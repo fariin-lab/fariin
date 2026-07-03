@@ -249,6 +249,15 @@ final class CallService: NSObject {
     }
     private func stopRingback() { ringbackPlayer?.stop(); ringbackPlayer = nil }
 
+    // Called by CallKit the instant it activates the audio session. Until this fires the session is
+    // dead (CallKit owns it), so the ringback started at startCall was silent. Restart it fresh on
+    // the live session — but only while we're still the caller waiting for an answer (outgoing).
+    func audioSessionActivated() {
+        guard state == .outgoing else { return }
+        stopRingback()
+        startRingback()
+    }
+
     // One-shot call-progress tone (busy/declined or ended). Same audio-session nudge
     // as ringback so it outputs while CallKit owns the session.
     private func playTone(_ data: Data, loops: Int) {

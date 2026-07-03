@@ -21,6 +21,10 @@ final class CallKitManager: NSObject {
         config.supportsVideo = true
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
+        // Branded incoming ringtone (bundled resource) instead of the generic iOS ring — this is
+        // what the RECEIVER hears while their phone rings, the way WhatsApp/Signal ship their own.
+        // CallKit loops it for the whole ring. Swap the file to change the sound; keep the name.
+        config.ringtoneSound = "kulan_ringtone.wav"
         provider = CXProvider(configuration: config)
         super.init()
         provider.setDelegate(self, queue: nil)
@@ -106,6 +110,10 @@ extension CallKitManager: CXProviderDelegate {
         s.audioSessionDidActivate(audioSession)
         s.isAudioEnabled = true   // turn the WebRTC audio unit ON
         s.unlockForConfiguration()
+        // The audio session is only LIVE now — CallKit owns it (useManualAudio), so it isn't active
+        // at startCall time. An AVAudioPlayer started before this point plays into a dead session =
+        // the caller hears NO ringback. So (re)start the ringback HERE, once the session is real.
+        CallService.shared.audioSessionActivated()
     }
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
