@@ -72,6 +72,13 @@ final class CallKitManager: NSObject {
         provider.reportNewIncomingCall(with: uuid, update: update) { _ in completion?() }
     }
 
+    // Reflect a mid-call video<->voice switch in the system call UI (green pill shows the camera glyph).
+    func updateHasVideo(_ hasVideo: Bool) {
+        guard let uuid = activeUUID else { return }
+        let update = CXCallUpdate(); update.hasVideo = hasVideo
+        provider.reportCall(with: uuid, updated: update)
+    }
+
     // MARK: - End
     func end() {   // user pressed End in our UI -> route through CallKit (handler does teardown)
         guard let uuid = activeUUID else { return }

@@ -19,6 +19,7 @@ struct CallView: View {
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var statusText: String {
+        if call.awaitingSwitchAccept { return "Asking to switch to video…" }
         switch call.state {
         case .outgoing:     return call.calleeRinging ? "Ringing…" : "Calling…"
         case .incoming:     return "Incoming…"
@@ -30,10 +31,11 @@ struct CallView: View {
     }
     private var endedText: String {
         switch call.endReason {
-        case .declined, .busy: return "Declined"
-        case .failed:          return "Call failed"
-        case .missed:          return "No answer"
-        default:               return "Call ended"
+        case .busy:     return "Busy"
+        case .declined: return "Declined"
+        case .failed:   return "Call failed"
+        case .missed:   return "No answer"
+        default:        return "Call ended"
         }
     }
     private var durationText: String {
@@ -95,6 +97,16 @@ struct CallView: View {
             // top-left chevron-down button (so a stray swipe can never minimize/break the call).
         }
         .ignoresSafeArea()
+        // "X wants to switch to video" — Accept turns BOTH cameras on; Decline keeps it a voice call.
+        .alert("Switch to video?", isPresented: Binding(
+            get: { call.incomingSwitchRequest != nil },
+            set: { if !$0 && call.incomingSwitchRequest != nil { call.respondToSwitch(accept: false) } }
+        )) {
+            Button("Decline", role: .cancel) { call.respondToSwitch(accept: false) }
+            Button("Accept") { call.respondToSwitch(accept: true) }
+        } message: {
+            Text("\(call.otherName) wants to switch to a video call.")
+        }
         .onDisappear { CallPiPController.shared.teardown() }
     }
 
@@ -177,6 +189,10 @@ struct CallView: View {
 
             Menu {
                 Button { withAnimation { call.minimized = true } } label: { Label("Minimize", systemImage: "arrow.down.right.and.arrow.up.left") }
+                // Drop a video call back to voice-only (both sides, no confirmation needed).
+                if call.isVideo && call.state == .active {
+                    Button { call.switchToVoice() } label: { Label("Switch to voice", systemImage: "phone.fill") }
+                }
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -260,12 +276,12 @@ struct CallView: View {
                 callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn) { call.toggleCamera() }
                 callCircle("arrow.triangle.2.circlepath", active: false) { call.switchCamera() }
             } else {
-                // Seamless upgrade: turn this voice call into a video call (renegotiates, no hang-up).
-                // Only possible once CONNECTED — dim + disable it while still Calling/Ringing so it
-                // doesn't look broken (upgradeToVideo guards on state == .active).
-                callCircle("video.fill", active: false) { call.upgradeToVideo() }
-                    .disabled(call.state != .active)
-                    .opacity(call.state == .active ? 1 : 0.4)
+                // Ask the other side to switch this voice call to video (they Accept/Decline, then
+                // both cameras turn on). Only once CONNECTED; dimmed while Calling/Ringing or while a
+                // request is already pending, so it never looks broken (requestVideoSwitch guards too).
+                callCircle("video.fill", active: false) { call.requestVideoSwitch() }
+                    .disabled(call.state != .active || call.awaitingSwitchAccept)
+                    .opacity(call.state == .active && !call.awaitingSwitchAccept ? 1 : 0.4)
             }
             // One steady speaker glyph; ON = filled white circle (the slash icon looked like
             // something was muted even when it wasn't).

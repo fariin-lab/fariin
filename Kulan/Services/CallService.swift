@@ -33,7 +33,9 @@ final class CallService: NSObject {
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 calleeRinging = false; recordWritten = false; minimized = false
-                endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0; handledVideoRequest = false
+                endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
+                incomingSwitchRequest = nil; awaitingSwitchAccept = false
+                switchReqCounter = 0; handledSwitchKeys = []
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
                 isVideo = false; cameraOn = true; usingFrontCamera = true
@@ -70,7 +72,12 @@ final class CallService: NSObject {
     private var iceRestartWork: DispatchWorkItem?    // delayed ICE restart after a drop
     private var reconnectGiveUpWork: DispatchWorkItem? // hard cap: can't recover -> Failed
     private var negotiationVersion = 0               // bumps each ICE restart / media renegotiation (caller)
-    private var handledVideoRequest = false          // caller handled a callee's mid-call video request once
+    // Mid-call video<->voice switch with consent. Only one switch negotiates at a time; every
+    // request carries a globally-unique reqId ("<uid>_<n>") so both phones dedup snapshot echoes.
+    var incomingSwitchRequest: String? = nil         // reqId of a pending "switch to video?" prompt (UI shows Accept/Decline)
+    var awaitingSwitchAccept = false                 // I asked to switch to video; waiting on the other side
+    private var switchReqCounter = 0
+    private var handledSwitchKeys: Set<String> = []  // "reqId:phase" already applied (ignore Firestore re-fires)
     private var appliedRemoteRestart = 0             // last restart version we applied
 
     private let db = Firestore.firestore()
@@ -189,34 +196,138 @@ final class CallService: NSObject {
         }
     }
 
-    /// Upgrade an ACTIVE voice call to video without dropping it: add my camera track and
-    /// renegotiate the existing peer connection (reuses the proven restartOffer/restartAnswer
-    /// channel). The peer's didAdd(rtpReceiver) fires for the new video track → their UI flips.
-    /// NOTE: mid-call SDP renegotiation needs a real 2-device test; not verifiable in the simulator.
-    func upgradeToVideo() {
-        guard let pc, state == .active, !isVideo, localVideoTrack == nil else { return }
-        isVideo = true
-        cameraOn = true
-        if !isSpeaker { toggleSpeaker() }
-        addLocalVideo(to: pc)        // inject my video track into the live session
-        renegotiateMedia()
+    // MARK: - Video <-> Voice switch (mid-call, with consent)
+    //
+    // Switch-to-VIDEO asks the other side first (like FaceTime/WhatsApp) and turns BOTH cameras on:
+    //   initiator → "requested"  ─▶  responder Accept ─▶ "accepted"/"calleeReady"
+    //   then the CALLER always drives ONE renegotiation (proven restartOffer/restartAnswer channel)
+    //   AFTER both sides have added their local video track, so a single offer negotiates 2-way video.
+    // Switch-to-VOICE needs no consent (turning your own camera off is not a privacy risk): both
+    // sides just disable video + flip the UI back to voice, no SDP renegotiation.
+    // NOTE: mid-call SDP renegotiation needs a real 2-device test; not verifiable in the simulator.
+
+    /// I tap "video" on a voice call → ask the other side to switch to video.
+    func requestVideoSwitch() {
+        guard state == .active, callId != nil, !isVideo, !awaitingSwitchAccept else { return }
+        awaitingSwitchAccept = true   // camera stays OFF until they accept
+        switchReqCounter += 1
+        writeSwitchPhase(reqId: "\(me)_\(switchReqCounter)", mode: "video", phase: "requested")
+        // Safety: if they never answer the prompt, re-enable the button after 30s (a late Accept
+        // still completes the handshake — this only stops the button from being stuck disabled).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, self.awaitingSwitchAccept, !self.isVideo else { return }
+            self.awaitingSwitchAccept = false
+        }
     }
 
-    // Re-offer the current tracks. Caller drives signaling directly; callee asks the caller to
-    // (the restart channel is caller→callee), having already added its own track first.
-    private func renegotiateMedia() {
-        guard let pc, let id = callId else { return }
+    /// I answer the "switch to video?" prompt.
+    func respondToSwitch(accept: Bool) {
+        guard let reqId = incomingSwitchRequest else { return }
+        incomingSwitchRequest = nil
+        guard accept else { writeSwitchPhase(reqId: reqId, mode: "video", phase: "declined"); return }
+        isVideo = true
         if isCaller {
-            negotiationVersion += 1
-            let v = negotiationVersion
-            pc.offer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)) { [weak self] sdp, _ in
-                guard let self, let sdp, let pc = self.pc else { return }
-                pc.setLocalDescription(sdp) { _ in
-                    self.db.collection("calls").document(id).updateData(["restartOffer": ["sdp": sdp.sdp, "version": v]])
-                }
+            // I'm the caller consenting to the callee's request: I offer only AFTER the callee
+            // (the initiator) has added its track and signalled ready — so wait, just accept.
+            writeSwitchPhase(reqId: reqId, mode: "video", phase: "accepted")
+        } else {
+            // I'm the callee: add my video now and tell the caller I'm ready to be re-offered.
+            enableLocalVideo()
+            writeSwitchPhase(reqId: reqId, mode: "video", phase: "calleeReady")
+        }
+    }
+
+    /// Drop a video call back to voice-only (either side, no consent needed).
+    func switchToVoice() {
+        guard isVideo else { return }
+        applyVoiceMode(signal: true)
+    }
+
+    // Applies the switch signalled on the call doc. Deduped by "reqId:phase" so Firestore re-fires
+    // (including our own writes echoing back) are processed exactly once.
+    private func handleVideoSwitch(reqId: String, mode: String, by: String, phase: String) {
+        let iAmInitiator = (by == me)
+        if mode == "voice" {                       // downgrade: converge to voice, no prompt
+            if !iAmInitiator { applyVoiceMode(signal: false) }
+            return
+        }
+        switch phase {
+        case "requested":
+            guard !iAmInitiator else { return }    // echo of my own request
+            minimized = false                      // surface the prompt even if the call was minimized
+            incomingSwitchRequest = reqId          // → UI Accept/Decline
+        case "declined":
+            if iAmInitiator { awaitingSwitchAccept = false }
+        case "accepted":
+            // The responder consented. Only the INITIATOR acts on this.
+            guard iAmInitiator else { return }
+            awaitingSwitchAccept = false; isVideo = true
+            if !isCaller {                         // callee-initiator: add my track, then signal ready
+                enableLocalVideo()
+                writeSwitchPhase(reqId: reqId, mode: "video", phase: "calleeReady")
+            }                                       // caller-initiator: wait for calleeReady below
+        case "calleeReady":
+            // The callee now has its video track. The CALLER adds video + drives the single re-offer.
+            guard isCaller else { return }
+            awaitingSwitchAccept = false; isVideo = true
+            enableLocalVideo()
+            callerReoffer()
+        default: break
+        }
+    }
+
+    private func writeSwitchPhase(reqId: String, mode: String, phase: String) {
+        guard let id = callId else { return }
+        db.collection("calls").document(id).updateData([
+            "videoSwitch": ["reqId": reqId, "mode": mode, "by": me, "phase": phase]
+        ])
+    }
+
+    // Turn my camera ON — reusing the existing track/m-line if we've had video before (so a second
+    // switch resumes without adding a duplicate transceiver), else create it the first time.
+    private func enableLocalVideo() {
+        guard let pc else { return }
+        cameraOn = true
+        if !isSpeaker { toggleSpeaker() }
+        CallKitManager.shared.updateHasVideo(true)
+        if let track = localVideoTrack {
+            track.isEnabled = true
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                guard granted, let self else { return }
+                DispatchQueue.global(qos: .userInitiated).async { self.startCapture(front: self.usingFrontCamera) }
             }
         } else {
-            db.collection("calls").document(id).updateData(["videoRequested": FieldValue.serverTimestamp()])
+            addLocalVideo(to: pc)   // first video ever this call: adds track + m-line + camera perms + capture
+        }
+    }
+
+    // Both sides flip back to voice: stop sending video, hide the remote feed, return to earpiece.
+    // The video transceiver stays (dormant) so a later re-switch resumes without SDP surgery.
+    private func applyVoiceMode(signal: Bool) {
+        localVideoTrack?.isEnabled = false
+        videoCapturer?.stopCapture()
+        cameraOn = false
+        isVideo = false
+        remoteVideoTrack = nil
+        if isSpeaker { isSpeaker = false; try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none) }
+        CallKitManager.shared.updateHasVideo(false)
+        if signal {
+            switchReqCounter += 1
+            writeSwitchPhase(reqId: "\(me)_\(switchReqCounter)", mode: "voice", phase: "applied")
+        }
+    }
+
+    // Caller-only re-offer of the current tracks over the proven restart channel. Called once both
+    // sides have added their local video, so a single offer/answer negotiates two-way video.
+    private func callerReoffer() {
+        guard isCaller, let pc, let id = callId else { return }
+        negotiationVersion += 1
+        let v = negotiationVersion
+        pc.offer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)) { [weak self] sdp, _ in
+            guard let self, let sdp, let pc = self.pc else { return }
+            pc.setLocalDescription(sdp) { _ in
+                self.db.collection("calls").document(id).updateData(["restartOffer": ["sdp": sdp.sdp, "version": v]])
+            }
         }
     }
 
@@ -605,14 +716,15 @@ final class CallService: NSObject {
                 self.appliedRemoteRestart = v
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
-            // Caller: the callee tapped video mid-call → add a recv-only video transceiver so their
-            // track has an m-line to land on, flip our UI to video, and drive the re-offer.
-            if self.isCaller, d["videoRequested"] != nil, !self.handledVideoRequest, let pc = self.pc {
-                self.handledVideoRequest = true
-                self.isVideo = true
-                let initt = RTCRtpTransceiverInit(); initt.direction = .recvOnly
-                pc.addTransceiver(of: .video, init: initt)
-                self.renegotiateMedia()
+            // Mid-call video<->voice switch handshake (deduped by reqId:phase so echoes apply once).
+            if let vs = d["videoSwitch"] as? [String: Any],
+               let reqId = vs["reqId"] as? String, let mode = vs["mode"] as? String,
+               let by = vs["by"] as? String, let phase = vs["phase"] as? String {
+                let key = "\(reqId):\(phase)"
+                if !self.handledSwitchKeys.contains(key) {
+                    self.handledSwitchKeys.insert(key)
+                    self.handleVideoSwitch(reqId: reqId, mode: mode, by: by, phase: phase)
+                }
             }
         }
         listeners.append(l)
@@ -784,8 +896,9 @@ extension CallService: RTCPeerConnectionDelegate {
     // Unified-plan remote track arrival: grab the remote video track for rendering.
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
         if let track = rtpReceiver.track as? RTCVideoTrack {
-            // Mid-call upgrade: a video track arriving on a voice call flips this side to video.
-            DispatchQueue.main.async { self.remoteVideoTrack = track; self.isVideo = true }
+            // Just bind the remote feed for rendering. isVideo is driven by the consent handshake (or
+            // the initial call type) — NOT flipped here, so an unsolicited track can't force video on.
+            DispatchQueue.main.async { self.remoteVideoTrack = track }
         }
     }
 }
