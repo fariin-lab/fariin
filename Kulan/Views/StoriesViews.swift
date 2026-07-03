@@ -612,7 +612,11 @@ struct StoryViewer: View {
             guard showViewers, currentIsMine, !id.isEmpty else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
         }
-        .presentationBackground(.clear)   // see-through cover so the Chats list shows behind during swipe-down
+        // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
+        // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
+        // black canvas and the light Chats list bleeds through as the "white" bug. Clear only at rest,
+        // so the swipe-DOWN dismiss still reveals the Chats list sliding behind the story.
+        .presentationBackground { Color.black.opacity(showViewers ? 1 : 0) }
     }
 
     // The Active Story layer: media + header + progress bars + owner bar/footer.
