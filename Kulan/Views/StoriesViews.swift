@@ -699,10 +699,28 @@ struct StoryViewer: View {
             },
             onDrag: { d in dragDown = d },   // fade my overlays out as the card is pulled down
             showMore: true, // "…" is a native dropdown menu in the header; its buttons post notifications
-            onSwipeUp: { openViewers() },   // library up pan → open the viewers sheet (own only; no-op for friends)
-            // BOTH swipe directions go through the library's native UIKit pans now, for own AND friends
-            // — that's why friends are smooth. The app gesture below is fully OFF (.subviews), so it can
-            // never fight the library's swipe-down pan (which is what broke/shook the own-story dismiss).
+            onSwipeUp: { },   // superseded by the continuous callbacks below
+            // Real-time swipe-UP: the library's direction-locked up pan reports the drag live, so the
+            // sheet follows the finger 1:1 (native feel) and snaps on release — WITHOUT an app gesture
+            // that would fight the library's down dismiss pan. Swipe-DOWN dismiss is the library pan too.
+            onSwipeUpChanged: { up in
+                guard currentIsMine else { return }
+                let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
+                openDragging = true   // keep the storyLayer visible/hit-testable through the drag
+                viewersProgress = max(0, min(1, up / sheetH))
+            },
+            onSwipeUpEnded: { _, velocity in
+                guard currentIsMine else { openDragging = false; return }
+                openDragging = false
+                let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                let projected = viewersProgress + (velocity / sheetH) * 0.25   // fling contribution
+                if projected > 0.5 || velocity > 600 {
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
+                } else {
+                    closeViewers()
+                }
+            },
             dismissEnabled: true,
             swipeUpEnabled: true
         )

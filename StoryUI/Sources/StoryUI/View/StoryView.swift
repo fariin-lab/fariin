@@ -25,6 +25,8 @@ public struct StoryView: View {
     let onDrag: ((CGFloat) -> Void)?         // swipe-down amount (so the host can hide its overlays)
     let showMore: Bool                      // show the header "…" dropdown menu
     let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet (Telegram)
+    let onSwipeUpChanged: ((CGFloat) -> Void)?   // live upward drag amount → real-time sheet open
+    let onSwipeUpEnded: ((CGFloat, CGFloat) -> Void)?   // (translation +up, velocity +up) on release
     let dismissEnabled: Bool               // install the library's native DOWN swipe-down-to-dismiss pan
     let swipeUpEnabled: Bool               // install the library's UP pan (false → host owns swipe-up)
 
@@ -46,6 +48,8 @@ public struct StoryView: View {
         onDrag: ((CGFloat) -> Void)? = nil,
         showMore: Bool = false,
         onSwipeUp: (() -> Void)? = nil,
+        onSwipeUpChanged: ((CGFloat) -> Void)? = nil,
+        onSwipeUpEnded: ((CGFloat, CGFloat) -> Void)? = nil,
         dismissEnabled: Bool = true,
         swipeUpEnabled: Bool = true
     ) {
@@ -59,6 +63,8 @@ public struct StoryView: View {
         self.onDrag = onDrag
         self.showMore = showMore
         self.onSwipeUp = onSwipeUp
+        self.onSwipeUpChanged = onSwipeUpChanged
+        self.onSwipeUpEnded = onSwipeUpEnded
         self.dismissEnabled = dismissEnabled
         self.swipeUpEnabled = swipeUpEnabled
     }
@@ -79,6 +85,8 @@ public struct StoryView: View {
                 onCommit: { isPresented = false },      // card already animated off in UIKit; remove the cover
                 onCancel: { onDrag?(0) },               // sprang back; restore overlays
                 onSwipeUp: { onSwipeUp?() },            // up-swipe → host opens the views sheet
+                onSwipeUpChanged: { up in onSwipeUpChanged?(up) },
+                onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
                 dismissEnabled: dismissEnabled,
                 swipeUpEnabled: swipeUpEnabled
             )

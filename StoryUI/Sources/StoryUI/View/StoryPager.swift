@@ -20,6 +20,8 @@ struct StoryPager: UIViewControllerRepresentable {
     let onCommit: () -> Void               // pulled past threshold -> dismiss
     let onCancel: () -> Void               // released short -> overlays restore
     let onSwipeUp: () -> Void              // up-swipe -> host opens the views sheet (Telegram)
+    var onSwipeUpChanged: (CGFloat) -> Void = { _ in }   // LIVE upward drag amount (pts, +up) → real-time open
+    var onSwipeUpEnded: (CGFloat, CGFloat) -> Void = { _, _ in }  // (translation +up, velocity +up) on release
     var dismissEnabled: Bool = true        // install the library's native DOWN dismiss pan (smooth UIKit)
     var swipeUpEnabled: Bool = true        // install the library's UP pan (false -> host owns swipe-up)
 
@@ -290,8 +292,16 @@ struct StoryPager: UIViewControllerRepresentable {
             guard let pager else { return }
             let t = g.translation(in: pager.view)
             let v = g.velocity(in: pager.view)
-            // More sensitive: a normal short swipe-up (or a flick) opens the viewers — was too strict at -90/-600.
-            if g.state == .ended, t.y < -48 || v.y < -350 { parent.onSwipeUp() }
+            // Report the drag CONTINUOUSLY so the host tracks the viewers sheet 1:1 with the finger
+            // (native feel), then decides open/close on release. Direction-locked to .up, so it never
+            // fights the down dismiss pan.
+            switch g.state {
+            case .changed:
+                parent.onSwipeUpChanged(max(0, -t.y))          // +up
+            case .ended, .cancelled:
+                parent.onSwipeUpEnded(-t.y, -v.y)              // translation +up, velocity +up
+            default: break
+            }
         }
 
         // Let the dismiss/swipe-up pans coexist with the hosted SwiftUI gestures (tap zones, hold-to-pause)
