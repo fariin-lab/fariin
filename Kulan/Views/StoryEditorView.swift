@@ -224,7 +224,8 @@ struct StoryEditorView: View {
                         .lineLimit(1...5)
                 }
                 .padding(.horizontal, 18).padding(.vertical, 12).frame(minHeight: 46)
-                .background(Color(white: 0.13), in: RoundedRectangle(cornerRadius: 23, style: .continuous))
+                // Real Apple Liquid Glass pill (matches the toolbar buttons) instead of a flat dark fill.
+                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous))
 
                 if captionFocused { sendButton }
             }
@@ -232,9 +233,14 @@ struct StoryEditorView: View {
             // Tool row hides while typing a caption (IG/WA: only the caption field stays, above the keyboard).
             if !captionFocused {
                 HStack(spacing: 14) {
-                    tool("textformat", active: false) { addTextOverlay() }   // Aa — add text on the photo
-                    tool("crop", active: croppedSource != nil) { showCrop = true }
-                    tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
+                    // Aa / crop / draw grouped in ONE dark capsule (target design), not separate circles.
+                    HStack(spacing: 22) {
+                        capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on the photo
+                        capsuleTool("crop", active: croppedSource != nil) { showCrop = true }
+                        capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
+                    }
+                    .padding(.horizontal, 20).frame(height: 48)
+                    .background(Color(white: 0.13), in: Capsule())
 
                     Spacer()
                     sendButton
@@ -244,38 +250,33 @@ struct StoryEditorView: View {
         .padding(.horizontal, 16)
     }
 
+    // Plain icon button inside the dark tool capsule (no per-button background — the capsule is the bg).
+    @ViewBuilder
+    private func capsuleTool(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 20, weight: .medium))
+                .foregroundStyle(active ? .green : .white)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(StoryPressStyle())
+    }
+
     // Shared green Send — used in the toolbar (idle) AND beside the caption (while typing).
     private var sendButton: some View {
         Button { Task { await send() } } label: {
-            Image(systemName: posting ? "ellipsis" : "paperplane.fill")
-                .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 46, height: 46).background(Color(.systemGreen), in: Circle())
-                .shadow(color: Color(.systemGreen).opacity(0.5), radius: posting ? 2 : 8)
-        }
-        .buttonStyle(StoryPressStyle()).disabled(posting)
-    }
-
-    // Flat tool button: white icon, green when active; "HD" renders as a bordered badge.
-    @ViewBuilder
-    private func tool(_ icon: String, active: Bool, label: String? = nil, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Group {
-                if let label, !label.isEmpty {
-                    Text(label).font(.system(size: 12, weight: .bold)).foregroundStyle(active ? .green : .white)
-                        .padding(.horizontal, 5).frame(height: 22)
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(active ? Color.green : Color.white, lineWidth: 1.5))
+            HStack(spacing: 4) {
+                if posting {
+                    ProgressView().tint(.white)
                 } else {
-                    Image(systemName: icon).font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(active ? .green : .white)   // always white; the glass + shadow carry contrast
-                        .shadow(color: .black.opacity(0.35), radius: 2)
+                    Text("NEXT").font(.system(size: 16, weight: .semibold))
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold))
                 }
             }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())   // whole 44pt circle is tappable, not just the glyph
-            .liquidGlass(Circle())    // real Apple .glassEffect (native Liquid Glass)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22).frame(height: 48)
+            .background(Color(.systemBlue), in: Capsule())
         }
-        .buttonStyle(StoryPressStyle())
+        .buttonStyle(StoryPressStyle()).disabled(posting)
     }
 
     // MARK: - Text overlays
