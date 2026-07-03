@@ -913,11 +913,14 @@ struct ThreadView: View {
             .padding(.vertical, 8).padding(.horizontal, 12)
             .background(mine ? Theme.accent(dark) : Theme.received(dark))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
+            // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
+            // tapping the blank space anywhere on the row placed a call (accidental-call bug).
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .onTapGesture { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) }
             .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) }
     }
 
     // Call-log duration phrasing: "43 sec", "1:31", or "1:31:00".
