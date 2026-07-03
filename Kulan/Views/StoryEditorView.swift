@@ -240,7 +240,7 @@ struct StoryEditorView: View {
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
                     }
                     .padding(.horizontal, 20).frame(height: 48)
-                    .background(Color(white: 0.13), in: Capsule())
+                    .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
 
                     Spacer()
                     sendButton
@@ -274,7 +274,8 @@ struct StoryEditorView: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 22).frame(height: 48)
-            .background(Color(.systemBlue), in: Capsule())
+            // Blue-tinted real Liquid Glass (prominent action), not a flat blue fill.
+            .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
     }

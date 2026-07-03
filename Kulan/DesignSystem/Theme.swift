@@ -67,10 +67,18 @@ enum AvatarPalette {
 extension View {
     /// Real iOS 26 Liquid Glass when available; frosted material fallback below it.
     /// `interactive: true` gives the same touch-reactive glass animation as the toolbar buttons.
+    /// `tint:` gives a coloured Liquid Glass (e.g. the blue NEXT button) — still translucent glass,
+    /// not a flat fill.
     @ViewBuilder
-    func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false) -> some View {
+    func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false, tint: Color? = nil) -> some View {
         if #available(iOS 26.0, *) {
-            self.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+            self.glassEffect({
+                var g: Glass = .regular
+                if let tint { g = g.tint(tint) }
+                return interactive ? g.interactive() : g
+            }(), in: shape)
+        } else if let tint {
+            self.background(tint.opacity(0.85), in: shape).background(.ultraThinMaterial, in: shape)
         } else {
             self.background(.ultraThinMaterial, in: shape)
         }

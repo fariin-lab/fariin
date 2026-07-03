@@ -727,8 +727,10 @@ struct StoryViewer: View {
         // starts to shrink — so the photo stays bright throughout and only the chrome dissolves.
         // Reversed on close (the chrome fades back in as the morph card grows away).
         .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(p / 0.08, 1))))
-        // App-level swipe-down: move + shrink + fade the card as it's pulled down (Instagram feel).
-        .scaleEffect(1 - min(dismissDrag / 2400, 0.1))
+        // App-level swipe-down: slide + fade the card as it's pulled down. NO .scaleEffect here —
+        // SwiftUI scaling a view that hosts the UIKit story pager re-renders it every frame, which is
+        // the "shaking" (friend stories are smooth because their scale happens inside UIKit). A pure
+        // translate + fade reads just as cleanly and stays perfectly smooth.
         .offset(y: dismissDrag)
         .opacity(dismissDrag > 0 ? max(0.3, 1 - Double(dismissDrag) / 500) : 1)
         .allowsHitTesting(viewersProgress == 0 || openDragging)
