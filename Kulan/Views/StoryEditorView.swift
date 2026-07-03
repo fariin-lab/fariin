@@ -222,6 +222,7 @@ struct StoryEditorView: View {
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
                         .lineLimit(1...5)
+                        .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
                 }
                 .padding(.horizontal, 18).padding(.vertical, 12).frame(minHeight: 46)
                 // Real Apple Liquid Glass pill (matches the toolbar buttons) instead of a flat dark fill.
@@ -318,6 +319,7 @@ struct StoryEditorView: View {
         posting = true
         let data = await flatten()
         posting = false
+        guard !data.isEmpty else { postError = true; return }   // never hand off a zero-byte (broken) image
         // Caption travels as TEXT (rendered as a Telegram overlay in the viewer), NOT baked into the photo —
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data, caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))

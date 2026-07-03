@@ -755,6 +755,9 @@ struct StoryViewer: View {
             // Anonymous viewing leaves NO trace (Telegram-incognito): no local flags either.
             onItemSeen: { id in
                 currentStoryId = id
+                // The synthetic still-uploading item has no real doc — don't persist it as "seen"
+                // (junk entry) or fetch its (non-existent) viewers.
+                guard id != StoriesService.uploadingStoryId else { return }
                 if !anonymous { StoryPrefs.markStorySeen(id) }
                 markSeenItem(id); loadBarViewers()
             },
@@ -1021,12 +1024,8 @@ struct StoryViewer: View {
             .frame(height: Self.ownerFooterHeight)
             .padding(.bottom, max(10, bottomInset))
             .background(Color.black)
-            .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 12).onEnded { v in
-                    if v.translation.height < -20 { openViewers() }   // swipe up here opens viewers too
-                }
-            )
+            // NO own swipe gesture here: the footer sits inside storyLayer, whose single drag already
+            // owns swipe-up-to-open. A second gesture here double-fired (open + close) on footer flicks.
     }
 
     private func loadBarViewers() {

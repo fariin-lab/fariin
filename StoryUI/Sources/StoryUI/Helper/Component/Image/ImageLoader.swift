@@ -131,6 +131,7 @@ final class ImageLoader: UIView {
 
         guard let validatedUrl = url else {
             print("url error")
+            imageIsLoaded()   // still mark ready → the story auto-advances instead of freezing forever
             return
         }
 
@@ -140,7 +141,7 @@ final class ImageLoader: UIView {
 
         imageURL = URL(string: validatedUrl)
 
-        guard let imageURL else { return }
+        guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
 
         // stop video if it's playing before image request
         NotificationCenter.default.post(name: .stopVideo, object: nil)

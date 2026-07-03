@@ -611,6 +611,7 @@ private extension StoryDetailView {
     }
     
     func configureProgress(with state: Bool) {
+        guard !model.stories.isEmpty else { return }   // last item deleted mid-animation → don't index [0]
         let index = getCurrentIndex()
         let story = model.stories[index]
         let mediaType = story.config.mediaType

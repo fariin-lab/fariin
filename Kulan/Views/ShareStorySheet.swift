@@ -17,11 +17,14 @@ struct ShareStorySheet: View {
     @State private var excluded = Set(UserDefaults.standard.stringArray(forKey: "storyAudExcluded") ?? [])
     @State private var included = Set(UserDefaults.standard.stringArray(forKey: "storyAudIncluded") ?? [])
     @State private var emptyAudienceAlert = false
+    @State private var posting = false   // one-shot guard so a double-tap can't double-post
     private var me: String { AuthService.shared.uid ?? "" }
 
     struct AudienceContact: Identifiable { let id: String; let name: String; let photo: String? }
     private var contacts: [AudienceContact] {
-        repo.conversations.filter { !$0.isGroup }.compactMap {
+        // Exclude blocked contacts — postStory drops them from the real audience, so if the picker
+        // still showed/counted them a story could pass the "not empty" guard yet post to NO ONE.
+        repo.conversations.filter { !$0.isGroup && !$0.isBlockedByMe(me) }.compactMap {
             let u = $0.otherUid(me)
             return u.isEmpty ? nil : AudienceContact(id: u, name: $0.displayName(me), photo: $0.displayPhoto(me))
         }
@@ -105,6 +108,7 @@ struct ShareStorySheet: View {
                 .background(.blue, in: Capsule())
         }
         .buttonStyle(StoryPressStyle())
+        .disabled(posting)
         .padding(.horizontal, 16).padding(.vertical, 10)
         // Match the sheet background (was `.bar`, which showed as a grey strip behind the button).
         .background(Color(.systemGroupedBackground))
@@ -126,6 +130,7 @@ struct ShareStorySheet: View {
     }
 
     private func post() {
+        guard !posting else { return }   // ignore a second tap while the first is in flight
         // Compute the EFFECTIVE audience (intersect with current contacts) and block an empty one
         // with a visible alert — not just a silent haptic. This catches both "only share with,
         // nobody picked" AND the stale-list case (only-share with X, then X was deleted/blocked →
@@ -145,6 +150,7 @@ struct ShareStorySheet: View {
         UserDefaults.standard.set(Array(excluded), forKey: "storyAudExcluded")
         UserDefaults.standard.set(Array(included), forKey: "storyAudIncluded")
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        posting = true
         StoriesService.shared.postStoryBackground(
             image: image,
             caption: caption,

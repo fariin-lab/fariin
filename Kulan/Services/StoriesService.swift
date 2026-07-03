@@ -139,6 +139,13 @@ final class StoriesService {
         else if !excluded.isEmpty { recipients = allContacts.subtracting(excluded); mode = "except" }
         else { recipients = allContacts; mode = "all" }
 
+        // Don't create a doc / upload bytes for a story literally no one can see (zero contacts, or a
+        // stale "only share with" that resolved empty). Surface it instead of silently posting to no one.
+        guard !recipients.isEmpty else {
+            throw NSError(domain: "Kulan.Story", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "No one to share this story with."])
+        }
+
         // Create the story doc FIRST (mediaUrl filled in after upload). The Storage READ
         // rule for downloadURL() checks this doc's authorUid, so it must exist before we
         // resolve the URL — otherwise getDownloadURL() is denied and the post fails.
