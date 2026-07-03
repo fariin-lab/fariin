@@ -1447,7 +1447,13 @@ struct StoryViewersBottomSheet: View {
             .offset(y: (1 - min(progress, 1)) * sheetH - overshoot(progress) )
         }
         .ignoresSafeArea()
-        .task(id: activeStoryId) { await load() }
+        .task(id: activeStoryId) {
+            // Debounce: .task(id:) cancels+restarts on every carousel-centre change, so a short sleep
+            // here means a fast scrub across many stories only fires ONE fetch when it settles.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            await load()
+        }
     }
 
     // Extra pixels the sheet rises above fully-open, with diminishing return (rubber band).

@@ -50,6 +50,8 @@ struct StoryDetailView: View {
     @State private var isTapDisabled: Bool = false
     @State private var showEmoji: Bool = true
     @State private var isPaused: Bool = false   // hold-to-pause
+    @State private var isHolding: Bool = false  // TRUE only after the long-press engages → drives the
+                                                // chrome fade, so a quick tap doesn't flicker the header/bars
     @State private var scenePaused = false      // pause came from leaving the foreground, not a hold
     @State private var hostPaused: Bool = false // app froze it while showing a sheet (e.g. viewers list)
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
@@ -117,8 +119,8 @@ struct StoryDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .overlay(
                 getUserInfoAndProgressBar(with: index)
-                    .opacity(isPaused ? 0 : 1)                       // fade chrome out while holding (IG/WhatsApp)
-                    .animation(.linear(duration: 0.2), value: isPaused)
+                    .opacity(isHolding ? 0 : 1)                      // fade chrome out only on a real hold
+                    .animation(.linear(duration: 0.2), value: isHolding)
                 ,alignment: .top
             )
             .rotation3DEffect(
@@ -386,12 +388,14 @@ private extension StoryDetailView {
             // and resumes on release; crucially, a horizontal swipe exceeds maximumDistance and
             // CANCELS the press (→ resume) so the TabView can still page between users (R2 fix —
             // a minimumDistance:0 drag stole the touch from the pager).
-            .onLongPressGesture(minimumDuration: 0.25, maximumDistance: 10, perform: {}, onPressingChanged: { pressing in
+            .onLongPressGesture(minimumDuration: 0.25, maximumDistance: 10,
+                                perform: { isHolding = true },   // fires only AFTER 0.25s → chrome fades on a real hold
+                                onPressingChanged: { pressing in
                 if pressing {
                     guard !keyboardManager.isKeyboardOpen else { return }
                     isPaused = true; pauseVideo()
                 } else {
-                    isPaused = false; playVideo()
+                    isPaused = false; isHolding = false; playVideo()
                 }
             })
         }

@@ -458,9 +458,14 @@ final class StoriesRepository {
             await withTaskGroup(of: (String, String, String?)?.self) { group in
                 for u in unknownAuthors {
                     group.addTask { [db] in
-                        guard let f = try? await db.collection("users").document(u).getDocument().data()
-                        else { return nil }   // fetch failed → not cached → retried next rebuild
-                        return (u, f["name"] as? String ?? "", f["photoUrl"] as? String)
+                        let snap = try? await db.collection("users").document(u).getDocument()
+                        if let snap, snap.exists, let f = snap.data() {
+                            return (u, f["name"] as? String ?? "", f["photoUrl"] as? String)
+                        }
+                        // Doc genuinely doesn't exist → negative-cache ("", nil) so a profileless author
+                        // isn't re-fetched on every listener tick. A NETWORK error (snap == nil) returns
+                        // nil so it's retried next rebuild (don't cache a transient failure).
+                        return snap != nil ? (u, "", nil) : nil
                     }
                 }
                 for await r in group { if let (u, n, p) = r { profiles[u] = (n, p) } }
