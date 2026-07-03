@@ -1211,15 +1211,6 @@ struct SeenBySheet: View {
 }
 
 
-// Each card reports (id, distance-from-screen-centre) so the carousel can pick the truly centred
-// card from GEOMETRY — the same measure that scales the cards — instead of trusting scrollPosition's
-// snap id (which lagged the visual centre by a card, so the big card and the count disagreed).
-private struct CardDist: Equatable { let id: String; let dist: CGFloat }
-private struct CenteredCardKey: PreferenceKey {
-    static var defaultValue: [CardDist] = []
-    static func reduce(value: inout [CardDist], nextValue: () -> [CardDist]) { value.append(contentsOf: nextValue()) }
-}
-
 // Carousel of ALL my posted stories, shown above the open viewers sheet (Telegram / user mockup):
 // ONLY the rounded photos — no captions, no avatars, no progress bars. Side cards carry a small
 // eye+heart count inside their bottom edge; the CENTRED card shows its count BIG underneath.
@@ -1232,15 +1223,13 @@ struct MyStoriesCarousel: View {
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
-    // The card the GEOMETRY says is centred (nearest to the screen centre). This — not scrollPosition's
-    // snap id — is the source of truth for the big count, the morph, and activeId, so the visually
-    // biggest card is ALWAYS the "active" one.
-    @State private var centeredID: String?
-    // Tap a side card → request a scroll to it (handled by the ScrollViewReader via onChange).
-    @State private var scrollRequest: String?
-    // Ignore geometry readings until the initial scroll has landed on the opened-on story. On the very
-    // first layout the row sits at offset 0 with the FIRST card centred, so an early reading would flip
-    // activeId to A (wrong count/photo, or a permanent stick).
+    // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
+    // so the row opens centred on it; SwiftUI's .viewAligned physics follow the finger 1:1 and snap to
+    // the nearest card on release (swipe past ~50% → next). It only updates when the scroll SETTLES, so
+    // the parent no longer re-renders every frame mid-swipe (that was the jank / "hard to swipe").
+    @State private var scrolledID: String?
+    // Don't push the settled id up to activeId until the initial centring has happened, so a first-layout
+    // reading can't flip the sheet/morph to card A.
     @State private var settled = false
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat,
@@ -1250,11 +1239,11 @@ struct MyStoriesCarousel: View {
         self.slotW = slotW
         self.slotH = slotH
         self.onActiveTap = onActiveTap
-        self._centeredID = State(initialValue: activeId.wrappedValue)
+        self._scrolledID = State(initialValue: activeId.wrappedValue)
     }
 
     var body: some View {
-        let focusedID = centeredID ?? activeId
+        let focusedID = scrolledID ?? activeId
         let active = byStory[focusedID] ?? []
         let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
         VStack(spacing: 12) {
@@ -1267,51 +1256,27 @@ struct MyStoriesCarousel: View {
                     // Centre whichever card is focused: half a screen minus half a slot of lead/trail padding.
                     .padding(.horizontal, max(16, (UIScreen.main.bounds.width - slotW) / 2))
                 }
-                .scrollTargetBehavior(.viewAligned)
+                .scrollTargetBehavior(.viewAligned)        // native paged snap-to-centre physics
+                .scrollPosition(id: $scrolledID, anchor: .center)   // seeded to the opened-on story
                 .frame(height: slotH)   // centre card fills the slot exactly (sides scale DOWN within it)
                 .onAppear {
-                    // Centre on the story I was viewing. NO .scrollPosition(id:) binding: that binding
-                    // snapped itself to the FIRST card during the initial layout and then dragged the
-                    // scroll back to A, undoing scrollTo — which is exactly why the top image always
-                    // showed A. Drive the centre purely with scrollTo: immediately, next runloop tick,
-                    // and once more after layout settles, so it reliably lands on the opened-on story.
-                    let target = activeId
-                    func center() {
-                        var t = Transaction(); t.disablesAnimations = true
-                        withTransaction(t) { proxy.scrollTo(target, anchor: .center) }
-                    }
-                    center()
-                    DispatchQueue.main.async { center() }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                        center()
-                        settled = true   // now geometry may drive the active card as I swipe
-                    }
+                    // Re-assert the seed (belt-and-braces) and open the gate after the first layout so a
+                    // transient first-frame reading can't push card A up to the sheet/morph.
+                    scrolledID = activeId
+                    DispatchQueue.main.async { scrolledID = activeId }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { settled = true }
                 }
-                // Tap a side card → smoothly recentre on it.
-                .onChange(of: scrollRequest) { _, v in
-                    guard let v else { return }
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { proxy.scrollTo(v, anchor: .center) }
-                    scrollRequest = nil
-                }
-                // If the caller retargets (rare), follow it.
-                .onChange(of: activeId) { _, v in
-                    guard settled, v != centeredID else { return }
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { proxy.scrollTo(v, anchor: .center) }
-                }
+                // Caller retargeted the active story (rare) → recentre.
+                .onChange(of: activeId) { _, v in if v != scrolledID { withAnimation { scrolledID = v } } }
             }
-            // The GEOMETRICALLY-centred card's count, big + centred under the carousel (mockup).
+            // The centred card's count, big + centred under the carousel (mockup).
             countRow(views: active.count, likes: activeReacts, big: true)
         }
-        // Collect every card's live distance-from-centre and pick the nearest as the centred story.
-        // This drives activeId (→ the viewers list + morph below), so the biggest card and the count
-        // can never disagree, and a mid-scroll release always resolves to the truly centred story.
-        .onPreferenceChange(CenteredCardKey.self) { dists in
-            guard settled else { return }   // don't let the first-layout reading flip us to A
-            guard let nearest = dists.min(by: { $0.dist < $1.dist })?.id else { return }
-            if nearest != centeredID {
-                centeredID = nearest
-                if activeId != nearest { activeId = nearest }
-            }
+        // When the scroll SETTLES on a new card, drive the sheet/morph to it (bidirectional). Only after
+        // the initial centring, so the open never flips to card A.
+        .onChange(of: scrolledID) { _, v in
+            guard settled, let v, v != activeId else { return }
+            activeId = v
         }
         .task { await loadAll() }
     }
@@ -1322,11 +1287,6 @@ struct MyStoriesCarousel: View {
         return StoryImage(url: s.mediaUrl)
             .frame(width: slotW, height: slotH)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            // Report this card's live distance from the screen centre for centred-card detection.
-            .background(GeometryReader { geo in
-                Color.clear.preference(key: CenteredCardKey.self,
-                                       value: [CardDist(id: s.id, dist: Self.centreDistance(geo))])
-            })
             .overlay(alignment: .bottom) {
                 // Side cards show a small count inside; the CENTRED card hides it (big count below).
                 countRow(views: vs.count, likes: reacts, big: false)
@@ -1349,7 +1309,7 @@ struct MyStoriesCarousel: View {
             .id(s.id)
             .onTapGesture {
                 if s.id == activeId { onActiveTap() }
-                else { scrollRequest = s.id }
+                else { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { scrolledID = s.id } }
             }
     }
 
@@ -1511,7 +1471,10 @@ struct StoryViewersBottomSheet: View {
         }
         .padding(.bottom, 10)
         .contentShape(Rectangle())
-        .gesture(sheetDrag(sheetH: sheetH, fromList: false))
+        // simultaneousGesture (not .gesture) so dragging down on the handle/tabs/search still drives the
+        // sheet even though the tabs + search field have their own tap/edit gestures. This is what made
+        // drag-down-to-close feel dead — the tab buttons were swallowing the drag.
+        .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: false))
     }
 
     // "All Viewers | Contacts" tabs (Telegram StoryItemSetViewListComponent): active tab is white
