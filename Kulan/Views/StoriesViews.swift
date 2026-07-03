@@ -411,8 +411,7 @@ struct StoryViewer: View {
     @State private var barViewers: [StoryViewerInfo] = []
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
-    @State private var openDragging = false           // finger is actively dragging the sheet OPEN
-    @State private var openDragStart: CGFloat = 0     // progress at drag start
+    @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -514,10 +513,11 @@ struct StoryViewer: View {
 
     var body: some View {
         ZStack {
-            // Solid black canvas revealed behind the story as it scales down into a card (Telegram).
-            // Invisible at rest so the see-through swipe-down dismiss (clear cover) keeps working.
+            // Solid black canvas behind the story while the viewers sheet is up (so the see-through
+            // cover never shows the light chat list through the shrinking card = the "white" bug).
+            // Fully OFF only at rest, so the swipe-down dismiss keeps its see-through look.
             Color.black.ignoresSafeArea()
-                .opacity(Double(min(viewersProgress * 3, 1)))
+                .opacity(showViewers ? 1 : 0)
             storyLayer
             // The viewers sheet is a SIBLING layer, NOT a system .sheet: a system sheet lives in
             // its own presentation layer and cannot drive a continuous transform on the story
@@ -655,45 +655,9 @@ struct StoryViewer: View {
                 storyContent
             }
         }
-        // Easy open (MY story only): swipe up anywhere → the sheet/card follow the finger in REAL
-        // TIME (onChanged drives `viewersProgress`), instead of only opening after you lift off.
-        // `including: .subviews` for friends disables MY drag while keeping the library's own
-        // gestures (swipe-down, tap-to-advance); `.all` for my own enables both.
-        // Swipe-UP only (open the viewers sheet in real time). Swipe-DOWN dismiss is now the library's
-        // native UIKit pan (same as friends) — no app-level offset here, so no shake. `.all` keeps this
-        // app gesture live alongside the library gestures for my own story; `.subviews` (friends) leaves
-        // the library to own everything.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { v in
-                    guard currentIsMine else { return }
-                    let vertical = abs(v.translation.height) > abs(v.translation.width)
-                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    if openDragging {
-                        viewersProgress = max(0, min(1, openDragStart - v.translation.height / sheetH))
-                        return
-                    }
-                    // Only UP engages the viewers sheet; DOWN is left entirely to the library's dismiss pan.
-                    guard vertical, v.translation.height < -6, viewersProgress < 1 else { return }
-                    openDragging = true
-                    openDragStart = viewersProgress
-                    if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
-                    viewersProgress = max(0, min(1, openDragStart - v.translation.height / sheetH))
-                }
-                .onEnded { v in
-                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    let wasOpen = openDragging
-                    openDragging = false
-                    guard wasOpen else { return }
-                    let projected = viewersProgress - v.predictedEndTranslation.height / sheetH
-                    if projected > 0.5 {
-                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
-                    } else {
-                        closeViewers()
-                    }
-                },
-            including: currentIsMine ? .all : .subviews
-        )
+        // NO app-level drag gesture on the story anymore. BOTH directions are the library's native
+        // UIKit pans: swipe-DOWN → dismiss (smooth, same as friends), swipe-UP → onSwipeUp → openViewers.
+        // An app gesture here fought the library's swipe-down pan and broke the dismiss.
         // NEVER transformed (the library has an internal 3D cube for user-to-user swipes; scaling
         // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
         // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
@@ -735,12 +699,12 @@ struct StoryViewer: View {
             },
             onDrag: { d in dragDown = d },   // fade my overlays out as the card is pulled down
             showMore: true, // "…" is a native dropdown menu in the header; its buttons post notifications
-            onSwipeUp: { },  // handled by the real-time drag on storyLayer (don't double-trigger)
-            // Swipe-DOWN dismiss = the library's native UIKit pan for EVERYONE now (own + friends), so
-            // my own story is as smooth as a friend's. Swipe-UP (open viewers) stays app-owned for my
-            // own story, so the library's up pan is disabled there (swipeUpEnabled: !mineOnly).
+            onSwipeUp: { openViewers() },   // library up pan → open the viewers sheet (own only; no-op for friends)
+            // BOTH swipe directions go through the library's native UIKit pans now, for own AND friends
+            // — that's why friends are smooth. The app gesture below is fully OFF (.subviews), so it can
+            // never fight the library's swipe-down pan (which is what broke/shook the own-story dismiss).
             dismissEnabled: true,
-            swipeUpEnabled: !mineOnly
+            swipeUpEnabled: true
         )
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.

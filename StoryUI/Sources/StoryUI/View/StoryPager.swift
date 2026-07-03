@@ -110,9 +110,10 @@ struct StoryPager: UIViewControllerRepresentable {
         // Own story (host owns the swipe): fully neutralize the pager's internal scroll so its
         // horizontal pan/bounce can't fight the host's vertical dismiss drag (the shaky double-image).
         func neutralizePagerScrollIfHostOwnsSwipe() {
-            // Own story = single bucket (host owns swipe-up). Kill the horizontal scroll so its
-            // bounce can't fight the vertical down-dismiss pan. Friends keep it for user-to-user swipe.
-            guard !parent.swipeUpEnabled, let scroll = internalScroll else { return }
+            // Own story = a SINGLE bucket: nothing to navigate to horizontally, so kill the internal
+            // scroll (its bounce would fight the vertical dismiss pan). Friends have multiple buckets
+            // and keep it for user-to-user swipe.
+            guard parent.viewModel.stories.count <= 1, let scroll = internalScroll else { return }
             scroll.isScrollEnabled = false
             scroll.panGestureRecognizer.isEnabled = false
             scroll.bounces = false
