@@ -428,6 +428,10 @@ struct StoryViewer: View {
     // (no mid-swipe layout jumps) — it drives the card+footer layout below.
     private var mineOnly: Bool { groups.count == 1 && (groups.first?.isMine ?? false) }
     @State private var sheetStoryId = ""   // which of MY stories the carousel + viewers list target
+    @State private var uploadSvc = StoriesService.shared   // observed → the "Uploading…" bar tracks the upload
+    // The current item is the still-uploading synthetic placeholder → show the "Uploading…" bar (both
+    // buttons cancel the upload), suppress the Views footer + delete (there's no real story doc yet).
+    private var isUploadingItem: Bool { currentStoryId == StoriesService.uploadingStoryId && uploadSvc.uploading }
     // Home-indicator inset (the story ignoresSafeArea, so overlays must add it back themselves).
     private var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
@@ -579,7 +583,7 @@ struct StoryViewer: View {
         }
         // "…" → Delete Story (only shown on my own story) → same confirm + seamless delete as the trash button.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionDelete"))) { _ in
-            if currentIsMine { confirmDelete = true }
+            if currentIsMine && !isUploadingItem { confirmDelete = true }   // no delete on the uploading item
         }
         .overlay(alignment: .bottom) {
             if sentToast {
@@ -974,6 +978,22 @@ struct StoryViewer: View {
         }
     }
 
+    // Shown in place of the Views/trash controls while THIS item is the uploading placeholder.
+    // Per the user's choice, BOTH the X and the trash cancel the in-progress upload and close.
+    private var uploadingControls: some View {
+        HStack(spacing: 14) {
+            Button { uploadSvc.cancelUpload(); onClose() } label: {
+                Image(systemName: "xmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+            }.buttonStyle(.plain)
+            Spinner(size: 20, color: .white)
+            Text("Uploading…").font(.subheadline).foregroundStyle(.white)
+            Spacer()
+            Button { uploadSvc.cancelUpload(); onClose() } label: {
+                Image(systemName: "trash").font(.title3).foregroundStyle(.white)
+            }.buttonStyle(.plain)
+        }
+    }
+
     private var ownerBar: some View {
         ownerControls
         // Smooth, gradual shadow: a tall gradient that eases clear -> black so it blends softly into the photo
@@ -992,7 +1012,7 @@ struct StoryViewer: View {
     // no more gradient bleeding over the story to the screen edge.
     static let ownerFooterHeight: CGFloat = 52
     private var ownerFooter: some View {
-        ownerControls
+        Group { if isUploadingItem { uploadingControls } else { ownerControls } }
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity)
             .frame(height: Self.ownerFooterHeight)
@@ -1107,56 +1127,40 @@ struct UploadingStoryViewer: View {
     }
 }
 
-// ONE full-screen cover across the whole upload: shows the uploading viewer while the upload
-// runs, then swaps IN-PLACE (crossfade) to the real story viewer when it completes. The old
-// flow dismissed the upload cover and presented the story viewer as a second cover — that
-// popped the user to the chat list (black flash) and re-navigated back in.
+// ONE full-screen cover across the whole upload. The uploading photo is shown as the NEWEST item
+// INSIDE the real story viewer (real progress bars, header, swipe to my older posted stories), with
+// an "Uploading…" bar on it. When the upload finishes, the viewer re-feeds to my real stories (the
+// just-posted image is already URLCache-warm, so no reload flash) and lands on the finished story.
 struct UploadingStoryHandoff: View {
     var meName: String
     var mePhoto: String?
     var onClose: () -> Void                       // dismiss the cover (both phases)
     var onProfile: (StoryGroup) -> Void = { _ in }
-    @State private var finished: StoryGroup?      // set on completion → real viewer, same screen
-    @State private var browsingOld: StoryGroup?   // "‹"/swipe-right → my older stories, SAME cover
-    @State private var feedTick = 0               // re-feed identity after an in-viewer delete
-    @State private var repo = StoriesRepository.shared   // observed so `hasOlder` is live if mine loads late
+    @State private var repo = StoriesRepository.shared
+    @State private var svc = StoriesService.shared
+
+    // My stories + the synthetic uploading item (newest). Once `uploadingStory` goes nil (upload done),
+    // this is just my real stories, which now include the just-posted one.
+    private var group: StoryGroup? {
+        guard let s = svc.uploadingStory else { return repo.mine }
+        if var g = repo.mine { g.stories.append(s); return g }
+        return StoryGroup(authorUid: s.authorUid, name: meName, photoUrl: mePhoto,
+                          stories: [s], lastViewedAt: nil, isMine: true)
+    }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()   // constant backdrop so the crossfade never blinks
-            if let mine = finished {
-                StoryViewer(group: mine, onClose: onClose, onProfile: onProfile,
-                            onDeletedRemaining: { fresh in
-                                // Deleted one item but more remain — instant re-feed, no animation.
-                                var t = Transaction(); t.disablesAnimations = true
-                                withTransaction(t) { finished = fresh; feedTick += 1 }
-                            })
-                    .id(feedTick)
-                    .transition(.opacity)
-            } else if let old = browsingOld {
-                // My already-posted older stories, shown in THIS cover (no cover-switch — presenting
-                // a second fullScreenCover while this one dismissed dropped the user to the chat list).
-                // The upload keeps running; closing returns to chat (the new story lands in the row).
-                StoryViewer(group: old, onClose: onClose, onProfile: onProfile)
-                    .transition(.opacity)
+            Color.black.ignoresSafeArea()   // constant backdrop so the re-feed never blinks
+            if let g = group {
+                StoryViewer(group: g, onClose: onClose, onProfile: onProfile)
+                    // Re-feed identity when the upload flips done → open on the real just-posted story
+                    // (image already URLCache-warm from postStory, so the swap is seamless).
+                    .id(svc.uploading)
             } else {
-                UploadingStoryViewer(meName: meName, mePhoto: mePhoto,
-                                     hasOlder: !(repo.mine?.stories.isEmpty ?? true),
-                                     onClose: onClose,
-                                     onSeeOlder: {
-                                         // Step back into older posted stories WITHOUT leaving this cover.
-                                         guard let m = repo.mine, !m.stories.isEmpty else { return }
-                                         withAnimation(.easeInOut(duration: 0.2)) { browsingOld = m }
-                                     },
-                                     onFinished: {
-                                         // Repo refreshes before `uploading` flips, so `mine` is fresh here.
-                                         if let mine = StoriesRepository.shared.mine { finished = mine }
-                                         else { onClose() }
-                                     })
-                    .transition(.opacity)
+                // Nothing to show (no stories and no upload) → just close.
+                Color.clear.onAppear { onClose() }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: finished == nil)
     }
 }
 

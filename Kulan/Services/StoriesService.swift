@@ -59,11 +59,32 @@ final class StoriesService {
     var uploadingImage: UIImage?
     var uploadError: String?   // set when a post fails so the UI can show it (was swallowed → "dead silent")
     private var uploadTask: Task<Void, Never>?
+    private var uploadStartedAt = Date()
+
+    // Synthetic "newest" story item shown while an upload runs, so the uploading photo appears INSIDE
+    // the real story viewer (real progress bars, header, swipe to my older posted stories) instead of a
+    // separate placeholder screen. Its image is served from URLCache (pre-stored on upload start); its
+    // fixed id marks it so the viewer shows the "Uploading…" bar and blocks delete.
+    static let uploadingStoryId = "story.uploading.placeholder"
+    private static let uploadingURLString = "https://kulan.local/uploading-placeholder.jpg"
+    var uploadingStory: Story? {
+        guard uploading, uploadingImage != nil else { return nil }
+        return Story(id: Self.uploadingStoryId, authorUid: uid, createdAt: uploadStartedAt,
+                     expiresAt: uploadStartedAt.addingTimeInterval(24 * 3600),
+                     mediaUrl: Self.uploadingURLString, allowsReplies: false)
+    }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
     @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = []) {
         uploadTask?.cancel()
         uploadingImage = UIImage(data: image)
+        uploadStartedAt = Date()
+        // Pre-store the picked bytes in URLCache under the synthetic URL so the injected uploading item
+        // renders instantly in the viewer (StoryUI's ImageLoader reads URLCache first).
+        if let u = URL(string: Self.uploadingURLString) {
+            let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: image.count, textEncodingName: nil)
+            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: image), for: URLRequest(url: u))
+        }
         uploading = true
         // Each post owns a token; the completion below only touches shared state if it's STILL the
         // owner. Without this, a cancel-then-repost (or a quick second post) let the FIRST task's

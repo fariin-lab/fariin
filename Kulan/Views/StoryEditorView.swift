@@ -216,13 +216,15 @@ struct StoryEditorView: View {
         VStack(spacing: 10) {
             // Caption bar — dark pill. While typing, Send sits beside it so you can post without
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
-            HStack(spacing: 10) {
+            HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 10) {
-                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+                    // Grows with the text (up to 5 lines) instead of staying a single truncated line.
+                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
+                        .lineLimit(1...5)
                 }
-                .padding(.horizontal, 18).frame(height: 46)
-                .background(Color(white: 0.13), in: Capsule())
+                .padding(.horizontal, 18).padding(.vertical, 12).frame(minHeight: 46)
+                .background(Color(white: 0.13), in: RoundedRectangle(cornerRadius: 23, style: .continuous))
 
                 if captionFocused { sendButton }
             }

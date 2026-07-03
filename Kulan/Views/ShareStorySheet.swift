@@ -121,6 +121,7 @@ struct ShareStorySheet: View {
                     Image(systemName: "checkmark").foregroundStyle(.green).fontWeight(.semibold)
                 }
             }
+            .contentShape(Rectangle())   // whole row taps, not just the icon/text
         }
     }
 
@@ -181,6 +182,7 @@ struct AudiencePicker: View {
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue)
                         }
                     }
+                    .contentShape(Rectangle())   // whole row taps, not just the avatar (Spacer was dead)
                 }
                 .buttonStyle(.plain)
             }
