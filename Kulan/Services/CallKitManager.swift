@@ -110,6 +110,13 @@ extension CallKitManager: CXProviderDelegate {
         action.fulfill()
     }
 
+    // Mute toggled from the SYSTEM call UI (lock screen / green pill) — mirror it into our engine,
+    // else the system mute button did nothing (audio kept sending). Guarded so it can't loop.
+    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+        if CallService.shared.isMuted != action.isMuted { CallService.shared.toggleMute() }
+        action.fulfill()
+    }
+
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
@@ -117,6 +124,11 @@ extension CallKitManager: CXProviderDelegate {
         s.audioSessionDidActivate(audioSession)
         s.isAudioEnabled = true   // turn the WebRTC audio unit ON
         s.unlockForConfiguration()
+        // Re-assert the speaker route. Every session (re)activation — first connect, and after any
+        // interruption (Siri, an incoming cellular call) — resets the output to the earpiece default,
+        // which silently dropped a speakerphone call back to the earpiece while the UI still showed
+        // Speaker ON. Reapply what the user chose.
+        try? audioSession.overrideOutputAudioPort(CallService.shared.isSpeaker ? .speaker : .none)
         // The audio session is only LIVE now — CallKit owns it (useManualAudio), so it isn't active
         // at startCall time. An AVAudioPlayer started before this point plays into a dead session =
         // the caller hears NO ringback. So (re)start the ringback HERE, once the session is real.

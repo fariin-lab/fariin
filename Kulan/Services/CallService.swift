@@ -308,7 +308,9 @@ final class CallService: NSObject {
         videoCapturer?.stopCapture()
         cameraOn = false
         isVideo = false
-        remoteVideoTrack = nil
+        // Do NOT nil remoteVideoTrack: the UI hides it via isVideo already, and didAdd(rtpReceiver)
+        // won't re-fire on a re-upgrade (same dormant transceiver), so clearing it would leave the
+        // remote feed permanently black after switch-to-voice → switch-to-video. Keep the ref.
         if isSpeaker { isSpeaker = false; try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none) }
         CallKitManager.shared.updateHasVideo(false)
         if signal {
