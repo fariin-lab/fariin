@@ -1386,6 +1386,10 @@ struct ThreadView: View {
     private var recordGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
+                // Once LOCKED, the finger no longer controls anything — the locked bar takes over.
+                // Without this, any finger movement after crossing the lock point re-entered the
+                // "!holdStarted" branch and RESTARTED the recorder, losing the audio recorded so far.
+                if recordLocked { return }
                 if !holdStarted {
                     holdStarted = true
                     recordCancelArmed = false
