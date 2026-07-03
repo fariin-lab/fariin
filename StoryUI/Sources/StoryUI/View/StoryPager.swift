@@ -146,6 +146,11 @@ struct StoryPager: UIViewControllerRepresentable {
             didInstallPan = true
             let scroll = pager.view.subviews.compactMap { $0 as? UIScrollView }.first
             internalScroll = scroll
+            // When the host owns the swipe (own story: app-level SwiftUI dismiss), the pager's internal
+            // scroll pan has nothing to navigate to (single bucket) and only CONTENDS with the host drag
+            // for the same touch — that gesture fight is the "shaky" swipe-down. Disable it so the host
+            // drag tracks cleanly (item nav is by tap, not swipe). Friends keep it for user-to-user swipe.
+            scroll?.isScrollEnabled = parent.dismissEnabled
             // Stationary blurred backdrop behind the pages: hidden at rest, shown only during a dismiss drag
             // so the area the card uncovers (above it) is a blurred copy of the story, not black.
             dismissBackdrop.contentMode = .scaleAspectFill
