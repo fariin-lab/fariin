@@ -106,7 +106,18 @@ struct StoryPager: UIViewControllerRepresentable {
 
         // Keep the visible page synced if currentStoryUser changes from outside the pager (e.g. tap-advance
         // off the end of a bucket sets the next user).
+        // Own story (host owns the swipe): fully neutralize the pager's internal scroll so its
+        // horizontal pan/bounce can't fight the host's vertical dismiss drag (the shaky double-image).
+        func neutralizePagerScrollIfHostOwnsSwipe() {
+            guard !parent.dismissEnabled, let scroll = internalScroll else { return }
+            scroll.isScrollEnabled = false
+            scroll.panGestureRecognizer.isEnabled = false
+            scroll.bounces = false
+            scroll.alwaysBounceHorizontal = false
+        }
+
         func syncIfNeeded() {
+            neutralizePagerScrollIfHostOwnsSwipe()   // re-assert on every update; UIPageViewController may reset it
             guard let pager else { return }
             let shown = (pager.viewControllers?.first as? StoryPageHostVC)?.bucketID
             // Initial population: stories/currentStoryUser weren't ready at makeUIViewController time
@@ -148,9 +159,11 @@ struct StoryPager: UIViewControllerRepresentable {
             internalScroll = scroll
             // When the host owns the swipe (own story: app-level SwiftUI dismiss), the pager's internal
             // scroll pan has nothing to navigate to (single bucket) and only CONTENDS with the host drag
-            // for the same touch — that gesture fight is the "shaky" swipe-down. Disable it so the host
-            // drag tracks cleanly (item nav is by tap, not swipe). Friends keep it for user-to-user swipe.
-            scroll?.isScrollEnabled = parent.dismissEnabled
+            // for the same touch — that horizontal scroll/bounce fighting the vertical drag is the
+            // "shaky"/double-image swipe-down. Fully neutralize it (scroll off + pan recognizer off +
+            // no bounce). Friends keep it for user-to-user swipe. Re-applied in syncIfNeeded so a
+            // UIPageViewController internal reset can't turn it back on.
+            neutralizePagerScrollIfHostOwnsSwipe()
             // Stationary blurred backdrop behind the pages: hidden at rest, shown only during a dismiss drag
             // so the area the card uncovers (above it) is a blurred copy of the story, not black.
             dismissBackdrop.contentMode = .scaleAspectFill
