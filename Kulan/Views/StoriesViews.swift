@@ -1386,10 +1386,10 @@ struct MyStoriesCarousel: View {
 // and the scrollable viewer list — NO story media (the carousel above it is its own layer). It drives
 // `progress` (0 closed … 1 open); the StoryViewer's backdrop reads the same value → always in sync.
 struct StoryViewersBottomSheet: View {
-    // Sheet height as a fraction of the screen. The story viewer derives the carousel slot
-    // from this same value, so the two layers always agree on the layout (user mockup:
-    // sheet ≈ bottom 58%, carousel fills the space above it).
-    static let heightFraction: CGFloat = 0.58
+    // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
+    // same value, so the two layers always agree on the layout. Telegram makes the LIST the dominant
+    // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
+    static let heightFraction: CGFloat = 0.70
 
     let activeStoryId: String
     @Binding var progress: CGFloat
@@ -1405,7 +1405,13 @@ struct StoryViewersBottomSheet: View {
         var v = viewers
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty { v = v.filter { $0.name.localizedCaseInsensitiveContains(q) } }
-        return v.sorted { $0.viewedAt > $1.viewedAt }
+        // Telegram order (sortMode .reactionsFirst): people who REACTED come first, then most-recent.
+        return v.sorted { a, b in
+            let ar = !(a.reaction ?? "").isEmpty
+            let br = !(b.reaction ?? "").isEmpty
+            if ar != br { return ar }            // reactions first
+            return a.viewedAt > b.viewedAt       // then newest view
+        }
     }
 
     var body: some View {
