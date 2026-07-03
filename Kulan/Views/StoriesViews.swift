@@ -642,10 +642,12 @@ struct StoryViewer: View {
                                 .allowsHitTesting(false)
                         }
                     }
-                    // NO app-level clip / background anymore: the card's bottom corners are rounded in
-                    // UIKit (inside the library's ImageLoader, which has its own black backing), so the
-                    // library's native swipe-down pan moves the whole card freely — exactly like a
-                    // friend's story. (An app clip pinned the card → the shaky/broken dismiss.)
+                    // NO app-level CLIP (the clip pinned the card and broke the native dismiss) — the
+                    // card's corners are rounded in UIKit inside the library now. But KEEP a solid black
+                    // background: the cover is see-through (.clear) for the swipe-down, so without this
+                    // the light chat list shows through as a WHITE story. A background (unlike a clip)
+                    // doesn't pin the card, so the library dismiss stays smooth.
+                    .background(Color.black)
                 ownerFooter
                     .opacity(dragDown > 6 ? 0 : 1).animation(.easeOut(duration: 0.15), value: dragDown > 6)
             } else {
