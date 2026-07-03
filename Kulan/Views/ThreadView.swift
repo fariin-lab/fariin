@@ -54,6 +54,9 @@ struct ThreadView: View {
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
     @State private var didAnchorUnread = false
+    // Open-position gate: keep the list hidden (skeleton shows) until it's positioned — at the unread
+    // divider if there are unread, else the bottom — so the user never sees a bottom→unread JUMP.
+    @State private var revealed = false
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
@@ -89,6 +92,7 @@ struct ThreadView: View {
             pinnedBar(proxy)
             ScrollView {
                 messageList(proxy)
+                    .opacity(revealed ? 1 : 0)   // hidden (skeleton shows) until positioned → no open jump
                     .contentShape(Rectangle())   // whole content tappable so the dismiss tap always lands
                     .simultaneousGesture(
                         // tap the chat to close the keyboard; force-resign so it always drops.
@@ -129,6 +133,15 @@ struct ThreadView: View {
             .onChange(of: repo.otherTyping) { _, t in
                 if t && isAtBottom { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("BOTTOM", anchor: .bottom) } }
             }
+            // Keyboard opening: if I was already at the bottom, keep the newest messages pinned right
+            // above the keyboard (the system doesn't reliably do this, which left the chat looking
+            // like it jumped up/away). If I'm reading history (not at bottom), leave my place alone.
+            .onChange(of: inputFocused) { _, focused in
+                guard focused, isAtBottom else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                }
+            }
             // Floating jump-to-bottom button (our design) — appears when scrolled up,
             // with a count of messages that arrived while away.
             .overlay(alignment: .bottomTrailing) {
@@ -161,7 +174,9 @@ struct ThreadView: View {
             // Skeleton placeholder bubbles until the first page is ready (cold load only;
             // a cached chat flips didInitialLoad instantly, so this never flashes).
             .overlay {
-                if !repo.didInitialLoad {
+                // Keep the skeleton up until the list is loaded AND positioned (revealed) — this is
+                // what hides the open-jump: we position the hidden list, then cross-fade it in.
+                if !revealed {
                     ThreadSkeleton().allowsHitTesting(false)
                 }
             }
@@ -297,21 +312,30 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
             recorder.prepare()                           // pre-warm so hold-to-record is instant
+            // Unread count SYNCHRONOUSLY from the cached conversation, so we know the open target on
+            // the very first frame (no async round-trip → no bottom-then-jump). 0 → open at bottom.
+            unreadOnOpen = cachedConv?.unread(me) ?? 0
+            maybeReveal()                                // no unread → reveal at the bottom as soon as loaded
             // Gate animated auto-scroll until the push transition + first chunked load settle,
-            // so the conversation opens cleanly at the bottom with no jump (defaultScrollAnchor
-            // handles the initial position). ~0.6s ≈ transition (0.35s) + load buffer.
+            // so the conversation opens cleanly with no jump.
             settled = false
             Task { try? await Task.sleep(nanoseconds: 600_000_000); await MainActor.run { settled = true } }
+            // Safety net: never leave the list hidden behind the skeleton if a reveal path is missed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { if !revealed { withAnimation(.easeOut(duration: 0.15)) { revealed = true } } }
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
             Task {
-                let n = await ChatService.myUnread(cid)   // capture BEFORE reset, to anchor the divider
-                await MainActor.run { unreadOnOpen = n }
+                // Only needed when this chat wasn't in the cached list (no sync count above).
+                if cachedConv == nil {
+                    let n = await ChatService.myUnread(cid)
+                    await MainActor.run { unreadOnOpen = n }
+                }
                 await ChatService.resetUnread(cid)
                 if !repo.iBlocked { await ChatService.markRead(cid) }
             }
         }
+        .onChange(of: repo.didInitialLoad) { _, _ in maybeReveal() }
         .onDisappear {
             repo.stop()
             groupCallListener?.remove(); groupCallListener = nil
@@ -951,10 +975,18 @@ struct ThreadView: View {
         guard idx < msgs.count else { return }
         firstUnreadId = msgs[idx].id
         didAnchorUnread = true
-        // Position instantly (no animated swoosh from the bottom) so the open feels clean.
+        // Position while still hidden, THEN reveal — so the user never sees the bottom-then-jump.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             proxy.scrollTo(firstUnreadId, anchor: .top)
+            withAnimation(.easeOut(duration: 0.18)) { revealed = true }
         }
+    }
+
+    // Reveal the list once it's correctly positioned. No-unread chats reveal at the bottom the moment
+    // the first page is loaded; unread chats reveal from anchorUnread after landing on the divider.
+    private func maybeReveal() {
+        guard !revealed, repo.didInitialLoad, unreadOnOpen == 0 else { return }
+        withAnimation(.easeOut(duration: 0.15)) { revealed = true }
     }
 
     // Toggle my reaction (re-tapping the same emoji removes it) and remember it as recent.
