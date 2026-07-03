@@ -222,10 +222,12 @@ private extension StoryDetailView {
     func getStoryView(with index: Int, story: Story) -> some View {
         switch story.config.mediaType {
         case .image:
-            // Reply-bar (friend) stories render as a card ending above the reply bar → round the
-            // bottom corners in UIKit so the blurred backdrop is clipped too (a SwiftUI clip isn't).
+            // Round the card's bottom corners in UIKit (a SwiftUI clip doesn't clip the blurred backdrop).
+            // Applies to reply-bar (friend) cards AND my own story (isMine) — my own card is rounded but
+            // uses the library's UIKit dismiss now, so the corners must live here, not in an app-level
+            // clip (an app clip pinned the card and broke the smooth dismiss).
             ImageView(imageURL: story.mediaURL,
-                      bottomCornerRadius: story.config.storyType != .plain() ? 24 : 0) {
+                      bottomCornerRadius: (story.config.storyType != .plain() || model.isMine) ? 24 : 0) {
                 start(index: index)
             }
             .onAppear {

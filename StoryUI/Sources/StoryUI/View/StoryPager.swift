@@ -20,7 +20,8 @@ struct StoryPager: UIViewControllerRepresentable {
     let onCommit: () -> Void               // pulled past threshold -> dismiss
     let onCancel: () -> Void               // released short -> overlays restore
     let onSwipeUp: () -> Void              // up-swipe -> host opens the views sheet (Telegram)
-    var dismissEnabled: Bool = true        // false -> skip the library's down/up pans (host owns them)
+    var dismissEnabled: Bool = true        // install the library's native DOWN dismiss pan (smooth UIKit)
+    var swipeUpEnabled: Bool = true        // install the library's UP pan (false -> host owns swipe-up)
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
@@ -109,7 +110,9 @@ struct StoryPager: UIViewControllerRepresentable {
         // Own story (host owns the swipe): fully neutralize the pager's internal scroll so its
         // horizontal pan/bounce can't fight the host's vertical dismiss drag (the shaky double-image).
         func neutralizePagerScrollIfHostOwnsSwipe() {
-            guard !parent.dismissEnabled, let scroll = internalScroll else { return }
+            // Own story = single bucket (host owns swipe-up). Kill the horizontal scroll so its
+            // bounce can't fight the vertical down-dismiss pan. Friends keep it for user-to-user swipe.
+            guard !parent.swipeUpEnabled, let scroll = internalScroll else { return }
             scroll.isScrollEnabled = false
             scroll.panGestureRecognizer.isEnabled = false
             scroll.bounces = false
@@ -176,14 +179,18 @@ struct StoryPager: UIViewControllerRepresentable {
             dismissBlur.isHidden = true
             pager.view.insertSubview(dismissBackdrop, at: 0)
             pager.view.insertSubview(dismissBlur, aboveSubview: dismissBackdrop)
-            // When the host owns swipe-down/up (own story: app-level dismiss + real-time viewers open),
-            // do NOT add the library's own down/up pans — two systems moving the same card = the shake.
+            // DOWN dismiss pan (native UIKit — smooth). Installed for BOTH own and friends now, so the
+            // own-story swipe-down uses the exact same buttery pan friends use (no app-level SwiftUI
+            // offset). The card moves in pure UIKit; require(toFail:) keeps the horizontal slide separate.
             if parent.dismissEnabled {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
                 scroll?.panGestureRecognizer.require(toFail: pan)
-                // Up-swipe opens the views sheet (Telegram). Direction-locked so it never fights the cube or dismiss.
+            }
+            // UP pan opens the views sheet. NOT installed for own stories — the host owns swipe-up there
+            // (real-time viewers-sheet tracking), so the library up pan would double-fire.
+            if parent.swipeUpEnabled {
                 let upPan = DirectionalPanGestureRecognizer(direction: .up, target: self, action: #selector(handleSwipeUp(_:)))
                 upPan.delegate = self
                 pager.view.addGestureRecognizer(upPan)

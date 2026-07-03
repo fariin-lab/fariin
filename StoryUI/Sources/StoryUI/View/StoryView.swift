@@ -25,7 +25,8 @@ public struct StoryView: View {
     let onDrag: ((CGFloat) -> Void)?         // swipe-down amount (so the host can hide its overlays)
     let showMore: Bool                      // show the header "…" dropdown menu
     let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet (Telegram)
-    let dismissEnabled: Bool               // false → host owns swipe-down/up (avoids double-move shake)
+    let dismissEnabled: Bool               // install the library's native DOWN swipe-down-to-dismiss pan
+    let swipeUpEnabled: Bool               // install the library's UP pan (false → host owns swipe-up)
 
 
     /// Stories and isPresented required, selectedIndex is optional default: 0
@@ -45,7 +46,8 @@ public struct StoryView: View {
         onDrag: ((CGFloat) -> Void)? = nil,
         showMore: Bool = false,
         onSwipeUp: (() -> Void)? = nil,
-        dismissEnabled: Bool = true
+        dismissEnabled: Bool = true,
+        swipeUpEnabled: Bool = true
     ) {
         self.stories = stories
         self.selectedIndex = selectedIndex
@@ -58,6 +60,7 @@ public struct StoryView: View {
         self.showMore = showMore
         self.onSwipeUp = onSwipeUp
         self.dismissEnabled = dismissEnabled
+        self.swipeUpEnabled = swipeUpEnabled
     }
     
     public var body: some View {
@@ -76,7 +79,8 @@ public struct StoryView: View {
                 onCommit: { isPresented = false },      // card already animated off in UIKit; remove the cover
                 onCancel: { onDrag?(0) },               // sprang back; restore overlays
                 onSwipeUp: { onSwipeUp?() },            // up-swipe → host opens the views sheet
-                dismissEnabled: dismissEnabled
+                dismissEnabled: dismissEnabled,
+                swipeUpEnabled: swipeUpEnabled
             )
             .ignoresSafeArea()
             .frame(maxWidth: .infinity, maxHeight: .infinity)

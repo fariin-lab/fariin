@@ -413,8 +413,6 @@ struct StoryViewer: View {
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // finger is actively dragging the sheet OPEN
     @State private var openDragStart: CGFloat = 0     // progress at drag start
-    @State private var dismissDrag: CGFloat = 0       // app-level swipe-DOWN on my own story (the clip
-                                                      // makes the library's own swipe-down inert)
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -644,12 +642,10 @@ struct StoryViewer: View {
                                 .allowsHitTesting(false)
                         }
                     }
-                    .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 24, bottomTrailingRadius: 24,
-                                                      style: .continuous))
-                    // Black BEHIND the clipped card so the rounded-corner cutouts read as black — the
-                    // clear see-through cover (for swipe-down) was showing the chat list through the
-                    // corners as light/white patches.
-                    .background(Color.black)
+                    // NO app-level clip / background anymore: the card's bottom corners are rounded in
+                    // UIKit (inside the library's ImageLoader, which has its own black backing), so the
+                    // library's native swipe-down pan moves the whole card freely — exactly like a
+                    // friend's story. (An app clip pinned the card → the shaky/broken dismiss.)
                 ownerFooter
                     .opacity(dragDown > 6 ? 0 : 1).animation(.easeOut(duration: 0.15), value: dragDown > 6)
             } else {
@@ -661,59 +657,37 @@ struct StoryViewer: View {
         // TIME (onChanged drives `viewersProgress`), instead of only opening after you lift off.
         // `including: .subviews` for friends disables MY drag while keeping the library's own
         // gestures (swipe-down, tap-to-advance); `.all` for my own enables both.
+        // Swipe-UP only (open the viewers sheet in real time). Swipe-DOWN dismiss is now the library's
+        // native UIKit pan (same as friends) — no app-level offset here, so no shake. `.all` keeps this
+        // app gesture live alongside the library gestures for my own story; `.subviews` (friends) leaves
+        // the library to own everything.
         .simultaneousGesture(
             DragGesture(minimumDistance: 10)
                 .onChanged { v in
                     guard currentIsMine else { return }
                     let vertical = abs(v.translation.height) > abs(v.translation.width)
                     let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    // Direction is decided LIVE each frame from the CURRENT translation, so reversing
-                    // mid-drag (down then up) cleanly switches modes instead of stranding a flag.
                     if openDragging {
-                        // Already opening: keep tracking (upward raises progress). If the finger goes
-                        // net-downward while the sheet is fully closed, hand off to dismiss.
-                        if viewersProgress == 0, v.translation.height > 6, vertical {
-                            openDragging = false
-                        } else {
-                            viewersProgress = max(0, min(1, openDragStart - v.translation.height / sheetH))
-                            return
-                        }
-                    }
-                    if dismissDrag > 0 {
-                        // Already dismissing: track down; if it reverses upward, cancel the dismiss.
-                        if v.translation.height <= 0 { dismissDrag = 0 } else { dismissDrag = v.translation.height; return }
-                    }
-                    guard vertical else { return }
-                    // Fresh engagement: DOWN (sheet closed) → dismiss; UP → open viewers in real time.
-                    if v.translation.height > 6, viewersProgress == 0 {
-                        dismissDrag = v.translation.height
-                    } else if v.translation.height < -6, viewersProgress < 1 {
-                        openDragging = true
-                        openDragStart = viewersProgress
-                        if !showViewers {
-                            sheetStoryId = targetStoryId
-                            showViewers = true
-                        }
                         viewersProgress = max(0, min(1, openDragStart - v.translation.height / sheetH))
+                        return
                     }
+                    // Only UP engages the viewers sheet; DOWN is left entirely to the library's dismiss pan.
+                    guard vertical, v.translation.height < -6, viewersProgress < 1 else { return }
+                    openDragging = true
+                    openDragStart = viewersProgress
+                    if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
+                    viewersProgress = max(0, min(1, openDragStart - v.translation.height / sheetH))
                 }
                 .onEnded { v in
                     let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    let wasDismiss = dismissDrag > 0
                     let wasOpen = openDragging
-                    // Always reset BOTH flags so a reversed/aborted drag can never strand state.
                     openDragging = false
-                    if wasDismiss {
-                        if dismissDrag > 110 || v.predictedEndTranslation.height > 320 { onClose() }
-                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dismissDrag = 0 } }
-                        dismissDrag = 0
-                    } else if wasOpen {
-                        let projected = viewersProgress - v.predictedEndTranslation.height / sheetH
-                        if projected > 0.5 {
-                            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
-                        } else {
-                            closeViewers()
-                        }
+                    guard wasOpen else { return }
+                    let projected = viewersProgress - v.predictedEndTranslation.height / sheetH
+                    if projected > 0.5 {
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
+                    } else {
+                        closeViewers()
                     }
                 },
             including: currentIsMine ? .all : .subviews
@@ -727,12 +701,8 @@ struct StoryViewer: View {
         // starts to shrink — so the photo stays bright throughout and only the chrome dissolves.
         // Reversed on close (the chrome fades back in as the morph card grows away).
         .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(p / 0.08, 1))))
-        // App-level swipe-down: slide + fade the card as it's pulled down. NO .scaleEffect here —
-        // SwiftUI scaling a view that hosts the UIKit story pager re-renders it every frame, which is
-        // the "shaking" (friend stories are smooth because their scale happens inside UIKit). A pure
-        // translate + fade reads just as cleanly and stays perfectly smooth.
-        .offset(y: dismissDrag)
-        .opacity(dismissDrag > 0 ? max(0.3, 1 - Double(dismissDrag) / 500) : 1)
+        // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
+        // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
         .ignoresSafeArea()
     }
@@ -764,10 +734,11 @@ struct StoryViewer: View {
             onDrag: { d in dragDown = d },   // fade my overlays out as the card is pulled down
             showMore: true, // "…" is a native dropdown menu in the header; its buttons post notifications
             onSwipeUp: { },  // handled by the real-time drag on storyLayer (don't double-trigger)
-            // My OWN story: the app owns swipe-up (real-time viewers open) AND swipe-down (app-level
-            // dismiss). Disable the library's own down/up pans so two systems don't move the same
-            // card at once (that was the swipe-down "shaking"). Friends keep the library's dismiss.
-            dismissEnabled: !mineOnly
+            // Swipe-DOWN dismiss = the library's native UIKit pan for EVERYONE now (own + friends), so
+            // my own story is as smooth as a friend's. Swipe-UP (open viewers) stays app-owned for my
+            // own story, so the library's up pan is disabled there (swipeUpEnabled: !mineOnly).
+            dismissEnabled: true,
+            swipeUpEnabled: !mineOnly
         )
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
