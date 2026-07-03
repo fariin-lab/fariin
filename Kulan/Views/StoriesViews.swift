@@ -818,10 +818,11 @@ struct StoryViewer: View {
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
-        // The morph card shows whatever the carousel has CENTERED (sheetStoryId), not the story that
-        // was on screen when the sheet opened — otherwise, after scrolling the carousel, closing
-        // cross-dissolved two different photos and collapsed into the wrong one.
-        let morphURL = (liveMyStories.first { $0.id == sheetStoryId } ?? currentStory).map { $0.mediaUrl }
+        // SINGLE SOURCE OF TRUTH: the background card always shows the CURRENT story (currentStoryId),
+        // never the carousel's transient centre id — so it can NEVER flash to the wrong story while the
+        // sheet is opening. Scrolling the carousel drives currentStoryId (via jumpToStoryItem), so the
+        // background still follows the selection, and closing collapses onto the very same story.
+        let morphURL = (currentStory ?? liveMyStories.first { $0.id == sheetStoryId }).map { $0.mediaUrl }
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH,
@@ -1404,11 +1405,20 @@ struct StoryViewersBottomSheet: View {
     @State private var viewers: [StoryViewerInfo] = []
     @State private var search = ""
     @State private var loading = true
+    @State private var tab = 0   // 0 = All Viewers, 1 = Contacts (Telegram tabs)
     @State private var dragStart: CGFloat? = nil
     @State private var listOffset: CGFloat = 0   // the viewer list's scroll offset (0 = top)
 
+    // Uids of my 1:1 contacts — for the "Contacts" tab filter.
+    private var contactUids: Set<String> {
+        let me = AuthService.shared.uid ?? ""
+        return Set(ConversationsRepository.shared.conversations
+            .filter { !$0.isGroup }.map { $0.otherUid(me) }.filter { !$0.isEmpty })
+    }
+
     private var filtered: [StoryViewerInfo] {
         var v = viewers
+        if tab == 1 { let c = contactUids; v = v.filter { c.contains($0.id) } }   // Contacts tab
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty { v = v.filter { $0.name.localizedCaseInsensitiveContains(q) } }
         // Telegram order (sortMode .reactionsFirst): people who REACTED come first, then most-recent.
@@ -1480,10 +1490,11 @@ struct StoryViewersBottomSheet: View {
             }
     }
 
-    // Sticky header (handle + search). Dragging here drives the sheet.
+    // Sticky header (handle + tabs + search). Dragging here drives the sheet.
     private func stickyHeader(sheetH: CGFloat) -> some View {
         VStack(spacing: 12) {
             Capsule().fill(.white.opacity(0.28)).frame(width: 38, height: 5).padding(.top, 8)
+            tabSelector
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.6))
                 TextField("", text: $search, prompt: Text("Search").foregroundColor(.white.opacity(0.5)))
@@ -1496,6 +1507,27 @@ struct StoryViewersBottomSheet: View {
         .padding(.bottom, 10)
         .contentShape(Rectangle())
         .gesture(sheetDrag(sheetH: sheetH, fromList: false))
+    }
+
+    // "All Viewers | Contacts" tabs (Telegram StoryItemSetViewListComponent): active tab is white
+    // with an underline, inactive is dimmed. Tapping switches the list filter (no sheet drag).
+    private var tabSelector: some View {
+        HStack(spacing: 24) {
+            ForEach(0..<2, id: \.self) { i in
+                Button { withAnimation(.easeInOut(duration: 0.18)) { tab = i } } label: {
+                    VStack(spacing: 6) {
+                        Text(i == 0 ? "All Viewers" : "Contacts")
+                            .font(.subheadline.weight(tab == i ? .semibold : .regular))
+                            .foregroundStyle(tab == i ? .white : .white.opacity(0.5))
+                        Capsule().fill(tab == i ? Color.white : Color.clear).frame(height: 2)
+                    }
+                    .fixedSize()
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 18)
     }
 
     private func viewerList(sheetH: CGFloat) -> some View {
