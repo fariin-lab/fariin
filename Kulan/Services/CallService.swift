@@ -27,18 +27,17 @@ final class CallService: NSObject {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
             if state == .active {
-                if isVideo { isSpeaker = true }   // video calls default to speakerphone (like FaceTime)
+                if cameraOn { isSpeaker = true }   // video calls default to speakerphone (like FaceTime)
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
             }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 calleeRinging = false; recordWritten = false; minimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
-                incomingSwitchRequest = nil; awaitingSwitchAccept = false
-                switchReqCounter = 0; handledSwitchKeys = []
+                pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
-                isVideo = false; cameraOn = true; usingFrontCamera = true
+                cameraOn = false; remoteCameraOn = false; usingFrontCamera = true
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
             }
@@ -56,9 +55,12 @@ final class CallService: NSObject {
     private var ringbackPlayer: AVAudioPlayer?
     private var tonePlayer: AVAudioPlayer?       // busy / ended one-shot tones
     private var localAudioTrack: RTCAudioTrack?
-    // Video (1:1 video calls) — layered on top of the existing audio peer connection.
-    var isVideo = false
-    var cameraOn = true
+    // Video (1:1). Each side controls its OWN camera independently (Signal/Zoom-style): no
+    // permission — turning your camera on just sends your video and the other side sees it. The
+    // video layout shows whenever EITHER camera is on.
+    var cameraOn = false            // is MY camera sending
+    var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
+    var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
     var usingFrontCamera = true
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
@@ -72,12 +74,7 @@ final class CallService: NSObject {
     private var iceRestartWork: DispatchWorkItem?    // delayed ICE restart after a drop
     private var reconnectGiveUpWork: DispatchWorkItem? // hard cap: can't recover -> Failed
     private var negotiationVersion = 0               // bumps each ICE restart / media renegotiation (caller)
-    // Mid-call video<->voice switch with consent. Only one switch negotiates at a time; every
-    // request carries a globally-unique reqId ("<uid>_<n>") so both phones dedup snapshot echoes.
-    var incomingSwitchRequest: String? = nil         // reqId of a pending "switch to video?" prompt (UI shows Accept/Decline)
-    var awaitingSwitchAccept = false                 // I asked to switch to video; waiting on the other side
-    private var switchReqCounter = 0
-    private var handledSwitchKeys: Set<String> = []  // "reqId:phase" already applied (ignore Firestore re-fires)
+    private var pendingOffer: [String: String]?      // cached incoming offer → answer without a server round-trip
     private var appliedRemoteRestart = 0             // last restart version we applied
 
     private let db = Firestore.firestore()
@@ -107,6 +104,13 @@ final class CallService: NSObject {
         let c = RTCConfiguration()
         c.iceServers = fetchedIceServers ?? Self.fallbackIceServers
         c.sdpSemantics = .unifiedPlan
+        // Connect faster (shorter "Connecting…"): pre-gather ICE candidates so they're ready the
+        // instant the offer/answer is set, keep gathering continuously, and bundle all media on ONE
+        // transport so there are far fewer candidate pairs to check before the path comes up.
+        c.iceCandidatePoolSize = 1
+        c.continualGatheringPolicy = .gatherContinually
+        c.bundlePolicy = .maxBundle
+        c.rtcpMuxPolicy = .require
         return c
     }
 
@@ -137,12 +141,17 @@ final class CallService: NSObject {
         let audioTrack = Self.factory.audioTrack(with: audioSource, trackId: "audio0")
         connection?.add(audioTrack, streamIds: ["stream0"])
         localAudioTrack = audioTrack
-        if isVideo { addLocalVideo(to: connection) }
+        // Always negotiate a video m-line up front — the track is DISABLED for a voice call (no
+        // frames, no camera). This makes a mid-call camera toggle a pure track-enable with NO
+        // renegotiation (which is fragile + glare-prone) and no black-remote-on-re-toggle bugs.
+        addLocalVideo(to: connection)
         return connection
     }
 
     // MARK: - Video tracks / capture
 
+    // Adds the local video track (once, at call setup). Only fires the camera + its permission
+    // prompt if my camera is actually on now — a voice call adds a silent, disabled track.
     private func addLocalVideo(to connection: RTCPeerConnection?) {
         guard let connection else { return }
         let source = Self.factory.videoSource()
@@ -152,8 +161,12 @@ final class CallService: NSObject {
         connection.add(track, streamIds: ["stream0"])
         videoCapturer = capturer
         localVideoTrack = track
-        // Explicitly ensure camera access, THEN start capture (off the main thread). Without
-        // this the capturer can silently never produce frames -> black video on both ends.
+        if cameraOn { startCameraCapture() }
+    }
+
+    // Ask for camera access, then feed frames into the local track (off the main thread). Without
+    // the access check the capturer can silently never produce frames -> black video on both ends.
+    private func startCameraCapture() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted, let self else { return }
             DispatchQueue.global(qos: .userInitiated).async { self.startCapture(front: self.usingFrontCamera) }
@@ -180,11 +193,7 @@ final class CallService: NSObject {
         DispatchQueue.main.async { self.usingFrontCamera = front }
     }
 
-    func toggleCamera() {
-        cameraOn.toggle()
-        localVideoTrack?.isEnabled = cameraOn
-        if cameraOn { startCapture(front: usingFrontCamera) } else { videoCapturer?.stopCapture() }
-    }
+    func toggleCamera() { setMyCamera(on: !cameraOn) }
 
     func switchCamera() {
         guard cameraOn, let capturer = videoCapturer else { return }
@@ -196,140 +205,36 @@ final class CallService: NSObject {
         }
     }
 
-    // MARK: - Video <-> Voice switch (mid-call, with consent)
-    //
-    // Switch-to-VIDEO asks the other side first (like FaceTime/WhatsApp) and turns BOTH cameras on:
-    //   initiator → "requested"  ─▶  responder Accept ─▶ "accepted"/"calleeReady"
-    //   then the CALLER always drives ONE renegotiation (proven restartOffer/restartAnswer channel)
-    //   AFTER both sides have added their local video track, so a single offer negotiates 2-way video.
-    // Switch-to-VOICE needs no consent (turning your own camera off is not a privacy risk): both
-    // sides just disable video + flip the UI back to voice, no SDP renegotiation.
-    // NOTE: mid-call SDP renegotiation needs a real 2-device test; not verifiable in the simulator.
+    // MARK: - Camera (each side controls its OWN camera, Signal-style — no permission handshake)
 
-    /// I tap "video" on a voice call → ask the other side to switch to video.
-    func requestVideoSwitch() {
-        guard state == .active, callId != nil, !isVideo, !awaitingSwitchAccept else { return }
-        awaitingSwitchAccept = true   // camera stays OFF until they accept
-        switchReqCounter += 1
-        writeSwitchPhase(reqId: "\(me)_\(switchReqCounter)", mode: "video", phase: "requested")
-        // Safety: if they never answer the prompt, re-enable the button after 30s (a late Accept
-        // still completes the handshake — this only stops the button from being stuck disabled).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-            guard let self, self.awaitingSwitchAccept, !self.isVideo else { return }
-            self.awaitingSwitchAccept = false
-        }
-    }
-
-    /// I answer the "switch to video?" prompt.
-    func respondToSwitch(accept: Bool) {
-        guard let reqId = incomingSwitchRequest else { return }
-        incomingSwitchRequest = nil
-        guard accept else { writeSwitchPhase(reqId: reqId, mode: "video", phase: "declined"); return }
-        isVideo = true
-        if isCaller {
-            // I'm the caller consenting to the callee's request: I offer only AFTER the callee
-            // (the initiator) has added its track and signalled ready — so wait, just accept.
-            writeSwitchPhase(reqId: reqId, mode: "video", phase: "accepted")
+    // Turn MY camera on/off. The video m-line was negotiated at call setup, so this is a pure
+    // track-enable + capture start/stop — NO renegotiation. Broadcast my state so the other side
+    // shows/hides my video. No prompt: I only ever share MY OWN camera, which is my choice.
+    private func setMyCamera(on: Bool) {
+        guard state == .active || state == .reconnecting else { return }
+        cameraOn = on
+        localVideoTrack?.isEnabled = on
+        if on {
+            if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone, like FaceTime
+            startCameraCapture()
         } else {
-            // I'm the callee: add my video now and tell the caller I'm ready to be re-offered.
-            enableLocalVideo()
-            writeSwitchPhase(reqId: reqId, mode: "video", phase: "calleeReady")
+            videoCapturer?.stopCapture()
         }
+        CallKitManager.shared.updateHasVideo(on)
+        broadcastCameraState()
     }
 
-    /// Drop a video call back to voice-only (either side, no consent needed).
-    func switchToVoice() {
-        guard isVideo else { return }
-        applyVoiceMode(signal: true)
-    }
-
-    // Applies the switch signalled on the call doc. Deduped by "reqId:phase" so Firestore re-fires
-    // (including our own writes echoing back) are processed exactly once.
-    private func handleVideoSwitch(reqId: String, mode: String, by: String, phase: String) {
-        let iAmInitiator = (by == me)
-        if mode == "voice" {                       // downgrade: converge to voice, no prompt
-            if !iAmInitiator { applyVoiceMode(signal: false) }
-            return
-        }
-        switch phase {
-        case "requested":
-            guard !iAmInitiator else { return }    // echo of my own request
-            minimized = false                      // surface the prompt even if the call was minimized
-            incomingSwitchRequest = reqId          // → UI Accept/Decline
-        case "declined":
-            if iAmInitiator { awaitingSwitchAccept = false }
-        case "accepted":
-            // The responder consented. Only the INITIATOR acts on this.
-            guard iAmInitiator else { return }
-            awaitingSwitchAccept = false; isVideo = true
-            if !isCaller {                         // callee-initiator: add my track, then signal ready
-                enableLocalVideo()
-                writeSwitchPhase(reqId: reqId, mode: "video", phase: "calleeReady")
-            }                                       // caller-initiator: wait for calleeReady below
-        case "calleeReady":
-            // The callee now has its video track. The CALLER adds video + drives the single re-offer.
-            guard isCaller else { return }
-            awaitingSwitchAccept = false; isVideo = true
-            enableLocalVideo()
-            callerReoffer()
-        default: break
-        }
-    }
-
-    private func writeSwitchPhase(reqId: String, mode: String, phase: String) {
+    // Tell the other side whether my camera is on — drives their show/hide of MY video.
+    private func broadcastCameraState() {
         guard let id = callId else { return }
-        db.collection("calls").document(id).updateData([
-            "videoSwitch": ["reqId": reqId, "mode": mode, "by": me, "phase": phase]
-        ])
+        db.collection("calls").document(id).updateData(["cams.\(me)": cameraOn])
     }
 
-    // Turn my camera ON — reusing the existing track/m-line if we've had video before (so a second
-    // switch resumes without adding a duplicate transceiver), else create it the first time.
-    private func enableLocalVideo() {
-        guard let pc else { return }
-        cameraOn = true
-        if !isSpeaker { toggleSpeaker() }
-        CallKitManager.shared.updateHasVideo(true)
-        if let track = localVideoTrack {
-            track.isEnabled = true
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                guard granted, let self else { return }
-                DispatchQueue.global(qos: .userInitiated).async { self.startCapture(front: self.usingFrontCamera) }
-            }
-        } else {
-            addLocalVideo(to: pc)   // first video ever this call: adds track + m-line + camera perms + capture
-        }
-    }
-
-    // Both sides flip back to voice: stop sending video, hide the remote feed, return to earpiece.
-    // The video transceiver stays (dormant) so a later re-switch resumes without SDP surgery.
-    private func applyVoiceMode(signal: Bool) {
-        localVideoTrack?.isEnabled = false
-        videoCapturer?.stopCapture()
-        cameraOn = false
-        isVideo = false
-        // Do NOT nil remoteVideoTrack: the UI hides it via isVideo already, and didAdd(rtpReceiver)
-        // won't re-fire on a re-upgrade (same dormant transceiver), so clearing it would leave the
-        // remote feed permanently black after switch-to-voice → switch-to-video. Keep the ref.
-        if isSpeaker { isSpeaker = false; try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none) }
-        CallKitManager.shared.updateHasVideo(false)
-        if signal {
-            switchReqCounter += 1
-            writeSwitchPhase(reqId: "\(me)_\(switchReqCounter)", mode: "voice", phase: "applied")
-        }
-    }
-
-    // Caller-only re-offer of the current tracks over the proven restart channel. Called once both
-    // sides have added their local video, so a single offer/answer negotiates two-way video.
-    private func callerReoffer() {
-        guard isCaller, let pc, let id = callId else { return }
-        negotiationVersion += 1
-        let v = negotiationVersion
-        pc.offer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)) { [weak self] sdp, _ in
-            guard let self, let sdp, let pc = self.pc else { return }
-            pc.setLocalDescription(sdp) { _ in
-                self.db.collection("calls").document(id).updateData(["restartOffer": ["sdp": sdp.sdp, "version": v]])
-            }
+    // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
+    // reveal/hide it). Their track keeps arriving; `remoteCameraOn` gates whether we render it.
+    private func handleRemoteCallState(_ d: [String: Any]) {
+        if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
+            remoteCameraOn = on
         }
     }
 
@@ -478,7 +383,7 @@ final class CallService: NSObject {
 
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
-        isVideo = video
+        cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
         isCaller = true
         otherUid = uid
         otherName = name
@@ -505,9 +410,10 @@ final class CallService: NSObject {
                         "callee": uid,
                         "callerName": ProfileStore.shared.me?.name ?? "Caller",
                         "callerPhoto": ProfileStore.shared.me?.photoUrl ?? "",
-                        "type": self.isVideo ? "video" : "voice",
+                        "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
                         "offer": ["sdp": sdp.sdp, "type": "offer"],
+                        "cams": [self.me: self.cameraOn],   // seed my camera state (Signal-style per-side)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]) { [weak self] err in
                         guard let self else { return }
@@ -592,9 +498,12 @@ final class CallService: NSObject {
                     let photo = d["callerPhoto"] as? String ?? ""
                     self.otherPhotoUrl = photo.isEmpty ? nil : photo
                     self.isCaller = false
-                    self.isVideo = (d["type"] as? String == "video")
+                    let isVideoCall = (d["type"] as? String == "video")
+                    self.cameraOn = isVideoCall                             // answering a video call turns my camera on
+                    self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
+                    if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
                     self.state = .incoming
-                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName, video: self.isVideo)
+                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName, video: isVideoCall)
                     self.markRinging()
                     self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
                 }
@@ -615,7 +524,7 @@ final class CallService: NSObject {
             }
             return
         }
-        self.isVideo = video
+        self.cameraOn = video   // a video call = my camera on when I answer
         self.callId = callId
         self.otherName = name
         self.otherUid = uid
@@ -636,33 +545,45 @@ final class CallService: NSObject {
             guard let self else { return }
             guard granted else { self.hangUp(); return }
             let ref = self.db.collection("calls").document(id)
-            ref.getDocument(source: .server) { [weak self] snap, _ in
-                guard let self else { return }
-                guard let d = snap?.data(),
-                      let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
-                // CRITICAL: learn whether this is a video call from the offer BEFORE building the
-                // peer connection, so the local video track is actually added on the answering side.
-                self.isVideo = (d["type"] as? String == "video")
-                self.pc = self.makePeerConnection()
-                guard let pc = self.pc else { self.hangUp(); return }
-                let remote = RTCSessionDescription(type: .offer, sdp: sdp)
-                pc.setRemoteDescription(remote) { _ in
-                    self.flushPendingCandidates()   // caller's candidates were buffered until now (C1)
-                    let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-                    pc.answer(for: constraints) { answerSdp, _ in
-                        guard let answerSdp else { return }
-                        pc.setLocalDescription(answerSdp) { _ in
-                            ref.updateData([
-                                "answer": ["sdp": answerSdp.sdp, "type": "answer"],
-                                "status": "active",
-                            ])
-                        }
-                    }
+            // FAST PATH: the incoming listener already cached the offer, so answer immediately with
+            // no server round-trip. That forced getDocument(source:.server) was a big slice of the
+            // "Connecting…" delay — skipping it lets the media path start right away.
+            if let offer = self.pendingOffer, let sdp = offer["sdp"] {
+                self.completeAnswer(ref: ref, offerSdp: sdp)
+            } else {
+                // Push path (app was killed, no cached offer): fetch it once.
+                ref.getDocument(source: .server) { [weak self] snap, _ in
+                    guard let self else { return }
+                    guard let d = snap?.data(),
+                          let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
+                    self.cameraOn = (d["type"] as? String == "video")
+                    if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
+                    self.completeAnswer(ref: ref, offerSdp: sdp)
                 }
-                self.observeCallDoc(ref)
-                self.observeRemoteCandidates(ref.collection("callerCandidates"))
             }
         }
+    }
+
+    // Build the answering peer connection from the caller's offer, publish the answer + my camera state.
+    private func completeAnswer(ref: DocumentReference, offerSdp: String) {
+        pc = makePeerConnection()   // cameraOn is already known → the local video track is added if it's a video call
+        guard let pc else { hangUp(); return }
+        let remote = RTCSessionDescription(type: .offer, sdp: offerSdp)
+        pc.setRemoteDescription(remote) { [weak self] _ in
+            guard let self, let pc = self.pc else { return }
+            self.flushPendingCandidates()   // caller's candidates were buffered until now (C1)
+            let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+            pc.answer(for: constraints) { answerSdp, _ in
+                guard let answerSdp else { return }
+                pc.setLocalDescription(answerSdp) { _ in
+                    var data: [String: Any] = ["answer": ["sdp": answerSdp.sdp, "type": "answer"], "status": "active"]
+                    data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (Signal-style per-side)
+                    ref.updateData(data)
+                }
+            }
+        }
+        observeCallDoc(ref)
+        observeRemoteCandidates(ref.collection("callerCandidates"))
     }
 
     // MARK: - Signalling observers
@@ -718,16 +639,8 @@ final class CallService: NSObject {
                 self.appliedRemoteRestart = v
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
-            // Mid-call video<->voice switch handshake (deduped by reqId:phase so echoes apply once).
-            if let vs = d["videoSwitch"] as? [String: Any],
-               let reqId = vs["reqId"] as? String, let mode = vs["mode"] as? String,
-               let by = vs["by"] as? String, let phase = vs["phase"] as? String {
-                let key = "\(reqId):\(phase)"
-                if !self.handledSwitchKeys.contains(key) {
-                    self.handledSwitchKeys.insert(key)
-                    self.handleVideoSwitch(reqId: reqId, mode: mode, by: by, phase: phase)
-                }
-            }
+            // The other side's camera on/off (Signal-style per-side, no permission).
+            self.handleRemoteCallState(d)
         }
         listeners.append(l)
     }
