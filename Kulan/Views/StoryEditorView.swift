@@ -227,7 +227,9 @@ struct StoryEditorView: View {
                 // Real Apple Liquid Glass pill (matches the toolbar buttons) instead of a flat dark fill.
                 .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous))
 
-                if captionFocused { sendButton }
+                // While typing, a SMALL round send button (not the wide NEXT pill) so the caption
+                // field keeps most of the width.
+                if captionFocused { compactSendButton }
             }
 
             // Tool row hides while typing a caption (IG/WA: only the caption field stays, above the keyboard).
@@ -262,6 +264,20 @@ struct StoryEditorView: View {
     }
 
     // Shared green Send — used in the toolbar (idle) AND beside the caption (while typing).
+    // Compact round send used beside the caption while the keyboard is open (keeps the field wide).
+    private var compactSendButton: some View {
+        Button { Task { await send() } } label: {
+            Group {
+                if posting { ProgressView().tint(.white) }
+                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold)) }
+            }
+            .foregroundStyle(.white)
+            .frame(width: 46, height: 46)
+            .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+        }
+        .buttonStyle(StoryPressStyle()).disabled(posting)
+    }
+
     private var sendButton: some View {
         Button { Task { await send() } } label: {
             HStack(spacing: 4) {
