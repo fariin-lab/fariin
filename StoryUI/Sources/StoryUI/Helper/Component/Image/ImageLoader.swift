@@ -89,8 +89,9 @@ final class ImageLoader: UIView {
         blurView.frame = bounds
         imageView.frame = bounds
         shimmer.frame = bounds
-        updateContentMode()
         applyCornerMask()
+        // NB: the fit/fill decision is NOT recomputed here — it's fixed once per image in apply(),
+        // so a swipe-down's transient bounds changes can never flip it (that flip was the "shaking").
     }
 
     // Round the bottom two corners of THIS view (which clips every subview, blur included).
@@ -100,39 +101,25 @@ final class ImageLoader: UIView {
         layer.masksToBounds = bottomCornerRadius > 0
     }
 
-    // Fill edge-to-edge (no blur) when the image's aspect essentially matches THIS VIEW's frame —
-    // e.g. a full-bleed text/colour status. Real photos differ → aspect-FIT + blurred backdrop.
-    // Keyed off `bounds` (the actual render frame, which accounts for the reply-bar card padding),
-    // NOT the physical screen, so a photo isn't cropped inside a shorter card.
-    // Remembered fit/fill choice, so a swipe-down's tiny bounds fluctuations can't flip it (that
-    // flip-flop resized the photo every frame = the "shaking"). Reset only when the image changes.
-    private var decidedFill: Bool? = nil
-
-    private func updateContentMode() {
-        guard let img = imageView.image, img.size.width > 0, bounds.width > 1 else { return }
+    // Fill edge-to-edge (no blur) vs aspect-FIT + blurred backdrop, decided ONCE per image against
+    // the STABLE screen aspect (NOT the live view bounds). The bounds jitter as the card scales/offsets
+    // during a swipe-down, and keying off them made the photo flip fit<->fill every frame = the
+    // "shaking". The screen aspect never changes, so the decision is rock-stable through any drag.
+    private func decideContentMode() {
+        guard let img = imageView.image, img.size.width > 0 else { return }
         let imgAspect = img.size.height / img.size.width
-        let viewAspect = bounds.height / bounds.width
-        // Fill when the image is at least as TALL as the view. Text/colour statuses are rendered
-        // taller than any phone, so they always fill full-bleed on every device (fixes the
-        // cross-device blur-bars bug); real photos are almost always shorter than the screen →
-        // aspect-FIT + blurred backdrop. HYSTERESIS: once decided, only flip when the aspect crosses
-        // a wide dead-band, so a swipe-down (bounds jitter) never oscillates fit<->fill.
-        let fill: Bool
-        if let prev = decidedFill {
-            fill = prev ? (imgAspect >= viewAspect - 0.20)    // stay FILL unless clearly shorter
-                        : (imgAspect >= viewAspect + 0.05)    // stay FIT  unless clearly taller
-        } else {
-            fill = imgAspect >= viewAspect - 0.02
-        }
-        decidedFill = fill
-        imageView.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
+        let screen = UIScreen.main.bounds
+        let screenAspect = screen.height / screen.width
+        // Fill when the image is at least as TALL as the screen. Text/colour statuses are rendered
+        // taller than any phone (2.5:1), so they always fill full-bleed on every device; real photos
+        // are shorter than the screen → aspect-FIT + blurred backdrop (the look the user prefers).
+        imageView.contentMode = imgAspect >= screenAspect - 0.02 ? .scaleAspectFill : .scaleAspectFit
     }
 
     private func apply(_ image: UIImage?) {
         imageView.image = image
         backgroundImageView.image = image
-        decidedFill = nil          // new image → decide fresh
-        updateContentMode()
+        decideContentMode()        // fixed for this image; never recomputed on layout/drag
     }
 
     private func showShimmer(_ show: Bool) {
