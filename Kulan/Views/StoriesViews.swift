@@ -839,7 +839,9 @@ struct StoryViewer: View {
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
                 StoryImage(url: url)
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
-                    .clipShape(RoundedRectangle(cornerRadius: 24 * sizeP, style: .continuous))
+                    // Rounded the WHOLE time (was 24*sizeP → square at the start of the open). Constant 24
+                    // matches the story card's corners, so the image is never square mid-transition.
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
                     .frame(maxWidth: .infinity)
                     .opacity(Double(morphVis))
@@ -849,6 +851,23 @@ struct StoryViewer: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
         .onTapGesture { closeViewers() }   // tap the dark area around the cards → back to full screen
+        // Dragging DOWN on the carousel/story area COLLAPSES the sheet (the active story grows back to
+        // full screen) — it must NOT dismiss the whole viewer to the chat list. Horizontal drags belong
+        // to the carousel (guarded out here), so this coexists with the cover-flow swipe.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { v in
+                    guard abs(v.translation.height) > abs(v.translation.width), v.translation.height > 0 else { return }
+                    let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    viewersProgress = max(0, min(1, 1 - v.translation.height / h))
+                }
+                .onEnded { v in
+                    let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    let projected = viewersProgress - v.predictedEndTranslation.height / h
+                    if projected < 0.6 { closeViewers() }   // collapse → story reopens full screen
+                    else { withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 } }
+                }
+        )
         .ignoresSafeArea()
     }
     private func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
