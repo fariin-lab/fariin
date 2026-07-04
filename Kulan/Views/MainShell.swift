@@ -654,6 +654,12 @@ struct ChatsView: View {
                         // plain Button does not, and in edit mode it is auto-disabled so the
                         // List's native multi-select still toggles via the row tag.
                         Button {
+                            #if DEBUG
+                            // Demo chats are fake (no real messages/keys) — opening one crashes
+                            // ThreadView. They're only here to populate the preview list, so tapping
+                            // is a safe no-op in demo mode.
+                            if DemoMode.active { return }
+                            #endif
                             path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                                    photo: conv.displayPhoto(me)))
                         } label: {
