@@ -1239,10 +1239,13 @@ struct MyStoriesCarousel: View {
     // so the row opens centred on it; SwiftUI's .viewAligned physics follow the finger 1:1 and snap to
     // the nearest card on release (swipe past ~50% → next). It only updates when the scroll SETTLES, so
     // the parent no longer re-renders every frame mid-swipe (that was the jank / "hard to swipe").
-    @State private var scrolledID: String?
-    // Don't push the settled id up to activeId until the initial centring has happened, so a first-layout
-    // reading can't flip the sheet/morph to card A.
-    @State private var settled = false
+    // Custom finger-tracking pager (replaces a .viewAligned ScrollView, which needed a ~50% drag or a
+    // hard flick to advance and snapped back otherwise — the "hard to swipe"). `index` is the centred
+    // card; the row is a plain offset HStack so the drag follows the finger 1:1 and commits to the next
+    // card at just 30%. Seeding `index` in init also kills the old .scrollPosition centring race.
+    @State private var index = 0
+    @State private var dragX: CGFloat = 0     // live horizontal finger translation
+    @State private var dragging = false
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat,
          onActiveTap: @escaping () -> Void = {}) {
@@ -1251,55 +1254,67 @@ struct MyStoriesCarousel: View {
         self.slotW = slotW
         self.slotH = slotH
         self.onActiveTap = onActiveTap
-        self._scrolledID = State(initialValue: activeId.wrappedValue)
+        self._index = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
     }
 
     var body: some View {
-        let focusedID = scrolledID ?? activeId
+        let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
         let active = byStory[focusedID] ?? []
         let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
+        let gap: CGFloat = 12
+        let step = slotW + gap
+        let n = stories.count
+        let totalW = CGFloat(n) * slotW + CGFloat(max(0, n - 1)) * gap
+        let offsetX = totalW / 2 - (CGFloat(index) * step + slotW / 2) + dragX
         VStack(spacing: 12) {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: slotH)   // centre card fills the slot; neighbours peek + scale DOWN (not clipped)
+                .overlay {
+                    HStack(spacing: gap) {
                         ForEach(stories, id: \.id) { s in card(s) }
                     }
-                    .scrollTargetLayout()
-                    // Centre whichever card is focused: half a screen minus half a slot of lead/trail padding.
-                    .padding(.horizontal, max(16, (UIScreen.main.bounds.width - slotW) / 2))
+                    .offset(x: offsetX)   // follows the finger via dragX; centres `index` otherwise
                 }
-                .scrollTargetBehavior(.viewAligned)        // native paged snap-to-centre physics
-                .scrollPosition(id: $scrolledID, anchor: .center)   // seeded to the opened-on story
-                .frame(height: slotH)   // centre card fills the slot exactly (sides scale DOWN within it)
-                .onAppear {
-                    // Open the sheet CENTRED on the story you swiped up from. `.scrollPosition(id:)` alone
-                    // is racy for a NON-first item: on first layout the scroll view writes the LEADING
-                    // item's id back into the binding, clobbering our seed — so the sheet ALWAYS opened
-                    // centred on the first story (viewing B, swipe up → showed A). Force the centre with
-                    // the ScrollViewReader, which wins that race. Fired twice (next tick + 50ms) to beat
-                    // the write-back regardless of when the scroll view runs its first layout.
-                    scrolledID = activeId
-                    DispatchQueue.main.async {
-                        scrolledID = activeId
-                        proxy.scrollTo(activeId, anchor: .center)
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        scrolledID = activeId
-                        proxy.scrollTo(activeId, anchor: .center)
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { settled = true }
-                }
-                // Caller retargeted the active story (rare) → recentre.
-                .onChange(of: activeId) { _, v in if v != scrolledID { withAnimation { scrolledID = v } } }
-            }
+                .contentShape(Rectangle())
+                // Horizontal drag pages the cards, tracking the finger 1:1. A vertical drag is left to the
+                // backdrop's collapse gesture (each guards its own axis) so the two never fight.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { v in
+                            guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                            dragging = true
+                            dragX = v.translation.width
+                        }
+                        .onEnded { v in
+                            let wasDragging = dragging
+                            dragging = false
+                            guard wasDragging else { dragX = 0; return }
+                            // Commit to the neighbour at just 30% of a card step (or a flick), so the next
+                            // card is EASY to reach; otherwise settle back. predictedEndTranslation carries
+                            // the fling so a quick short flick still advances.
+                            let commit = step * 0.30
+                            let predicted = v.predictedEndTranslation.width
+                            var ni = index
+                            if v.translation.width <= -commit || predicted <= -step * 0.5 {
+                                ni = min(index + 1, max(0, n - 1))
+                            } else if v.translation.width >= commit || predicted >= step * 0.5 {
+                                ni = max(index - 1, 0)
+                            }
+                            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                                index = ni
+                                dragX = 0
+                            }
+                            if stories.indices.contains(ni) { activeId = stories[ni].id }
+                        }
+                )
             // The centred card's count, big + centred under the carousel (mockup).
             countRow(views: active.count, likes: activeReacts, big: true)
         }
-        // When the scroll SETTLES on a new card, drive the sheet/morph to it (bidirectional). Only after
-        // the initial centring, so the open never flips to card A.
-        .onChange(of: scrolledID) { _, v in
-            guard settled, let v, v != activeId else { return }
-            activeId = v
+        // External retarget (rare) → recentre, but never while the finger is dragging.
+        .onChange(of: activeId) { _, v in
+            guard !dragging, let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
+            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) { index = ni }
         }
         .task { await loadAll() }
     }
@@ -1332,7 +1347,10 @@ struct MyStoriesCarousel: View {
             .id(s.id)
             .onTapGesture {
                 if s.id == activeId { onActiveTap() }
-                else { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { scrolledID = s.id } }
+                else if let ni = stories.firstIndex(where: { $0.id == s.id }) {
+                    withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84)) { index = ni }
+                    activeId = s.id
+                }
             }
     }
 
