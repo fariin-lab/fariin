@@ -17,13 +17,12 @@ final class ConversationsRepository {
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
 
     func start() {
+        // Safety net FIRST — before the uid guard / listener — so the chat-list skeleton can NEVER spin
+        // forever: even if auth isn't ready yet, or Firestore's realtime channel is blocked/slow (a cloud
+        // simulator like Appetize, or a brand-new user on a poor connection). Real chats clear it sooner.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.hasLoaded = true }
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
-        // Safety net: always clear the skeleton after a few seconds. On a fresh/empty account only an
-        // empty CACHED snapshot arrives (ignored below to protect offline chats), so without this the
-        // skeleton spins forever when the server is slow/unreachable — e.g. a cloud simulator
-        // (Appetize) or a brand-new user's first launch. Real chats load before this and clear it sooner.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.hasLoaded = true }
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
         // Cached chats render instantly (hasLoaded flips on the first non-empty snapshot);
         // a true cold start shows the skeleton until the server responds.
