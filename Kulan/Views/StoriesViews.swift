@@ -708,14 +708,17 @@ struct StoryViewer: View {
             // sheet follows the finger 1:1 (native feel) and snaps on release — WITHOUT an app gesture
             // that would fight the library's down dismiss pan. Swipe-DOWN dismiss is the library pan too.
             onSwipeUpChanged: { up in
-                guard currentIsMine else { return }
+                // `mineOnly` (groups-based) is reliable from the first frame; `currentIsMine` depends on
+                // currentBucketUid, which is only set AFTER the library's onUserChanged fires — so on a
+                // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
+                guard currentIsMine || mineOnly else { return }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                 if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
                 openDragging = true   // keep the storyLayer visible/hit-testable through the drag
                 viewersProgress = max(0, min(1, up / sheetH))
             },
             onSwipeUpEnded: { _, velocity in
-                guard currentIsMine else { openDragging = false; return }
+                guard currentIsMine || mineOnly else { openDragging = false; return }
                 openDragging = false
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                 let projected = viewersProgress + (velocity / sheetH) * 0.25   // fling contribution
