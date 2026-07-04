@@ -1,5 +1,6 @@
 import SwiftUI
 import LocalAuthentication
+import UIKit
 
 struct RootView: View {
     enum Phase { case loading, onboarding, main }
@@ -40,6 +41,14 @@ struct RootView: View {
             if locked { LockScreen { authenticate() } }
         }
         .task { await route() }
+        // PREVIEW ONLY (Debug builds — Appetize): a fresh preview account is empty, so seed a demo
+        // story once we reach the main app, so the Story feature (and the viewers swipe) is testable
+        // in the browser. Stripped from TestFlight/App Store (Release), so real users never see it.
+        .onChange(of: phase) { _, new in
+            #if DEBUG
+            if new == .main { Task { await seedPreviewStoryIfNeeded() } }
+            #endif
+        }
         .onAppear { if lockEnabled { locked = true; authenticate() } }
         .onChange(of: scenePhase) { _, new in
             if new == .background {
@@ -82,6 +91,37 @@ struct RootView: View {
         if ready { Push.register(); Push.saveVoipToken() }   // notifications + VoIP token now that we're signed in
         phase = ready ? .main : .onboarding
     }
+
+    #if DEBUG
+    // Seed one demo story on a fresh PREVIEW account (Appetize) so the app isn't empty and the Story
+    // viewer / swipe-up can be tried. Debug-only: never compiled into the Release (TestFlight/App Store) build.
+    private func seedPreviewStoryIfNeeded() async {
+        await StoriesRepository.shared.load(force: true)
+        guard StoriesRepository.shared.mine?.stories.isEmpty ?? true else { return }   // seed once
+        guard let data = Self.makeDemoStoryImage() else { return }
+        StoriesService.shared.postStoryBackground(image: data, caption: "Demo story — swipe up to see viewers")
+    }
+
+    private static func makeDemoStoryImage() -> Data? {
+        let size = CGSize(width: 1080, height: 1920)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            let cg = ctx.cgContext
+            let colors = [UIColor.systemPurple.cgColor, UIColor.systemBlue.cgColor] as CFArray
+            if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                cg.drawLinearGradient(g, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
+            }
+            let text = "Demo\nStory" as NSString
+            let p = NSMutableParagraphStyle(); p.alignment = .center
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: UIColor.white,
+                .font: UIFont.systemFont(ofSize: 140, weight: .heavy),
+                .paragraphStyle: p,
+            ]
+            text.draw(in: CGRect(x: 0, y: size.height/2 - 180, width: size.width, height: 400), withAttributes: attrs)
+        }
+        return img.jpegData(compressionQuality: 0.85)
+    }
+    #endif
 }
 
 // Full-screen lock shown when App Lock is on.
