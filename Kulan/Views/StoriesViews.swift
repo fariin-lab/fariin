@@ -34,13 +34,25 @@ struct StoryRingView: View {
 // back/forward, reopening, and app relaunches load instantly with no re-download.
 struct StoryImage: View {
     let url: String
+    // fitBlur = show the WHOLE image (aspect-fit) over a blurred fill of itself — the SAME look as the
+    // story viewer, so a wide/tall photo isn't cropped/zoomed and keeps its blur bars. Used for the
+    // swipe-up morph card + the viewers carousel; the small story-row covers stay plain fill (crop).
+    var fitBlur = false
     @State private var image: UIImage?
     @State private var failed = false
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                if fitBlur {
+                    ZStack {
+                        Image(uiImage: image).resizable().scaledToFill().blur(radius: 26).clipped()
+                        Image(uiImage: image).resizable().scaledToFit()
+                    }
                     .transition(.opacity)
+                } else {
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .transition(.opacity)
+                }
             } else if failed {
                 ZStack { Color.black; Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.5)) }
             } else {
@@ -830,7 +842,7 @@ struct StoryViewer: View {
                 // Start height matches the story CARD (which ends above the black owner footer),
                 // so the morph begins exactly where the card visually is.
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url)
+                StoryImage(url: url, fitBlur: true)   // whole image + blur (no zoom/crop), matching the story
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
                     // Rounded the WHOLE time (was 24*sizeP → square at the start of the open). Constant 24
                     // matches the story card's corners, so the image is never square mid-transition.
@@ -1322,7 +1334,7 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        return StoryImage(url: s.mediaUrl)
+        return StoryImage(url: s.mediaUrl, fitBlur: true)   // whole image + blur, same as the story/morph
             .frame(width: slotW, height: slotH)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(alignment: .bottom) {

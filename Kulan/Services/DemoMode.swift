@@ -23,7 +23,7 @@ enum DemoMode {
         // Three VISUALLY DISTINCT own stories (A/B/C) so the "sheet opens centred on the story you
         // swiped up from" behaviour is actually verifiable in the preview (identical cards hid the bug).
         let aImg = cache("demo-a", .systemPurple, .systemBlue, "Story A")
-        let bImg = cache("demo-b", .systemPink, .systemRed, "Story B")
+        let bImg = cache("demo-b", .systemPink, .systemRed, "Story B (wide)", wide: true)   // landscape → tests fit+blur
         let cImg = cache("demo-c", .systemTeal, .systemIndigo, "Story C")
         let aishaImg = cache("demo-aisha", .systemPink, .systemOrange, "Aisha")
         let omarImg = cache("demo-omar", .systemTeal, .systemGreen, "Omar")
@@ -77,11 +77,13 @@ enum DemoMode {
     private static var cached = Set<String>()
     // Draw a gradient + label, store it in URLCache under a local URL. The story viewer (StoryUI's
     // ImageLoader) reads URLCache first, so the image renders with no network/Firebase.
-    private static func cache(_ key: String, _ c1: UIColor, _ c2: UIColor, _ text: String) -> String {
+    private static func cache(_ key: String, _ c1: UIColor, _ c2: UIColor, _ text: String, wide: Bool = false) -> String {
         let urlStr = "https://kulan.local/\(key).jpg"
         guard !cached.contains(key), let url = URL(string: urlStr) else { return urlStr }
         cached.insert(key)
-        let size = CGSize(width: 1080, height: 1920)
+        // `wide` = a landscape image, so the viewer/morph must show the WHOLE image + blur bars (fitBlur),
+        // never a cropped zoom — the case the user hit with a panorama.
+        let size = wide ? CGSize(width: 1920, height: 1080) : CGSize(width: 1080, height: 1920)
         let img = UIGraphicsImageRenderer(size: size).image { ctx in
             if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                   colors: [c1.cgColor, c2.cgColor] as CFArray, locations: [0, 1]) {
