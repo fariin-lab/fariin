@@ -804,8 +804,13 @@ struct StoryViewer: View {
         //    finger continuously all the way to the slot at 0.9 — no dead "hold" before it responds.
         //  • carIn: neighbours + counts fade in gradually 0.5→0.9 (behind the opaque morph centre).
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
-        let carIn = max(0, min(1, (p - 0.5) / 0.4))
-        let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.9) / 0.1)))
+        // The live carousel only appears in the last sliver near rest (0.9→1). Below that, the OPAQUE
+        // morph card fully covers it. This makes CLOSING mirror OPENING: on open the morph card already
+        // hid the carousel during the size-morph (smooth); on close the carousel used to stay exposed and
+        // JITTER behind a half-faded morph card (the "shaking"). Now the morph card covers it the whole
+        // drag in BOTH directions, so the live (re-rendering) carousel is never visible mid-drag.
+        let carIn = max(0, min(1, (p - 0.9) / 0.1))
+        let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
