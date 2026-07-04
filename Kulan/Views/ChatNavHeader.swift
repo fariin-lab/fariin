@@ -7,6 +7,10 @@ import UIKit
 // swipe-back — the effect SwiftUI's `.toolbar` can't do (it cross-fades = the "abChats" overlap).
 // Same Apple API Signal uses; no AGPL code.
 //
+// CRITICAL: install on THIS chat screen's OWN pushed view controller, NOT nav.topViewController —
+// the list and the chat share one nav controller, so setting items on the shared controller bled
+// the avatar+call-buttons onto the Chats LIST header (the reported leak).
+//
 // PLAIN UIKit (not a UIHostingController) on purpose: a hosting controller in the nav bar crashes
 // (SIGABRT) via _UINavigationBarTitleControl's appearance-forwarding hierarchy check.
 struct ChatNavHeader: UIViewControllerRepresentable {
@@ -21,13 +25,13 @@ struct ChatNavHeader: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> ProbeVC {
         let vc = ProbeVC()
-        vc.onReady = { [weak c = context.coordinator] nav in c?.install(on: nav) }
+        vc.onReady = { [weak c = context.coordinator] host in c?.install(on: host) }
         return vc
     }
 
     func updateUIViewController(_ vc: ProbeVC, context: Context) {
         context.coordinator.parent = self
-        if let nav = vc.enclosingNav() { context.coordinator.install(on: nav) }
+        if let host = vc.hostInNav() { context.coordinator.install(on: host) }
     }
 
     final class Coordinator {
@@ -35,8 +39,9 @@ struct ChatNavHeader: UIViewControllerRepresentable {
         private var titleView: ChatTitleView?
         init(_ parent: ChatNavHeader) { self.parent = parent }
 
-        func install(on nav: UINavigationController) {
-            guard let top = nav.topViewController else { return }
+        // `host` is THIS chat's own pushed view controller.
+        func install(on host: UIViewController) {
+            let item = host.navigationItem
 
             if titleView == nil {
                 let tv = ChatTitleView()
@@ -47,12 +52,12 @@ struct ChatNavHeader: UIViewControllerRepresentable {
 
             // Left-aligned avatar+name AFTER the back chevron (leftItemsSupplementBackButton keeps
             // the native back button + its edge-swipe). Bar items slide with the page in UIKit.
-            if top.navigationItem.leftBarButtonItems?.isEmpty ?? true, let tv = titleView {
-                top.navigationItem.leftItemsSupplementBackButton = true
-                top.navigationItem.leftBarButtonItems = [UIBarButtonItem(customView: tv)]
+            if item.leftBarButtonItems?.isEmpty ?? true, let tv = titleView {
+                item.leftItemsSupplementBackButton = true
+                item.leftBarButtonItems = [UIBarButtonItem(customView: tv)]
             }
 
-            if parent.showCalls, top.navigationItem.rightBarButtonItems?.isEmpty ?? true {
+            if parent.showCalls, item.rightBarButtonItems?.isEmpty ?? true {
                 // First item sits nearest the edge → [video, phone] renders phone innermost.
                 let phone = UIBarButtonItem(image: UIImage(systemName: "phone.fill"),
                                             primaryAction: UIAction { [weak self] _ in self?.parent.onPhone() })
@@ -60,26 +65,27 @@ struct ChatNavHeader: UIViewControllerRepresentable {
                                             primaryAction: UIAction { [weak self] _ in self?.parent.onVideo() })
                 phone.tintColor = .label
                 video.tintColor = .label
-                top.navigationItem.rightBarButtonItems = [video, phone]
+                item.rightBarButtonItems = [video, phone]
             }
         }
     }
 }
 
-// A zero-size probe that reports the UINavigationController it lands inside.
+// Reports THIS view's own pushed view controller (the one that is a direct child of the enclosing
+// UINavigationController) — i.e. the chat screen, never the list root.
 final class ProbeVC: UIViewController {
-    var onReady: ((UINavigationController) -> Void)?
+    var onReady: ((UIViewController) -> Void)?
     override func didMove(toParent parent: UIViewController?) {
         super.didMove(toParent: parent)
-        if let nav = enclosingNav() { onReady?(nav) }
+        if let host = hostInNav() { onReady?(host) }
     }
-    func enclosingNav() -> UINavigationController? {
+    func hostInNav() -> UIViewController? {
         var p: UIViewController? = self
         while let cur = p {
-            if let nav = cur as? UINavigationController { return nav }
+            if cur.parent is UINavigationController { return cur }
             p = cur.parent
         }
-        return navigationController
+        return nil
     }
 }
 
