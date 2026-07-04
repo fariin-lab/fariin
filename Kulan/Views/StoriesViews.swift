@@ -618,13 +618,10 @@ struct StoryViewer: View {
         .onChange(of: viewersProgress > 0.01) { _, open in
             NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
-        // A swipe-DOWN dismiss drag (friend OR own story) must freeze the story so the progress bar can't
-        // keep advancing under the finger. The library pauses on the pan's .began, but on a multi-item
-        // feed the cube pager's require(toFail:) can delay .began — so reassert the pause from the host on
-        // the first reported drag. Resume (spring-back) / stop (commit) stays the library's job on release.
-        .onChange(of: dragDown > 0.5) { _, dragging in
-            if dragging { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
-        }
+        // NOTE: do NOT post pauseStory from the host during the swipe-DOWN dismiss drag. Doing so re-renders
+        // the hosted story view mid-pan and INTERRUPTS the library's dismiss gesture (the "close became hard
+        // to trigger" bug). The library already freezes the story on the pan's own .began (StoryPager
+        // handleDismiss), which does not disturb the gesture.
         // Carousel centred a different one of my stories while the sheet is up → advance the frozen
         // story underneath to match, so collapsing lands on that story with no photo-swap flash.
         .onChange(of: sheetStoryId) { _, id in
@@ -693,11 +690,37 @@ struct StoryViewer: View {
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
-        // NO app-level swipe-UP gesture here. It's a SwiftUI DragGesture and, once past its minimumDistance,
-        // it claims EVERY drag (up AND down) — even though it ignored downward ones, it starved the library's
-        // native swipe-DOWN dismiss pan (the "close became hard to trigger" regression). Swipe-up is now the
-        // library's own direction-locked UP pan again (swipeUpEnabled: true), which coexists with the DOWN
-        // dismiss pan via require(toFail:). Both directions are library UIKit pans → no gesture fight.
+        // App-level swipe-UP opens the viewers sheet, tracking the finger 1:1. The library's own up-pan does
+        // NOT fire for our hosted SwiftUI content (tried it — sheet never opened), so the app owns swipe-up
+        // (swipeUpEnabled: false below). Guarded to UPWARD drags only; a downward drag is ignored here so the
+        // library's native swipe-DOWN dismiss still runs. This coexists fine with the dismiss — the close only
+        // broke when a host-side pause was posted DURING the down drag (that re-render interrupted the pan);
+        // that pause has been removed.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 14)
+                .onChanged { v in
+                    guard currentIsMine || mineOnly, v.translation.height < 0 else { return }
+                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    if !showViewers {
+                        sheetStoryId = targetStoryId; showViewers = true
+                        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze instantly on open
+                    }
+                    openDragging = true
+                    viewersProgress = max(0, min(1, -v.translation.height / sheetH))
+                }
+                .onEnded { v in
+                    guard currentIsMine || mineOnly else { return }
+                    openDragging = false
+                    guard viewersProgress > 0 else { return }   // no upward drag happened → nothing to snap
+                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    let projected = viewersProgress + (-v.predictedEndTranslation.height / sheetH) * 0.3
+                    if projected > 0.4 {
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
+                    } else {
+                        closeViewers()
+                    }
+                }
+        )
         .ignoresSafeArea()
     }
 
@@ -758,7 +781,7 @@ struct StoryViewer: View {
                 }
             },
             dismissEnabled: true,
-            swipeUpEnabled: true   // library's own UP pan drives the callbacks above; coexists with the DOWN dismiss pan (require(toFail:)), so the close is never starved
+            swipeUpEnabled: false   // library up-pan doesn't fire for our hosted content → the APP owns swipe-up (gesture on storyLayer)
         )
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
