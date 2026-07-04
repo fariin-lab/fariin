@@ -674,6 +674,32 @@ struct StoryViewer: View {
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
+        // App-level swipe-UP to open the viewers sheet, tracking the finger 1:1. The library's own
+        // up-pan wasn't firing reliably, so the APP owns swipe-up now (swipeUpEnabled: false below).
+        // minimumDistance keeps taps (advance) + holds (pause) working; a DOWNWARD drag is ignored
+        // here so the library's swipe-down DISMISS still fires.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 14)
+                .onChanged { v in
+                    guard currentIsMine || mineOnly, v.translation.height < 0 else { return }
+                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
+                    openDragging = true
+                    viewersProgress = max(0, min(1, -v.translation.height / sheetH))
+                }
+                .onEnded { v in
+                    guard currentIsMine || mineOnly else { return }
+                    openDragging = false
+                    guard viewersProgress > 0 else { return }   // never got an upward drag → nothing to snap
+                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    let projected = viewersProgress + (-v.predictedEndTranslation.height / sheetH) * 0.3
+                    if projected > 0.4 {
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
+                    } else {
+                        closeViewers()
+                    }
+                }
+        )
         .ignoresSafeArea()
     }
 
@@ -729,7 +755,7 @@ struct StoryViewer: View {
                 }
             },
             dismissEnabled: true,
-            swipeUpEnabled: true
+            swipeUpEnabled: false   // the APP owns swipe-up now (storyLayer .simultaneousGesture); the library's up-pan was unreliable
         )
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
