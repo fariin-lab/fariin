@@ -424,6 +424,7 @@ struct StoryViewer: View {
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
+    @State private var closeDragStart: CGFloat?       // progress snapshot when a backdrop close-drag begins → 1:1 tracking
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -859,17 +860,22 @@ struct StoryViewer: View {
         // full screen) — it must NOT dismiss the whole viewer to the chat list. Horizontal drags belong
         // to the carousel (guarded out here), so this coexists with the cover-flow swipe.
         .simultaneousGesture(
-            DragGesture(minimumDistance: 12)
+            DragGesture(minimumDistance: 10)
                 .onChanged { v in
-                    guard abs(v.translation.height) > abs(v.translation.width), v.translation.height > 0 else { return }
+                    // Only vertical drags collapse; horizontal belongs to the carousel. Anchor to the progress
+                    // at grab time so the sheet follows the finger 1:1 with NO jump (even if you grab mid-close).
+                    guard abs(v.translation.height) > abs(v.translation.width) else { return }
+                    if closeDragStart == nil { closeDragStart = viewersProgress }
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    viewersProgress = max(0, min(1, 1 - v.translation.height / h))
+                    viewersProgress = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
                 }
                 .onEnded { v in
+                    guard closeDragStart != nil else { return }   // never engaged (horizontal / tap)
+                    closeDragStart = nil
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    let projected = viewersProgress - v.predictedEndTranslation.height / h
+                    let projected = viewersProgress - v.predictedEndTranslation.height / h   // fling carries velocity
                     if projected < 0.6 { closeViewers() }   // collapse → story reopens full screen
-                    else { withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 } }
+                    else { withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82)) { viewersProgress = 1 } }
                 }
         )
         .ignoresSafeArea()
