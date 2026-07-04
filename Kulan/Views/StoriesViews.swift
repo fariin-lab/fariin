@@ -1300,8 +1300,14 @@ struct MyStoriesCarousel: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { v in
-                            guard abs(v.translation.width) > abs(v.translation.height) else { return }
-                            dragging = true
+                            // Engage ONLY on a decisive horizontal move, and lock to it. A vertical (close)
+                            // drag must never page or wobble the cards — that wobble was the close "shake";
+                            // the backdrop owns the downward close.
+                            if !dragging {
+                                guard abs(v.translation.width) > 12,
+                                      abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
+                                dragging = true
+                            }
                             dragX = v.translation.width
                         }
                         .onEnded { v in
@@ -1329,10 +1335,21 @@ struct MyStoriesCarousel: View {
             // The centred card's count, big + centred under the carousel (mockup).
             countRow(views: active.count, likes: activeReacts, big: true)
         }
+        // The CENTRED card is the single source of truth: keep sheetStoryId (activeId) in lockstep with
+        // it, so the story behind + the close ALWAYS land on exactly the card you see. Without this the
+        // seeded `index` and `activeId` could drift (open on A, close showed B).
+        .onChange(of: index) { _, i in
+            guard stories.indices.contains(i), stories[i].id != activeId else { return }
+            activeId = stories[i].id
+        }
         // External retarget (rare) → recentre, but never while the finger is dragging.
         .onChange(of: activeId) { _, v in
             guard !dragging, let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
             withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) { index = ni }
+        }
+        // Re-seed from the opened-on story in case `stories` was still loading at init.
+        .onAppear {
+            if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { index = ni }
         }
         .task { await loadAll() }
     }
