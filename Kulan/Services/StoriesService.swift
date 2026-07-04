@@ -376,6 +376,9 @@ final class StoriesRepository {
     // Kept for every existing call site: first call goes LIVE (attaches the listeners); later
     // calls just regroup (refilter expiry, pick up renamed profiles) — no network round-trip.
     func load(force: Bool = false) async {
+        #if DEBUG
+        if DemoMode.active { return }   // demo stories injected; don't let Firebase overwrite them
+        #endif
         guard let me = Auth.auth().currentUser?.uid else { return }
         if listeningUid != me {
             await MainActor.run { start(me) }   // first call, or the signed-in user changed

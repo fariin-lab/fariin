@@ -46,7 +46,7 @@ struct RootView: View {
         // in the browser. Stripped from TestFlight/App Store (Release), so real users never see it.
         .onChange(of: phase) { _, new in
             #if DEBUG
-            if new == .main { Task { await seedPreviewStoryIfNeeded() } }
+            if new == .main && !DemoMode.active { Task { await seedPreviewStoryIfNeeded() } }
             #endif
         }
         .onAppear { if lockEnabled { locked = true; authenticate() } }
@@ -200,6 +200,10 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .tint(.primary)
+                    #if DEBUG
+                    Text("Preview: type username **apple** to load a demo account.")
+                        .font(.caption2).foregroundStyle(.blue).multilineTextAlignment(.center)
+                    #endif
                 }
                 .padding()
             }
@@ -207,6 +211,14 @@ struct OnboardingView: View {
     }
 
     private func save() async {
+        #if DEBUG
+        // Preview demo login (Appetize): username "apple" loads a fully-local demo account (stories +
+        // chats) with no Firebase, so the app can be tried where Storage uploads don't work. Debug-only.
+        if handle.lowercased() == "apple" {
+            await MainActor.run { DemoMode.activate(); onDone() }
+            return
+        }
+        #endif
         let n = name.trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }

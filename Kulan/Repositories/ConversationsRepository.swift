@@ -17,6 +17,9 @@ final class ConversationsRepository {
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
 
     func start() {
+        #if DEBUG
+        if DemoMode.active { hasLoaded = true; return }   // demo data already injected; don't let Firebase overwrite it
+        #endif
         // Safety net FIRST — before the uid guard / listener — so the chat-list skeleton can NEVER spin
         // forever: even if auth isn't ready yet, or Firestore's realtime channel is blocked/slow (a cloud
         // simulator like Appetize, or a brand-new user on a poor connection). Real chats clear it sooner.
