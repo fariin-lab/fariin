@@ -203,7 +203,7 @@ struct ThreadView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .background(
-            ChatNavHeader(title: headerLabel,
+            ChatNavHeader(name: title, photoURL: photoUrl,
                           showCalls: !isGroup && cid.contains("_"),
                           onPhone: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) },
                           onVideo: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) })
