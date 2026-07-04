@@ -54,9 +54,6 @@ struct ThreadView: View {
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
     @State private var didAnchorUnread = false
-    // Open-position gate: keep the list hidden (skeleton shows) until it's positioned — at the unread
-    // divider if there are unread, else the bottom — so the user never sees a bottom→unread JUMP.
-    @State private var revealed = false
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
@@ -92,7 +89,6 @@ struct ThreadView: View {
             pinnedBar(proxy)
             ScrollView {
                 messageList(proxy)
-                    .opacity(revealed ? 1 : 0)   // hidden (skeleton shows) until positioned → no open jump
                     .contentShape(Rectangle())   // whole content tappable so the dismiss tap always lands
                     .simultaneousGesture(
                         // tap the chat to close the keyboard; force-resign so it always drops.
@@ -174,9 +170,7 @@ struct ThreadView: View {
             // Skeleton placeholder bubbles until the first page is ready (cold load only;
             // a cached chat flips didInitialLoad instantly, so this never flashes).
             .overlay {
-                // Keep the skeleton up until the list is loaded AND positioned (revealed) — this is
-                // what hides the open-jump: we position the hidden list, then cross-fade it in.
-                if !revealed {
+                if !repo.didInitialLoad {
                     ThreadSkeleton().allowsHitTesting(false)
                 }
             }
@@ -312,16 +306,13 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
             recorder.prepare()                           // pre-warm so hold-to-record is instant
-            // Unread count SYNCHRONOUSLY from the cached conversation, so we know the open target on
-            // the very first frame (no async round-trip → no bottom-then-jump). 0 → open at bottom.
+            // Unread count from the cached conversation — only used to place the unread-divider
+            // MARKER now (we always open at the bottom, so it no longer drives the scroll position).
             unreadOnOpen = cachedConv?.unread(me) ?? 0
-            maybeReveal()                                // no unread → reveal at the bottom as soon as loaded
             // Gate animated auto-scroll until the push transition + first chunked load settle,
-            // so the conversation opens cleanly with no jump.
+            // so the conversation opens cleanly at the bottom with no jump (defaultScrollAnchor).
             settled = false
             Task { try? await Task.sleep(nanoseconds: 600_000_000); await MainActor.run { settled = true } }
-            // Safety net: never leave the list hidden behind the skeleton if a reveal path is missed.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { if !revealed { withAnimation(.easeOut(duration: 0.15)) { revealed = true } } }
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
@@ -335,7 +326,6 @@ struct ThreadView: View {
                 if !repo.iBlocked { await ChatService.markRead(cid) }
             }
         }
-        .onChange(of: repo.didInitialLoad) { _, _ in maybeReveal() }
         .onDisappear {
             repo.stop()
             groupCallListener?.remove(); groupCallListener = nil
@@ -973,20 +963,11 @@ struct ThreadView: View {
         guard !msgs.isEmpty else { return }
         let idx = max(0, msgs.count - unreadOnOpen)
         guard idx < msgs.count else { return }
+        // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
+        // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
+        // (Scrolling to the first unread dropped the user into old history / old missed calls.)
         firstUnreadId = msgs[idx].id
         didAnchorUnread = true
-        // Position while still hidden, THEN reveal — so the user never sees the bottom-then-jump.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            proxy.scrollTo(firstUnreadId, anchor: .top)
-            withAnimation(.easeOut(duration: 0.18)) { revealed = true }
-        }
-    }
-
-    // Reveal the list once it's correctly positioned. No-unread chats reveal at the bottom the moment
-    // the first page is loaded; unread chats reveal from anchorUnread after landing on the divider.
-    private func maybeReveal() {
-        guard !revealed, repo.didInitialLoad, unreadOnOpen == 0 else { return }
-        withAnimation(.easeOut(duration: 0.15)) { revealed = true }
     }
 
     // Toggle my reaction (re-tapping the same emoji removes it) and remember it as recent.
