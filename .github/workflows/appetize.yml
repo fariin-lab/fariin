@@ -1,0 +1,95 @@
+name: Appetize Preview
+
+# Manual only — same policy as ios-build.yml: macOS minutes are spent only on purpose.
+# Builds the simulator app (no signing needed) and uploads it to Appetize.io so the
+# app can be tried live in the browser without TestFlight.
+on:
+  workflow_dispatch:
+
+jobs:
+  appetize:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode (need iOS 26 SDK for .glassEffect etc.)
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)
+          echo "Selecting $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan
+
+      - name: Build for iOS Simulator (Debug, no signing)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Kulan.xcodeproj \
+            -scheme Kulan \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Appetize wants the .app zipped with the bundle at the top level of the
+      # archive; -y keeps framework symlinks as symlinks.
+      - name: Zip Kulan.app
+        run: |
+          APP_DIR="build/Build/Products/Debug-iphonesimulator"
+          ls "$APP_DIR"
+          (cd "$APP_DIR" && zip -qry Kulan.zip Kulan.app)
+          echo "ZIP_PATH=$APP_DIR/Kulan.zip" >> "$GITHUB_ENV"
+          du -h "$APP_DIR/Kulan.zip"
+
+      # First run: creates a new Appetize app and prints its publicKey.
+      # To keep ONE stable preview URL across runs, save that publicKey as the
+      # APPETIZE_PUBLIC_KEY secret — then later runs update the same app in place.
+      - name: Upload to Appetize.io and print preview URL
+        env:
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+          APPETIZE_PUBLIC_KEY: ${{ secrets.APPETIZE_PUBLIC_KEY }}
+        run: |
+          if [ -z "$APPETIZE_TOKEN" ]; then
+            echo "::error::APPETIZE_TOKEN secret is not set (repo Settings -> Secrets and variables -> Actions)"
+            exit 1
+          fi
+          API_URL="https://api.appetize.io/v1/apps"
+          if [ -n "$APPETIZE_PUBLIC_KEY" ]; then
+            API_URL="$API_URL/$APPETIZE_PUBLIC_KEY"
+          fi
+          RESPONSE=$(curl --fail-with-body -sS -u "$APPETIZE_TOKEN:" \
+            -F "file=@$ZIP_PATH" \
+            -F "platform=ios" \
+            "$API_URL")
+          PUBLIC_KEY=$(echo "$RESPONSE" | jq -r '.publicKey')
+          APP_URL=$(echo "$RESPONSE" | jq -r '.publicURL // empty')
+          if [ -z "$APP_URL" ]; then
+            APP_URL="https://appetize.io/app/$PUBLIC_KEY"
+          fi
+          echo ""
+          echo "=================================================="
+          echo "  Appetize live preview (click to run in browser):"
+          echo "  $APP_URL"
+          echo ""
+          echo "  publicKey: $PUBLIC_KEY"
+          echo "=================================================="
+          echo "::notice title=Appetize preview::$APP_URL"
+          {
+            echo "### Appetize live preview"
+            echo ""
+            echo "[$APP_URL]($APP_URL)"
+            echo ""
+            echo "publicKey: \`$PUBLIC_KEY\` (save as APPETIZE_PUBLIC_KEY secret to keep this URL stable)"
+          } >> "$GITHUB_STEP_SUMMARY"
