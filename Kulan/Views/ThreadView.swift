@@ -86,6 +86,7 @@ struct ThreadView: View {
     private var threadScroll: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
+            slideHeader        // custom in-page header → slides away WITH the page on swipe-back (Signal-style)
             pinnedBar(proxy)
             ScrollView {
                 messageList(proxy)
@@ -196,10 +197,11 @@ struct ThreadView: View {
     private var threadCovers: some View {
         threadScroll
         .toolbar(.hidden, for: .tabBar)
-        // Native nav bar = real iOS 26 Liquid Glass + the genuine edge-swipe-back, exactly
-        // like the Chats list header. Avatar/name/call buttons live in the toolbar.
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { chatToolbar }
+        // HEADER MOVED INTO THE PAGE (slideHeader) so it slides away with the content on swipe-back
+        // (Signal-style), instead of pinning in the nav bar. Hide the native bar entirely. The custom
+        // back chevron calls dismiss(); test on-device whether the edge-swipe still pops with the bar
+        // hidden — if not, a left-edge drag-to-dismiss is the follow-up.
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
                 GroupInfoView(cid: cid)
@@ -722,6 +724,38 @@ struct ThreadView: View {
         let name = url.lastPathComponent
         do { try await ChatService.sendFile(cid: cid, data: data, fileName: name, group: isGroup ? groupMembers : nil) }
         catch { await MainActor.run { sendError = "Couldn't send the file. Try again." } }
+    }
+
+    // Custom in-page chat header (Signal-style). It lives in the page CONTENT (not the nav bar), so
+    // on swipe-back it slides away WITH the messages as one piece — the nav-bar version pinned the
+    // avatar/name/call-buttons and they overlapped the Chats header. Matches the old look: a glass
+    // back circle, glass-free avatar+name, and the voice+video buttons in one glass capsule.
+    private var slideHeader: some View {
+        HStack(spacing: 8) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(Circle(), interactive: true)
+            }
+            Button { showContactInfo = true } label: { headerLabel }.buttonStyle(.plain)
+            Spacer(minLength: 8)
+            // 1:1 call buttons only (groups need an SFU, not built) — one shared glass capsule.
+            if !isGroup && cid.contains("_") {
+                HStack(spacing: 20) {
+                    Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) } label: {
+                        Image(systemName: "phone.fill").font(.system(size: 17, weight: .medium)).foregroundStyle(.primary)
+                    }
+                    Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) } label: {
+                        Image(systemName: "video.fill").font(.system(size: 17, weight: .medium)).foregroundStyle(.primary)
+                    }
+                }
+                .padding(.horizontal, 16).frame(height: 40)
+                .liquidGlass(Capsule(), interactive: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4).padding(.bottom, 6)
     }
 
     // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
