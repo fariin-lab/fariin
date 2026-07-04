@@ -1272,10 +1272,21 @@ struct MyStoriesCarousel: View {
                 .scrollPosition(id: $scrolledID, anchor: .center)   // seeded to the opened-on story
                 .frame(height: slotH)   // centre card fills the slot exactly (sides scale DOWN within it)
                 .onAppear {
-                    // Re-assert the seed (belt-and-braces) and open the gate after the first layout so a
-                    // transient first-frame reading can't push card A up to the sheet/morph.
+                    // Open the sheet CENTRED on the story you swiped up from. `.scrollPosition(id:)` alone
+                    // is racy for a NON-first item: on first layout the scroll view writes the LEADING
+                    // item's id back into the binding, clobbering our seed — so the sheet ALWAYS opened
+                    // centred on the first story (viewing B, swipe up → showed A). Force the centre with
+                    // the ScrollViewReader, which wins that race. Fired twice (next tick + 50ms) to beat
+                    // the write-back regardless of when the scroll view runs its first layout.
                     scrolledID = activeId
-                    DispatchQueue.main.async { scrolledID = activeId }
+                    DispatchQueue.main.async {
+                        scrolledID = activeId
+                        proxy.scrollTo(activeId, anchor: .center)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        scrolledID = activeId
+                        proxy.scrollTo(activeId, anchor: .center)
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { settled = true }
                 }
                 // Caller retargeted the active story (rare) → recentre.

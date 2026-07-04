@@ -20,20 +20,28 @@ enum DemoMode {
         let me = Auth.auth().currentUser?.uid ?? "demo-me"
         let now = Date()
 
-        let myImg = cache("demo-my", .systemPurple, .systemBlue, "My Story")
+        // Three VISUALLY DISTINCT own stories (A/B/C) so the "sheet opens centred on the story you
+        // swiped up from" behaviour is actually verifiable in the preview (identical cards hid the bug).
+        let aImg = cache("demo-a", .systemPurple, .systemBlue, "Story A")
+        let bImg = cache("demo-b", .systemPink, .systemRed, "Story B")
+        let cImg = cache("demo-c", .systemTeal, .systemIndigo, "Story C")
         let aishaImg = cache("demo-aisha", .systemPink, .systemOrange, "Aisha")
         let omarImg = cache("demo-omar", .systemTeal, .systemGreen, "Omar")
 
-        // My own story (2 items) — open it and swipe up to reach the viewers sheet.
+        // My own story (3 items) — open it, tap to reach B or C, then swipe up: the viewers sheet must
+        // open centred on the SAME story.
         StoriesRepository.shared.mine = StoryGroup(
             authorUid: me, name: "You", photoUrl: nil,
             stories: [
                 Story(id: "demo-s1", authorUid: me, createdAt: now.addingTimeInterval(-3600),
-                      expiresAt: now.addingTimeInterval(20 * 3600), mediaUrl: myImg, allowsReplies: true,
-                      caption: "Swipe up to see who viewed"),
+                      expiresAt: now.addingTimeInterval(20 * 3600), mediaUrl: aImg, allowsReplies: true,
+                      caption: "Story A — swipe up to see who viewed"),
                 Story(id: "demo-s2", authorUid: me, createdAt: now.addingTimeInterval(-1500),
-                      expiresAt: now.addingTimeInterval(22 * 3600), mediaUrl: myImg, allowsReplies: true,
-                      caption: "My second story"),
+                      expiresAt: now.addingTimeInterval(22 * 3600), mediaUrl: bImg, allowsReplies: true,
+                      caption: "Story B"),
+                Story(id: "demo-s3", authorUid: me, createdAt: now.addingTimeInterval(-600),
+                      expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: cImg, allowsReplies: true,
+                      caption: "Story C"),
             ], lastViewedAt: nil, isMine: true)
 
         // Friends' stories.
