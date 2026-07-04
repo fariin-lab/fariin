@@ -196,13 +196,18 @@ struct ThreadView: View {
     private var threadCovers: some View {
         threadScroll
         .toolbar(.hidden, for: .tabBar)
-        // Native nav bar KEPT (real edge-swipe-back that follows your finger + reveals the list), but
-        // its BACKGROUND is hidden — no solid bar / border, so the chat scrolls up under a transparent
-        // floating header (the Signal "no border, see the background" look). Avatar/name/call buttons
-        // stay as the toolbar's glass pills.
+        // Native nav bar KEPT (real edge-swipe-back), background hidden (transparent floating header,
+        // no bar/border). The header (avatar+name + voice/video) is installed straight onto the
+        // backing UIKit nav bar via ChatNavHeader — so UIKit SLIDES it off with the page on swipe-back
+        // (SwiftUI's own .toolbar only cross-fades it = the "abChats" overlap). Apple API only.
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { chatToolbar }
         .toolbarBackground(.hidden, for: .navigationBar)
+        .background(
+            ChatNavHeader(title: headerLabel,
+                          showCalls: !isGroup && cid.contains("_"),
+                          onPhone: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) },
+                          onVideo: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) })
+        )
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
                 GroupInfoView(cid: cid)
