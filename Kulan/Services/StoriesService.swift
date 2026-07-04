@@ -139,12 +139,10 @@ final class StoriesService {
         else if !excluded.isEmpty { recipients = allContacts.subtracting(excluded); mode = "except" }
         else { recipients = allContacts; mode = "all" }
 
-        // Don't create a doc / upload bytes for a story literally no one can see (zero contacts, or a
-        // stale "only share with" that resolved empty). Surface it instead of silently posting to no one.
-        guard !recipients.isEmpty else {
-            throw NSError(domain: "Kulan.Story", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "No one to share this story with."])
-        }
+        // Empty recipients is OK: it's still MY OWN story (the `mine` query loads by authorUid, so I
+        // always see it) — just with no other viewers yet (e.g. a brand-new account with no contacts).
+        // The audience sheet already warns when you HAVE contacts but narrowed the audience to none, so
+        // reaching here with empty recipients means "own story only", which is valid — don't block it.
 
         // Create the story doc FIRST (mediaUrl filled in after upload). The Storage READ
         // rule for downloadURL() checks this doc's authorUid, so it must exist before we

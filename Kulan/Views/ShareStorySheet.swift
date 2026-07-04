@@ -140,7 +140,11 @@ struct ShareStorySheet: View {
         if mode == 2 { effective = included.intersection(contactIds) }
         else if mode == 1 { effective = contactIds.subtracting(excluded) }
         else { effective = contactIds }
-        if effective.isEmpty {
+        // Block ONLY when you HAVE contacts but narrowed the audience down to literally no one
+        // (excluded everyone / picked nobody). If you simply have NO contacts yet, posting is fine —
+        // it's still YOUR OWN story (always visible to you); it just has no other recipients until
+        // you add contacts. Without this, a brand-new user could never post their first story.
+        if effective.isEmpty && !contactIds.isEmpty {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             emptyAudienceAlert = true
             return
