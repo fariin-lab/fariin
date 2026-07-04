@@ -205,6 +205,7 @@ struct ThreadView: View {
         .background(
             ChatNavHeader(name: title, photoURL: photoUrl,
                           showCalls: !isGroup && cid.contains("_"),
+                          onTapHeader: { showContactInfo = true },
                           onPhone: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) },
                           onVideo: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) })
         )

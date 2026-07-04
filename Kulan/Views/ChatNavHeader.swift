@@ -2,17 +2,18 @@ import SwiftUI
 import UIKit
 
 // Installs the chat header onto the UIKit UINavigationController backing SwiftUI's NavigationStack:
-// a PLAIN-UIKit avatar+name as `navigationItem.titleView`, voice/video as `rightBarButtonItems`.
-// UIKit then slides the whole bar off with the page on swipe-back — the effect SwiftUI's `.toolbar`
-// can't do (it cross-fades = the "abChats" overlap). Same Apple API Signal uses; no AGPL code.
+// a PLAIN-UIKit avatar+name placed as a LEFT bar item (right after the back chevron → left-aligned
+// like Signal), voice/video as rightBarButtonItems. UIKit slides the whole bar off with the page on
+// swipe-back — the effect SwiftUI's `.toolbar` can't do (it cross-fades = the "abChats" overlap).
+// Same Apple API Signal uses; no AGPL code.
 //
-// IMPORTANT: the titleView is a plain UIView, NOT a UIHostingController's view. A hosting controller
-// in the nav bar crashes (SIGABRT) via _UINavigationBarTitleControl's appearance-forwarding
-// hierarchy check — that was the earlier crash. Plain UIKit avoids it entirely.
+// PLAIN UIKit (not a UIHostingController) on purpose: a hosting controller in the nav bar crashes
+// (SIGABRT) via _UINavigationBarTitleControl's appearance-forwarding hierarchy check.
 struct ChatNavHeader: UIViewControllerRepresentable {
     var name: String
     var photoURL: String?
     var showCalls: Bool
+    var onTapHeader: () -> Void
     var onPhone: () -> Void
     var onVideo: () -> Void
 
@@ -37,9 +38,19 @@ struct ChatNavHeader: UIViewControllerRepresentable {
         func install(on nav: UINavigationController) {
             guard let top = nav.topViewController else { return }
 
-            if titleView == nil { titleView = ChatTitleView() }
-            if top.navigationItem.titleView !== titleView { top.navigationItem.titleView = titleView }
+            if titleView == nil {
+                let tv = ChatTitleView()
+                tv.onTap = { [weak self] in self?.parent.onTapHeader() }
+                titleView = tv
+            }
             titleView?.configure(name: parent.name, photoURL: parent.photoURL)
+
+            // Left-aligned avatar+name AFTER the back chevron (leftItemsSupplementBackButton keeps
+            // the native back button + its edge-swipe). Bar items slide with the page in UIKit.
+            if top.navigationItem.leftBarButtonItems?.isEmpty ?? true, let tv = titleView {
+                top.navigationItem.leftItemsSupplementBackButton = true
+                top.navigationItem.leftBarButtonItems = [UIBarButtonItem(customView: tv)]
+            }
 
             if parent.showCalls, top.navigationItem.rightBarButtonItems?.isEmpty ?? true {
                 // First item sits nearest the edge → [video, phone] renders phone innermost.
@@ -72,8 +83,9 @@ final class ProbeVC: UIViewController {
     }
 }
 
-// Plain UIKit avatar + name for the nav bar titleView (no SwiftUI hosting → no crash).
+// Plain UIKit avatar + name for the nav bar (no SwiftUI hosting → no crash). Tap opens the profile.
 final class ChatTitleView: UIView {
+    var onTap: (() -> Void)?
     private let avatar = UIImageView()
     private let initials = UILabel()
     private let nameLabel = UILabel()
@@ -101,6 +113,7 @@ final class ChatTitleView: UIView {
         stack.axis = .horizontal
         stack.spacing = 8
         stack.alignment = .center
+        stack.isUserInteractionEnabled = false
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         avatar.addSubview(initials)
@@ -115,8 +128,12 @@ final class ChatTitleView: UIView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    @objc private func tapped() { onTap?() }
 
     func configure(name: String, photoURL: String?) {
         nameLabel.text = name
