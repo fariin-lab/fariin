@@ -1533,8 +1533,10 @@ struct StoryViewersBottomSheet: View {
         // while the sheet also moved = the "shaking" when pulling DOWN to close). Without it the drag
         // owns the downward motion cleanly, matching the smooth upward open.
         .scrollBounceBehavior(.basedOnSize)
-        // Lock the list while the sheet isn't fully open so a collapse-drag owns the motion.
-        .scrollDisabled(progress < 1)
+        // Lock the list while the sheet isn't fully open OR while a collapse-drag is active (dragStart
+        // set), so the list's own scroll/rubber-band can NEVER fight the drag at the top (that fight was
+        // the down-drag "shaking"). The drag owns the motion cleanly, matching the smooth upward open.
+        .scrollDisabled(progress < 1 || dragStart != nil)
         // Pulling the list down at its top collapses the sheet (Telegram hand-off).
         .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: true))
     }
