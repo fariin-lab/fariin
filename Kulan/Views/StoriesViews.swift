@@ -695,7 +695,12 @@ struct StoryViewer: View {
                 .onChanged { v in
                     guard currentIsMine || mineOnly, v.translation.height < 0 else { return }
                     let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
+                    if !showViewers {
+                        sheetStoryId = targetStoryId; showViewers = true
+                        // Freeze the story the INSTANT the sheet starts to open (don't wait for the
+                        // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
+                        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+                    }
                     openDragging = true
                     viewersProgress = max(0, min(1, -v.translation.height / sheetH))
                 }
@@ -804,8 +809,8 @@ struct StoryViewer: View {
         // made the cards touch the top and the side cards overflow the screen edge). The narrower
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        let slotH = (avail - countArea) * 0.84             // ~16% top/bottom breathing room
-        let slotW = slotH * 0.58                           // narrower cards → side cards peek + shrink
+        let slotH = (avail - countArea) * 0.94             // fill most of the free area (cards were too small)
+        let slotW = slotH * 0.62                           // a touch wider; side cards still peek + shrink
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // SMOOTH, NO-JUMP handoff (Telegram), staged so opening morphs "story → only image" and
         // closing morphs "only image → story", as one continuous motion:
@@ -882,6 +887,7 @@ struct StoryViewer: View {
         // to 1 mid-close both cancels the unmount (guard below) and re-raises the sheet — no more
         // "swipe up does nothing for 0.42s after closing".
         guard currentIsMine else { return }
+        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
         if !showViewers {
             sheetStoryId = targetStoryId
             showViewers = true   // mount at progress 0 (offscreen) …
@@ -1408,7 +1414,7 @@ struct StoryViewersBottomSheet: View {
     // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
     // same value, so the two layers always agree on the layout. Telegram makes the LIST the dominant
     // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
-    static let heightFraction: CGFloat = 0.70
+    static let heightFraction: CGFloat = 0.64   // shorter sheet → more room so the story cards read BIG (was 0.70)
 
     let activeStoryId: String
     @Binding var progress: CGFloat
