@@ -54,7 +54,9 @@ struct ChatNavHeader: UIViewControllerRepresentable {
             // the native back button + its edge-swipe). Bar items slide with the page in UIKit.
             if item.leftBarButtonItems?.isEmpty ?? true, let tv = titleView {
                 item.leftItemsSupplementBackButton = true
-                item.leftBarButtonItems = [UIBarButtonItem(customView: tv)]
+                let avatarItem = UIBarButtonItem(customView: tv)
+                avatarItem.hidesSharedBackground = true   // glass-FREE avatar+name like Signal (iOS 26 API)
+                item.leftBarButtonItems = [avatarItem]
             }
 
             if parent.showCalls, item.rightBarButtonItems?.isEmpty ?? true {
