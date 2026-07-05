@@ -424,6 +424,7 @@ struct StoryViewer: View {
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
+    @State private var closeDragStart: CGFloat? = nil // progress at grab for the backdrop collapse drag
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -876,11 +877,18 @@ struct StoryViewer: View {
                 .onChanged { v in
                     guard abs(v.translation.height) > abs(v.translation.width), v.translation.height > 0 else { return }
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    viewersProgress = max(0, min(1, 1 - v.translation.height / h))
+                    // Anchor to the progress at GRAB (like the sheet's own dragStart). The old
+                    // `1 - translation/h` assumed the sheet was fully open, so grabbing it again while
+                    // the release spring was still settling YANKED it back up to ~1 and then fought the
+                    // in-flight spring — the frame-by-frame up/down "shaking" on a down-drag close.
+                    if closeDragStart == nil { closeDragStart = viewersProgress }
+                    viewersProgress = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
                 }
                 .onEnded { v in
+                    guard let start = closeDragStart else { return }   // guarded-out drag (horizontal) → not ours
+                    closeDragStart = nil
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    let projected = viewersProgress - v.predictedEndTranslation.height / h
+                    let projected = start - v.predictedEndTranslation.height / h
                     if projected < 0.6 { closeViewers() }   // collapse → story reopens full screen
                     else { withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 } }
                 }
@@ -894,6 +902,7 @@ struct StoryViewer: View {
         // to 1 mid-close both cancels the unmount (guard below) and re-raises the sheet — no more
         // "swipe up does nothing for 0.42s after closing".
         guard currentIsMine else { return }
+        closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
         if !showViewers {
             sheetStoryId = targetStoryId
@@ -906,6 +915,7 @@ struct StoryViewer: View {
         }
     }
     private func closeViewers() {
+        closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86, blendDuration: 0.2)) {
             viewersProgress = 0
         }
