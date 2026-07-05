@@ -248,13 +248,13 @@ struct StoryPager: UIViewControllerRepresentable {
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
             case .changed:
                 let ty = max(0, t.y)
-                let frac = min(1, ty / card.bounds.height)
-                let scale = 1.0 - 0.4 * frac            // Telegram: card scales 1.0 -> 0.6 as you pull
-                card.layer.cornerCurve = .continuous    // Apple squircle
-                card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
-                card.layer.masksToBounds = true
+                // ONE close style at every speed: pure vertical translation, nothing else. Scale +
+                // corner-radius were distance-driven, so a fast flick compressed the whole shrink into
+                // ~0.1s and it POPPED as a "turns into a rounded card" second style — the slow drag's
+                // gradual version of the same math is what the user calls the correct straight slide.
+                // With geometry-only movement there is nothing left for speed to reveal.
                 // Move ONLY the card; the backdrop stays put, so the area above it shows the blur, not black.
-                card.transform = CGAffineTransform(translationX: 0, y: ty).scaledBy(x: scale, y: scale)
+                card.transform = CGAffineTransform(translationX: 0, y: ty)
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
@@ -263,22 +263,15 @@ struct StoryPager: UIViewControllerRepresentable {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
-                    // Exit at the size the drag already reached (1 - 0.4*frac), not a forced 0.6.
-                    // A velocity commit (fast flick) releases near full size; forcing 0.6 there read
-                    // as a sudden zoom. A slow full drag has already reached ~0.6 — unchanged look.
-                    let exitFrac = min(1, max(0, ty) / card.bounds.height)
-                    let exitScale = 1.0 - 0.4 * exitFrac
-                    // ONE shared exit for distance AND velocity commits: continue the linear slide from
-                    // the release point at (roughly) the finger's release speed. The old fixed 0.25s
-                    // ease-IN visibly decelerated right after a fast flick (finger leaves fast, card
-                    // almost stops, then re-accelerates) — read as an abrupt/system-y jump. Linear +
-                    // velocity-matched duration makes the flick exit flow seamlessly out of the gesture;
-                    // a slow-drag release only has a short remainder, so it looks the same as before.
+                    // ONE shared exit for distance AND velocity commits: continue the SAME straight-down
+                    // slide from the release point at (roughly) the finger's release speed. Linear curve —
+                    // an ease-in here visibly decelerated right after a fast flick (finger leaves fast,
+                    // card almost stops, re-accelerates) and read as a different, system-y dismissal.
                     let remaining = max(1, card.bounds.height - max(0, ty))
                     let speed = max(vy, 1100)                     // pts/s floor: slow commits still finish briskly
                     let duration = min(0.3, max(0.12, remaining / speed))
                     UIView.animate(withDuration: duration, delay: 0, options: [.curveLinear]) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: exitScale, y: exitScale)
+                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height)
                     } completion: { _ in self.parent.onCommit() }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
