@@ -499,6 +499,28 @@ struct StoryViewer: View {
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
     @State private var closeDragStart: CGFloat? = nil // progress at grab for the backdrop collapse drag
+    // SINGLE-OWNER drag arbiter: `viewersProgress` may be written by three drag handlers (sheet
+    // header, sheet list, backdrop collapse) each with its OWN grab anchor. When iOS cancels a drag
+    // mid-flight (no onEnded!) its anchor went stale, and a later touch could engage TWO handlers
+    // whose anchors disagree — they alternated writes EVERY FRAME (frame-measured: the whole layout
+    // ping-ponged ~90pt between two states = the violent sheet "vibrating / two sheets fighting").
+    // The arbiter lets exactly ONE handler write at a time; a claim after >0.25s of silence is
+    // FRESH and forces re-anchoring at the CURRENT progress, healing stale anchors for free.
+    // A class held in @State: mutating it never invalidates the view (no re-render mid-gesture).
+    final class SheetDragArbiter {
+        enum Claim { case fresh, continuing }
+        private var owner: String?
+        private var lastEvent = Date.distantPast
+        func claim(_ id: String) -> Claim? {
+            let now = Date()
+            defer { lastEvent = now }
+            if owner == id { return now.timeIntervalSince(lastEvent) > 0.25 ? .fresh : .continuing }
+            if owner == nil || now.timeIntervalSince(lastEvent) > 0.25 { owner = id; return .fresh }
+            return nil
+        }
+        func release(_ id: String) { if owner == id { owner = nil } }
+    }
+    @State private var sheetDragArbiter = SheetDragArbiter()
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -615,6 +637,7 @@ struct StoryViewer: View {
                 viewersBackdrop   // flat 2D morph card during the drag → my-stories carousel when open
                 StoryViewersBottomSheet(activeStoryId: sheetStoryId,
                                         progress: $viewersProgress,
+                                        arbiter: sheetDragArbiter,
                                         onClose: closeViewers)
             }
         }
@@ -946,15 +969,17 @@ struct StoryViewer: View {
             DragGesture(minimumDistance: 12)
                 .onChanged { v in
                     guard abs(v.translation.height) > abs(v.translation.width), v.translation.height > 0 else { return }
+                    // ONE writer at a time (see SheetDragArbiter). A fresh claim re-anchors at the
+                    // CURRENT progress, so a stale anchor from a cancelled drag can never jump/fight.
+                    guard let claim = sheetDragArbiter.claim("backdrop") else { return }
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    // Anchor to the progress at GRAB (like the sheet's own dragStart). The old
-                    // `1 - translation/h` assumed the sheet was fully open, so grabbing it again while
-                    // the release spring was still settling YANKED it back up to ~1 and then fought the
-                    // in-flight spring — the frame-by-frame up/down "shaking" on a down-drag close.
-                    if closeDragStart == nil { closeDragStart = viewersProgress }
+                    if claim == .fresh || closeDragStart == nil {
+                        closeDragStart = viewersProgress + v.translation.height / h   // anchor so current touch maps to current progress
+                    }
                     viewersProgress = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
                 }
                 .onEnded { v in
+                    sheetDragArbiter.release("backdrop")
                     guard let start = closeDragStart else { return }   // guarded-out drag (horizontal) → not ours
                     closeDragStart = nil
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
@@ -1525,6 +1550,7 @@ struct StoryViewersBottomSheet: View {
 
     let activeStoryId: String
     @Binding var progress: CGFloat
+    let arbiter: StoryViewer.SheetDragArbiter   // single-owner rule for all progress-writing drags
     let onClose: () -> Void
 
     @State private var viewers: [StoryViewerInfo] = []
@@ -1600,11 +1626,19 @@ struct StoryViewersBottomSheet: View {
                     // Take over only when already collapsing, or at the top pulling DOWN.
                     guard progress < 1 || (atTop && v.translation.height > 0) else { return }
                 }
-                if dragStart == nil { dragStart = progress }
+                // ONE writer at a time (SheetDragArbiter): a second handler with a different anchor
+                // used to alternate writes with this one every frame = the violent sheet vibration.
+                // A fresh claim re-anchors so the current touch maps to the CURRENT progress — a
+                // stale dragStart from a system-cancelled drag can never jump the sheet again.
+                guard let claim = arbiter.claim(fromList ? "list" : "header") else { return }
+                if claim == .fresh || dragStart == nil {
+                    dragStart = progress + v.translation.height / sheetH
+                }
                 // Track the finger 1:1; allow a little past 1.0 so overshoot() rubber-bands; clamp bottom at 0.
                 progress = max(0, min(1.14, (dragStart ?? 1) - v.translation.height / sheetH))
             }
             .onEnded { v in
+                arbiter.release(fromList ? "list" : "header")
                 guard dragStart != nil else { return }   // fromList drag that never engaged
                 dragStart = nil
                 // Where the sheet would COME TO REST given the fling: predictedEndTranslation is the
