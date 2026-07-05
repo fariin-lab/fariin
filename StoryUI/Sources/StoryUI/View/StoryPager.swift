@@ -263,8 +263,13 @@ struct StoryPager: UIViewControllerRepresentable {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    // Exit at the size the drag already reached (1 - 0.4*frac), not a forced 0.6.
+                    // A velocity commit (fast flick) releases near full size; forcing 0.6 there read
+                    // as a sudden zoom. A slow full drag has already reached ~0.6 — unchanged look.
+                    let exitFrac = min(1, max(0, ty) / card.bounds.height)
+                    let exitScale = 1.0 - 0.4 * exitFrac
                     UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: 0.6, y: 0.6)
+                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: exitScale, y: exitScale)
                     } completion: { _ in self.parent.onCommit() }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
