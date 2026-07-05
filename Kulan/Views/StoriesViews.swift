@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import Photos
 import UIKit
+import CoreImage
 import StoryUI
 
 // Telegram/IG segmented story ring: one arc per story (3 stories = 3 arcs with gaps, 1 = full circle).
@@ -32,15 +33,6 @@ struct StoryRingView: View {
 
 // Cached story image: memory + persistent disk (DiskImageCache), so swiping
 // back/forward, reopening, and app relaunches load instantly with no re-download.
-// The exact dark blur the story viewer uses over its fill backdrop (ImageLoader's
-// UIVisualEffectView(.systemThickMaterialDark)) — so bars look identical in-story and in-sheet.
-struct StoryDarkBlur: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
-    }
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
-}
-
 struct StoryImage: View {
     let url: String
     // fitBlur = show the WHOLE image (aspect-fit) over a blurred fill of itself — the SAME look as the
@@ -48,6 +40,7 @@ struct StoryImage: View {
     // swipe-up morph card + the viewers carousel; the small story-row covers stay plain fill (crop).
     var fitBlur = false
     @State private var image: UIImage?
+    @State private var blurredBG: UIImage?   // pre-baked dark-blurred backdrop (fit case only)
     @State private var failed = false
     var body: some View {
         Group {
@@ -68,13 +61,19 @@ struct StoryImage: View {
                             .transition(.opacity)
                     } else {
                         ZStack {
+                            // PRE-BAKED dark-blurred backdrop (heavy blur + near-black tint, matching the
+                            // story's systemThickMaterialDark look). It must be a plain static image:
+                            // live blur (UIVisualEffectView / SwiftUI material) BREAKS when its opacity is
+                            // animated — during the morph card's fade-in the blur dropped out and the raw
+                            // bright fill flashed as a ghost "full image" for the whole fade.
                             Color.clear
-                                .overlay(Image(uiImage: image).resizable().scaledToFill())
-                                // The REAL systemThickMaterialDark (same UIVisualEffectView the story's
-                                // ImageLoader puts over its fill backdrop) — the SwiftUI .thickMaterial
-                                // approximation was too transparent and showed a ghost "reflection" of
-                                // the image in the bars, where the story's bars are near-black.
-                                .overlay(StoryDarkBlur())
+                                .overlay {
+                                    if let bg = blurredBG {
+                                        Image(uiImage: bg).resizable().scaledToFill()
+                                    } else {
+                                        Color.black   // bake not ready yet → plain dark bars, never a bright flash
+                                    }
+                                }
                                 .clipped()
                             Image(uiImage: image).resizable().scaledToFit()
                         }
@@ -103,13 +102,45 @@ struct StoryImage: View {
 
     @MainActor private func load() async {
         failed = false
-        if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
+        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
         guard let u = URL(string: url) else { failed = true; return }
         guard let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) else {
             failed = true; return
         }
         DiskImageCache.shared.store(img, data: data, for: url)
+        await apply(img)
+    }
+
+    @MainActor private func apply(_ img: UIImage) async {
         image = img
+        guard fitBlur, !fillsScreen(img), blurredBG == nil else { return }
+        let bake = await Task.detached(priority: .userInitiated) { Self.darkBlurred(img) }.value
+        blurredBG = bake
+    }
+
+    // Bake the backdrop ONCE per image: downscale → gaussian blur → near-black tint. Approximates the
+    // story's fill + systemThickMaterialDark, but as a plain image so it alpha-fades cleanly and costs
+    // nothing per frame during the morph/carousel drags.
+    private static func darkBlurred(_ img: UIImage) -> UIImage {
+        let targetW: CGFloat = 240
+        let scale = targetW / max(1, img.size.width)
+        let size = CGSize(width: targetW, height: max(1, img.size.height * scale))
+        let small = UIGraphicsImageRenderer(size: size).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
+        }
+        var base = small
+        if let ci = CIImage(image: small) {
+            let blurred = ci.clampedToExtent().applyingGaussianBlur(sigma: 12).cropped(to: ci.extent)
+            let ctx = CIContext(options: nil)
+            if let cg = ctx.createCGImage(blurred, from: blurred.extent) {
+                base = UIImage(cgImage: cg)
+            }
+        }
+        return UIGraphicsImageRenderer(size: size).image { c in
+            base.draw(in: CGRect(origin: .zero, size: size))
+            UIColor.black.withAlphaComponent(0.62).setFill()
+            c.fill(CGRect(origin: .zero, size: size))
+        }
     }
 }
 
