@@ -33,13 +33,39 @@ struct StoryRingView: View {
 
 // Cached story image: memory + persistent disk (DiskImageCache), so swiping
 // back/forward, reopening, and app relaunches load instantly with no re-download.
-// The exact dark blur the story viewer uses over its fill backdrop (ImageLoader's
-// UIVisualEffectView(.systemThickMaterialDark)) — so bars look identical in-story and in-sheet.
-struct StoryDarkBlur: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+// Pre-rendered dark-blur backdrops keyed by image URL, tuned to match the systemThickMaterialDark
+// look. LIVE blur (UIVisualEffectView) breaks while its opacity animates — during the viewers-sheet
+// open/close crossfade it dropped out and flashed the raw bright fill (the "reflection flashing").
+// A baked image fades perfectly smoothly and costs nothing per frame; the cache makes rebuilds instant.
+enum StoryBlurBake {
+    private static let cache = NSCache<NSString, UIImage>()
+    static func cached(_ url: String) -> UIImage? { cache.object(forKey: url as NSString) }
+    static func bake(_ img: UIImage, url: String) -> UIImage {
+        if let hit = cached(url) { return hit }
+        let targetW: CGFloat = 240
+        let scale = targetW / max(1, img.size.width)
+        let size = CGSize(width: targetW, height: max(1, img.size.height * scale))
+        let small = UIGraphicsImageRenderer(size: size).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
+        }
+        var base = small
+        if let ci = CIImage(image: small) {
+            var work = ci.clampedToExtent().applyingGaussianBlur(sigma: 16).cropped(to: ci.extent)
+            if let desat = CIFilter(name: "CIColorControls", parameters: [
+                kCIInputImageKey: work, kCIInputSaturationKey: 0.9
+            ])?.outputImage { work = desat }
+            let ctx = CIContext(options: nil)
+            if let cg = ctx.createCGImage(work, from: work.extent) { base = UIImage(cgImage: cg) }
+        }
+        let out = UIGraphicsImageRenderer(size: size).image { c in
+            base.draw(in: CGRect(origin: .zero, size: size))
+            // Material-matched smoke: systemThickMaterialDark ≈ heavy blur + ~50% near-black veil.
+            UIColor.black.withAlphaComponent(0.5).setFill()
+            c.fill(CGRect(origin: .zero, size: size))
+        }
+        cache.setObject(out, forKey: url as NSString)
+        return out
     }
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
 }
 
 struct StoryImage: View {
@@ -49,6 +75,7 @@ struct StoryImage: View {
     // swipe-up morph card + the viewers carousel; the small story-row covers stay plain fill (crop).
     var fitBlur = false
     @State private var image: UIImage?
+    @State private var blurredBG: UIImage?   // baked dark backdrop (fit case), from StoryBlurBake
     @State private var failed = false
     var body: some View {
         Group {
@@ -70,10 +97,13 @@ struct StoryImage: View {
                     } else {
                         ZStack {
                             Color.clear
-                                .overlay(Image(uiImage: image).resizable().scaledToFill())
-                                // BUILD 216's exact recipe (user's explicit choice): the REAL
-                                // systemThickMaterialDark over the fill copy, same as the story's bars.
-                                .overlay(StoryDarkBlur())
+                                .overlay {
+                                    if let bg = blurredBG {
+                                        Image(uiImage: bg).resizable().scaledToFill()
+                                    } else {
+                                        Color.black   // first ms while the bake runs — never a bright flash
+                                    }
+                                }
                                 .clipped()
                             Image(uiImage: image).resizable().scaledToFit()
                         }
@@ -102,13 +132,21 @@ struct StoryImage: View {
 
     @MainActor private func load() async {
         failed = false
-        if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
+        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
         guard let u = URL(string: url) else { failed = true; return }
         guard let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) else {
             failed = true; return
         }
         DiskImageCache.shared.store(img, data: data, for: url)
+        await apply(img)
+    }
+
+    @MainActor private func apply(_ img: UIImage) async {
         image = img
+        guard fitBlur, !fillsScreen(img), blurredBG == nil else { return }
+        if let hit = StoryBlurBake.cached(url) { blurredBG = hit; return }
+        let u = url
+        blurredBG = await Task.detached(priority: .userInitiated) { StoryBlurBake.bake(img, url: u) }.value
     }
 }
 
