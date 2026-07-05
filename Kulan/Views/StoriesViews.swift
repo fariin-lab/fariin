@@ -838,9 +838,12 @@ struct StoryViewer: View {
             onSwipeUpEnded: { _, velocity in
                 guard currentIsMine || mineOnly else { openDragging = false; return }
                 openDragging = false
+                guard viewersProgress > 0 else { return }   // never got an upward drag → nothing to snap
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                let projected = viewersProgress + (velocity / sheetH) * 0.25   // fling contribution
-                if projected > 0.5 || velocity > 600 {
+                // Build 216's exact release rule (the feel the user wants): fling weight 0.3,
+                // open past 0.4 — a modest upward pull commits, a small nudge settles back.
+                let projected = viewersProgress + (velocity / sheetH) * 0.3
+                if projected > 0.4 {
                     withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
                 } else {
                     closeViewers()
