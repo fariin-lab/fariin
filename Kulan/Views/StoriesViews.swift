@@ -650,7 +650,11 @@ struct StoryViewer: View {
         // resumed it meanwhile (the "sheet forcefully dismissed while reading it" bug). pauseStory just
         // sets hostPaused=true; re-setting a true @State is a no-op — no re-render, no gesture fights.
         .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
-            if showViewers && viewersProgress > 0.5 {
+            // > 0.01 (not > 0.5): the freeze must hold through the ENTIRE close drag too — a story
+            // resuming mid-collapse re-renders behind the moving sheet every tick and fights the
+            // drag frame-by-frame (the violent "two views shaking" close). Resume still happens
+            // via the viewersProgress onChange once the sheet is fully down.
+            if showViewers && viewersProgress > 0.01 {
                 NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
             }
         }
