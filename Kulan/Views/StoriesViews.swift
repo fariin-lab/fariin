@@ -601,6 +601,7 @@ struct StoryViewer: View {
                 viewersBackdrop   // flat 2D morph card during the drag → my-stories carousel when open
                 StoryViewersBottomSheet(activeStoryId: sheetStoryId,
                                         progress: $viewersProgress,
+                                        arbiter: sheetDragArbiter,
                                         onClose: closeViewers)
             }
         }
@@ -1513,12 +1514,15 @@ struct StoryViewersBottomSheet: View {
 
     let activeStoryId: String
     @Binding var progress: CGFloat
+    let arbiter: StoryViewer.SheetDragArbiter   // single-owner rule for all progress-writing drags
     let onClose: () -> Void
 
     @State private var viewers: [StoryViewerInfo] = []
     @State private var search = ""
     @State private var loading = true
     @State private var tab = 0   // 0 = All Viewers, 1 = Contacts (Telegram tabs)
+    @State private var dragStart: CGFloat? = nil
+    @State private var listOffset: CGFloat = 0   // the viewer list's scroll offset (0 = top)
 
     // Uids of my 1:1 contacts — for the "Contacts" tab filter.
     private var contactUids: Set<String> {
@@ -1542,23 +1546,21 @@ struct StoryViewersBottomSheet: View {
     }
 
     var body: some View {
-        // TELEGRAM ARCHITECTURE (user's explicit request, studied from their real component): no
-        // custom drag gestures at all. One native scroll surface owns the sheet position AND the
-        // list; iOS's own scroll physics + the half-point snap decide open/close. The custom
-        // sheetDrag / arbiter / listOffset machinery is GONE — one input, nothing left to fight.
         GeometryReader { geo in
             let sheetH = geo.size.height * Self.heightFraction
-            TelegramSheetSurface(expansion: sheetH, progress: $progress, onClosed: onClose) {
-                VStack(spacing: 0) {
-                    stickyHeader()          // drag handle + tabs + search (surface scrolls it)
-                    viewerRows()            // plain rows — the surface IS the scroll view
-                }
-                .background(
-                    UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-                        .fill(Color(white: 0.10))
-                        .ignoresSafeArea(edges: .bottom)
-                )
+            VStack(spacing: 0) {
+                stickyHeader(sheetH: sheetH)        // drag handle + search
+                viewerList(sheetH: sheetH)          // list scrolls; drag its top to collapse the sheet
             }
+            .frame(height: sheetH)
+            .background(
+                UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
+                    .fill(Color(white: 0.10))
+            )
+            .frame(maxHeight: .infinity, alignment: .bottom)   // park at the bottom of the screen
+            // Rubber-band past fully-open (progress can exceed 1 while dragging up): resist so the
+            // sheet eases to a soft stop instead of a hard wall, Telegram-style.
+            .offset(y: (1 - min(progress, 1)) * sheetH - overshoot(progress) )
         }
         .ignoresSafeArea()
         .task(id: activeStoryId) {
@@ -1570,8 +1572,57 @@ struct StoryViewersBottomSheet: View {
         }
     }
 
-    // Sheet header (handle + tabs + search). The surface scrolls it — no gesture of its own.
-    private func stickyHeader() -> some View {
+    // Extra pixels the sheet rises above fully-open, with diminishing return (rubber band).
+    private func overshoot(_ p: CGFloat) -> CGFloat {
+        guard p > 1 else { return 0 }
+        return 22 * (1 - 1 / (1 + (p - 1) * 3))   // asymptotes to ~22pt
+    }
+
+    // ONE unified drag (Telegram): dragging the handle/search OR the list (when the list is at its
+    // top and you pull down) drives the sheet up/down. `fromList` gates the list case so mid-list
+    // scrolling isn't hijacked. The list is scroll-disabled while the sheet isn't fully open, so once
+    // a collapse starts the list locks and the drag owns the motion.
+    private func sheetDrag(sheetH: CGFloat, fromList: Bool) -> some Gesture {
+        DragGesture(minimumDistance: fromList ? 8 : 4)
+            .onChanged { v in
+                if fromList {
+                    let atTop = listOffset <= 0.5
+                    // Take over only when already collapsing, or at the top pulling DOWN.
+                    guard progress < 1 || (atTop && v.translation.height > 0) else { return }
+                }
+                // ONE writer at a time (SheetDragArbiter): a second handler with a different anchor
+                // used to alternate writes with this one every frame = the violent sheet vibration.
+                // A fresh claim re-anchors so the current touch maps to the CURRENT progress — a
+                // stale dragStart from a system-cancelled drag can never jump the sheet again.
+                guard let claim = arbiter.claim(fromList ? "list" : "header") else { return }
+                if claim == .fresh || dragStart == nil {
+                    dragStart = progress + v.translation.height / sheetH
+                }
+                // Track the finger 1:1; allow a little past 1.0 so overshoot() rubber-bands; clamp bottom at 0.
+                progress = max(0, min(1.14, (dragStart ?? 1) - v.translation.height / sheetH))
+            }
+            .onEnded { v in
+                arbiter.release(fromList ? "list" : "header")
+                guard dragStart != nil else { return }   // fromList drag that never engaged
+                dragStart = nil
+                // Where the sheet would COME TO REST given the fling: predictedEndTranslation is the
+                // ADDITIONAL travel from here, so subtract only that.
+                let extra = (v.predictedEndTranslation.height - v.translation.height) / sheetH
+                let projected = progress - extra
+                // 0.8 / 160 (was 0.6 / 240): the old thresholds demanded almost half the sheet's
+                // travel or a hard fling, so ordinary pulls bounced back repeatedly ("soo hard").
+                let close = projected < 0.8 || v.predictedEndTranslation.height > 160
+                if close { onClose() }
+                else {
+                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.78, blendDuration: 0.2)) {
+                        progress = 1
+                    }
+                }
+            }
+    }
+
+    // Sticky header (handle + tabs + search). Dragging here drives the sheet.
+    private func stickyHeader(sheetH: CGFloat) -> some View {
         VStack(spacing: 12) {
             Capsule().fill(.white.opacity(0.28)).frame(width: 38, height: 5).padding(.top, 8)
             tabSelector
@@ -1586,6 +1637,10 @@ struct StoryViewersBottomSheet: View {
         }
         .padding(.bottom, 10)
         .contentShape(Rectangle())
+        // simultaneousGesture (not .gesture) so dragging down on the handle/tabs/search still drives the
+        // sheet even though the tabs + search field have their own tap/edit gestures. This is what made
+        // drag-down-to-close feel dead — the tab buttons were swallowing the drag.
+        .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: false))
     }
 
     // "All Viewers | Contacts" tabs (Telegram StoryItemSetViewListComponent): active tab is white
@@ -1609,24 +1664,35 @@ struct StoryViewersBottomSheet: View {
         .padding(.horizontal, 18)
     }
 
-    // Plain rows — NOT a ScrollView. The Telegram surface scrolls the whole sheet body natively;
-    // a nested scroll view here would reintroduce exactly the two-scroller fights we removed.
-    private func viewerRows() -> some View {
-        LazyVStack(spacing: 0) {
-            if loading {
-                ProgressView().tint(.white).padding(.top, 44).frame(maxWidth: .infinity)
-            } else if filtered.isEmpty {
-                ContentUnavailableView("No views yet", systemImage: "eye",
-                    description: Text("When people view this story, they'll show up here."))
-                    .padding(.top, 40)
-            } else {
-                ForEach(filtered) { v in
-                    viewerRow(v)
-                    Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 74)
+    private func viewerList(sheetH: CGFloat) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if loading {
+                    ProgressView().tint(.white).padding(.top, 44).frame(maxWidth: .infinity)
+                } else if filtered.isEmpty {
+                    ContentUnavailableView("No views yet", systemImage: "eye",
+                        description: Text("When people view this story, they'll show up here."))
+                        .padding(.top, 40)
+                } else {
+                    ForEach(filtered) { v in
+                        viewerRow(v)
+                        Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 74)
+                    }
                 }
             }
+            .padding(.bottom, 30)
         }
-        .padding(.bottom, 30)
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in listOffset = y }
+        // No rubber-band bounce at the top: the bounce fought the collapse-drag below (the list sprang
+        // while the sheet also moved = the "shaking" when pulling DOWN to close). Without it the drag
+        // owns the downward motion cleanly, matching the smooth upward open.
+        .scrollBounceBehavior(.basedOnSize)
+        // Lock the list while the sheet isn't fully open OR while a collapse-drag is active (dragStart
+        // set), so the list's own scroll/rubber-band can NEVER fight the drag at the top (that fight was
+        // the down-drag "shaking"). The drag owns the motion cleanly, matching the smooth upward open.
+        .scrollDisabled(progress < 1 || dragStart != nil)
+        // Pulling the list down at its top collapses the sheet (Telegram hand-off).
+        .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: true))
     }
 
     private var doubleCheck: some View {
