@@ -19,13 +19,16 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let loc = touch.location(in: view)
             let dy = prev.y - loc.y
             let dx = prev.x - loc.x
+            // delta = previous - current: finger DOWN gives dy < 0, finger UP gives dy > 0.
+            // Signs were inverted (same bug as the story dismiss pan) — the gesture only began
+            // off micro-jitter, so decisive flicks could reach touch-end without ever starting.
             let ok: Bool = {
                 if abs(dy) > abs(dx) {
-                    if dir == .up, dy < 0 { return true }
-                    if dir == .down, dy > 0 { return true }
+                    if dir == .up, dy > 0 { return true }
+                    if dir == .down, dy < 0 { return true }
                 } else {
-                    if dir == .left, dx < 0 { return true }
-                    if dir == .right, dx > 0 { return true }
+                    if dir == .left, dx > 0 { return true }
+                    if dir == .right, dx < 0 { return true }
                 }
                 return false
             }()

@@ -39,13 +39,17 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let deltaY = previousLocation.y - location.y
             let deltaX = previousLocation.x - location.x
 
+            // delta = previous - current, so a DOWNWARD finger move (y grows) gives deltaY < 0 and an
+            // UPWARD one gives deltaY > 0. These signs were inverted before, which made the pan only
+            // begin off micro-jitter: slow drags sneaked in eventually, fast decisive flicks produced one
+            // big clean "wrong-direction" sample and hard-failed instantly ("fast swipe-down never closes").
             let isSatisfied: Bool = {
                 if abs(deltaY) > abs(deltaX) {
-                    if direction.contains(.up), deltaY < 0 { return true }
-                    if direction.contains(.down), deltaY > 0 { return true }
+                    if direction.contains(.up), deltaY > 0 { return true }
+                    if direction.contains(.down), deltaY < 0 { return true }
                 } else {
-                    if direction.contains(.left), deltaX < 0 { return true }
-                    if direction.contains(.right), deltaX > 0 { return true }
+                    if direction.contains(.left), deltaX > 0 { return true }
+                    if direction.contains(.right), deltaX < 0 { return true }
                 }
                 return false
             }()
