@@ -795,16 +795,6 @@ struct ChatsView: View {
                 // Telegram hero: the viewer grows out of the tapped story card on open and shrinks back
                 // into it on close (matchedTransitionSource on the cards + this zoom transition).
                 .navigationTransition(.zoom(sourceID: g.id, in: storyNS))
-                // The zoom transition installs the SYSTEM's own interactive drag-to-dismiss, and FAST
-                // downward flicks trip IT instead of the library's dismiss pan — the cover then shrinks
-                // toward the story row while the story content RE-LAYS-OUT inside it (image + reply bar
-                // squashed over a stretched black card, chat list growing from the BOTTOM — the user's
-                // screenshots; a real slide-down would reveal it from the top). Slow drags go to our pan,
-                // hence the "slow ok / fast broken" split. Kill the system gesture; swipes belong to the
-                // library pan only. Hero zoom open/close animation and programmatic close are unaffected.
-                // NOTE: this was applied once before (41e9c29, user-approved) and accidentally wiped by
-                // the build-207 close restoration (fa263fc). Do not remove it again.
-                .interactiveDismissDisabled()
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting
