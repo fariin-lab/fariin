@@ -52,22 +52,23 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let start = startPoint ?? loc
             let dx = loc.x - start.x   // + = finger moved right
             let dy = loc.y - start.y   // + = finger moved down
-            if max(abs(dx), abs(dy)) >= 8 {
-                let isSatisfied: Bool = {
-                    if abs(dy) > abs(dx) {
-                        if direction.contains(.up), dy < 0 { return true }
-                        if direction.contains(.down), dy > 0 { return true }
-                    } else {
-                        if direction.contains(.left), dx < 0 { return true }
-                        if direction.contains(.right), dx > 0 { return true }
-                    }
-                    return false
-                }()
-                guard isSatisfied else {
-                    // Off-axis movement: fail NOW instead of lingering in .possible, so a scroll view
-                    // that did require(toFail:) us (the cube pager) can begin instantly (no sticky paging).
-                    state = .failed
-                    return
+            let ax = abs(dx), ay = abs(dy)
+            if max(ax, ay) >= 8 {
+                // Only judge once one axis CLEARLY dominates (1.2×). Hard-failing on an ambiguous
+                // diagonal first sample killed whole drags dead — a finger that rolls slightly
+                // sideways at touch-down then pulls straight down never got the pan back ("scroll
+                // down to close sometimes completely not working"). Ambiguous → keep sampling; the
+                // .began velocity axis-check below still catches anything that slips through.
+                if ay > ax * 1.2 {
+                    // Clearly vertical: right direction begins, wrong direction fails (frees the tap
+                    // zones / the app's swipe-up).
+                    let ok = (direction.contains(.down) && dy > 0) || (direction.contains(.up) && dy < 0)
+                    if !ok { state = .failed; return }
+                } else if ax > ay * 1.2 {
+                    // Clearly horizontal: fail NOW so the cube pager (require(toFail:) on us) can
+                    // begin instantly — no sticky paging.
+                    let ok = (direction.contains(.left) && dx < 0) || (direction.contains(.right) && dx > 0)
+                    if !ok { state = .failed; return }
                 }
             }
         }

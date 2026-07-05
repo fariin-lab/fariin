@@ -937,7 +937,10 @@ struct StoryViewer: View {
                     closeDragStart = nil
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                     let projected = start - v.predictedEndTranslation.height / h
-                    if projected < 0.6 { closeViewers() }   // collapse → story reopens full screen
+                    // 0.8 (was 0.6): demanding nearly half the sheet's travel made ordinary drags
+                    // bounce back over and over ("scroll down to close is soo hard"). A deliberate
+                    // downward pull now commits; only a tiny nudge springs back.
+                    if projected < 0.8 { closeViewers() }   // collapse → story reopens full screen
                     else { withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 } }
                 }
         )
@@ -1586,7 +1589,9 @@ struct StoryViewersBottomSheet: View {
                 // ADDITIONAL travel from here, so subtract only that.
                 let extra = (v.predictedEndTranslation.height - v.translation.height) / sheetH
                 let projected = progress - extra
-                let close = projected < 0.6 || v.predictedEndTranslation.height > 240
+                // 0.8 / 160 (was 0.6 / 240): the old thresholds demanded almost half the sheet's
+                // travel or a hard fling, so ordinary pulls bounced back repeatedly ("soo hard").
+                let close = projected < 0.8 || v.predictedEndTranslation.height > 160
                 if close { onClose() }
                 else {
                     withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.78, blendDuration: 0.2)) {
