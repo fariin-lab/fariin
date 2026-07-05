@@ -7,7 +7,6 @@
 
 import Combine
 import UIKit
-import CoreImage
 import CryptoKit
 
 // Persistent disk cache for story images — survives app relaunches (unlike URLCache, which evicts).
@@ -71,6 +70,7 @@ final class ImageLoader: UIView {
     var imageView = UIImageView()
     // Background: a zoomed + blurred copy of the same photo that fills the empty top/bottom.
     private let backgroundImageView = UIImageView()
+    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
     private let shimmer = ShimmerView()
 
     // MARK: - Initializers
@@ -86,6 +86,7 @@ final class ImageLoader: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         backgroundImageView.frame = bounds
+        blurView.frame = bounds
         imageView.frame = bounds
         shimmer.frame = bounds
         applyCornerMask()
@@ -115,55 +116,10 @@ final class ImageLoader: UIView {
         imageView.contentMode = imgAspect >= screenAspect - 0.02 ? .scaleAspectFill : .scaleAspectFit
     }
 
-    // Baked backdrops cached by URL: the viewer can be torn down and rebuilt around a load (e.g. the
-    // upload handoff swaps the cover), and the old `imageView.image === image` identity guard silently
-    // dropped the bake in that case — the black placeholder then stayed FOREVER ("bars are black").
-    // URL identity is stable across re-applies and view rebuilds; the cache makes rebuilds instant.
-    private static let bakeCache = NSCache<NSString, UIImage>()
-
     private func apply(_ image: UIImage?) {
         imageView.image = image
+        backgroundImageView.image = image
         decideContentMode()        // fixed for this image; never recomputed on layout/drag
-        guard let image else { backgroundImageView.image = nil; return }
-        let key = (imageURL?.absoluteString ?? "") as NSString
-        if key.length > 0, let cached = Self.bakeCache.object(forKey: key) {
-            backgroundImageView.image = cached
-            return
-        }
-        backgroundImageView.image = nil   // plain black ONLY while the very first bake runs (ms)
-        let url = imageURL
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let baked = Self.bakedBackdrop(image)
-            DispatchQueue.main.async {
-                if key.length > 0 { Self.bakeCache.setObject(baked, forKey: key) }
-                guard let self, self.imageURL == url else { return }
-                self.backgroundImageView.image = baked
-            }
-        }
-    }
-
-    // Downscale → heavy gaussian → barely-there dim. Identical recipe to the host's StoryImage bake,
-    // so the story's bars and the viewers-sheet card's bars always match.
-    private static func bakedBackdrop(_ img: UIImage) -> UIImage {
-        let targetW: CGFloat = 240
-        let scale = targetW / max(1, img.size.width)
-        let size = CGSize(width: targetW, height: max(1, img.size.height * scale))
-        let small = UIGraphicsImageRenderer(size: size).image { _ in
-            img.draw(in: CGRect(origin: .zero, size: size))
-        }
-        var base = small
-        if let ci = CIImage(image: small) {
-            let work = ci.clampedToExtent().applyingGaussianBlur(sigma: 20).cropped(to: ci.extent)
-            let ctx = CIContext(options: nil)
-            if let cg = ctx.createCGImage(work, from: work.extent) {
-                base = UIImage(cgImage: cg)
-            }
-        }
-        return UIGraphicsImageRenderer(size: size).image { c in
-            base.draw(in: CGRect(origin: .zero, size: size))
-            UIColor.black.withAlphaComponent(0.18).setFill()
-            c.fill(CGRect(origin: .zero, size: size))
-        }
     }
 
     private func showShimmer(_ show: Bool) {
@@ -256,10 +212,7 @@ private extension ImageLoader {
        backgroundImageView.contentMode = .scaleAspectFill
        backgroundImageView.clipsToBounds = true
        addSubview(backgroundImageView)
-       // NO live UIVisualEffectView over the fill copy anymore: live blur BREAKS while its opacity is
-       // animated, so every viewers-sheet fade (open/drag/dismiss) dropped the blur and flashed the
-       // sharp fill for the whole animation. The backdrop is now a PRE-BAKED blurred image (set in
-       // apply()) — pixel-stable through any fade, and identical to the sheet card's bars.
+       addSubview(blurView)   // heavy Gaussian blur over the fill copy
 
        // Foreground: the photo at its TRUE aspect ratio — aspect-FIT so a square/landscape is never
        // cropped/zoomed. The empty top/bottom become the zoomed + blurred backdrop above (user prefers
