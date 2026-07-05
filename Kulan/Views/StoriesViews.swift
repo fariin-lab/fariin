@@ -687,13 +687,12 @@ struct StoryViewer: View {
         // NO app-level drag gesture on the story anymore. BOTH directions are the library's native
         // UIKit pans: swipe-DOWN → dismiss (smooth, same as friends), swipe-UP → onSwipeUp → openViewers.
         // An app gesture here fought the library's swipe-down pan and broke the dismiss.
-        // NEVER scaled (the library has an internal 3D cube for user-to-user swipes; scaling
-        // warped the card) and never re-laid-out (the deleted morph card re-drew the image with its
-        // own sizing and blew wide panoramas into a huge crop). The story keeps its EXACT layout —
-        // aspect fit, side blur, dimensions — and slides UP as one locked unit in tandem with the
-        // sheet (pure translation below, driven by the same progress). In the last sliver (0.88→1)
-        // it crossfades out as the my-stories carousel crossfades in (viewersBackdrop).
-        .offset(y: -p * UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction)
+        // NEVER transformed (the library has an internal 3D cube for user-to-user swipes; scaling
+        // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
+        // The story stays FULL-SCREEN and UNCHANGED for the whole swipe-up (opacity 1) — it does NOT
+        // shrink/zoom/crop or re-layout (the morph card re-drew the image with its own sizing and blew
+        // up wide panoramas into a huge crop). Only in the last sliver (0.88→1) does it crossfade out
+        // as the my-stories carousel crossfades in (viewersBackdrop). Only the sheet animates.
         .opacity(1 - Double(max(0, min(1, (p - 0.88) / 0.12))))
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
