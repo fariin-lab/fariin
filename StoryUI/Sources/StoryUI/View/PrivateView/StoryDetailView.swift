@@ -53,7 +53,13 @@ struct StoryDetailView: View {
     @State private var isHolding: Bool = false  // TRUE only after the long-press engages → drives the
                                                 // chrome fade, so a quick tap doesn't flicker the header/bars
     @State private var scenePaused = false      // pause came from leaving the foreground, not a hold
-    @State private var hostPaused: Bool = false // app froze it while showing a sheet (e.g. viewers list)
+    // Host-pause lives in a REFERENCE box: writing it must NOT invalidate/re-render this view.
+    // pauseStory posts on the dismiss pan's .began — a plain @State flip there re-rendered the hosted
+    // story MID-PAN and iOS cancelled the pan ~20pt in, so a slow swipe-down bounced back every time
+    // (fast flicks survived only via the velocity commit). Nothing in `body` reads this flag — only
+    // the timer tick and the resume gate do — so a non-invalidating box is safe and kills the bounce.
+    private final class HostPauseBox { var paused = false }
+    @State private var hostPause = HostPauseBox()  // @State keeps the SAME box across re-renders
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
     @State private var isFolding: Bool = false   // true while this page is mid-cube-fold (pause timer)
     @State private var captionExpanded: Bool = false   // Telegram: tap the caption to expand past 3 lines
@@ -173,10 +179,10 @@ struct StoryDetailView: View {
         }
         // Host shows/hides a sheet over the viewer (viewers list, share, menu) → freeze/resume.
         .onReceive(NotificationCenter.default.publisher(for: .pauseStory)) { _ in
-            hostPaused = true; pauseVideo()
+            hostPause.paused = true; pauseVideo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in
-            hostPaused = false; if !keyboardManager.isKeyboardOpen { playVideo() }
+            hostPause.paused = false; if !keyboardManager.isKeyboardOpen { playVideo() }
         }
         // Host's viewers carousel centred a different one of MY stories → jump the (frozen) viewer to
         // that item, so when the sheet collapses the story underneath matches the carousel/morph (no
@@ -471,7 +477,7 @@ private extension StoryDetailView {
         }
         // Pause sources: emoji-fly animation (isTimerRunning), hold-to-pause (isPaused),
         // and composing a reply (keyboard open) — any of them freezes the segment + progress.
-        guard !isTimerRunning, !isPaused, !hostPaused, !isFolding, !isDismissing, !keyboardManager.isKeyboardOpen else { return }
+        guard !isTimerRunning, !isPaused, !hostPause.paused, !isFolding, !isDismissing, !keyboardManager.isKeyboardOpen else { return }
         
         let index = getCurrentIndex()
         let story = getStory(with: index)
@@ -591,7 +597,7 @@ private extension StoryDetailView {
     
     func playVideo() {
         // Never resume under a sheet or the reply keyboard, and never index an empty bucket.
-        guard !model.stories.isEmpty, !hostPaused, !keyboardManager.isKeyboardOpen else { return }
+        guard !model.stories.isEmpty, !hostPause.paused, !keyboardManager.isKeyboardOpen else { return }
         let index = getCurrentIndex()
         let currentUser = viewModel.currentStoryUser == model.id
         let video = model.stories[index].config.mediaType == .video
