@@ -268,7 +268,16 @@ struct StoryPager: UIViewControllerRepresentable {
                     // as a sudden zoom. A slow full drag has already reached ~0.6 — unchanged look.
                     let exitFrac = min(1, max(0, ty) / card.bounds.height)
                     let exitScale = 1.0 - 0.4 * exitFrac
-                    UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
+                    // ONE shared exit for distance AND velocity commits: continue the linear slide from
+                    // the release point at (roughly) the finger's release speed. The old fixed 0.25s
+                    // ease-IN visibly decelerated right after a fast flick (finger leaves fast, card
+                    // almost stops, then re-accelerates) — read as an abrupt/system-y jump. Linear +
+                    // velocity-matched duration makes the flick exit flow seamlessly out of the gesture;
+                    // a slow-drag release only has a short remainder, so it looks the same as before.
+                    let remaining = max(1, card.bounds.height - max(0, ty))
+                    let speed = max(vy, 1100)                     // pts/s floor: slow commits still finish briskly
+                    let duration = min(0.3, max(0.12, remaining / speed))
+                    UIView.animate(withDuration: duration, delay: 0, options: [.curveLinear]) {
                         card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: exitScale, y: exitScale)
                     } completion: { _ in self.parent.onCommit() }
                 } else {
