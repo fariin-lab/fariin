@@ -81,7 +81,6 @@ struct StoryPager: UIViewControllerRepresentable {
         private let dismissBackdrop = UIImageView()
         private let dismissBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
         private var didInstallPan = false
-        weak var dismissPan: UIPanGestureRecognizer?   // Telegram-style: begin gated by live velocity direction
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
 
         init(_ parent: StoryPager) { self.parent = parent }
@@ -183,17 +182,13 @@ struct StoryPager: UIViewControllerRepresentable {
             dismissBlur.isHidden = true
             pager.view.insertSubview(dismissBackdrop, at: 0)
             pager.view.insertSubview(dismissBlur, aboveSubview: dismissBackdrop)
-            // DOWN dismiss pan — TELEGRAM ARCHITECTURE (rebuilt at the user's request; the old
-            // DirectionalPan-based implementation is fully removed for the dismiss). A PLAIN
-            // UIPanGestureRecognizer whose begin decision is Telegram's: at the moment UIKit wants to
-            // begin the pan, look at the live velocity — begin ONLY if it points predominantly DOWN
-            // (gestureRecognizerShouldBegin below). Anything else fails instantly so the cube pager
-            // (require(toFail:) on us) starts paging with zero stickiness.
+            // DOWN dismiss pan (native UIKit — smooth). Installed for BOTH own and friends now, so the
+            // own-story swipe-down uses the exact same buttery pan friends use (no app-level SwiftUI
+            // offset). The card moves in pure UIKit; require(toFail:) keeps the horizontal slide separate.
             if parent.dismissEnabled {
-                let pan = UIPanGestureRecognizer(target: self, action: #selector(handleDismiss(_:)))
+                let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
-                dismissPan = pan
                 scroll?.panGestureRecognizer.require(toFail: pan)
             }
             // UP pan opens the views sheet. NOT installed for own stories — the host owns swipe-up there
@@ -263,27 +258,28 @@ struct StoryPager: UIViewControllerRepresentable {
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
-                // Telegram commit rule: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
+                // Telegram commit: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
                 if ty > 200 || (ty > 5 && vy > 200) {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
-                    // TELEGRAM EXIT: a velocity-SEEDED spring (damping 1 = no bounce) carries the card
-                    // to its final off-screen pose — the release physics literally continue the finger's
-                    // motion, at any speed. initialSpringVelocity is normalized to the remaining travel.
+                    // Exit CONTINUES the flick: keep the scale the drag already reached (a fast flick
+                    // releases near full size — force-shrinking to 0.6 read as a sudden ugly zoom) and
+                    // slide off at the release velocity with a linear curve (a fixed ease-in visibly
+                    // stalled right after a fast release). Slow closes are already ~0.6 and nearly
+                    // off-screen, so they look exactly as before.
+                    let exitFrac = min(1, max(0, ty) / card.bounds.height)
+                    let exitScale = 1.0 - 0.4 * exitFrac
                     let remaining = max(1, card.bounds.height - max(0, ty))
-                    let seed = max(0, vy) / remaining
-                    UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 1.0,
-                                   initialSpringVelocity: seed, options: [.allowUserInteraction]) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: 0.6, y: 0.6)
+                    let speed = max(vy, 1100)                     // pts/s floor: distance commits still finish briskly
+                    let duration = min(0.3, max(0.12, remaining / speed))
+                    UIView.animate(withDuration: duration, delay: 0, options: [.curveLinear]) {
+                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: exitScale, y: exitScale)
                     } completion: { _ in self.parent.onCommit() }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
-                    // TELEGRAM CANCEL: velocity-seeded spring back to identity (slight damping so it
-                    // settles with a soft catch, like their container).
-                    let seed = max(0, -vy) / max(1, ty)
-                    UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.85,
-                                   initialSpringVelocity: seed, options: [.allowUserInteraction]) {
+                    UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
+                                   initialSpringVelocity: 0.3, options: []) {
                         card.transform = .identity
                         card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
                     } completion: { _ in
@@ -323,16 +319,6 @@ struct StoryPager: UIViewControllerRepresentable {
         // touch, so swipe-down-to-close and swipe-up never fired. The horizontal-scroll relationship is
         // still ordered by require(toFail:), so this doesn't double-handle paging.
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
-
-        // Telegram's begin gate for the dismiss: when UIKit is ready to begin the pan, begin only if
-        // the LIVE velocity points predominantly downward. Horizontal → fail (cube pager takes over
-        // instantly via require(toFail:)); upward → fail (tap zones / up pan own it). Works identically
-        // at every speed because it reads velocity, not a first-sample position delta.
-        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard let pan = g as? UIPanGestureRecognizer, pan === dismissPan else { return true }
-            let v = pan.velocity(in: pan.view)
-            return v.y > 0 && v.y > abs(v.x)
-        }
     }
 }
 
