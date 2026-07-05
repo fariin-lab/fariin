@@ -779,37 +779,14 @@ struct StoryViewer: View {
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
-        // App-level swipe-UP to open the viewers sheet, tracking the finger 1:1. The library's own
-        // up-pan wasn't firing reliably, so the APP owns swipe-up now (swipeUpEnabled: false below).
-        // minimumDistance keeps taps (advance) + holds (pause) working; a DOWNWARD drag is ignored
-        // here so the library's swipe-down DISMISS still fires.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 14)
-                .onChanged { v in
-                    guard currentIsMine || mineOnly, v.translation.height < 0 else { return }
-                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    if !showViewers {
-                        sheetStoryId = targetStoryId; showViewers = true
-                        // Freeze the story the INSTANT the sheet starts to open (don't wait for the
-                        // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
-                        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
-                    }
-                    openDragging = true
-                    viewersProgress = max(0, min(1, -v.translation.height / sheetH))
-                }
-                .onEnded { v in
-                    guard currentIsMine || mineOnly else { return }
-                    openDragging = false
-                    guard viewersProgress > 0 else { return }   // never got an upward drag → nothing to snap
-                    let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    let projected = viewersProgress + (-v.predictedEndTranslation.height / sheetH) * 0.3
-                    if projected > 0.4 {
-                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
-                    } else {
-                        closeViewers()
-                    }
-                }
-        )
+        // NO app-level SwiftUI gesture on the story AT ALL anymore. A SwiftUI DragGesture activates
+        // after its minimumDistance in ANY direction (the direction guard runs only inside onChanged),
+        // and its ACTIVATION cancels the touches of the hosted UIKit views — frame-measured on device:
+        // every slow swipe-down tracked ~20-30pt (≈ the 14pt activation + latency) then got cancelled
+        // and sprang back, over and over. Swipe-UP is now the library's own DirectionalPan (.up) again
+        // (swipeUpEnabled: true below): it never fired historically because its direction test had
+        // inverted signs — fixed — and being direction-locked it FAILS cleanly on a downward drag, so
+        // the down dismiss pan can never be starved or cancelled by it.
         .ignoresSafeArea()
     }
 
@@ -849,7 +826,12 @@ struct StoryViewer: View {
                 // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
                 guard currentIsMine || mineOnly else { return }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
+                if !showViewers {
+                    sheetStoryId = targetStoryId; showViewers = true
+                    // Freeze the story the INSTANT the sheet starts to open (don't wait for the
+                    // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
+                    NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+                }
                 openDragging = true   // keep the storyLayer visible/hit-testable through the drag
                 viewersProgress = max(0, min(1, up / sheetH))
             },
@@ -865,7 +847,9 @@ struct StoryViewer: View {
                 }
             },
             dismissEnabled: true,
-            swipeUpEnabled: false   // the APP owns swipe-up now (storyLayer .simultaneousGesture); the library's up-pan was unreliable
+            swipeUpEnabled: true   // library's DirectionalPan(.up) owns swipe-up: with the direction-sign
+                                   // fix it fires reliably, and it FAILS cleanly on downward drags — unlike
+                                   // the removed SwiftUI DragGesture whose activation cancelled the down pan
         )
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
