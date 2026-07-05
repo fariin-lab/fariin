@@ -248,13 +248,11 @@ struct StoryPager: UIViewControllerRepresentable {
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
             case .changed:
                 let ty = max(0, t.y)
-                let frac = min(1, ty / card.bounds.height)
-                let scale = 1.0 - 0.4 * frac            // Telegram: card scales 1.0 -> 0.6 as you pull
-                card.layer.cornerCurve = .continuous    // Apple squircle
-                card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
-                card.layer.masksToBounds = true
+                // ONE dismissal style: pure linear vertical slide. NO scale-down and NO growing corner
+                // radius — the shrink-into-a-floating-card look read as a second, conflicting close
+                // style over the plain slide. The story stays full-size and just tracks the finger down.
                 // Move ONLY the card; the backdrop stays put, so the area above it shows the blur, not black.
-                card.transform = CGAffineTransform(translationX: 0, y: ty).scaledBy(x: scale, y: scale)
+                card.transform = CGAffineTransform(translationX: 0, y: ty)
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
@@ -263,14 +261,10 @@ struct StoryPager: UIViewControllerRepresentable {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
-                    // Exit at the size the drag already reached — do NOT force-shrink to 0.6. A velocity
-                    // commit (fast flick) releases while the card is still near full size; animating it to
-                    // 0.6 read as a sudden "zoom then close" second style. Keeping the in-drag scale makes
-                    // every close look like one thing: the slide simply continuing off screen.
-                    let frac = min(1, max(0, ty) / card.bounds.height)
-                    let exitScale = 1.0 - 0.4 * frac
+                    // Commit continues the SAME linear slide: full-size card translates straight off the
+                    // bottom. No scale here either — any shrink on exit reads as a second close style.
                     UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: exitScale, y: exitScale)
+                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height)
                     } completion: { _ in self.parent.onCommit() }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
