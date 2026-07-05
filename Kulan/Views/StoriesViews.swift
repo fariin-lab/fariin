@@ -645,6 +645,15 @@ struct StoryViewer: View {
         .onChange(of: viewersProgress > 0.01) { _, open in
             NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
+        // BULLETPROOF pause while the viewers sheet is open: reassert the freeze twice a second so the
+        // story can NEVER creep forward and auto-advance/auto-close the sheet, even if some other event
+        // resumed it meanwhile (the "sheet forcefully dismissed while reading it" bug). pauseStory just
+        // sets hostPaused=true; re-setting a true @State is a no-op — no re-render, no gesture fights.
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+            if showViewers && viewersProgress > 0.5 {
+                NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+            }
+        }
         // NO host pause post during the swipe-DOWN dismiss drag — matching TestFlight build 210,
         // whose scroll-down-to-close the user confirmed as the correct one. The library already
         // pauses on its pan's own .began; this extra post only existed in 211+.
