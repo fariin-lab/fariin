@@ -792,18 +792,15 @@ struct ChatsView: View {
                                     })
                     }
                 }
-                // Telegram hero: the viewer grows out of the tapped story card on open and shrinks back
-                // into it on close (matchedTransitionSource on the cards + this zoom transition).
-                .navigationTransition(.zoom(sourceID: g.id, in: storyNS))
-                // The zoom transition installs the SYSTEM's own interactive drag-to-dismiss, and FAST
-                // downward flicks trip IT instead of the library's dismiss pan — the cover then shrinks
-                // toward the story row while the story content RE-LAYS-OUT inside it (image + reply bar
-                // squashed over a stretched black card, chat list growing from the BOTTOM — the user's
-                // screenshots; a real slide-down would reveal it from the top). Slow drags go to our pan,
-                // hence the "slow ok / fast broken" split. Kill the system gesture; swipes belong to the
-                // library pan only. Hero zoom open/close animation and programmatic close are unaffected.
-                // NOTE: this was applied once before (41e9c29, user-approved) and accidentally wiped by
-                // the build-207 close restoration (fa263fc). Do not remove it again.
+                // NO .navigationTransition(.zoom) anymore — REMOVED DELIBERATELY, do not bring it back.
+                // The zoom transition installs the SYSTEM's own interactive drag-to-dismiss which owns
+                // fast downward flicks: it half-collapses the cover (content reflows — reply bar rides
+                // to the TOP, image vanishes), then cancels and snaps everything back ("jumping coming
+                // up"), or re-presents the cover after our pan already closed it (story re-opened by
+                // itself). `.interactiveDismissDisabled()` does NOT stop the zoom drag on a
+                // fullScreenCover (verified on device, build 220) — removing the transition is the only
+                // categorical kill. Cost: stories open with the standard cover slide instead of the hero
+                // grow. The library's dismiss pan is now the ONLY swipe-close at any speed.
                 .interactiveDismissDisabled()
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
