@@ -792,9 +792,11 @@ struct ChatsView: View {
                                     })
                     }
                 }
-                // Telegram hero: the viewer grows out of the tapped story card on open and shrinks back
-                // into it on close (matchedTransitionSource on the cards + this zoom transition).
-                .navigationTransition(.zoom(sourceID: g.id, in: storyNS))
+                // NO hero zoom transition — REMOVED (deep-research finding 1a, user-approved "fix all").
+                // Its built-in interactive drag-to-dismiss cannot be disabled on a fullScreenCover
+                // (device-verified) and it owned every fast downward flick: squashed reflow layouts,
+                // mid-drag jump-backs, and the story re-opening by itself after a successful close.
+                // Stories open with the standard cover slide; the library pan is the only swipe-close.
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting
