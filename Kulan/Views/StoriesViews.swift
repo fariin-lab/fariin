@@ -45,7 +45,14 @@ struct StoryImage: View {
             if let image {
                 if fitBlur {
                     ZStack {
-                        Image(uiImage: image).resizable().scaledToFill().blur(radius: 26).clipped()
+                        // The blurred fill lives INSIDE an overlay of Color.clear so it can never report
+                        // an oversized layout. A bare scaledToFill here returned e.g. 2280×760 for a wide
+                        // panorama in a tall frame — the ZStack adopted that size and the story "expanded
+                        // into a huge zoomed crop" the moment the viewers sheet (morph card) appeared.
+                        // Color.clear locks the ZStack to exactly the proposed frame; the fill just paints.
+                        Color.clear
+                            .overlay(Image(uiImage: image).resizable().scaledToFill().blur(radius: 26))
+                            .clipped()
                         Image(uiImage: image).resizable().scaledToFit()
                     }
                     .transition(.opacity)
