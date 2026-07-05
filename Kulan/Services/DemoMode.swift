@@ -22,13 +22,14 @@ enum DemoMode {
 
         // Three VISUALLY DISTINCT own stories (A/B/C) so the "sheet opens centred on the story you
         // swiped up from" behaviour is actually verifiable in the preview (identical cards hid the bug).
-        let aImg = cache("demo-a", .systemPurple, .systemBlue, "Story A")
-        let bImg = cache("demo-b", .systemPink, .systemRed, "Story B (wide)", wide: true)   // landscape → tests fit+blur
-        let cImg = cache("demo-c", .systemTeal, .systemIndigo, "Story C")
-        // More OWN-story shapes (user request): square + 4:3 — both letterbox like a real
-        // half-height photo, so the blur bars (never black!) are verifiable in the preview.
-        let dImg = cache("demo-d", .systemGreen, .systemYellow, "Story D (square)", size: CGSize(width: 1080, height: 1080))
-        let eImg = cache("demo-e", .systemOrange, .systemBrown, "Story E (4:3)", size: CGSize(width: 1440, height: 1080))
+        // OWN stories = REAL photos (user request), every one a DIFFERENT size, so fit/fill and the
+        // blur bars are testable with true image content. Lorem Picsum with fixed seeds → the same
+        // photo every session; loads over the network (works on Appetize — only Storage uploads fail).
+        let aImg = "https://picsum.photos/seed/kulan1/1080/1920"   // tall 9:16 → full-bleed, no bars
+        let bImg = "https://picsum.photos/seed/kulan2/1920/1080"   // wide panorama → side/top-bottom bars
+        let cImg = "https://picsum.photos/seed/kulan3/1080/1080"   // square → bars
+        let dImg = "https://picsum.photos/seed/kulan4/1440/1080"   // 4:3 landscape → bars
+        let eImg = "https://picsum.photos/seed/kulan5/1080/1440"   // 3:4 portrait → smaller bars
         let aishaImg = cache("demo-aisha", .systemPink, .systemOrange, "Aisha")
         let omarImg = cache("demo-omar", .systemTeal, .systemGreen, "Omar")
 
@@ -39,19 +40,19 @@ enum DemoMode {
             stories: [
                 Story(id: "demo-s1", authorUid: me, createdAt: now.addingTimeInterval(-3600),
                       expiresAt: now.addingTimeInterval(20 * 3600), mediaUrl: aImg, allowsReplies: true,
-                      caption: "Story A — swipe up to see who viewed"),
+                      caption: "A — tall 9:16, full-bleed"),
                 Story(id: "demo-s2", authorUid: me, createdAt: now.addingTimeInterval(-1500),
                       expiresAt: now.addingTimeInterval(22 * 3600), mediaUrl: bImg, allowsReplies: true,
-                      caption: "Story B"),
+                      caption: "B — wide panorama"),
                 Story(id: "demo-s3", authorUid: me, createdAt: now.addingTimeInterval(-600),
                       expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: cImg, allowsReplies: true,
-                      caption: "Story C"),
+                      caption: "C — square"),
                 Story(id: "demo-s4", authorUid: me, createdAt: now.addingTimeInterval(-300),
                       expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: dImg, allowsReplies: true,
-                      caption: "Story D — square, bars must be BLUR"),
+                      caption: "D — 4:3 landscape"),
                 Story(id: "demo-s5", authorUid: me, createdAt: now.addingTimeInterval(-120),
                       expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: eImg, allowsReplies: true,
-                      caption: "Story E — 4:3, bars must be BLUR"),
+                      caption: "E — 3:4 portrait"),
             ], lastViewedAt: nil, isMine: true)
 
         // Friends' stories.
