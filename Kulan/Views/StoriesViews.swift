@@ -130,15 +130,21 @@ struct StoryImage: View {
         }
         var base = small
         if let ci = CIImage(image: small) {
-            let blurred = ci.clampedToExtent().applyingGaussianBlur(sigma: 12).cropped(to: ci.extent)
+            // Milky heavy blur + slight desaturation, then a MODERATE dark tint (0.42 — the first
+            // bake used 0.62 and the user read the bars as plain black; systemThickMaterialDark
+            // shows the blurred image through clearly, just dimmed).
+            var work = ci.clampedToExtent().applyingGaussianBlur(sigma: 16).cropped(to: ci.extent)
+            if let desat = CIFilter(name: "CIColorControls", parameters: [
+                kCIInputImageKey: work, kCIInputSaturationKey: 0.85, kCIInputBrightnessKey: -0.02
+            ])?.outputImage { work = desat }
             let ctx = CIContext(options: nil)
-            if let cg = ctx.createCGImage(blurred, from: blurred.extent) {
+            if let cg = ctx.createCGImage(work, from: work.extent) {
                 base = UIImage(cgImage: cg)
             }
         }
         return UIGraphicsImageRenderer(size: size).image { c in
             base.draw(in: CGRect(origin: .zero, size: size))
-            UIColor.black.withAlphaComponent(0.62).setFill()
+            UIColor.black.withAlphaComponent(0.42).setFill()
             c.fill(CGRect(origin: .zero, size: size))
         }
     }
