@@ -619,13 +619,9 @@ struct StoryViewer: View {
         .onChange(of: viewersProgress > 0.01) { _, open in
             NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
-        // A swipe-DOWN dismiss drag (friend OR own story) must freeze the story so the progress bar can't
-        // keep advancing under the finger. The library pauses on the pan's .began, but on a multi-item
-        // feed the cube pager's require(toFail:) can delay .began — so reassert the pause from the host on
-        // the first reported drag. Resume (spring-back) / stop (commit) stays the library's job on release.
-        .onChange(of: dragDown > 0.5) { _, dragging in
-            if dragging { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
-        }
+        // NO host pause post during the swipe-DOWN dismiss drag — matching TestFlight build 210,
+        // whose scroll-down-to-close the user confirmed as the correct one. The library already
+        // pauses on its pan's own .began; this extra post only existed in 211+.
         // Carousel centred a different one of my stories while the sheet is up → advance the frozen
         // story underneath to match, so collapsing lands on that story with no photo-swap flash.
         .onChange(of: sheetStoryId) { _, id in

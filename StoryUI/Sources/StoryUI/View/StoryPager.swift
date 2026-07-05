@@ -248,11 +248,13 @@ struct StoryPager: UIViewControllerRepresentable {
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
             case .changed:
                 let ty = max(0, t.y)
-                // ONE dismissal style: pure linear vertical slide. NO scale-down and NO growing corner
-                // radius — the shrink-into-a-floating-card look read as a second, conflicting close
-                // style over the plain slide. The story stays full-size and just tracks the finger down.
+                let frac = min(1, ty / card.bounds.height)
+                let scale = 1.0 - 0.4 * frac            // Telegram: card scales 1.0 -> 0.6 as you pull
+                card.layer.cornerCurve = .continuous    // Apple squircle
+                card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
+                card.layer.masksToBounds = true
                 // Move ONLY the card; the backdrop stays put, so the area above it shows the blur, not black.
-                card.transform = CGAffineTransform(translationX: 0, y: ty)
+                card.transform = CGAffineTransform(translationX: 0, y: ty).scaledBy(x: scale, y: scale)
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
@@ -261,10 +263,8 @@ struct StoryPager: UIViewControllerRepresentable {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
-                    // Commit continues the SAME linear slide: full-size card translates straight off the
-                    // bottom. No scale here either — any shrink on exit reads as a second close style.
                     UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height)
+                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: 0.6, y: 0.6)
                     } completion: { _ in self.parent.onCommit() }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
