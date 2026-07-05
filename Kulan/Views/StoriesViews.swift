@@ -33,39 +33,13 @@ struct StoryRingView: View {
 
 // Cached story image: memory + persistent disk (DiskImageCache), so swiping
 // back/forward, reopening, and app relaunches load instantly with no re-download.
-// Shared pre-rendered dark-blur backdrops, keyed by image URL. Tuned to match the story's
-// systemThickMaterialDark look (finding 2a): LIVE blur breaks while its opacity animates, so every
-// sheet crossfade flashed the raw bright fill. A baked image fades perfectly and costs nothing
-// per frame; the cache makes viewer rebuilds (e.g. the upload handoff) instant.
-enum StoryBlurBake {
-    private static let cache = NSCache<NSString, UIImage>()
-    static func cached(_ url: String) -> UIImage? { cache.object(forKey: url as NSString) }
-    static func bake(_ img: UIImage, url: String) -> UIImage {
-        if let hit = cached(url) { return hit }
-        let targetW: CGFloat = 240
-        let scale = targetW / max(1, img.size.width)
-        let size = CGSize(width: targetW, height: max(1, img.size.height * scale))
-        let small = UIGraphicsImageRenderer(size: size).image { _ in
-            img.draw(in: CGRect(origin: .zero, size: size))
-        }
-        var base = small
-        if let ci = CIImage(image: small) {
-            var work = ci.clampedToExtent().applyingGaussianBlur(sigma: 16).cropped(to: ci.extent)
-            if let desat = CIFilter(name: "CIColorControls", parameters: [
-                kCIInputImageKey: work, kCIInputSaturationKey: 0.9
-            ])?.outputImage { work = desat }
-            let ctx = CIContext(options: nil)
-            if let cg = ctx.createCGImage(work, from: work.extent) { base = UIImage(cgImage: cg) }
-        }
-        let out = UIGraphicsImageRenderer(size: size).image { c in
-            base.draw(in: CGRect(origin: .zero, size: size))
-            // Material-matched smoke: systemThickMaterialDark ≈ heavy blur + ~50% near-black veil.
-            UIColor.black.withAlphaComponent(0.5).setFill()
-            c.fill(CGRect(origin: .zero, size: size))
-        }
-        cache.setObject(out, forKey: url as NSString)
-        return out
+// The exact dark blur the story viewer uses over its fill backdrop (ImageLoader's
+// UIVisualEffectView(.systemThickMaterialDark)) — so bars look identical in-story and in-sheet.
+struct StoryDarkBlur: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
     }
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
 }
 
 struct StoryImage: View {
@@ -75,7 +49,6 @@ struct StoryImage: View {
     // swipe-up morph card + the viewers carousel; the small story-row covers stay plain fill (crop).
     var fitBlur = false
     @State private var image: UIImage?
-    @State private var blurredBG: UIImage?   // baked dark backdrop (fit case), from StoryBlurBake
     @State private var failed = false
     var body: some View {
         Group {
@@ -97,13 +70,10 @@ struct StoryImage: View {
                     } else {
                         ZStack {
                             Color.clear
-                                .overlay {
-                                    if let bg = blurredBG {
-                                        Image(uiImage: bg).resizable().scaledToFill()
-                                    } else {
-                                        Color.black   // first ms while the bake runs — never a bright flash
-                                    }
-                                }
+                                .overlay(Image(uiImage: image).resizable().scaledToFill())
+                                // BUILD 216's exact recipe (user's explicit choice): the REAL
+                                // systemThickMaterialDark over the fill copy, same as the story's bars.
+                                .overlay(StoryDarkBlur())
                                 .clipped()
                             Image(uiImage: image).resizable().scaledToFit()
                         }
@@ -132,21 +102,13 @@ struct StoryImage: View {
 
     @MainActor private func load() async {
         failed = false
-        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
+        if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
         guard let u = URL(string: url) else { failed = true; return }
         guard let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) else {
             failed = true; return
         }
         DiskImageCache.shared.store(img, data: data, for: url)
-        await apply(img)
-    }
-
-    @MainActor private func apply(_ img: UIImage) async {
         image = img
-        guard fitBlur, !fillsScreen(img), blurredBG == nil else { return }
-        if let hit = StoryBlurBake.cached(url) { blurredBG = hit; return }
-        let u = url
-        blurredBG = await Task.detached(priority: .userInitiated) { StoryBlurBake.bake(img, url: u) }.value
     }
 }
 
@@ -528,8 +490,7 @@ struct StoryViewer: View {
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
-    @State private var overlaysHidden = false           // flips ONCE at the 6pt drag threshold (finding 1d:
-                                                        // a per-frame CGFloat write re-rendered the whole story)
+    @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
     private var myStories: [Story] { groups.first { $0.isMine }?.stories ?? [] }
@@ -714,12 +675,10 @@ struct StoryViewer: View {
         .onChange(of: sheetUp) { _, up in
             NotificationCenter.default.post(name: up ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
-        // Viewers sheet: pause the moment it starts opening (progress > 0). Resume is NOT posted here
-        // (finding 3a): dragging the sheet to the very bottom while still holding briefly hit
-        // progress == 0 and resumed the story under the finger. The resume now fires exactly once,
-        // when the sheet actually unmounts (closeViewers' completion / onDisappear safety net).
+        // Viewers sheet: pause the moment it starts opening (progress > 0), resume only once fully
+        // closed. This keeps the story frozen the entire time the sheet is up (fixes the auto-close).
         .onChange(of: viewersProgress > 0.01) { _, open in
-            if open { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
+            NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
         // BULLETPROOF pause while the viewers sheet is open: reassert the freeze twice a second so the
         // story can NEVER creep forward and auto-advance/auto-close the sheet, even if some other event
@@ -772,8 +731,8 @@ struct StoryViewer: View {
                                 .padding(.horizontal, 16).padding(.top, 26).padding(.bottom, 14)
                                 .background(LinearGradient(colors: [.clear, .black.opacity(0.45)],
                                                            startPoint: .top, endPoint: .bottom))
-                                .opacity(overlaysHidden ? 0 : 1)
-                                .animation(.easeOut(duration: 0.15), value: overlaysHidden)
+                                .opacity(dragDown > 6 ? 0 : 1)
+                                .animation(.easeOut(duration: 0.15), value: dragDown > 6)
                                 .allowsHitTesting(false)
                         }
                     }
@@ -784,7 +743,7 @@ struct StoryViewer: View {
                     // doesn't pin the card, so the library dismiss stays smooth.
                     .background(Color.black)
                 ownerFooter
-                    .opacity(overlaysHidden ? 0 : 1).animation(.easeOut(duration: 0.15), value: overlaysHidden)
+                    .opacity(dragDown > 6 ? 0 : 1).animation(.easeOut(duration: 0.15), value: dragDown > 6)
             } else {
                 // Friend's story: full-bleed, NO clip → the library's swipe-down dismiss works.
                 storyContent
@@ -840,10 +799,7 @@ struct StoryViewer: View {
                 if !anonymous { StoryPrefs.markStorySeen(id) }
                 markSeenItem(id); loadBarViewers()
             },
-            onDrag: { d in
-                let hide = d > 6
-                if hide != overlaysHidden { overlaysHidden = hide }   // write state ONLY at the crossing
-            },
+            onDrag: { d in dragDown = d },   // fade my overlays out as the card is pulled down
             showMore: true, // "…" is a native dropdown menu in the header; its buttons post notifications
             onSwipeUp: { },   // superseded by the continuous callbacks below
             // Real-time swipe-UP: the library's direction-locked up pan reports the drag live, so the
@@ -854,9 +810,6 @@ struct StoryViewer: View {
                 // currentBucketUid, which is only set AFTER the library's onUserChanged fires — so on a
                 // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
                 guard currentIsMine || mineOnly else { return }
-                // No viewers sheet on the synthetic still-uploading item (finding 4a): it has no real
-                // story doc, so the sheet would fetch viewers of nothing.
-                guard targetStoryId != StoriesService.uploadingStoryId else { return }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                 if !showViewers {
                     sheetStoryId = targetStoryId; showViewers = true
@@ -891,7 +844,7 @@ struct StoryViewer: View {
         .overlay(alignment: .bottom) {
             if currentIsMine && !mineOnly {
                 ownerBar
-                    .opacity(overlaysHidden ? 0 : 1).animation(.easeOut(duration: 0.15), value: overlaysHidden)
+                    .opacity(dragDown > 6 ? 0 : 1).animation(.easeOut(duration: 0.15), value: dragDown > 6)
                     .contentShape(Rectangle())
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 12).onEnded { v in
@@ -955,9 +908,7 @@ struct StoryViewer: View {
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
-            // ALWAYS mounted (finding 3d) — visibility via opacity only, so a close drag never
-            // structurally inserts the card (and its image load) mid-gesture.
-            if let url = morphURL {
+            if morphVis > 0.001, let url = morphURL {
                 // Start height matches the story CARD (which ends above the black owner footer),
                 // so the morph begins exactly where the card visually is.
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
@@ -1013,7 +964,6 @@ struct StoryViewer: View {
         // to 1 mid-close both cancels the unmount (guard below) and re-raises the sheet — no more
         // "swipe up does nothing for 0.42s after closing".
         guard currentIsMine else { return }
-        guard targetStoryId != StoriesService.uploadingStoryId else { return }   // no sheet on the uploading item (4a)
         closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
         if !showViewers {
@@ -1028,16 +978,11 @@ struct StoryViewer: View {
     }
     private func closeViewers() {
         closeDragStart = nil   // never let a cancelled drag leave a stale anchor
-        // Unmount on the ANIMATION'S OWN completion, not a fixed 0.42s timer (finding 3b: an
-        // interrupted spring could outlive the timer and the sheet vanished mid-flight). The story
-        // resumes HERE, exactly once, when the sheet is truly gone (finding 3a).
-        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86, blendDuration: 0.2), completionCriteria: .logicallyComplete) {
+        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86, blendDuration: 0.2)) {
             viewersProgress = 0
-        } completion: {
-            if viewersProgress == 0 {   // a re-open set it back to 1 → stay mounted, stay paused
-                showViewers = false
-                NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
-            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            if viewersProgress == 0 { showViewers = false }   // a re-open set it back to 1 → stay mounted
         }
     }
 

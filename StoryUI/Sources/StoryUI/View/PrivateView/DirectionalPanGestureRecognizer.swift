@@ -76,15 +76,12 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
         super.touchesMoved(touches, with: event)
 
         if state == .began {
-            // Backstop axis check at begin — require CLEAR cross-axis dominance (1.2×) before
-            // cancelling, matching the cumulative gate above. The old plain |vx|>|vy| cancelled
-            // fast flicks whose instantaneous begin-sample tilted slightly sideways (rare bounce).
             let vel = velocity(in: view)
             switch direction {
             case .left, .right:
-                if abs(vel.y) > abs(vel.x) * 1.2 { state = .cancelled }
+                if abs(vel.y) > abs(vel.x) { state = .cancelled }
             case .up, .down:
-                if abs(vel.x) > abs(vel.y) * 1.2 { state = .cancelled }
+                if abs(vel.x) > abs(vel.y) { state = .cancelled }
             default:
                 break
             }
