@@ -424,7 +424,6 @@ struct StoryViewer: View {
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
-    @State private var closeDragStart: CGFloat?       // progress snapshot when a backdrop close-drag begins → 1:1 tracking
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -619,19 +618,13 @@ struct StoryViewer: View {
         .onChange(of: viewersProgress > 0.01) { _, open in
             NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
-        // BULLETPROOF pause while the viewers sheet is open: reassert the freeze twice a second so the story
-        // can NEVER creep forward and auto-close the sheet, even if some other event tried to resume it.
-        // pauseStory just sets hostPaused=true; re-setting a true @State is a no-op, so this never re-renders
-        // or fights the open gesture. Only fires while the sheet is actually up.
-        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
-            if showViewers && viewersProgress > 0.5 {
-                NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
-            }
+        // A swipe-DOWN dismiss drag (friend OR own story) must freeze the story so the progress bar can't
+        // keep advancing under the finger. The library pauses on the pan's .began, but on a multi-item
+        // feed the cube pager's require(toFail:) can delay .began — so reassert the pause from the host on
+        // the first reported drag. Resume (spring-back) / stop (commit) stays the library's job on release.
+        .onChange(of: dragDown > 0.5) { _, dragging in
+            if dragging { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
         }
-        // NOTE: do NOT post pauseStory from the host during the swipe-DOWN dismiss drag. Doing so re-renders
-        // the hosted story view mid-pan and INTERRUPTS the library's dismiss gesture (the "close became hard
-        // to trigger" bug). The library already freezes the story on the pan's own .began (StoryPager
-        // handleDismiss), which does not disturb the gesture.
         // Carousel centred a different one of my stories while the sheet is up → advance the frozen
         // story underneath to match, so collapsing lands on that story with no photo-swap flash.
         .onChange(of: sheetStoryId) { _, id in
@@ -690,19 +683,20 @@ struct StoryViewer: View {
         // An app gesture here fought the library's swipe-down pan and broke the dismiss.
         // NEVER transformed (the library has an internal 3D cube for user-to-user swipes; scaling
         // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
-        // The story stays FULL-SCREEN and UNCHANGED for the whole swipe-up (opacity 1) — it does NOT
-        // shrink/zoom/crop. Only in the last sliver (0.88→1) does it crossfade out as the my-stories
-        // carousel crossfades in (viewersBackdrop). This is the user's rule: only the sheet animates.
-        .opacity(1 - Double(max(0, min(1, (p - 0.88) / 0.12))))
+        // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
+        // drag so the gesture keeps tracking the finger even after the story has visually faded.
+        // Crossfade timing: the story (WITH its chrome) stays fully visible while the opaque morph
+        // card fades in over it (0→0.08 dissolves the chrome), then is gone by the time the card
+        // starts to shrink — so the photo stays bright throughout and only the chrome dissolves.
+        // Reversed on close (the chrome fades back in as the morph card grows away).
+        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(p / 0.08, 1))))
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
-        // App-level swipe-UP opens the viewers sheet, tracking the finger 1:1. The library's own up-pan does
-        // NOT fire for our hosted SwiftUI content (tried it — sheet never opened), so the app owns swipe-up
-        // (swipeUpEnabled: false below). Guarded to UPWARD drags only; a downward drag is ignored here so the
-        // library's native swipe-DOWN dismiss still runs. This coexists fine with the dismiss — the close only
-        // broke when a host-side pause was posted DURING the down drag (that re-render interrupted the pan);
-        // that pause has been removed.
+        // App-level swipe-UP to open the viewers sheet, tracking the finger 1:1. The library's own
+        // up-pan wasn't firing reliably, so the APP owns swipe-up now (swipeUpEnabled: false below).
+        // minimumDistance keeps taps (advance) + holds (pause) working; a DOWNWARD drag is ignored
+        // here so the library's swipe-down DISMISS still fires.
         .simultaneousGesture(
             DragGesture(minimumDistance: 14)
                 .onChanged { v in
@@ -710,7 +704,9 @@ struct StoryViewer: View {
                     let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                     if !showViewers {
                         sheetStoryId = targetStoryId; showViewers = true
-                        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze instantly on open
+                        // Freeze the story the INSTANT the sheet starts to open (don't wait for the
+                        // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
+                        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
                     }
                     openDragging = true
                     viewersProgress = max(0, min(1, -v.translation.height / sheetH))
@@ -718,7 +714,7 @@ struct StoryViewer: View {
                 .onEnded { v in
                     guard currentIsMine || mineOnly else { return }
                     openDragging = false
-                    guard viewersProgress > 0 else { return }   // no upward drag happened → nothing to snap
+                    guard viewersProgress > 0 else { return }   // never got an upward drag → nothing to snap
                     let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                     let projected = viewersProgress + (-v.predictedEndTranslation.height / sheetH) * 0.3
                     if projected > 0.4 {
@@ -767,12 +763,7 @@ struct StoryViewer: View {
                 // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
                 guard currentIsMine || mineOnly else { return }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                if !showViewers {
-                    sheetStoryId = targetStoryId; showViewers = true
-                    // Freeze the story the INSTANT the sheet starts to open — don't wait for the
-                    // viewersProgress>0.01 onChange — so it can never run to the end and auto-close the sheet.
-                    NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
-                }
+                if !showViewers { sheetStoryId = targetStoryId; showViewers = true }
                 openDragging = true   // keep the storyLayer visible/hit-testable through the drag
                 viewersProgress = max(0, min(1, up / sheetH))
             },
@@ -788,7 +779,7 @@ struct StoryViewer: View {
                 }
             },
             dismissEnabled: true,
-            swipeUpEnabled: false   // library up-pan doesn't fire for our hosted content → the APP owns swipe-up (gesture on storyLayer)
+            swipeUpEnabled: false   // the APP owns swipe-up now (storyLayer .simultaneousGesture); the library's up-pan was unreliable
         )
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
@@ -836,15 +827,22 @@ struct StoryViewer: View {
         //  • sizeP: the card scales down starting the instant the chrome has gone (0.08), tracking the
         //    finger continuously all the way to the slot at 0.9 — no dead "hold" before it responds.
         //  • carIn: neighbours + counts fade in gradually 0.5→0.9 (behind the opaque morph centre).
-        // STORY STAYS UNCHANGED (user rule: "only the sheet animates; the story image must remain unchanged,
-        // never zoom, never crop"). There is NO growing/shrinking morph card anymore — the full-screen story
-        // behind (in storyLayer) is left exactly as-is during the whole swipe-up. The my-stories carousel
-        // simply CROSSFADES in over the last sliver (0.88→1) as the story crossfades out (storyLayer opacity),
-        // so nothing can ever look zoomed or cropped, and there's no per-frame morph to jitter (the shake).
-        let carIn = max(0, min(1, (p - 0.88) / 0.12))
-        // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story deleted
-        // while viewing doesn't linger as a ghost card. Fall back to the snapshot.
+        let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
+        // The live carousel only appears in the last sliver near rest (0.9→1). Below that, the OPAQUE
+        // morph card fully covers it. This makes CLOSING mirror OPENING: on open the morph card already
+        // hid the carousel during the size-morph (smooth); on close the carousel used to stay exposed and
+        // JITTER behind a half-faded morph card (the "shaking"). Now the morph card covers it the whole
+        // drag in BOTH directions, so the live (re-rendering) carousel is never visible mid-drag.
+        let carIn = max(0, min(1, (p - 0.9) / 0.1))
+        let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
+        // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
+        // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
+        // SINGLE SOURCE OF TRUTH: the background card always shows the CURRENT story (currentStoryId),
+        // never the carousel's transient centre id — so it can NEVER flash to the wrong story while the
+        // sheet is opening. Scrolling the carousel drives currentStoryId (via jumpToStoryItem), so the
+        // background still follows the selection, and closing collapses onto the very same story.
+        let morphURL = (currentStory ?? liveMyStories.first { $0.id == sheetStoryId }).map { $0.mediaUrl }
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH,
@@ -852,6 +850,20 @@ struct StoryViewer: View {
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
+            if morphVis > 0.001, let url = morphURL {
+                // Start height matches the story CARD (which ends above the black owner footer),
+                // so the morph begins exactly where the card visually is.
+                let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+                StoryImage(url: url, fitBlur: true)   // whole image + blur (no zoom/crop), matching the story
+                    .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
+                    // Rounded the WHOLE time (was 24*sizeP → square at the start of the open). Constant 24
+                    // matches the story card's corners, so the image is never square mid-transition.
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .padding(.top, blockTop * sizeP)
+                    .frame(maxWidth: .infinity)
+                    .opacity(Double(morphVis))
+                    .allowsHitTesting(false)   // mid-drag frames take no touches
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
@@ -860,22 +872,17 @@ struct StoryViewer: View {
         // full screen) — it must NOT dismiss the whole viewer to the chat list. Horizontal drags belong
         // to the carousel (guarded out here), so this coexists with the cover-flow swipe.
         .simultaneousGesture(
-            DragGesture(minimumDistance: 10)
+            DragGesture(minimumDistance: 12)
                 .onChanged { v in
-                    // Only vertical drags collapse; horizontal belongs to the carousel. Anchor to the progress
-                    // at grab time so the sheet follows the finger 1:1 with NO jump (even if you grab mid-close).
-                    guard abs(v.translation.height) > abs(v.translation.width) else { return }
-                    if closeDragStart == nil { closeDragStart = viewersProgress }
+                    guard abs(v.translation.height) > abs(v.translation.width), v.translation.height > 0 else { return }
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    viewersProgress = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
+                    viewersProgress = max(0, min(1, 1 - v.translation.height / h))
                 }
                 .onEnded { v in
-                    guard closeDragStart != nil else { return }   // never engaged (horizontal / tap)
-                    closeDragStart = nil
                     let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
-                    let projected = viewersProgress - v.predictedEndTranslation.height / h   // fling carries velocity
+                    let projected = viewersProgress - v.predictedEndTranslation.height / h
                     if projected < 0.6 { closeViewers() }   // collapse → story reopens full screen
-                    else { withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82)) { viewersProgress = 1 } }
+                    else { withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 } }
                 }
         )
         .ignoresSafeArea()
