@@ -115,17 +115,28 @@ final class ImageLoader: UIView {
         imageView.contentMode = imgAspect >= screenAspect - 0.02 ? .scaleAspectFill : .scaleAspectFit
     }
 
+    // Baked backdrops cached by URL: the viewer can be torn down and rebuilt around a load (e.g. the
+    // upload handoff swaps the cover), and the old `imageView.image === image` identity guard silently
+    // dropped the bake in that case — the black placeholder then stayed FOREVER ("bars are black").
+    // URL identity is stable across re-applies and view rebuilds; the cache makes rebuilds instant.
+    private static let bakeCache = NSCache<NSString, UIImage>()
+
     private func apply(_ image: UIImage?) {
         imageView.image = image
-        backgroundImageView.image = nil   // plain black until the bake lands — never a sharp flash
         decideContentMode()        // fixed for this image; never recomputed on layout/drag
-        // Bake the backdrop off-main (same recipe as the viewers-sheet card: gaussian σ20 + 0.18 dim),
-        // then set it if this image is still the one on screen.
-        guard let image else { return }
+        guard let image else { backgroundImageView.image = nil; return }
+        let key = (imageURL?.absoluteString ?? "") as NSString
+        if key.length > 0, let cached = Self.bakeCache.object(forKey: key) {
+            backgroundImageView.image = cached
+            return
+        }
+        backgroundImageView.image = nil   // plain black ONLY while the very first bake runs (ms)
+        let url = imageURL
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let baked = Self.bakedBackdrop(image)
             DispatchQueue.main.async {
-                guard let self, self.imageView.image === image else { return }
+                if key.length > 0 { Self.bakeCache.setObject(baked, forKey: key) }
+                guard let self, self.imageURL == url else { return }
                 self.backgroundImageView.image = baked
             }
         }
