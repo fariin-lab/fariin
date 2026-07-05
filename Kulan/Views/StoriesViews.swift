@@ -32,6 +32,15 @@ struct StoryRingView: View {
 
 // Cached story image: memory + persistent disk (DiskImageCache), so swiping
 // back/forward, reopening, and app relaunches load instantly with no re-download.
+// The exact dark blur the story viewer uses over its fill backdrop (ImageLoader's
+// UIVisualEffectView(.systemThickMaterialDark)) — so bars look identical in-story and in-sheet.
+struct StoryDarkBlur: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+    }
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
+}
+
 struct StoryImage: View {
     let url: String
     // fitBlur = show the WHOLE image (aspect-fit) over a blurred fill of itself — the SAME look as the
@@ -61,7 +70,11 @@ struct StoryImage: View {
                         ZStack {
                             Color.clear
                                 .overlay(Image(uiImage: image).resizable().scaledToFill())
-                                .overlay(Rectangle().fill(.thickMaterial).environment(\.colorScheme, .dark))
+                                // The REAL systemThickMaterialDark (same UIVisualEffectView the story's
+                                // ImageLoader puts over its fill backdrop) — the SwiftUI .thickMaterial
+                                // approximation was too transparent and showed a ghost "reflection" of
+                                // the image in the bars, where the story's bars are near-black.
+                                .overlay(StoryDarkBlur())
                                 .clipped()
                             Image(uiImage: image).resizable().scaledToFit()
                         }
