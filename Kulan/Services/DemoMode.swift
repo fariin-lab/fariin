@@ -25,6 +25,10 @@ enum DemoMode {
         let aImg = cache("demo-a", .systemPurple, .systemBlue, "Story A")
         let bImg = cache("demo-b", .systemPink, .systemRed, "Story B (wide)", wide: true)   // landscape → tests fit+blur
         let cImg = cache("demo-c", .systemTeal, .systemIndigo, "Story C")
+        // More OWN-story shapes (user request): square + 4:3 — both letterbox like a real
+        // half-height photo, so the blur bars (never black!) are verifiable in the preview.
+        let dImg = cache("demo-d", .systemGreen, .systemYellow, "Story D (square)", size: CGSize(width: 1080, height: 1080))
+        let eImg = cache("demo-e", .systemOrange, .systemBrown, "Story E (4:3)", size: CGSize(width: 1440, height: 1080))
         let aishaImg = cache("demo-aisha", .systemPink, .systemOrange, "Aisha")
         let omarImg = cache("demo-omar", .systemTeal, .systemGreen, "Omar")
 
@@ -42,6 +46,12 @@ enum DemoMode {
                 Story(id: "demo-s3", authorUid: me, createdAt: now.addingTimeInterval(-600),
                       expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: cImg, allowsReplies: true,
                       caption: "Story C"),
+                Story(id: "demo-s4", authorUid: me, createdAt: now.addingTimeInterval(-300),
+                      expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: dImg, allowsReplies: true,
+                      caption: "Story D — square, bars must be BLUR"),
+                Story(id: "demo-s5", authorUid: me, createdAt: now.addingTimeInterval(-120),
+                      expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: eImg, allowsReplies: true,
+                      caption: "Story E — 4:3, bars must be BLUR"),
             ], lastViewedAt: nil, isMine: true)
 
         // Friends' stories.
@@ -77,13 +87,15 @@ enum DemoMode {
     private static var cached = Set<String>()
     // Draw a gradient + label, store it in URLCache under a local URL. The story viewer (StoryUI's
     // ImageLoader) reads URLCache first, so the image renders with no network/Firebase.
-    private static func cache(_ key: String, _ c1: UIColor, _ c2: UIColor, _ text: String, wide: Bool = false) -> String {
+    private static func cache(_ key: String, _ c1: UIColor, _ c2: UIColor, _ text: String,
+                              wide: Bool = false, size explicitSize: CGSize? = nil) -> String {
         let urlStr = "https://kulan.local/\(key).jpg"
         guard !cached.contains(key), let url = URL(string: urlStr) else { return urlStr }
         cached.insert(key)
         // `wide` = a landscape image, so the viewer/morph must show the WHOLE image + blur bars (fitBlur),
-        // never a cropped zoom — the case the user hit with a panorama.
-        let size = wide ? CGSize(width: 1920, height: 1080) : CGSize(width: 1080, height: 1920)
+        // never a cropped zoom — the case the user hit with a panorama. `size` overrides for other
+        // letterboxing shapes (square, 4:3) to verify the bars everywhere.
+        let size = explicitSize ?? (wide ? CGSize(width: 1920, height: 1080) : CGSize(width: 1080, height: 1920))
         let img = UIGraphicsImageRenderer(size: size).image { ctx in
             if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                   colors: [c1.cgColor, c2.cgColor] as CFArray, locations: [0, 1]) {
