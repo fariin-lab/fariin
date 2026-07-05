@@ -44,18 +44,29 @@ struct StoryImage: View {
         Group {
             if let image {
                 if fitBlur {
-                    ZStack {
-                        // The blurred fill lives INSIDE an overlay of Color.clear so it can never report
-                        // an oversized layout. A bare scaledToFill here returned e.g. 2280×760 for a wide
-                        // panorama in a tall frame — the ZStack adopted that size and the story "expanded
-                        // into a huge zoomed crop" the moment the viewers sheet (morph card) appeared.
-                        // Color.clear locks the ZStack to exactly the proposed frame; the fill just paints.
+                    // Match the story viewer's ImageLoader EXACTLY, both rules:
+                    //  • an image at least as TALL as the screen (9:16 photos, text statuses) fills
+                    //    edge-to-edge with NO blur bars — don't add bars the story never had;
+                    //  • shorter images aspect-FIT over the SAME dark backdrop the story uses
+                    //    (fill + systemThickMaterialDark), not a bright gaussian blur.
+                    // Every fill lives INSIDE an overlay of Color.clear so it can never report an
+                    // oversized layout (a bare scaledToFill blew a wide panorama into a huge zoomed
+                    // crop the moment the viewers sheet appeared — the ZStack adopted its size).
+                    if fillsScreen(image) {
                         Color.clear
-                            .overlay(Image(uiImage: image).resizable().scaledToFill().blur(radius: 26))
+                            .overlay(Image(uiImage: image).resizable().scaledToFill())
                             .clipped()
-                        Image(uiImage: image).resizable().scaledToFit()
+                            .transition(.opacity)
+                    } else {
+                        ZStack {
+                            Color.clear
+                                .overlay(Image(uiImage: image).resizable().scaledToFill())
+                                .overlay(Rectangle().fill(.thickMaterial).environment(\.colorScheme, .dark))
+                                .clipped()
+                            Image(uiImage: image).resizable().scaledToFit()
+                        }
+                        .transition(.opacity)
                     }
-                    .transition(.opacity)
                 } else {
                     Image(uiImage: image).resizable().scaledToFill()
                         .transition(.opacity)
@@ -69,6 +80,14 @@ struct StoryImage: View {
         .animation(.easeOut(duration: 0.25), value: image != nil)   // fade in when loaded
         .task(id: url) { await load() }
     }
+    // Fill vs fit decided against the STABLE screen aspect, identical to ImageLoader.decideContentMode()
+    // (including the 0.02 tolerance) — so a photo looks the same in the story and in the viewers sheet.
+    private func fillsScreen(_ img: UIImage) -> Bool {
+        guard img.size.width > 0 else { return false }
+        let screen = UIScreen.main.bounds
+        return img.size.height / img.size.width >= screen.height / screen.width - 0.02
+    }
+
     @MainActor private func load() async {
         failed = false
         if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
