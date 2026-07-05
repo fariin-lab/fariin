@@ -130,13 +130,9 @@ struct StoryImage: View {
         }
         var base = small
         if let ci = CIImage(image: small) {
-            // Milky heavy blur + slight desaturation, then a MODERATE dark tint (0.42 — the first
-            // bake used 0.62 and the user read the bars as plain black; systemThickMaterialDark
-            // shows the blurred image through clearly, just dimmed).
-            var work = ci.clampedToExtent().applyingGaussianBlur(sigma: 16).cropped(to: ci.extent)
-            if let desat = CIFilter(name: "CIColorControls", parameters: [
-                kCIInputImageKey: work, kCIInputSaturationKey: 0.85, kCIInputBrightnessKey: -0.02
-            ])?.outputImage { work = desat }
+            // The bars are the IMAGE'S OWN soft blur, clearly visible (user rule: "use exactly the
+            // blur of the image — don't make black"). Heavy gaussian, natural colors.
+            let work = ci.clampedToExtent().applyingGaussianBlur(sigma: 20).cropped(to: ci.extent)
             let ctx = CIContext(options: nil)
             if let cg = ctx.createCGImage(work, from: work.extent) {
                 base = UIImage(cgImage: cg)
@@ -144,7 +140,9 @@ struct StoryImage: View {
         }
         return UIGraphicsImageRenderer(size: size).image { c in
             base.draw(in: CGRect(origin: .zero, size: size))
-            UIColor.black.withAlphaComponent(0.42).setFill()
+            // Barely-there dim so white chrome stays readable — NOT a dark tint (0.62 and 0.42
+            // both read as "black bars" to the user).
+            UIColor.black.withAlphaComponent(0.18).setFill()
             c.fill(CGRect(origin: .zero, size: size))
         }
     }
