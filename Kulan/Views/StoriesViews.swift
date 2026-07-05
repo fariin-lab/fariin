@@ -619,6 +619,15 @@ struct StoryViewer: View {
         .onChange(of: viewersProgress > 0.01) { _, open in
             NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
+        // BULLETPROOF pause while the viewers sheet is open: reassert the freeze twice a second so the story
+        // can NEVER creep forward and auto-close the sheet, even if some other event tried to resume it.
+        // pauseStory just sets hostPaused=true; re-setting a true @State is a no-op, so this never re-renders
+        // or fights the open gesture. Only fires while the sheet is actually up.
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+            if showViewers && viewersProgress > 0.5 {
+                NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+            }
+        }
         // NO host pause post during the swipe-DOWN dismiss drag — matching TestFlight build 210,
         // whose scroll-down-to-close the user confirmed as the correct one. The library already
         // pauses on its pan's own .began; this extra post only existed in 211+.
@@ -680,13 +689,11 @@ struct StoryViewer: View {
         // An app gesture here fought the library's swipe-down pan and broke the dismiss.
         // NEVER transformed (the library has an internal 3D cube for user-to-user swipes; scaling
         // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
-        // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
-        // drag so the gesture keeps tracking the finger even after the story has visually faded.
-        // Crossfade timing: the story (WITH its chrome) stays fully visible while the opaque morph
-        // card fades in over it (0→0.08 dissolves the chrome), then is gone by the time the card
-        // starts to shrink — so the photo stays bright throughout and only the chrome dissolves.
-        // Reversed on close (the chrome fades back in as the morph card grows away).
-        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(p / 0.08, 1))))
+        // The story stays FULL-SCREEN and UNCHANGED for the whole swipe-up (opacity 1) — it does NOT
+        // shrink/zoom/crop or re-layout (the morph card re-drew the image with its own sizing and blew
+        // up wide panoramas into a huge crop). Only in the last sliver (0.88→1) does it crossfade out
+        // as the my-stories carousel crossfades in (viewersBackdrop). Only the sheet animates.
+        .opacity(1 - Double(max(0, min(1, (p - 0.88) / 0.12))))
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -816,30 +823,15 @@ struct StoryViewer: View {
         let slotH = (avail - countArea) * 0.94             // fill most of the free area (cards were too small)
         let slotW = slotH * 0.62                           // a touch wider; side cards still peek + shrink
         let blockTop = topInset + (avail - countArea - slotH) / 2
-        // SMOOTH, NO-JUMP handoff (Telegram), staged so opening morphs "story → only image" and
-        // closing morphs "only image → story", as one continuous motion:
-        //  • morphVis: the clean morph card fades IN OPAQUE over 0→0.05 (over the still-full story, so
-        //    the progress bars / header / footer DISSOLVE while the photo stays bright), holds, then
-        //    fades out 0.9→1.0 into the live carousel centre card.
-        //  • sizeP: the card scales down starting the instant the chrome has gone (0.08), tracking the
-        //    finger continuously all the way to the slot at 0.9 — no dead "hold" before it responds.
-        //  • carIn: neighbours + counts fade in gradually 0.5→0.9 (behind the opaque morph centre).
-        let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
-        // The live carousel only appears in the last sliver near rest (0.9→1). Below that, the OPAQUE
-        // morph card fully covers it. This makes CLOSING mirror OPENING: on open the morph card already
-        // hid the carousel during the size-morph (smooth); on close the carousel used to stay exposed and
-        // JITTER behind a half-faded morph card (the "shaking"). Now the morph card covers it the whole
-        // drag in BOTH directions, so the live (re-rendering) carousel is never visible mid-drag.
-        let carIn = max(0, min(1, (p - 0.9) / 0.1))
-        let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
-        // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
-        // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
+        // STORY STAYS UNCHANGED ("only the sheet animates; the story image must remain unchanged,
+        // never zoom, never crop"). There is NO growing/shrinking morph card anymore — the full-screen
+        // story behind (in storyLayer) is left exactly as-is during the whole swipe-up. The my-stories
+        // carousel simply CROSSFADES in over the last sliver (0.88→1) as the story crossfades out
+        // (storyLayer opacity), so nothing can ever look zoomed or cropped, and no per-frame morph.
+        let carIn = max(0, min(1, (p - 0.88) / 0.12))
+        // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story deleted
+        // while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
-        // SINGLE SOURCE OF TRUTH: the background card always shows the CURRENT story (currentStoryId),
-        // never the carousel's transient centre id — so it can NEVER flash to the wrong story while the
-        // sheet is opening. Scrolling the carousel drives currentStoryId (via jumpToStoryItem), so the
-        // background still follows the selection, and closing collapses onto the very same story.
-        let morphURL = (currentStory ?? liveMyStories.first { $0.id == sheetStoryId }).map { $0.mediaUrl }
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH,
@@ -847,20 +839,6 @@ struct StoryViewer: View {
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
-            if morphVis > 0.001, let url = morphURL {
-                // Start height matches the story CARD (which ends above the black owner footer),
-                // so the morph begins exactly where the card visually is.
-                let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true)   // whole image + blur (no zoom/crop), matching the story
-                    .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
-                    // Rounded the WHOLE time (was 24*sizeP → square at the start of the open). Constant 24
-                    // matches the story card's corners, so the image is never square mid-transition.
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .padding(.top, blockTop * sizeP)
-                    .frame(maxWidth: .infinity)
-                    .opacity(Double(morphVis))
-                    .allowsHitTesting(false)   // mid-drag frames take no touches
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
