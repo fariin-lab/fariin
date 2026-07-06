@@ -488,6 +488,68 @@ enum ChatService {
         try await batch.commit()
     }
 
+    /// Encrypt + send a VIDEO message. Same E2EE pipeline as photos: the transcoded mp4
+    /// AND its thumbnail are sealed separately; the server stores only ciphertext. The
+    /// thumbnail rides on the message (and the chat-list preview) so bubbles render
+    /// instantly without downloading the video.
+    static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
+                          width: Double, height: Double, clientId: String? = nil, group: [String]? = nil) async throws {
+        var members = group
+        if members == nil, !cid.contains("_") {
+            let snap = try? await db.collection("conversations").document(cid).getDocument()
+            members = snap?.data()?["users"] as? [String]
+        }
+        let convRef = db.collection("conversations").document(cid)
+        let vidCipher: Data, vidMeta: EncMeta, thCipher: Data, thMeta: EncMeta
+        if let members {
+            (vidCipher, vidMeta) = try await Crypto.shared.encryptBytesForGroup(video, members: members)
+            (thCipher, thMeta) = try await Crypto.shared.encryptBytesForGroup(thumbnail, members: members)
+        } else {
+            (vidCipher, vidMeta) = try await Crypto.shared.encryptBytes(cid, video)
+            (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, thumbnail)
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+        }
+        let msgRef = convRef.collection("messages").document()
+        let vRef = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).mp4.enc")
+        let tRef = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).thumb.enc")
+        let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
+        _ = try await vRef.putDataAsync(vidCipher, metadata: sm)
+        _ = try await tRef.putDataAsync(thCipher, metadata: sm)
+        let videoUrl = try await vRef.downloadURL().absoluteString
+        let thumbUrl = try await tRef.downloadURL().absoluteString
+        // Seed the cache so the optimistic bubble reconciles with no shimmer (photo parity).
+        if let ui = UIImage(data: thumbnail) { DiskImageCache.shared.store(ui, for: thumbUrl) }
+
+        let batch = db.batch()
+        var msg: [String: Any] = [
+            "type": "video", "videoUrl": videoUrl, "enc": vidMeta.asDict,
+            "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
+            "duration": duration, "width": width, "height": height,
+            "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+        ]
+        if let clientId { msg["clientId"] = clientId }
+        batch.setData(msg, forDocument: msgRef)
+        var convUpdate: [String: Any] = [
+            "lastMessage": "🎥 Video · " + voiceDurationLabel(duration),
+            "lastImageUrl": thumbUrl,       // chat list shows the real thumbnail (photo parity)
+            "lastImageEnc": thMeta.asDict,
+            "lastSender": uid,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ]
+        if let members {
+            for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) }
+        } else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
+        }
+        batch.updateData(convUpdate, forDocument: convRef)
+        try await batch.commit()
+        // Mailman model: the SENDER's copy lives on their own device from day one — the
+        // server object exists only to deliver, and the recipient deletes it on pickup.
+        VideoCache.store(video, for: msgRef.documentID)
+    }
+
     /// Encrypt + send a document/file. Contents are E2EE (same pipeline as photos); the file
     /// NAME is metadata stored in the clear (like image dimensions) so the bubble can label it.
     static func sendFile(cid: String, data rawData: Data, fileName: String, clientId: String? = nil, group: [String]? = nil) async throws {
@@ -580,6 +642,23 @@ enum ChatService {
                   let (cipher, _) = try? await URLSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) else { return }
             try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform)
+        } else if m.isVideo {
+            // Prefer this device's copy (the server object may already be delivered+deleted).
+            var bytes = VideoCache.data(for: m.id)
+            if bytes == nil, let s = m.videoUrl, let url = URL(string: s), let meta = m.enc,
+               let (cipher, _) = try? await URLSession.shared.data(from: url),
+               let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
+                bytes = dec
+            }
+            guard let bytes else { return }
+            var thumb: Data? = nil
+            if let s = m.thumbUrl, let url = URL(string: s), let meta = m.thumbEnc,
+               let (cipher, _) = try? await URLSession.shared.data(from: url) {
+                thumb = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
+            }
+            guard let thumb else { return }
+            try await sendVideo(cid: targetCid, video: bytes, thumbnail: thumb, duration: m.duration ?? 0,
+                                width: m.width ?? 720, height: m.height ?? 720)
         } else if m.isGif {
             try await sendGif(cid: targetCid, url: m.imageUrl ?? "", width: m.width ?? 200, height: m.height ?? 200)
         } else if m.isFile {

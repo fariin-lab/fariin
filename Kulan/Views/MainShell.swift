@@ -1192,6 +1192,9 @@ struct ChatRow: View, Equatable {
         if s.hasPrefix("🎤 Voice message") {
             return ("mic.fill", "Voice message" + String(s.dropFirst("🎤 Voice message".count)))
         }
+        if s.hasPrefix("🎥 Video") {   // video MESSAGE (🎥) — distinct from 📹 call markers
+            return ("video.fill", "Video" + String(s.dropFirst("🎥 Video".count)))
+        }
         switch s {
         case "📄 File":              return ("doc.fill", "File")
         case "GIF":                  return ("sparkles", "GIF")
@@ -1240,16 +1243,23 @@ struct ChatRow: View, Equatable {
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         let c = conv.lastMessageCipher
-        guard c.hasPrefix("enc") || c == "📷 Photo" || c.hasPrefix("🎤 Voice message") else { return "" }
+        guard c.hasPrefix("enc") || c == "📷 Photo" || c.hasPrefix("🎤 Voice message") || c.hasPrefix("🎥 Video") else { return "" }
         let n = conv.names[conv.lastSender] ?? "Someone"
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }
     private var unread: Int { conv.isBlockedByMe(me) ? 0 : conv.unread(me) }   // silent block: no badge
     private var muted: Bool { conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000) }
 
-    // The last message is a photo we can preview (and not a frozen blocked-chat row).
+    // The last message is a photo/video we can thumbnail (and not a frozen blocked-chat row).
     private var isPhotoPreview: Bool {
-        !conv.leaksBlocked(me) && conv.lastMessageCipher == "📷 Photo" && (conv.lastImageUrl?.isEmpty == false)
+        !conv.leaksBlocked(me)
+            && (conv.lastMessageCipher == "📷 Photo" || conv.lastMessageCipher.hasPrefix("🎥 Video"))
+            && (conv.lastImageUrl?.isEmpty == false)
+    }
+    // "Photo" or "Video · 0:12" next to the little thumbnail.
+    private var photoPreviewLabel: String {
+        let c = conv.lastMessageCipher
+        return c.hasPrefix("🎥 Video") ? "Video" + String(c.dropFirst("🎥 Video".count)) : "Photo"
     }
     // Preview area, in priority order: blocked freeze → live typing → unsent draft →
     // photo thumbnail → media/call badge → say-hello → decrypted text.
@@ -1268,7 +1278,7 @@ struct ChatRow: View, Equatable {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
                     .frame(width: 20, height: 20)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                Text("\(lastSenderPrefix)Photo").font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+                Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher) {
             // Unheard voice note = accent mic (like an unread badge, but for your ears).

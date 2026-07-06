@@ -11,6 +11,7 @@ enum Limits {
     static let forwardChatsAtOnce = 5
     static let mediaPerMessage = 30
     static let fileUploadBytes = 2 * 1024 * 1024 * 1024            // 2 GB
+    static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB after 720p transcode
     static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
     static let deleteForEveryoneSeconds: TimeInterval = 48 * 3600 // 48 h

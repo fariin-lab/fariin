@@ -1,10 +1,28 @@
 import SwiftUI
 import PhotosUI
 import Photos
+import CoreTransferable
 import UIKit
 import FirebaseFirestore
 import UniformTypeIdentifiers
 import QuickLook
+
+// Gallery-video handoff: PhotosPicker exports the movie to a temp FILE (no giant Data
+// copy through memory); we transcode from that URL and delete it after.
+struct PickedMovie: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pick-\(UUID().uuidString).\(received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension)")
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.copyItem(at: received.file, to: dest)
+            return PickedMovie(url: dest)
+        }
+    }
+}
 
 struct ThreadView: View {
     let cid: String
@@ -28,6 +46,7 @@ struct ThreadView: View {
     @State private var sendingPhoto = false
     @State private var typingSent = false
     @State private var viewerImage: Message?
+    @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
     @State private var storyToOpen: StoryGroup?      // tapped a status reply → open that status
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
     @State private var sendError: String?
@@ -230,7 +249,10 @@ struct ThreadView: View {
         .fullScreenCover(item: $viewerImage) { msg in
             ImageViewerView(message: msg, cid: cid)
         }
-        .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .images)
+        .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
+        .fullScreenCover(item: $viewerVideo) { msg in
+            VideoPlayerScreen(message: msg, cid: cid)
+        }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { data in if let ui = UIImage(data: data) { editImage = EditImageWrap(image: ui) } }
                 .ignoresSafeArea()
@@ -431,7 +453,7 @@ struct ThreadView: View {
                             Text("\(idx + 1)/\(ids.count)").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
-                    Text(msg.map { $0.isImage ? "Photo" : ($0.isAudio ? "Voice message" : $0.text) } ?? "Tap to view")
+                    Text(msg.map { $0.isImage ? "Photo" : ($0.isVideo ? "Video" : ($0.isAudio ? "Voice message" : $0.text)) } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -557,6 +579,7 @@ struct ThreadView: View {
                         onReply: { m in withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m } },
                         onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                         onTapImage: { viewerImage = $0 },
+                        onTapVideo: { viewerVideo = $0 },
                         onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                         onPin: { m in
                             if repo.pinnedMessageIds.contains(m.id) {
@@ -801,7 +824,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isImage ? "📷 Photo" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text))))
+                     text: $0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text)))))
         }
         replyingTo = nil
         typingSent = false
@@ -1033,22 +1056,60 @@ struct ThreadView: View {
         }
     }
 
-    // Multi-select: send each chosen photo in order (native PhotosUI multi-pick).
+    // Multi-select: send each chosen photo/video in order (native PhotosUI multi-pick).
     private func sendPickedMulti(_ items: [PhotosPickerItem]) async {
         guard !items.isEmpty else { return }
         let picked = items
         await MainActor.run { photoItems = [] }
-        // A single pick opens the editor (crop/draw/adjust/caption); multiple send directly.
-        if picked.count == 1, let data = try? await picked[0].loadTransferable(type: Data.self),
+        // A single PHOTO opens the editor (crop/draw/adjust/caption); videos and
+        // multi-picks send directly.
+        if picked.count == 1, !isVideoItem(picked[0]),
+           let data = try? await picked[0].loadTransferable(type: Data.self),
            let ui = UIImage(data: data) {
             await MainActor.run { editImage = EditImageWrap(image: ui) }
             return
         }
         for item in picked {
-            if let data = try? await item.loadTransferable(type: Data.self) {
+            if isVideoItem(item) {
+                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+                    await sendVideo(from: movie.url)
+                }
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
                 await sendPhoto(data)
             }
         }
+    }
+
+    private func isVideoItem(_ item: PhotosPickerItem) -> Bool {
+        item.supportedContentTypes.contains { $0.conforms(to: .movie) }
+    }
+
+    // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
+    // the sender's copy on-device; the recipient's player deletes the server object).
+    private func sendVideo(from url: URL) async {
+        guard let prepared = await VideoTranscoder.prepare(url) else {
+            try? FileManager.default.removeItem(at: url)
+            await MainActor.run { sendError = "Couldn't process this video." }
+            return
+        }
+        try? FileManager.default.removeItem(at: url)
+        guard prepared.data.count <= Limits.videoMessageBytes else {
+            await MainActor.run { sendError = "This video is too long to send (max \(Limits.videoMessageBytes / 1_048_576) MB after compression)." }
+            return
+        }
+        let clientId = UUID().uuidString
+        await MainActor.run {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                repo.addPending(Message(localVideoThumb: prepared.thumbnail, duration: prepared.duration,
+                                        width: prepared.width, height: prepared.height,
+                                        authorId: me, clientId: clientId, sendState: .sending))
+            }
+        }
+        do {
+            try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
+                                            duration: prepared.duration, width: prepared.width, height: prepared.height,
+                                            clientId: clientId, group: isGroup ? groupMembers : nil)
+        } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
     // When I've blocked this contact, the composer is replaced by an unblock bar —
@@ -1493,7 +1554,7 @@ struct ThreadView: View {
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isImage ? "📷 Photo" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text))))
+                     text: $0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text)))))
         }
         await MainActor.run {
             withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
@@ -1532,6 +1593,7 @@ struct MessageBubble: View, Equatable {
     var onReply: (Message) -> Void = { _ in }
     var onDelete: (Message) -> Void = { _ in }
     var onTapImage: (Message) -> Void = { _ in }
+    var onTapVideo: (Message) -> Void = { _ in }
     var onReact: (String?) -> Void = { _ in }
     var onPin: (Message) -> Void = { _ in }
     var onForward: (Message) -> Void = { _ in }
@@ -1551,6 +1613,10 @@ struct MessageBubble: View, Equatable {
         if b >= 1_048_576 { return String(format: "%.1f MB", Double(b) / 1_048_576) }
         if b >= 1024 { return String(format: "%.0f KB", Double(b) / 1024) }
         return "\(b) B"
+    }
+    private var videoDurationLabel: String {
+        let d = Int(message.duration ?? 0)
+        return String(format: "%d:%02d", d / 60, d % 60)
     }
     var onLongPress: (Message) -> Void = { _ in }
     var onResend: (Message) -> Void = { _ in }
@@ -1905,6 +1971,60 @@ struct MessageBubble: View, Equatable {
                     AnimatedGifView(url: url)
                         .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
                         .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                }
+            }
+        } else if message.isVideo {
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote
+                Group {
+                    if let data = message.localImageData, let ui = UIImage(data: data) {
+                        Image(uiImage: ui).resizable().scaledToFill()          // optimistic local thumbnail
+                    } else if let url = message.thumbUrl {
+                        SecureImageView(imageUrl: url, enc: message.thumbEnc, cid: cid)
+                    } else {
+                        Rectangle().fill(Color.gray.opacity(0.18))
+                    }
+                }
+                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay {   // upload ring while sending, play disc once delivered
+                    if message.sendState == .sending {
+                        ZStack {
+                            Color.black.opacity(0.18)
+                            Spinner(size: 26, color: .white)
+                                .padding(15)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .environment(\.colorScheme, .dark)
+                                .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 1))
+                        }
+                        .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    } else {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 22)).foregroundStyle(.white)
+                            .padding(16)
+                            .background(.black.opacity(0.45), in: Circle())
+                    }
+                }
+                .overlay(alignment: .topLeading) {   // length chip, WhatsApp-style corner
+                    HStack(spacing: 4) {
+                        Image(systemName: "video.fill").font(.system(size: 10))
+                        Text(videoDurationLabel).font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(.black.opacity(0.35), in: Capsule())
+                    .padding(7)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    metaRow
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.35), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(7)
+                }
+                .onTapGesture {
+                    if message.sendState == .failed { onResend(message) }
+                    else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
                 }
             }
         } else if message.isImage {

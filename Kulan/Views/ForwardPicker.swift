@@ -24,6 +24,7 @@ struct ForwardPicker: View {
 
     private var snippet: String {
         if message.isImage { return "📷 Photo" }
+        if message.isVideo { return "🎥 Video" }
         if message.isAudio { return "🎤 Voice message" }
         return message.text
     }

@@ -39,9 +39,12 @@ struct Message: Identifiable, Equatable {
     let id: String
     var authorId: String
     var text: String          // DECRYPTED for display
-    var type: String?         // "image" for photos, "audio" for voice notes, "file" for documents
+    var type: String?         // "image" photos, "audio" voice notes, "file" documents, "video" videos
     var imageUrl: String?
     var audioUrl: String?
+    var videoUrl: String?     // encrypted mp4 (deleted from storage after delivery — mailman model)
+    var thumbUrl: String?     // encrypted video thumbnail (kept, so old bubbles still render)
+    var thumbEnc: EncMeta?
     var fileUrl: String?      // encrypted document (type == "file")
     var fileName: String?     // original document name
     var fileSize: Int?        // bytes (for the "1.2 MB" label)
@@ -64,8 +67,10 @@ struct Message: Identifiable, Equatable {
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
 
-    var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || localImageData != nil }
+    var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
     var isAudio: Bool { (type == "audio" && (audioUrl?.isEmpty == false)) || localAudioData != nil }
+    // Optimistic videos carry their thumbnail in localImageData (hence the isImage carve-out).
+    var isVideo: Bool { type == "video" && (videoUrl?.isEmpty == false || localImageData != nil) }
     var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false) }
     var isGif: Bool { type == "gif" && (imageUrl?.isEmpty == false) }   // public Giphy url (not E2EE)
     var isCall: Bool { type == "call" }
@@ -86,6 +91,24 @@ struct Message: Identifiable, Equatable {
         self.createdAt = Date()
         self.sendState = sendState
         self.localImageData = localImageData
+        self.width = width
+        self.height = height
+    }
+
+    /// Local optimistic VIDEO — shows the thumbnail bubble instantly while the
+    /// transcode + encrypt + upload run (play enables once the server echo lands).
+    init(localVideoThumb: Data, duration: Double, width: Double, height: Double,
+         authorId: String, clientId: String, sendState: MessageSendState) {
+        self.id = clientId
+        self.authorId = authorId
+        self.text = ""
+        self.type = "video"
+        self.clientId = clientId
+        self.reactions = [:]
+        self.createdAt = Date()
+        self.sendState = sendState
+        self.localImageData = localVideoThumb
+        self.duration = duration
         self.width = width
         self.height = height
     }
@@ -126,6 +149,9 @@ struct Message: Identifiable, Equatable {
         self.type = data["type"] as? String
         self.imageUrl = data["imageUrl"] as? String
         self.audioUrl = data["audioUrl"] as? String
+        self.videoUrl = data["videoUrl"] as? String
+        self.thumbUrl = data["thumbUrl"] as? String
+        self.thumbEnc = (data["thumbEnc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         self.fileUrl = data["fileUrl"] as? String
         self.fileName = data["fileName"] as? String
         self.fileSize = (data["fileSize"] as? NSNumber)?.intValue

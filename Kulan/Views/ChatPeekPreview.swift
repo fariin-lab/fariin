@@ -70,6 +70,8 @@ struct ChatPeekPreview: View {
         let fg = mine ? Theme.onAccent(dark) : (dark ? Color.white : .black)
         if m.isCall {
             callWidget(m)
+        } else if m.isVideo {
+            videoBubble(m)
         } else if m.isImage {
             imageBubble(m)
         } else if m.isAudio {
@@ -92,6 +94,22 @@ struct ChatPeekPreview: View {
         }
         .frame(width: 150, height: 170)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func videoBubble(_ m: Message) -> some View {
+        Group {
+            if let url = m.thumbUrl {
+                SecureImageView(imageUrl: url, enc: m.thumbEnc, cid: conv.id)
+            } else {
+                Rectangle().fill(Color.black.opacity(0.85))
+            }
+        }
+        .frame(width: 150, height: 170)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            Image(systemName: "play.fill").font(.system(size: 18)).foregroundStyle(.white)
+                .padding(12).background(.black.opacity(0.45), in: Circle())
+        }
     }
 
     private func voiceBubble(fg: Color, bg: Color) -> some View {
