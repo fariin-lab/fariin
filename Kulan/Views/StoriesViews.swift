@@ -42,13 +42,53 @@ struct StoryDarkBlur: UIViewRepresentable {
     func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
 }
 
+// Pre-baked imitation of systemThickMaterialDark for views that must CROSSFADE:
+// a real UIVisualEffectView drops its blur entirely whenever it's composited at
+// fractional opacity (the bright flash while the viewers sheet opened/closed).
+// Used ONLY by the mid-transition morph card — the story's own bars and the
+// carousel keep the real material, so the at-rest look is untouched (build 216).
+enum StoryBlurBake {
+    private static let cache = NSCache<NSString, UIImage>()
+    static func cached(_ url: String) -> UIImage? { cache.object(forKey: url as NSString) }
+    static func bake(_ img: UIImage, url: String) -> UIImage {
+        if let hit = cached(url) { return hit }
+        let targetW: CGFloat = 240
+        let scale = targetW / max(1, img.size.width)
+        let size = CGSize(width: targetW, height: max(1, img.size.height * scale))
+        let small = UIGraphicsImageRenderer(size: size).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
+        }
+        var base = small
+        if let ci = CIImage(image: small) {
+            var work = ci.clampedToExtent().applyingGaussianBlur(sigma: 16).cropped(to: ci.extent)
+            if let desat = CIFilter(name: "CIColorControls", parameters: [
+                kCIInputImageKey: work, kCIInputSaturationKey: 0.9
+            ])?.outputImage { work = desat }
+            let ctx = CIContext(options: nil)
+            if let cg = ctx.createCGImage(work, from: work.extent) { base = UIImage(cgImage: cg) }
+        }
+        let out = UIGraphicsImageRenderer(size: size).image { c in
+            base.draw(in: CGRect(origin: .zero, size: size))
+            // Material-matched smoke: systemThickMaterialDark ≈ heavy blur + ~50% near-black veil.
+            UIColor.black.withAlphaComponent(0.5).setFill()
+            c.fill(CGRect(origin: .zero, size: size))
+        }
+        cache.setObject(out, forKey: url as NSString)
+        return out
+    }
+}
+
 struct StoryImage: View {
     let url: String
     // fitBlur = show the WHOLE image (aspect-fit) over a blurred fill of itself — the SAME look as the
     // story viewer, so a wide/tall photo isn't cropped/zoomed and keeps its blur bars. Used for the
     // swipe-up morph card + the viewers carousel; the small story-row covers stay plain fill (crop).
     var fitBlur = false
+    // bakedBars = the fit-case backdrop is a PRE-BAKED blur image instead of the live material.
+    // Only the morph card (which crossfades) uses it — materials break at fractional opacity.
+    var bakedBars = false
     @State private var image: UIImage?
+    @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
     @State private var failed = false
     var body: some View {
         Group {
@@ -70,10 +110,23 @@ struct StoryImage: View {
                     } else {
                         ZStack {
                             Color.clear
-                                .overlay(Image(uiImage: image).resizable().scaledToFill())
-                                // BUILD 216's exact recipe (user's explicit choice): the REAL
-                                // systemThickMaterialDark over the fill copy, same as the story's bars.
-                                .overlay(StoryDarkBlur())
+                                .overlay {
+                                    if bakedBars {
+                                        // Crossfade-safe backdrop (morph card only): a baked image
+                                        // composites at any opacity; black for the first ms while
+                                        // the bake runs — never the raw bright fill.
+                                        if let bg = blurredBG {
+                                            Image(uiImage: bg).resizable().scaledToFill()
+                                        } else {
+                                            Color.black
+                                        }
+                                    } else {
+                                        // BUILD 216's exact recipe (user's explicit choice): the REAL
+                                        // systemThickMaterialDark over the fill copy, same as the story's bars.
+                                        Image(uiImage: image).resizable().scaledToFill()
+                                            .overlay(StoryDarkBlur())
+                                    }
+                                }
                                 .clipped()
                             Image(uiImage: image).resizable().scaledToFit()
                         }
@@ -102,13 +155,22 @@ struct StoryImage: View {
 
     @MainActor private func load() async {
         failed = false
-        if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
+        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
         guard let u = URL(string: url) else { failed = true; return }
         guard let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) else {
             failed = true; return
         }
         DiskImageCache.shared.store(img, data: data, for: url)
+        await apply(img)
+    }
+
+    @MainActor private func apply(_ img: UIImage) async {
         image = img
+        // Bake the crossfade-safe backdrop off-main (morph card only; cached per URL).
+        guard bakedBars, fitBlur, !fillsScreen(img), blurredBG == nil else { return }
+        if let hit = StoryBlurBake.cached(url) { blurredBG = hit; return }
+        let u = url
+        blurredBG = await Task.detached(priority: .userInitiated) { StoryBlurBake.bake(img, url: u) }.value
     }
 }
 
@@ -756,11 +818,12 @@ struct StoryViewer: View {
         // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
         // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
         // drag so the gesture keeps tracking the finger even after the story has visually faded.
-        // Crossfade timing: the story (WITH its chrome) stays fully visible while the opaque morph
-        // card fades in over it (0→0.08 dissolves the chrome), then is gone by the time the card
-        // starts to shrink — so the photo stays bright throughout and only the chrome dissolves.
+        // Crossfade timing: the story fades ONLY AFTER the morph card above it is fully opaque
+        // (card opaque by p=0.05 → story fades 0.05→0.13, entirely covered). The story's bars are
+        // a live material (UIVisualEffectView) that DROPS its blur at fractional opacity — fading
+        // it in view was half of the bright flash; now its dropout frames are never visible.
         // Reversed on close (the chrome fades back in as the morph card grows away).
-        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(p / 0.08, 1))))
+        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(max(0, p - 0.05) / 0.08, 1))))
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -886,12 +949,15 @@ struct StoryViewer: View {
         //    finger continuously all the way to the slot at 0.9 — no dead "hold" before it responds.
         //  • carIn: neighbours + counts fade in gradually 0.5→0.9 (behind the opaque morph centre).
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
-        // The live carousel only appears in the last sliver near rest (0.9→1). Below that, the OPAQUE
+        // The live carousel only appears in the last sliver near rest. Below that, the OPAQUE
         // morph card fully covers it. This makes CLOSING mirror OPENING: on open the morph card already
         // hid the carousel during the size-morph (smooth); on close the carousel used to stay exposed and
         // JITTER behind a half-faded morph card (the "shaking"). Now the morph card covers it the whole
         // drag in BOTH directions, so the live (re-rendering) carousel is never visible mid-drag.
-        let carIn = max(0, min(1, (p - 0.9) / 0.1))
+        // Window 0.85→0.95 (was 0.9→1.0): the carousel — whose cards use the live material — must
+        // finish its fractional fade WHILE STILL COVERED by the card (card fades out 0.95→1.0), so
+        // its material dropout frames are never on screen (the end-of-open flash).
+        let carIn = max(0, min(1, (p - 0.85) / 0.1))
         let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
@@ -912,7 +978,7 @@ struct StoryViewer: View {
                 // Start height matches the story CARD (which ends above the black owner footer),
                 // so the morph begins exactly where the card visually is.
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true)   // whole image + blur (no zoom/crop), matching the story
+                StoryImage(url: url, fitBlur: true, bakedBars: true)   // whole image + CROSSFADE-SAFE baked bars (material breaks at fractional opacity)
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
                     // Rounded the WHOLE time (was 24*sizeP → square at the start of the open). Constant 24
                     // matches the story card's corners, so the image is never square mid-transition.
