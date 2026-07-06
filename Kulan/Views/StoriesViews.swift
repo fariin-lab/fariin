@@ -815,6 +815,11 @@ struct StoryViewer: View {
         }
         // A fresh drag claim takes over from any in-flight snap animation (finger beats spring).
         .onAppear { sheetDragArbiter.onFreshClaim = { sheetAnimator.cancel() } }
+        // Safety net: the sheet unmounting must NEVER leave a stray progress value behind
+        // (a tiny leftover hid the owner footer with no sheet in sight — user screenshot).
+        .onChange(of: showViewers) { _, on in
+            if !on { sheetAnimator.cancel(); viewersProgress = 0 }
+        }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
@@ -889,9 +894,9 @@ struct StoryViewer: View {
                                 .padding(.horizontal, 16).padding(.top, 26).padding(.bottom, 14)
                                 .background(LinearGradient(colors: [.clear, .black.opacity(0.45)],
                                                            startPoint: .top, endPoint: .bottom))
-                                .opacity((dragDown > 6 || viewersProgress > 0.05) ? 0 : 1)
+                                .opacity((dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
                                 .animation(.easeOut(duration: 0.15), value: dragDown > 6)
-                                .animation(.easeOut(duration: 0.15), value: viewersProgress > 0.05)
+                                .animation(.easeOut(duration: 0.15), value: showViewers && viewersProgress > 0.05)
                                 .allowsHitTesting(false)
                         }
                     }
@@ -902,11 +907,12 @@ struct StoryViewer: View {
                     // doesn't pin the card, so the library dismiss stays smooth.
                     .background(Color.black)
                 ownerFooter
-                    // Hidden on swipe-down AND while the sheet is engaged (the shrunk story card
-                    // must show only the photo — the Views/trash bar is full-screen chrome).
-                    .opacity((dragDown > 6 || viewersProgress > 0.05) ? 0 : 1)
+                    // Hidden on swipe-down AND while the sheet is REALLY engaged (showViewers
+                    // gate: a stray leftover progress value once hid the Views/Delete bar with
+                    // no sheet in sight — the tab bar showed through the empty strip).
+                    .opacity((dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
                     .animation(.easeOut(duration: 0.15), value: dragDown > 6)
-                    .animation(.easeOut(duration: 0.15), value: viewersProgress > 0.05)
+                    .animation(.easeOut(duration: 0.15), value: showViewers && viewersProgress > 0.05)
             } else {
                 // Friend's story: full-bleed, NO clip → the library's swipe-down dismiss works.
                 storyContent
