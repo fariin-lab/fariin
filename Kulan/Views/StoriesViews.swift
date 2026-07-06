@@ -59,7 +59,10 @@ enum StoryBlurBake {
         // and 50% black over black = the "blur is gone" bug. Pure UIKit drawing cannot fail.
         let fmt = UIGraphicsImageRendererFormat.default()
         fmt.scale = 1
-        let tiny = CGSize(width: 16, height: 16)
+        // 4×4, not 16×16: the real systemThickMaterialDark shows essentially NO image
+        // structure — at 16px the stretched thumbnail still ghosted recognizable shapes,
+        // which read as "a different blur" next to the at-rest bars (user screenshot).
+        let tiny = CGSize(width: 4, height: 4)
         let thumb = UIGraphicsImageRenderer(size: tiny, format: fmt).image { ctx in
             ctx.cgContext.interpolationQuality = .medium
             img.draw(in: CGRect(origin: .zero, size: tiny))
