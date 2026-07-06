@@ -87,10 +87,13 @@ struct StoryEditorView: View {
                 // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
                 // earlier vivid full-screen blur, which was rejected). Black frames it above
                 // and below. Editor-only look; the posted image is untouched.
-                let cardTop = max(windowSafeTop - 4, 10)
-                let cardBottomGap = geo.safeAreaInsets.bottom + 72   // stays clear of the Aa/crop/draw + NEXT row
+                // Insets from GEO's own safe area (adding windowSafeTop on top of an already
+                // safe-area-inset layout DOUBLE-COUNTED the notch = the fat black band, user bug 1).
+                let cardTop = geo.safeAreaInsets.top + 8
+                let cardBottomGap = geo.safeAreaInsets.bottom + 64   // clears the Aa/crop/draw + NEXT row
                 let cardH = geo.size.height - cardTop - cardBottomGap
-                if !imageFillsCanvas(geo.size), cardH > 0 {
+                let boxed = !imageFillsCanvas(geo.size)
+                if boxed, cardH > 0 {
                     Image(uiImage: edited).resizable().scaledToFill()
                         .frame(width: geo.size.width, height: cardH)
                         .blur(radius: 90, opaque: true)
@@ -110,6 +113,19 @@ struct StoryEditorView: View {
                                   onTap: { captionFocused = false; selectedID = nil })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
+                    // Zoomed/panned photo must stay INSIDE the card (user bug 2: it spilled over
+                    // the top/bottom controls). A MASK, not a frame change: the zoom math, pan
+                    // limits, and the WYSIWYG flatten all keep their full-canvas geometry.
+                    .mask {
+                        if boxed, cardH > 0 {
+                            Rectangle().fill(.black)
+                                .frame(width: geo.size.width, height: cardH)
+                                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                                .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                        } else {
+                            Rectangle().fill(.black)
+                        }
+                    }
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
