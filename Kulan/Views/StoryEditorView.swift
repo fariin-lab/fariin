@@ -87,11 +87,10 @@ struct StoryEditorView: View {
                 // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
                 // earlier vivid full-screen blur, which was rejected). Black frames it above
                 // and below. Editor-only look; the posted image is untouched.
-                // User-tuned (round 2, annotated): the card reaches the PHYSICAL top edge — geo
-                // sits inside the safe area, so pull the top out by the real window inset — and
-                // its bottom drops to just above the controls row.
-                let cardTop: CGFloat = 8 - windowSafeTop
-                let cardBottomGap = max(12, geo.safeAreaInsets.bottom - 20) + 44
+                // User-tuned (round 3): the STATUS BAR is visible in the editor (reference look),
+                // so the card starts just below it; bottom leaves clear room for the controls.
+                let cardTop: CGFloat = 8
+                let cardBottomGap: CGFloat = 44
                 let cardH = geo.size.height - cardTop - cardBottomGap
                 let boxed = !imageFillsCanvas(geo.size)
                 if boxed, cardH > 0 {
@@ -201,9 +200,9 @@ struct StoryEditorView: View {
                     VStack {
                         Spacer()
                         bottomBar
-                            // User-tuned: the Aa/crop/draw + NEXT row sits LOW, into the home-indicator
-                            // strip (was floating ~42pt up with a dead black band beneath it).
-                            .padding(.bottom, captionFocused ? 8 : max(12, geo.safeAreaInsets.bottom - 20))
+                            // User-tuned (round 3): the Aa/crop/draw + NEXT row sinks a bit further
+                            // down (it was overlapping the card's bottom edge), toward the indicator.
+                            .padding(.bottom, captionFocused ? 8 : -14)
                     }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
                 }
@@ -222,7 +221,7 @@ struct StoryEditorView: View {
                 }
             }
         }
-        .statusBarHidden()
+        .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
         .sheet(item: $pendingShare) { s in
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
