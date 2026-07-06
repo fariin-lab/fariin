@@ -740,12 +740,15 @@ struct ChatsView: View {
                                  onOpenUploading: { showUploadViewer = true })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
-                        // Clip ONLY the stories row to its own strip (it still slides away under
-                        // the nav bar, never over it). The old .clipped() on the WHOLE ZStack cut
-                        // the chat LIST off with hard top/bottom edges — the "borders" the user
-                        // circled — instead of letting rows flow under the header and the floating
-                        // tab bar with the system blur, the way the Calls page does.
-                        .clipped()
+                        // Trim the stories row ONLY above its own top edge: sliding UP it still
+                        // tucks under the nav bar (never draws over it), but on a pull-DOWN
+                        // rubber-band it rides down freely with the list — a full .clipped() here
+                        // chopped the cards mid-height and left a white gap under the header
+                        // (user video, build 224). The chat LIST itself stays unclipped so rows
+                        // flow under the header and floating tab bar like the Calls page.
+                        .mask(alignment: .top) {
+                            Rectangle().frame(height: UIScreen.main.bounds.height)
+                        }
                     }   // ZStack (stories row scrolling in sync above the list)
                     // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
                     // only when truly unfiltered; a filtered empty result says so instead.
