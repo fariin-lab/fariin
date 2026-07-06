@@ -1602,7 +1602,23 @@ struct MyStoriesCarousel: View {
                         .onEnded { v in
                             let wasDragging = dragging
                             dragging = false
-                            guard wasDragging else { dragX = 0; return }
+                            guard wasDragging else {
+                                // A FAST short flick can end before the 12pt engagement gate ever
+                                // passes — don't swallow it: a decisively horizontal fling still
+                                // turns the page ("fast swipe not working", user report).
+                                let pw = v.predictedEndTranslation.width
+                                guard abs(pw) > step * 0.5,
+                                      abs(v.translation.width) > abs(v.translation.height) else { dragX = 0; return }
+                                onInteracting(true)
+                                let ni = pw < 0 ? min(index + 1, max(0, n - 1)) : max(index - 1, 0)
+                                withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                                    index = ni
+                                    dragX = 0
+                                }
+                                if stories.indices.contains(ni) { activeId = stories[ni].id }
+                                endInteractionSoon()
+                                return
+                            }
                             // Commit to the neighbour at just 30% of a card step (or a flick), so the next
                             // card is EASY to reach; otherwise settle back. predictedEndTranslation carries
                             // the fling so a quick short flick still advances.
