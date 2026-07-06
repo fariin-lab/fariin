@@ -719,6 +719,10 @@ struct ChatsView: View {
                     // Rows start below the stories row; as the list scrolls, the row above is
                     // offset by the same amount, so both move as ONE scroll surface.
                     .contentMargins(.top, storiesRowHeight, for: .scrollContent)
+                    // No hard hairline where the list scrolls under the header / the floating tab
+                    // bar (visible in LIGHT mode; the system's default "hard" scroll-edge look).
+                    // .soft keeps the gentle fade with no drawn border line.
+                    .scrollEdgeEffectStyle(.soft, for: .all)
                     .onScrollGeometryChange(for: CGFloat.self,
                                             of: { $0.contentOffset.y + $0.contentInsets.top },
                                             action: { _, y in chatScrollY = y })
