@@ -866,9 +866,15 @@ struct ChatsView: View {
                                     })
                     }
                 }
-                // Telegram hero: the viewer grows out of the tapped story card on open and shrinks back
-                // into it on close (matchedTransitionSource on the cards + this zoom transition).
-                .navigationTransition(.zoom(sourceID: g.id, in: storyNS))
+                // NO .navigationTransition(.zoom) anymore — REMOVED DELIBERATELY, do not bring it back.
+                // The zoom transition installs the SYSTEM's own interactive drag-to-dismiss which owns
+                // fast downward flicks: it half-collapses the cover (content reflows — wrong-story flash,
+                // black frame with a lone reply bar), then cancels/snaps back or re-presents after our pan
+                // already closed. Device-proven immune to BOTH `.interactiveDismissDisabled()` (build 220)
+                // AND require(toFail:) subordination of discovered "_UI…" pans (build 231). Removing the
+                // transition is the only categorical kill (first proven in bd5450b). Cost: stories open
+                // with the standard cover slide instead of the ring-zoom hero. The library's dismiss pan
+                // is now the ONLY swipe-close at any speed.
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting
