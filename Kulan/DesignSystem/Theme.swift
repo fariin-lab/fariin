@@ -76,10 +76,11 @@ extension View {
     func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false, tint: Color? = nil, enabled: Bool = true) -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect({
+                guard enabled else { return Glass.identity }   // glass off, view tree unchanged
                 var g: Glass = .regular
                 if let tint { g = g.tint(tint) }
                 return interactive ? g.interactive() : g
-            }(), in: shape, isEnabled: enabled)
+            }(), in: shape)
         } else if let tint {
             self.background(tint.opacity(0.85).opacity(enabled ? 1 : 0), in: shape)
                 .background(.ultraThinMaterial.opacity(enabled ? 1 : 0), in: shape)
