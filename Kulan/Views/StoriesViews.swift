@@ -790,6 +790,13 @@ struct StoryViewer: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyForceClose"))) { _ in
             isPresented = false
         }
+        // The still-UPLOADING placeholder is not a watchable story yet: ITS progress bar
+        // pauses (user ask) so it can never tick away and auto-advance mid-upload. Leaving
+        // it (or the upload finishing and swapping in the real item) resumes normally —
+        // every other item keeps its usual timer.
+        .onChange(of: isUploadingItem) { _, up in
+            NotificationCenter.default.post(name: .init(up ? "pauseStory" : "resumeStory"), object: nil)
+        }
         // A fresh drag claim takes over from any in-flight snap animation (finger beats spring).
         .onAppear { sheetDragArbiter.onFreshClaim = { sheetAnimator.cancel() } }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
