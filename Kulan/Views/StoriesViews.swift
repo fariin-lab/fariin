@@ -602,6 +602,10 @@ struct StoryViewer: View {
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
+    // Horizontal carousel swipe in flight: all cards show + slide normally while the REAL
+    // story steps aside; it takes the centre back once the swipe settles (identical pixels
+    // at both hand-off moments = invisible swaps, and the swipe stays as smooth as ever).
+    @State private var carouselInteracting = false
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
     private var myStories: [Story] { groups.first { $0.isMine }?.stories ?? [] }
@@ -911,6 +915,9 @@ struct StoryViewer: View {
         .clipShape(RoundedRectangle(cornerRadius: morphClipRadius, style: .continuous))
         .scaleEffect(morphScale, anchor: .top)
         .offset(y: morphOffsetY)
+        // BINARY (no animation → no fractional material frames): the real story steps aside
+        // while the carousel is swiping, so the cards slide as smoothly as they always did.
+        .opacity(carouselInteracting && viewersProgress > 0.9 ? 0 : 1)
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -1072,7 +1079,8 @@ struct StoryViewer: View {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH,
                               onActiveTap: { closeViewers() },
-                              hideActiveContent: true)
+                              hideActiveContent: !carouselInteracting,
+                              onInteracting: { carouselInteracting = $0 })
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
@@ -1483,6 +1491,7 @@ struct MyStoriesCarousel: View {
     let slotH: CGFloat
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
     var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
+    var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
     // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
@@ -1498,14 +1507,26 @@ struct MyStoriesCarousel: View {
     @State private var dragging = false
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat,
-         onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false) {
+         onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
+         onInteracting: @escaping (Bool) -> Void = { _ in }) {
         self.stories = stories
         self._activeId = activeId
         self.slotW = slotW
         self.slotH = slotH
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
+        self.onInteracting = onInteracting
         self._index = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
+    }
+
+    @State private var interactGen = 0   // invalidates a stale "settled" callback when a new swipe starts
+    // Swipe finished settling → hand the centre back to the real story (identical pixels = invisible swap).
+    private func endInteractionSoon() {
+        interactGen += 1
+        let gen = interactGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if gen == interactGen, !dragging { onInteracting(false) }
+        }
     }
 
     var body: some View {
@@ -1540,6 +1561,8 @@ struct MyStoriesCarousel: View {
                                 guard abs(v.translation.width) > 12,
                                       abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
                                 dragging = true
+                                interactGen += 1
+                                onInteracting(true)   // all cards show + slide; the real story steps aside
                             }
                             dragX = v.translation.width
                         }
@@ -1563,6 +1586,7 @@ struct MyStoriesCarousel: View {
                                 dragX = 0
                             }
                             if stories.indices.contains(ni) { activeId = stories[ni].id }
+                            endInteractionSoon()   // centre hands back to the real story after the spring
                         }
                 )
             // The centred card's count, big + centred under the carousel (mockup).
@@ -1619,8 +1643,10 @@ struct MyStoriesCarousel: View {
             .onTapGesture {
                 if s.id == activeId { onActiveTap() }
                 else if let ni = stories.firstIndex(where: { $0.id == s.id }) {
+                    onInteracting(true)   // tap-to-recentre animates cards too — same hand-off dance
                     withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84)) { index = ni }
                     activeId = s.id
+                    endInteractionSoon()
                 }
             }
     }
