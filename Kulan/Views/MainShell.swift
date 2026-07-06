@@ -719,10 +719,6 @@ struct ChatsView: View {
                     // Rows start below the stories row; as the list scrolls, the row above is
                     // offset by the same amount, so both move as ONE scroll surface.
                     .contentMargins(.top, storiesRowHeight, for: .scrollContent)
-                    // No hard hairline where the list scrolls under the header / the floating tab
-                    // bar (visible in LIGHT mode; the system's default "hard" scroll-edge look).
-                    // .soft keeps the gentle fade with no drawn border line.
-                    .scrollEdgeEffectStyle(.soft, for: .all)
                     .onScrollGeometryChange(for: CGFloat.self,
                                             of: { $0.contentOffset.y + $0.contentInsets.top },
                                             action: { _, y in chatScrollY = y })
@@ -739,8 +735,13 @@ struct ChatsView: View {
                                  onOpenUploading: { showUploadViewer = true })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
+                        // Clip ONLY the stories row to its own strip (it still slides away under
+                        // the nav bar, never over it). The old .clipped() on the WHOLE ZStack cut
+                        // the chat LIST off with hard top/bottom edges — the "borders" the user
+                        // circled — instead of letting rows flow under the header and the floating
+                        // tab bar with the system blur, the way the Calls page does.
+                        .clipped()
                     }   // ZStack (stories row scrolling in sync above the list)
-                    .clipped()   // the row slides up under the nav bar, not over it
                     // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
                     // only when truly unfiltered; a filtered empty result says so instead.
                     .overlay(alignment: .top) {
