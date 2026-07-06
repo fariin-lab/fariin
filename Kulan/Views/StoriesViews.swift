@@ -702,6 +702,10 @@ struct StoryViewer: View {
             // Fully OFF only at rest, so the swipe-down dismiss keeps its see-through look.
             Color.black.ignoresSafeArea()
                 .opacity(showViewers ? 1 : 0)
+            // Carousel/backdrop UNDER the story: the REAL story is the centre card (user's final
+            // call — no duplicate morph card; the original shrinks into the slot). The story layer
+            // is non-hittable while the sheet is engaged, so taps/drags fall through to these.
+            if showViewers { viewersBackdrop }
             storyLayer
             // The viewers sheet is a SIBLING layer, NOT a system .sheet: a system sheet lives in
             // its own presentation layer and cannot drive a continuous transform on the story
@@ -709,7 +713,6 @@ struct StoryViewer: View {
             // INSIDE the sheet. Both layers share `viewersProgress`, so the drag and the release
             // spring stay perfectly in sync.
             if showViewers {
-                viewersBackdrop   // flat 2D morph card during the drag → my-stories carousel when open
                 StoryViewersBottomSheet(activeStoryId: sheetStoryId,
                                         progress: $viewersProgress,
                                         arbiter: sheetDragArbiter,
@@ -857,8 +860,9 @@ struct StoryViewer: View {
                                 .padding(.horizontal, 16).padding(.top, 26).padding(.bottom, 14)
                                 .background(LinearGradient(colors: [.clear, .black.opacity(0.45)],
                                                            startPoint: .top, endPoint: .bottom))
-                                .opacity(dragDown > 6 ? 0 : 1)
+                                .opacity((dragDown > 6 || viewersProgress > 0.05) ? 0 : 1)
                                 .animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                                .animation(.easeOut(duration: 0.15), value: viewersProgress > 0.05)
                                 .allowsHitTesting(false)
                         }
                     }
@@ -869,7 +873,11 @@ struct StoryViewer: View {
                     // doesn't pin the card, so the library dismiss stays smooth.
                     .background(Color.black)
                 ownerFooter
-                    .opacity(dragDown > 6 ? 0 : 1).animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    // Hidden on swipe-down AND while the sheet is engaged (the shrunk story card
+                    // must show only the photo — the Views/trash bar is full-screen chrome).
+                    .opacity((dragDown > 6 || viewersProgress > 0.05) ? 0 : 1)
+                    .animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    .animation(.easeOut(duration: 0.15), value: viewersProgress > 0.05)
             } else {
                 // Friend's story: full-bleed, NO clip → the library's swipe-down dismiss works.
                 storyContent
@@ -882,13 +890,14 @@ struct StoryViewer: View {
         // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
         // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
         // drag so the gesture keeps tracking the finger even after the story has visually faded.
-        // NO crossfade on the image (user spec): the story stays at FULL opacity until the
-        // opaque morph card has popped over it at p=0.07 (identical pixels — the pop is
-        // invisible; only the chrome fades, via the library's storyChromeHidden). The fade
-        // below runs 0.08→0.16, entirely hidden behind the opaque card, purely to free the
-        // GPU from compositing the covered story. Reversed on close: story is back at full
-        // opacity by p≤0.08, before the card leaves at p<0.07.
-        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(max(0, p - 0.08) / 0.08, 1))))
+        // THE REAL STORY IS THE MORPH (user's final call — no duplicate card, ever): the
+        // original story layer itself scales from full screen into the carousel's centre
+        // slot, driven by the drag. Same pixels the whole way — nothing can mismatch.
+        // Corner radius is applied INSIDE the scale (unscaled space), so it reads as a
+        // constant ~24pt on screen as the card shrinks; 0 at rest (no-op clip).
+        .clipShape(RoundedRectangle(cornerRadius: morphClipRadius, style: .continuous))
+        .scaleEffect(morphScale, anchor: .top)
+        .offset(y: morphOffsetY)
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -998,6 +1007,29 @@ struct StoryViewer: View {
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.max() ?? 0
     }
 
+    // The REAL story's morph into the carousel slot — geometry MUST mirror viewersBackdrop's
+    // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
+    private var morphGeometry: (sizeP: CGFloat, scale: CGFloat, offsetY: CGFloat) {
+        let p = viewersProgress
+        let scr = UIScreen.main.bounds
+        let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
+        let avail = scr.height - sheetH - topInset
+        let countArea: CGFloat = 40
+        let slotH = (avail - countArea) * 0.94
+        let blockTop = topInset + (avail - countArea - slotH) / 2
+        let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
+        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        let s = 1 - (1 - slotH / max(contentH, 1)) * sizeP
+        return (sizeP, s, blockTop * sizeP)
+    }
+    private var morphScale: CGFloat { morphGeometry.scale }
+    private var morphOffsetY: CGFloat { morphGeometry.offsetY }
+    // Radius in UNSCALED space so it reads ~24pt constant on screen; 0 at rest (no-op).
+    private var morphClipRadius: CGFloat {
+        let g = morphGeometry
+        return g.sizeP <= 0.001 ? 0 : 24 / max(g.scale, 0.2) * g.sizeP
+    }
+
     // The layer behind the viewers sheet. Strictly 2D (no rotations anywhere):
     // - while DRAGGING (0 < p < 1): ONE flat card of the current photo interpolates
     //   full-screen ⇄ the carousel's centre slot (uniform scale + radius + translate).
@@ -1015,61 +1047,22 @@ struct StoryViewer: View {
         let slotH = (avail - countArea) * 0.94             // fill most of the free area (cards were too small)
         let slotW = slotH * 0.62                           // a touch wider; side cards still peek + shrink
         let blockTop = topInset + (avail - countArea - slotH) / 2
-        // SMOOTH, NO-JUMP handoff (Telegram), staged so opening morphs "story → only image" and
-        // closing morphs "only image → story", as one continuous motion:
-        //  • morphVis: the clean morph card fades IN OPAQUE over 0→0.05 (over the still-full story, so
-        //    the progress bars / header / footer DISSOLVE while the photo stays bright), holds, then
-        //    fades out 0.9→1.0 into the live carousel centre card.
-        //  • sizeP: the card scales down starting the instant the chrome has gone (0.08), tracking the
-        //    finger continuously all the way to the slot at 0.9 — no dead "hold" before it responds.
-        //  • carIn: neighbours + counts fade in gradually 0.5→0.9 (behind the opaque morph centre).
-        let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
-        // NO fade-in for the morph card (user spec: the image must never crossfade): it pops
-        // at FULL opacity at p=0.07, when it is still full-screen (sizeP engages at 0.08) and
-        // pixel-identical to the story beneath — an invisible swap. The chrome has already
-        // faded via storyChromeHidden. Only the hand-off to the live carousel at the very end
-        // (0.95→1) fades, using the baked backdrop that composites safely at any opacity.
-        // The display-link animator keeps model == presentation, so these thresholds hold
-        // during snap springs too, not just finger drags.
-        // The live carousel only appears in the last sliver near rest. Below that, the OPAQUE
-        // morph card fully covers it. This makes CLOSING mirror OPENING: on open the morph card already
-        // hid the carousel during the size-morph (smooth); on close the carousel used to stay exposed and
-        // JITTER behind a half-faded morph card (the "shaking"). Now the morph card covers it the whole
-        // drag in BOTH directions, so the live (re-rendering) carousel is never visible mid-drag.
-        // Window 0.85→0.95 (was 0.9→1.0): the carousel — whose cards use the live material — must
-        // finish its fractional fade WHILE STILL COVERED by the card (card fades out 0.95→1.0), so
-        // its material dropout frames are never on screen (the end-of-open flash).
+        // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
+        // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
+        // only supplies the carousel (neighbours + counts); its CENTRE card keeps its frame
+        // for layout/taps but hides its content, since the shrunk real story sits on top.
         let carIn = max(0, min(1, (p - 0.85) / 0.1))
-        let morphVis: CGFloat = p >= 0.07 ? (1 - max(0, min(1, (p - 0.95) / 0.05))) : 0
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
-        // SINGLE SOURCE OF TRUTH: the background card always shows the CURRENT story (currentStoryId),
-        // never the carousel's transient centre id — so it can NEVER flash to the wrong story while the
-        // sheet is opening. Scrolling the carousel drives currentStoryId (via jumpToStoryItem), so the
-        // background still follows the selection, and closing collapses onto the very same story.
-        let morphURL = (currentStory ?? liveMyStories.first { $0.id == sheetStoryId }).map { $0.mediaUrl }
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH,
-                              onActiveTap: { closeViewers() })
+                              onActiveTap: { closeViewers() },
+                              hideActiveContent: true)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
-            if morphVis > 0.001, let url = morphURL {
-                // Start height matches the story CARD (which ends above the black owner footer),
-                // so the morph begins exactly where the card visually is.
-                let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true, bakedBars: true)   // whole image + CROSSFADE-SAFE baked bars (material breaks at fractional opacity)
-                    .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
-                    // Rounded the WHOLE time (was 24*sizeP → square at the start of the open). Constant 24
-                    // matches the story card's corners, so the image is never square mid-transition.
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .padding(.top, blockTop * sizeP)
-                    .frame(maxWidth: .infinity)
-                    .opacity(Double(morphVis))
-                    .allowsHitTesting(false)   // mid-drag frames take no touches
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
@@ -1476,6 +1469,7 @@ struct MyStoriesCarousel: View {
     let slotW: CGFloat
     let slotH: CGFloat
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
+    var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
     // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
@@ -1491,12 +1485,13 @@ struct MyStoriesCarousel: View {
     @State private var dragging = false
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat,
-         onActiveTap: @escaping () -> Void = {}) {
+         onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false) {
         self.stories = stories
         self._activeId = activeId
         self.slotW = slotW
         self.slotH = slotH
         self.onActiveTap = onActiveTap
+        self.hideActiveContent = hideActiveContent
         self._index = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
     }
 
@@ -1583,6 +1578,8 @@ struct MyStoriesCarousel: View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
         return StoryImage(url: s.mediaUrl, fitBlur: true)   // whole image + blur, same as the story/morph
+            // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
+            .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
             .frame(width: slotW, height: slotH)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(alignment: .bottom) {
@@ -1605,6 +1602,7 @@ struct MyStoriesCarousel: View {
                     .saturation(1.0 - 0.45 * t)
             }
             .id(s.id)
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
             .onTapGesture {
                 if s.id == activeId { onActiveTap() }
                 else if let ni = stories.firstIndex(where: { $0.id == s.id }) {
