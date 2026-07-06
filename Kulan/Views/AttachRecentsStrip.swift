@@ -11,7 +11,7 @@ struct AttachRecentsStrip: View {
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
 
-    @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readOnly)
+    @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
     @State private var loadingPick = false   // fetching the full-size asset after a tap
 
@@ -62,7 +62,7 @@ struct AttachRecentsStrip: View {
     }
 
     private func request() {
-        PHPhotoLibrary.requestAuthorization(for: .readOnly) { s in
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { s in
             DispatchQueue.main.async {
                 status = s
                 if s == .authorized || s == .limited { load() }
