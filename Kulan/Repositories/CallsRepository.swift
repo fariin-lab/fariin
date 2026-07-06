@@ -12,11 +12,15 @@ struct CallEntry: Identifiable, Hashable {
     let otherUid: String
     let callerUid: String
     let outcome: String     // answered | missed
+    let video: Bool         // placed as a video call (old records default to voice)
     let durationSec: Int
     let date: Date
 
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
     var missed: Bool { outcome == "missed" }
+    /// Red/badge-worthy only when THEY called and I didn't pick up — my own
+    /// unanswered outgoing call is just "Outgoing" (Phone/Signal/WhatsApp rule).
+    var missedIncoming: Bool { missed && !mine }
 }
 
 // Aggregates call records across all of my conversations into one history list.
@@ -73,6 +77,7 @@ final class CallsRepository {
                             name: name, photoUrl: photo, otherUid: other,
                             callerUid: data["callerUid"] as? String ?? "",
                             outcome: data["callOutcome"] as? String ?? "answered",
+                            video: data["callVideo"] as? Bool ?? false,
                             durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
                             date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
                     }

@@ -690,6 +690,8 @@ enum ChatService {
             "lastMessage": marker,
             "updatedAt": FieldValue.serverTimestamp(),
         ], merge: true)
+        // Keep the Calls tab (list + missed badge) live — the history repo has no listener.
+        await CallsRepository.shared.load(force: true)
     }
 
     /// "0:53" — voice-note length for markers and previews.

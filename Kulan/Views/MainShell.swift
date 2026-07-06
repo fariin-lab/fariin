@@ -7,9 +7,16 @@ struct MainShell: View {
     var onSignOut: () -> Void
     private var call: CallService { CallService.shared }
     private var profile = ProfileStore.shared
+    private var callsRepo = CallsRepository.shared   // @Observable: drives the missed-call tab badge
     @State private var settingsIcon: UIImage?
     @State private var tab = 0
     @State private var previousTab = 0   // last non-search tab → drives what the search circle searches
+    // Missed-call badge on the Calls tab (WhatsApp/Signal): incoming missed calls newer
+    // than the last time the tab was viewed. Local-only "seen" watermark.
+    @AppStorage("callsSeenAt") private var callsSeenAt: Double = 0
+    private var missedBadge: Int {
+        callsRepo.calls.filter { $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt }.count
+    }
 
     init(onSignOut: @escaping () -> Void) { self.onSignOut = onSignOut }
 
@@ -37,7 +44,17 @@ struct MainShell: View {
         .task(id: profile.me?.photoUrl) { await loadSettingsIcon() }
         // Remember the last real tab so the search circle (tab 3) knows whether to do a
         // Chats / Calls / Settings search.
-        .onChange(of: tab) { _, new in if new != 3 { previousTab = new } }
+        .onChange(of: tab) { _, new in
+            if new != 3 { previousTab = new }
+            if new == 1 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
+        }
+        // New records landing while the user is already ON the Calls tab count as seen too.
+        .onChange(of: callsRepo.calls) { _, _ in
+            if tab == 1 { callsSeenAt = Date().timeIntervalSince1970 }
+        }
+        // Load call history at startup so the badge is right before the tab is ever opened
+        // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).
+        .task { await CallsRepository.shared.load() }
     }
 
     // Your profile photo as the Settings tab icon (full-color circle); falls back to a
@@ -65,6 +82,7 @@ struct MainShell: View {
             Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
                 CallsView()
             }
+            .badge(missedBadge)   // 0 hides it
             Tab(value: 2) {
                 SettingsView(onSignOut: onSignOut, asTab: true)
             } label: {
@@ -85,6 +103,7 @@ struct MainShell: View {
                 .tag(0)
             CallsView()
                 .tabItem { Label("Calls", systemImage: tab == 1 ? "phone.fill" : "phone") }
+                .badge(missedBadge)
                 .tag(1)
             SettingsView(onSignOut: onSignOut, asTab: true)
                 .tabItem { settingsTabLabel }
@@ -132,14 +151,39 @@ struct CallsView: View {
     @State private var searchText = ""
 
     private var shown: [CallEntry] {
-        var list = filter == 1 ? repo.calls.filter { $0.missed } : repo.calls
+        var list = filter == 1 ? repo.calls.filter { $0.missedIncoming } : repo.calls
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty { list = list.filter { $0.name.lowercased().contains(q) } }
         return list
     }
-    private func deleteCall(_ c: CallEntry) { Task { await repo.delete(c) } }
+    // Consecutive same-kind calls collapse into one "name (3)" row (Phone/Signal/WhatsApp):
+    // same person, same direction/outcome/type, same day, adjacent in the list.
+    struct CallRun: Identifiable {
+        var entries: [CallEntry]          // newest first (list order)
+        var latest: CallEntry { entries[0] }
+        var id: String { latest.id }
+        var ids: Set<String> { Set(entries.map(\.id)) }
+    }
+    private var shownRuns: [CallRun] {
+        var runs: [CallRun] = []
+        for e in shown {
+            if let last = runs.last?.latest,
+               last.otherUid == e.otherUid, last.mine == e.mine,
+               last.missed == e.missed, last.video == e.video,
+               Calendar.current.isDate(last.date, inSameDayAs: e.date) {
+                runs[runs.count - 1].entries.append(e)
+            } else {
+                runs.append(CallRun(entries: [e]))
+            }
+        }
+        return runs
+    }
+    private func deleteRun(_ r: CallRun) {
+        Task { await repo.delete(ids: r.ids) }   // a grouped row deletes ALL calls in the run
+    }
     private func deleteSelectedCalls() {
-        let ids = selection
+        // Selection holds run ids — expand each to every record inside its run.
+        let ids = Set(shownRuns.filter { selection.contains($0.id) }.flatMap { $0.ids })
         Task { await repo.delete(ids: ids) }
         selecting = false; selection = []
     }
@@ -154,19 +198,21 @@ struct CallsView: View {
                                            description: Text("Your call history will appear here."))
                 } else {
                     List(selection: selecting ? $selection : nil) {   // nil when not editing -> taps OPEN the row (not select)
-                        ForEach(shown) { call in
+                        ForEach(shownRuns) { run in
+                            let call = run.latest
                             CallHistoryRow(
                                 call: call,
+                                count: run.entries.count,
                                 onProfile: { profileTarget = call },
-                                onCall: {
-                                    CallService.shared.startCall(to: call.otherUid, name: call.name, photo: call.photoUrl)
+                                onCall: {   // call back the same way (video stays video, like Signal)
+                                    CallService.shared.startCall(to: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
                                 }
                             )
-                            .tag(call.id)
+                            .tag(run.id)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) { deleteCall(call) } label: {
+                                Button(role: .destructive) { deleteRun(run) } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                                 .tint(.red)   // force red — the app's white tint was washing it out
@@ -186,15 +232,15 @@ struct CallsView: View {
                                     AppRouter.shared.pendingChatId = call.cid
                                 } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
                                 Button {
-                                    withAnimation(.easeInOut(duration: 0.3)) { selecting = true; selection = [call.id] }
+                                    withAnimation(.easeInOut(duration: 0.3)) { selecting = true; selection = [run.id] }
                                 } label: { Label("Select", systemImage: "checkmark.circle") }
                                 Divider()
-                                Button(role: .destructive) { deleteCall(call) } label: { Label("Delete", systemImage: "trash") }
+                                Button(role: .destructive) { deleteRun(run) } label: { Label("Delete", systemImage: "trash") }
                             }
                         }
                     }
                     .listStyle(.plain)
-                    .animation(.spring(response: 0.38, dampingFraction: 0.86), value: shown.map(\.id))   // deletes/filter switch animate (parity with chats)
+                    .animation(.spring(response: 0.38, dampingFraction: 0.86), value: shownRuns.map(\.id))   // deletes/filter switch animate (parity with chats)
                     .environment(\.defaultMinListRowHeight, 56)   // tight, compact rows
                     .environment(\.editMode, .constant(selecting ? .active : .inactive))
                 }
@@ -253,11 +299,18 @@ struct CallsView: View {
 
 struct CallHistoryRow: View {
     let call: CallEntry
+    var count: Int = 1        // consecutive same-kind calls collapsed into this row → "name (3)"
     var onProfile: () -> Void
     var onCall: () -> Void
 
-    private var directionIcon: String { call.mine ? "arrow.up.right" : "arrow.down.left" }
-    private var directionText: String { call.missed ? "Missed" : (call.mine ? "Outgoing" : "Incoming") }
+    // Video calls get the camera-direction glyphs (Phone-app style); voice keeps the arrows.
+    private var directionIcon: String {
+        call.video ? (call.mine ? "arrow.up.right.video.fill" : "arrow.down.left.video.fill")
+                   : (call.mine ? "arrow.up.right" : "arrow.down.left")
+    }
+    // Red "Missed" ONLY for calls THEY placed that I didn't answer; my own unanswered
+    // outgoing call reads "Outgoing" like every big app (was wrongly red before).
+    private var directionText: String { call.mine ? "Outgoing" : (call.missed ? "Missed" : "Incoming") }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -266,9 +319,9 @@ struct CallHistoryRow: View {
                 HStack(spacing: 12) {
                     AvatarView(name: call.name, photoUrl: call.photoUrl, size: 46)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(call.name)
+                        Text(count > 1 ? "\(call.name) (\(count))" : call.name)
                             .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(call.missed ? Color.red : Color.primary)
+                            .foregroundStyle(call.missedIncoming ? Color.red : Color.primary)
                             .lineLimit(1)
                         HStack(spacing: 4) {
                             Image(systemName: directionIcon).font(.system(size: 11, weight: .semibold))
@@ -283,9 +336,9 @@ struct CallHistoryRow: View {
             }
             .buttonStyle(.plain)
 
-            // Round phone button → the ONLY thing that calls back.
+            // Round call-back button → the ONLY thing that calls back; camera for video calls.
             Button(action: onCall) {
-                Image(systemName: "phone.fill")
+                Image(systemName: call.video ? "video.fill" : "phone.fill")
                     .font(.system(size: 15))
                     .foregroundStyle(.tint)
                     .frame(width: 38, height: 38)
