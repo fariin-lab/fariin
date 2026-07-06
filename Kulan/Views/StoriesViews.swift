@@ -1055,9 +1055,8 @@ struct StoryViewer: View {
 
     // The REAL story's morph into the carousel slot — geometry MUST mirror viewersBackdrop's
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
-    // Width and height scale INDEPENDENTLY: the 231-size slot (0.62 ratio, user's choice) is
-    // wider than the story's natural shape, so the story stretches ~13% horizontally by the
-    // end of the morph — interpolated through the drag, it lands exactly on the slot.
+    // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
+    // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
     private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat) {
         let p = viewersProgress
         let scr = UIScreen.main.bounds
@@ -1065,13 +1064,11 @@ struct StoryViewer: View {
         let avail = scr.height - sheetH - topInset
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        let slotW = slotH * 0.62
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let sy = 1 - (1 - slotH / max(contentH, 1)) * sizeP
-        let sx = 1 - (1 - slotW / max(scr.width, 1)) * sizeP
-        return (sizeP, sx, sy, blockTop * sizeP)
+        let s = 1 - (1 - slotH / max(contentH, 1)) * sizeP
+        return (sizeP, s, s, blockTop * sizeP)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
@@ -1101,8 +1098,12 @@ struct StoryViewer: View {
         // made the cards touch the top and the side cards overflow the screen edge). The narrower
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        let slotH = (avail - countArea) * 0.94             // BUILD 231's exact card height
-        let slotW = slotH * 0.62                           // BUILD 231's exact card width (user's chosen size)
+        let slotH = (avail - countArea) * 0.94
+        // ASPECT-TRUE width (story's real shape → the shrunk story lands on it EXACTLY, no
+        // stretch, no hand-off size change). With the 0.60 sheet the width computes to ~231's
+        // chunky 120pt — the user's chosen look, now stable by construction.
+        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
@@ -1746,7 +1747,7 @@ struct StoryViewersBottomSheet: View {
     // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
     // same value, so the two layers always agree on the layout. Telegram makes the LIST the dominant
     // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
-    static let heightFraction: CGFloat = 0.64   // BUILD 231's exact sheet height (user's chosen card size)
+    static let heightFraction: CGFloat = 0.60   // tuned so the ASPECT-TRUE cards land at ~231's 120pt width (chunky) — stable size everywhere, no stretch
 
     let activeStoryId: String
     @Binding var progress: CGFloat
