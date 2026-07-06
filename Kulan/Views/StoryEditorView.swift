@@ -82,15 +82,32 @@ struct StoryEditorView: View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
-                // Photo: aspect-fit on BLACK (Signal/WhatsApp lobby — NO blurred self-background).
-                // Zoom/pan applied DIRECTLY to a UIImageView's transform in UIKit (no SwiftUI @State write
+                // Letterboxed photo → soft blurred SELF-backdrop behind the frame (user mock:
+                // the picture extends into a blur instead of flat black bars). Editor-only look.
+                if !imageFillsCanvas(geo.size) {
+                    Image(uiImage: edited).resizable().scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .blur(radius: 40, opaque: true)
+                        .clipped()
+                        .overlay(Color.black.opacity(0.18))   // slight dim so the controls stay readable
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                }
+                // Photo frame: sized to the picture itself (not the whole screen) with rounded
+                // corners when letterboxed — the mock's framed-photo look. Zoom/pan applied
+                // DIRECTLY to a UIImageView's transform in UIKit (no SwiftUI @State write
                 // per touch -> zero re-render mid-pinch -> butter smooth, anchored between the fingers).
                 // The final scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
+                // NOTE: a hard zoom+pan can put photo content outside this frame; the flatten clips to the
+                // full canvas, so exports can reveal slightly more than the frame showed — acceptable.
+                let fit = photoFitSize(in: geo.size)
+                let boxed = !imageFillsCanvas(geo.size)
                 ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
                                   maxScale: 4, interactive: !isDrawing && editingID == nil,
                                   onTap: { captionFocused = false; selectedID = nil })
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
+                    .frame(width: boxed ? fit.width : geo.size.width,
+                           height: boxed ? fit.height : geo.size.height)
+                    .clipShape(RoundedRectangle(cornerRadius: boxed ? 22 : 0, style: .continuous))
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
@@ -356,6 +373,19 @@ struct StoryEditorView: View {
         .frame(width: size.width, height: size.height)
         let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
         return r.uiImage?.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
+    }
+
+    // The picture's aspect-fit size within the canvas — the photo frame's real footprint.
+    private func photoFitSize(in canvas: CGSize) -> CGSize {
+        let iw = edited.size.width, ih = edited.size.height
+        guard iw > 0, ih > 0 else { return canvas }
+        let s = min(canvas.width / iw, canvas.height / ih)
+        return CGSize(width: iw * s, height: ih * s)
+    }
+    // Edge-to-edge photos keep the plain full-bleed canvas (no backdrop, no rounding).
+    private func imageFillsCanvas(_ canvas: CGSize) -> Bool {
+        let f = photoFitSize(in: canvas)
+        return f.width >= canvas.width - 1 && f.height >= canvas.height - 1
     }
 
     // MARK: - Image ops
