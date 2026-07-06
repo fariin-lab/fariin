@@ -1338,7 +1338,7 @@ struct ThreadView: View {
                 }
                 HStack(alignment: .bottom, spacing: 4) {
                     if recordingHeld { recordingHoldRow } else { messageField }
-                    if !recordingHeld && !hasText { inFieldCamera }
+                    if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
@@ -1389,6 +1389,13 @@ struct ThreadView: View {
             Image(systemName: "camera").font(.system(size: 22)).foregroundStyle(.secondary)
         }
         .padding(.trailing, 12).padding(.bottom, 7)
+    }
+    // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
+    private var inFieldGif: some View {
+        Button { showGifPicker = true } label: {
+            Image(systemName: "sparkles").font(.system(size: 22)).foregroundStyle(.secondary)
+        }
+        .padding(.trailing, 2).padding(.bottom, 7)
     }
 
     // Standalone right button OUTSIDE the field (like "+"): Send when typing, else hold-to-record mic.
