@@ -1742,7 +1742,7 @@ struct StoryViewersBottomSheet: View {
     // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
     // same value, so the two layers always agree on the layout. Telegram makes the LIST the dominant
     // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
-    static let heightFraction: CGFloat = 0.58   // shorter sheet → more room so the story cards read BIG (user: cards were too small/thin at 0.64 once the slot took the story's true aspect)
+    static let heightFraction: CGFloat = 0.55   // shorter sheet → more room so the story cards read BIG (user flagged small/thin twice; cards are mini real stories at the screen's true aspect, so height is the only size lever)
 
     let activeStoryId: String
     @Binding var progress: CGFloat
