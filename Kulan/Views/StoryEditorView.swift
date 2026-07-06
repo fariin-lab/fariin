@@ -7,6 +7,26 @@ import CoreImage.CIFilterBuiltins
 // black canvas; X top-left; a caption bar + @ and a crop / draw / adjust / HD tool row at the
 // bottom with a green send. Send flattens the edits and opens the audience sheet, which posts the
 // story via StoriesService. Every tool is real.
+// Publishes the live keyboard height. The editor opts OUT of SwiftUI's automatic keyboard
+// avoidance (it was squishing the canvas and desyncing button hit-tests) and instead lifts
+// only the bottom bar by this measured height.
+final class KeyboardWatcher: ObservableObject {
+    @Published var height: CGFloat = 0
+    private var tokens: [NSObjectProtocol] = []
+    init() {
+        tokens.append(NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
+                guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+                self?.height = max(0, UIScreen.main.bounds.height - f.origin.y)
+        })
+        tokens.append(NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.height = 0
+        })
+    }
+    deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
+}
+
 struct StoryEditorView: View {
     let source: UIImage
     var onPosted: () -> Void = {}
@@ -35,6 +55,7 @@ struct StoryEditorView: View {
     @State private var postError = false
     @State private var pendingShare: StoryShareData?
     @FocusState private var captionFocused: Bool
+    @StateObject private var keyboard = KeyboardWatcher()   // manual keyboard rise (editor ignores the keyboard safe area)
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
@@ -210,9 +231,9 @@ struct StoryEditorView: View {
                     VStack {
                         Spacer()
                         bottomBar
-                            // User-tuned (round 3): the Aa/crop/draw + NEXT row sinks a bit further
-                            // down (it was overlapping the card's bottom edge), toward the indicator.
-                            .padding(.bottom, captionFocused ? 8 : -14)
+                            // Keyboard rise is MANUAL now (the editor ignores the keyboard's safe
+                            // area): measured height + 8. At rest, the user-tuned low position.
+                            .padding(.bottom, keyboard.height > 0 ? keyboard.height + 8 : -14)
                     }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
                 }
@@ -231,6 +252,11 @@ struct StoryEditorView: View {
                 }
             }
         }
+        // The editor NEVER resizes for the keyboard: automatic avoidance was squishing the
+        // canvas (user bug 1) and desynced the compact send button's visual vs tappable
+        // frame (user bug 2 — taps landed on nothing). The bottom bar rises by a MEASURED
+        // keyboard height instead (KeyboardWatcher).
+        .ignoresSafeArea(.keyboard)
         .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
         .sheet(item: $pendingShare) { s in
