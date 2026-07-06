@@ -910,9 +910,13 @@ struct StoryViewer: View {
         // THE REAL STORY IS THE MORPH (user's final call — no duplicate card, ever): the
         // original story layer itself scales from full screen into the carousel's centre
         // slot, driven by the drag. Same pixels the whole way — nothing can mismatch.
-        // Corner radius is applied INSIDE the scale (unscaled space), so it reads as a
-        // constant ~24pt on screen as the card shrinks; 0 at rest (no-op clip).
-        .clipShape(RoundedRectangle(cornerRadius: morphClipRadius, style: .continuous))
+        // PERFORMANCE: mid-drag the story moves by scale+offset ONLY (pure GPU transforms).
+        // Re-clipping the live-material story with a changing radius EVERY finger frame was
+        // the "follows then stutters" jank — corners now apply only once the card has
+        // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
+        .clipShape(RoundedRectangle(
+            cornerRadius: viewersProgress >= 0.97 ? 24 / max(morphScale, 0.2) : 0,
+            style: .continuous))
         .scaleEffect(morphScale, anchor: .top)
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
