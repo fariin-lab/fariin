@@ -1351,8 +1351,11 @@ struct ThreadView: View {
             .foregroundStyle(recordingHeld ? Theme.onAccent(dark) : .primary)
             .frame(width: 40, height: 40)   // standalone target, same size as "+"
             // Held: solid colored (red when armed-to-cancel) circle. Idle: liquid glass like "+".
+            // Glass goes OFF while held (isEnabled keeps the view mounted so the drag survives):
+            // scaled + dragged glass melts into the composer capsule's glass inside the
+            // GlassEffectContainer — the amorphous white blob behind the mic (user screenshot).
             .background(Circle().fill(recordingHeld ? (recordCancelArmed ? Color.red : Theme.accent(dark)) : Color.clear))
-            .liquidGlass(Circle(), interactive: true)
+            .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
             // scaleEffect overflows the footprint, so the bar height never stretches.
             .scaleEffect(recordingHeld ? 1.5 : 1, anchor: .center)
             .offset(recordingHeld ? clampedDrag : .zero)

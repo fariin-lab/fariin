@@ -69,18 +69,22 @@ extension View {
     /// `interactive: true` gives the same touch-reactive glass animation as the toolbar buttons.
     /// `tint:` gives a coloured Liquid Glass (e.g. the blue NEXT button) — still translucent glass,
     /// not a flat fill.
+    /// `enabled: false` turns the glass OFF without changing the view tree — for views that
+    /// must never unmount mid-gesture (e.g. the hold-to-record mic, whose glass would
+    /// otherwise melt into the neighbouring composer glass while scaled/dragged).
     @ViewBuilder
-    func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false, tint: Color? = nil) -> some View {
+    func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false, tint: Color? = nil, enabled: Bool = true) -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect({
                 var g: Glass = .regular
                 if let tint { g = g.tint(tint) }
                 return interactive ? g.interactive() : g
-            }(), in: shape)
+            }(), in: shape, isEnabled: enabled)
         } else if let tint {
-            self.background(tint.opacity(0.85), in: shape).background(.ultraThinMaterial, in: shape)
+            self.background(tint.opacity(0.85).opacity(enabled ? 1 : 0), in: shape)
+                .background(.ultraThinMaterial.opacity(enabled ? 1 : 0), in: shape)
         } else {
-            self.background(.ultraThinMaterial, in: shape)
+            self.background(.ultraThinMaterial.opacity(enabled ? 1 : 0), in: shape)
         }
     }
 
