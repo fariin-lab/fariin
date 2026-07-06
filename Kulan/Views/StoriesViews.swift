@@ -1583,7 +1583,12 @@ struct StoryViewersBottomSheet: View {
     // scrolling isn't hijacked. The list is scroll-disabled while the sheet isn't fully open, so once
     // a collapse starts the list locks and the drag owns the motion.
     private func sheetDrag(sheetH: CGFloat, fromList: Bool) -> some Gesture {
-        DragGesture(minimumDistance: fromList ? 8 : 4)
+        // GLOBAL coordinate space, not the default .local: this drag MOVES the sheet it is
+        // attached to, so local-space translation kept shrinking as the sheet followed the
+        // finger — a per-frame feedback loop (sheet down → reading smaller → sheet back up)
+        // that read as the jitter/heaviness when dragging ON the sheet. The backdrop drag
+        // never had this because its layer is stationary. Global space = honest finger truth.
+        DragGesture(minimumDistance: fromList ? 8 : 4, coordinateSpace: .global)
             .onChanged { v in
                 if fromList {
                     let atTop = listOffset <= 0.5
