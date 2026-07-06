@@ -25,7 +25,14 @@ struct StoryPager: UIViewControllerRepresentable {
     var dismissEnabled: Bool = true        // install the library's native DOWN dismiss pan (smooth UIKit)
     var swipeUpEnabled: Bool = true        // install the library's UP pan (false -> host owns swipe-up)
 
+    // TRUE while a swipe-down dismiss drag/exit is running. The cube fold (getAngle) derives
+    // its 3D angle from each page's GLOBAL minX — and the dismiss transform MOVES the card,
+    // so a fast flick slammed the pages into a sudden violent fold (content flips away =
+    // "wrong story/layout", edge-on = "black frame"). The cube must be inert during dismissal.
+    static var dismissActive = false
+
     func makeUIViewController(context: Context) -> UIPageViewController {
+        StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
         let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
         pager.dataSource = context.coordinator
         pager.delegate = context.coordinator
@@ -253,6 +260,7 @@ struct StoryPager: UIViewControllerRepresentable {
             let t = g.translation(in: pager.view)
             switch g.state {
             case .began:
+                StoryPager.dismissActive = true   // freeze the cube: no 3D fold while the card moves
                 // SEE-THROUGH dismissal (user reference): the shrinking card must reveal the CHAT
                 // LIST behind the cover, not a blurred copy of itself. The stationary container
                 // goes clear (the cover's presentation background is already clear at rest); the
@@ -272,7 +280,9 @@ struct StoryPager: UIViewControllerRepresentable {
                 card.layer.cornerCurve = .continuous    // Apple squircle
                 card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
                 card.layer.masksToBounds = true
-                card.transform = CGAffineTransform(translationX: t.x * 0.7, y: ty * 0.85)
+                // Horizontal follow clamped: a flick's large t.x must not yank the card sideways.
+                let tx = max(-60, min(60, t.x * 0.7))
+                card.transform = CGAffineTransform(translationX: tx, y: ty * 0.85)
                     .scaledBy(x: scale, y: scale)
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
@@ -286,13 +296,15 @@ struct StoryPager: UIViewControllerRepresentable {
                     // place over the visible chat list. It must NOT slide off the bottom — the
                     // slide-off exit was the rejected look. Same exit at every drag depth/speed.
                     let exitScale: CGFloat = 0.12
+                    let exitTx = max(-60, min(60, t.x * 0.7))   // clamped like the drag
                     UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn]) {
-                        card.transform = CGAffineTransform(translationX: t.x * 0.7, y: max(0, t.y) * 0.85 + 40)
+                        card.transform = CGAffineTransform(translationX: exitTx, y: max(0, t.y) * 0.85 + 40)
                             .scaledBy(x: exitScale, y: exitScale)
                         card.alpha = 0
                     } completion: { _ in
                         self.parent.onCommit()
                         card.alpha = 1   // reset in case the pager is ever reused
+                        StoryPager.dismissActive = false
                     }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
@@ -302,6 +314,7 @@ struct StoryPager: UIViewControllerRepresentable {
                         card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
                     } completion: { _ in
                         self.pager?.view.backgroundColor = .black   // restore the solid backing at rest
+                        StoryPager.dismissActive = false            // cube live again at rest
                         self.parent.onCancel()
                     }
                 }
