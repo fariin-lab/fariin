@@ -113,9 +113,19 @@ struct StoryEditorView: View {
                                   onTap: { captionFocused = false; selectedID = nil })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
-                    // NO card mask on the photo (tried once, user verdict: "zoom is broken, must
-                    // work like before") — pinch-zoom explores over the full screen, exactly the
-                    // original behavior; only the resting letterboxed photo sits within the card.
+                    // Zoomed/panned photo stays STRICTLY inside the card (user's final spec:
+                    // "when I zoom, the image should not go outside the frame"). A MASK only —
+                    // the pinch mechanics, pan limits, and the posted photo are untouched.
+                    .mask {
+                        if boxed, cardH > 0 {
+                            Rectangle().fill(.black)
+                                .frame(width: geo.size.width, height: cardH)
+                                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                                .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                        } else {
+                            Rectangle().fill(.black)
+                        }
+                    }
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
