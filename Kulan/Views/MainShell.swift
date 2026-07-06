@@ -719,6 +719,11 @@ struct ChatsView: View {
                     // Rows start below the stories row; as the list scrolls, the row above is
                     // offset by the same amount, so both move as ONE scroll surface.
                     .contentMargins(.top, storiesRowHeight, for: .scrollContent)
+                    // Now that the list truly underlaps the nav bar (clip fix), the header draws
+                    // its HARD edge line whenever content is beneath it — in BOTH scroll
+                    // directions. Soft top edge = blur fade, no drawn line (bottom stays default,
+                    // which the user confirmed fixed).
+                    .scrollEdgeEffectStyle(.soft, for: .top)
                     .onScrollGeometryChange(for: CGFloat.self,
                                             of: { $0.contentOffset.y + $0.contentInsets.top },
                                             action: { _, y in chatScrollY = y })
