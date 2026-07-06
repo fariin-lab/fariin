@@ -110,21 +110,20 @@ struct StoryImage: View {
                             .clipped()
                             .transition(.opacity)
                     } else {
+                        // ORIGINAL nesting (build 216): fill INSIDE the first overlay, the blur layer as a
+                        // SECOND overlay on Color.clear — so the blur is sized to the CARD, never to the
+                        // (possibly enormous) overflowing fill image. Nesting the blur on the fill image
+                        // itself gave it the fill's oversized frame and the material rendered BLACK on the
+                        // sheet cards (the "blur is gone" regression). Only the TOP layer varies:
+                        // the real material normally, the baked crossfade-safe copy for the morph card.
                         ZStack {
                             Color.clear
+                                .overlay(Image(uiImage: image).resizable().scaledToFill())
                                 .overlay {
                                     if bakedBars, let bg = blurredBG {
-                                        // Crossfade-safe backdrop (morph card only): a baked image
-                                        // composites at any opacity — no material dropout flash.
                                         Image(uiImage: bg).resizable().scaledToFill()
                                     } else {
-                                        // BUILD 216's exact recipe (user's explicit choice): the REAL
-                                        // systemThickMaterialDark over the fill copy, same as the story's
-                                        // bars. ALSO the bakedBars fallback while the bake runs or if it
-                                        // fails (e.g. simulator without GPU CoreImage) — the blur look
-                                        // must NEVER degrade to black (user report: "I lost my blur").
-                                        Image(uiImage: image).resizable().scaledToFill()
-                                            .overlay(StoryDarkBlur())
+                                        StoryDarkBlur()
                                     }
                                 }
                                 .clipped()
