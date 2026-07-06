@@ -265,12 +265,15 @@ struct StoryPager: UIViewControllerRepresentable {
             case .changed:
                 let ty = max(0, t.y)
                 let frac = min(1, ty / card.bounds.height)
-                let scale = 1.0 - 0.4 * frac            // Telegram: card scales 1.0 -> 0.6 as you pull
+                // Reference video (user's chosen close): the card shrinks HARD as you pull —
+                // down to ~30% at a full drag — floating over the live chat list, with a light
+                // horizontal follow. It shrinks in place; it does not ride off with the finger.
+                let scale = 1.0 - 0.7 * frac
                 card.layer.cornerCurve = .continuous    // Apple squircle
                 card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
                 card.layer.masksToBounds = true
-                // Move ONLY the card; the backdrop stays put, so the area above it shows the blur, not black.
-                card.transform = CGAffineTransform(translationX: 0, y: ty).scaledBy(x: scale, y: scale)
+                card.transform = CGAffineTransform(translationX: t.x * 0.7, y: ty * 0.85)
+                    .scaledBy(x: scale, y: scale)
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
@@ -279,19 +282,18 @@ struct StoryPager: UIViewControllerRepresentable {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
-                    // Exit CONTINUES the flick: keep the scale the drag already reached (a fast flick
-                    // releases near full size — force-shrinking to 0.6 read as a sudden ugly zoom) and
-                    // slide off at the release velocity with a linear curve (a fixed ease-in visibly
-                    // stalled right after a fast release). Slow closes are already ~0.6 and nearly
-                    // off-screen, so they look exactly as before.
-                    let exitFrac = min(1, max(0, ty) / card.bounds.height)
-                    let exitScale = 1.0 - 0.4 * exitFrac
-                    let remaining = max(1, card.bounds.height - max(0, ty))
-                    let speed = max(vy, 1100)                     // pts/s floor: distance commits still finish briskly
-                    let duration = min(0.3, max(0.12, remaining / speed))
-                    UIView.animate(withDuration: duration, delay: 0, options: [.curveLinear]) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: exitScale, y: exitScale)
-                    } completion: { _ in self.parent.onCommit() }
+                    // Reference video (user's chosen close): the card SHRINKS AND MELTS AWAY in
+                    // place over the visible chat list. It must NOT slide off the bottom — the
+                    // slide-off exit was the rejected look. Same exit at every drag depth/speed.
+                    let exitScale: CGFloat = 0.12
+                    UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn]) {
+                        card.transform = CGAffineTransform(translationX: t.x * 0.7, y: max(0, t.y) * 0.85 + 40)
+                            .scaledBy(x: exitScale, y: exitScale)
+                        card.alpha = 0
+                    } completion: { _ in
+                        self.parent.onCommit()
+                        card.alpha = 1   // reset in case the pager is ever reused
+                    }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
                     UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
