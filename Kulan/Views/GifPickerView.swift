@@ -18,7 +18,13 @@ struct GifPickerView: View {
                             .frame(height: 110)
                             .frame(maxWidth: .infinity)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .onTapGesture { onPick(g); dismiss() }
+                            // Tap lives on a pure-SwiftUI overlay: a gesture attached to the
+                            // UIKit-backed gif view itself can silently never fire (hit-testing
+                            // falls into the UIImageView, which doesn't accept touches).
+                            .overlay {
+                                Color.clear.contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .onTapGesture { onPick(g); dismiss() }
+                            }
                     }
                 }
                 .padding(6)

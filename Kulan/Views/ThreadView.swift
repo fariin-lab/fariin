@@ -249,7 +249,11 @@ struct ThreadView: View {
         .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.height(230)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
-                Task { try? await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, group: isGroup ? groupMembers : nil) }
+                Task {
+                    // Surface failures — the old try? made a failed send look like a dead tap.
+                    do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, group: isGroup ? groupMembers : nil) }
+                    catch { await MainActor.run { sendError = "Couldn't send the GIF. Check your connection and try again." } }
+                }
             }
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
