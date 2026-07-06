@@ -251,9 +251,9 @@ struct StoryEditorView: View {
                         .lineLimit(1...5)
                         .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
                 }
-                .padding(.horizontal, 18).padding(.vertical, 12).frame(minHeight: 46)
+                .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)   // user spec: 40px
                 // Real Apple Liquid Glass pill (matches the toolbar buttons) instead of a flat dark fill.
-                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous))
+                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
                 // While typing, a SMALL round send button (not the wide NEXT pill) so the caption
                 // field keeps most of the width.
