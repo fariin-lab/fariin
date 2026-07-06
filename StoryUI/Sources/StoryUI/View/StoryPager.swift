@@ -81,6 +81,7 @@ struct StoryPager: UIViewControllerRepresentable {
         private let dismissBackdrop = UIImageView()
         private let dismissBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
         private var didInstallPan = false
+        private weak var dismissPan: DirectionalPanGestureRecognizer?   // ours — system pans defer to it
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
 
         init(_ parent: StoryPager) { self.parent = parent }
@@ -190,6 +191,17 @@ struct StoryPager: UIViewControllerRepresentable {
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
                 scroll?.panGestureRecognizer.require(toFail: pan)
+                dismissPan = pan
+                // The zoom navigationTransition installs its OWN hidden interactive-dismiss pan on the
+                // presentation chain, and it wins the race on fast flicks (re-lays-out the cover mid-
+                // drag: wrong story flash, black frame, stuck dismissal — and it IGNORES
+                // .interactiveDismissDisabled, device-proven on build 220). Subordinate it: any SYSTEM
+                // pan up the chain must WAIT for our pan to fail — ours begins on every real downward
+                // drag, so the system gesture never engages during drags, while X/auto closes (no pan)
+                // keep the zoom-back hero. The recognizer only exists once presentation settles, so
+                // try shortly after mount and again after the transition completes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.subordinateSystemPans() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.subordinateSystemPans() }
             }
             // UP pan opens the views sheet. NOT installed for own stories — the host owns swipe-up there
             // (real-time viewers-sheet tracking), so the library up pan would double-fire.
@@ -314,11 +326,34 @@ struct StoryPager: UIViewControllerRepresentable {
             }
         }
 
+        // Walk the presentation chain (pager → window) and make every SYSTEM pan recognizer —
+        // identified by Apple's private "_UI…" class-name prefix (name READ only, no private API
+        // called) — wait for our dismiss pan to fail. SwiftUI's own gesture host recognizers
+        // ("SwiftUI.…") and the scroll pans are untouched. Idempotent; if nothing matches
+        // (future iOS moves it), behavior simply stays as before — graceful no-op.
+        private func subordinateSystemPans() {
+            guard let pan = dismissPan, let v = pager?.view else { return }
+            var node: UIView? = v.superview
+            while let cur = node {
+                for g in cur.gestureRecognizers ?? [] where g !== pan {
+                    guard g is UIPanGestureRecognizer else { continue }
+                    if NSStringFromClass(type(of: g)).hasPrefix("_UI") {
+                        g.require(toFail: pan)
+                    }
+                }
+                node = cur.superview   // ends at (and includes) the UIWindow
+            }
+        }
+
         // Let the dismiss/swipe-up pans coexist with the hosted SwiftUI gestures (tap zones, hold-to-pause)
         // and the page scroll. Returning false here blocked the pans whenever the content was tracking a
         // touch, so swipe-down-to-close and swipe-up never fired. The horizontal-scroll relationship is
         // still ordered by require(toFail:), so this doesn't double-handle paging.
-        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
+        // EXCEPTION: never volunteer simultaneity with a SYSTEM ("_UI…") pan — that pairing is the
+        // zoom transition's hidden dismiss riding along with ours on fast flicks (the exploded close).
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool {
+            !(o is UIPanGestureRecognizer && NSStringFromClass(type(of: o)).hasPrefix("_UI"))
+        }
     }
 }
 
