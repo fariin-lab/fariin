@@ -972,7 +972,7 @@ struct StoryViewer: View {
                     closeViewers()
                 }
             },
-            dismissEnabled: true,
+            dismissEnabled: false,   // Apple's zoom-dismiss is the ONLY swipe-close (user's final call)
             swipeUpEnabled: true   // library's DirectionalPan(.up) owns swipe-up: with the direction-sign
                                    // fix it fires reliably, and it FAILS cleanly on downward drags — unlike
                                    // the removed SwiftUI DragGesture whose activation cancelled the down pan

@@ -866,15 +866,14 @@ struct ChatsView: View {
                                     })
                     }
                 }
-                // NO .navigationTransition(.zoom) anymore — REMOVED DELIBERATELY, do not bring it back.
-                // The zoom transition installs the SYSTEM's own interactive drag-to-dismiss which owns
-                // fast downward flicks: it half-collapses the cover (content reflows — wrong-story flash,
-                // black frame with a lone reply bar), then cancels/snaps back or re-presents after our pan
-                // already closed. Device-proven immune to BOTH `.interactiveDismissDisabled()` (build 220)
-                // AND require(toFail:) subordination of discovered "_UI…" pans (build 231). Removing the
-                // transition is the only categorical kill (first proven in bd5450b). Cost: stories open
-                // with the standard cover slide instead of the ring-zoom hero. The library's dismiss pan
-                // is now the ONLY swipe-close at any speed.
+                // APPLE-NATIVE open + close (user's final call): the zoom transition provides the
+                // ring→story hero AND its own interactive drag-to-dismiss — the shrink-over-chats
+                // close from the user's reference. Its historical fast-flick "explosions" were the
+                // CUBE folding while the system moved the pages (getAngle reads global minX): that
+                // fold is now gated to real horizontal page swipes only, and the library's custom
+                // dismiss pan is REMOVED (dismissEnabled: false) so exactly ONE close gesture
+                // exists — Apple's. Do not reintroduce a custom dismiss pan alongside this.
+                .navigationTransition(.zoom(sourceID: g.id, in: storyNS))
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting

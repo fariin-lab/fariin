@@ -431,6 +431,12 @@ private extension StoryDetailView {
         // the page's GLOBAL minX, and the dismiss transform shifts it — a fast flick otherwise
         // slams the page into a sudden violent 3D fold (flipped/black frames on close).
         if StoryPager.dismissActive { return .zero }
+        // And the fold may fire ONLY during a live horizontal page swipe. Apple's zoom-dismiss
+        // (the native close) moves every page's global minX while it shrinks the cover — the
+        // cube folding along with it was the true source of the fast-flick "explosions".
+        if let s = StoryPager.horizontalScroll, !(s.isTracking || s.isDragging || s.isDecelerating) {
+            return .zero
+        }
         // StoryUI library's cube (tiskender2/StoryUI): angle = 45° × (minX / width). Combined with the
         // pager's horizontal slide + the .leading/.trailing anchor + perspective 2.5, this IS the cube —
         // pure SwiftUI, no UIKit transform feedback (so no shake/black).

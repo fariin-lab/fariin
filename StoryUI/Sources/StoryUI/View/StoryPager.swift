@@ -30,6 +30,10 @@ struct StoryPager: UIViewControllerRepresentable {
     // so a fast flick slammed the pages into a sudden violent fold (content flips away =
     // "wrong story/layout", edge-on = "black frame"). The cube must be inert during dismissal.
     static var dismissActive = false
+    // The pager's horizontal scroll view: the cube may fold ONLY while THIS is live (a real
+    // finger page-swipe: tracking/dragging/decelerating). Any other page movement — Apple's
+    // zoom-transition interactive dismiss, layout shifts — must never fold the pages.
+    static weak var horizontalScroll: UIScrollView?
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
@@ -171,6 +175,7 @@ struct StoryPager: UIViewControllerRepresentable {
             didInstallPan = true
             let scroll = pager.view.subviews.compactMap { $0 as? UIScrollView }.first
             internalScroll = scroll
+            StoryPager.horizontalScroll = scroll   // getAngle gates the cube on ITS live activity
             // When the host owns the swipe (own story: app-level SwiftUI dismiss), the pager's internal
             // scroll pan has nothing to navigate to (single bucket) and only CONTENDS with the host drag
             // for the same touch — that horizontal scroll/bounce fighting the vertical drag is the
