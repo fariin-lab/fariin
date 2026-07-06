@@ -52,6 +52,8 @@ struct StoryDetailView: View {
     @State private var isPaused: Bool = false   // hold-to-pause
     @State private var isHolding: Bool = false  // TRUE only after the long-press engages → drives the
                                                 // chrome fade, so a quick tap doesn't flicker the header/bars
+    @State private var chromeHidden = false     // viewers sheet engaged (host posts storyChromeHidden):
+                                                // ONLY the chrome fades; the photo never animates
     @State private var scenePaused = false      // pause came from leaving the foreground, not a hold
     // Host-pause lives in a REFERENCE box: writing it must NOT invalidate/re-render this view.
     // pauseStory posts on the dismiss pan's .began — a plain @State flip there re-rendered the hosted
@@ -113,7 +115,12 @@ struct StoryDetailView: View {
                         // Telegram-style caption: overlaid on the media (never baked into the photo).
                         .overlay(captionView(story.caption, plain: story.config.storyType == .plain()), alignment: .bottom)
                         // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
-                        .overlay(topScrim, alignment: .top)
+                        // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
+                        // pixel-stable when the viewers sheet opens, so the scrim can't linger under
+                        // a scrimless morph card (that brightness step read as a flash).
+                        .overlay(topScrim.opacity(chromeHidden ? 0 : 1)
+                                    .animation(.linear(duration: 0.18), value: chromeHidden),
+                                 alignment: .top)
                     // (Removed the always-on bottom photo scrim: the reply pill now sits on the solid
                     // black footer BELOW the card, not over the photo, so dimming the photo's bottom
                     // was pointless and just darkened captionless photos.)
@@ -125,8 +132,12 @@ struct StoryDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .overlay(
                 getUserInfoAndProgressBar(with: index)
-                    .opacity(isHolding ? 0 : 1)                      // fade chrome out only on a real hold
+                    // Chrome-only fades: on a real hold, AND while the viewers sheet is engaged
+                    // (host posts storyChromeHidden). ONLY these overlays animate — the story
+                    // image itself must never fade, flash, or re-render (user spec).
+                    .opacity((isHolding || chromeHidden) ? 0 : 1)
                     .animation(.linear(duration: 0.2), value: isHolding)
+                    .animation(.linear(duration: 0.18), value: chromeHidden)
                 ,alignment: .top
             )
             .rotation3DEffect(
@@ -141,6 +152,12 @@ struct StoryDetailView: View {
         .onPreferenceChange(StoryFoldKey.self) { minX in
             let folding = abs(minX) > 2     // off-centre = mid-fold (or off-screen): freeze the timer
             if folding != isFolding { isFolding = folding }
+        }
+        // Viewers-sheet chrome control: the host hides ONLY the progress bar / avatar / name /
+        // top scrim while the sheet is engaged. The story image stays completely untouched.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyChromeHidden"))) { note in
+            let hidden = (note.object as? Bool) ?? false
+            if hidden != chromeHidden { chromeHidden = hidden }
         }
         .onChange(of: viewModel.currentStoryUser) { newValue in
             NotificationCenter.default.post(name: .stopVideo, object: nil)

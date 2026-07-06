@@ -536,16 +536,63 @@ struct StoryViewer: View {
         enum Claim { case fresh, continuing }
         private var owner: String?
         private var lastEvent = Date.distantPast
+        var onFreshClaim: (() -> Void)?   // StoryViewer hooks this to cancel a running snap animation
         func claim(_ id: String) -> Claim? {
             let now = Date()
             defer { lastEvent = now }
-            if owner == id { return now.timeIntervalSince(lastEvent) > 0.25 ? .fresh : .continuing }
-            if owner == nil || now.timeIntervalSince(lastEvent) > 0.25 { owner = id; return .fresh }
+            if owner == id {
+                if now.timeIntervalSince(lastEvent) > 0.25 { onFreshClaim?(); return .fresh }
+                return .continuing
+            }
+            if owner == nil || now.timeIntervalSince(lastEvent) > 0.25 { owner = id; onFreshClaim?(); return .fresh }
             return nil
         }
         func release(_ id: String) { if owner == id { owner = nil } }
     }
     @State private var sheetDragArbiter = SheetDragArbiter()
+
+    // Drives `viewersProgress` frame-by-frame with a display-link spring instead of
+    // withAnimation. With withAnimation the MODEL value jumps to the target instantly and
+    // only the animatable modifiers interpolate — every step function derived from progress
+    // (mount the morph card, swap to the carousel) fired at commit time, mid-spring, which
+    // made a no-crossfade design impossible. Here model == presentation on every frame, so
+    // thresholds are exact. Class in @State: writes never invalidate the view by themselves.
+    final class SheetProgressAnimator {
+        private var link: CADisplayLink?
+        private var target: CGFloat = 0
+        private var velocity: CGFloat = 0
+        private var current: CGFloat = 0
+        private var write: ((CGFloat) -> Void)?
+        private var completion: (() -> Void)?
+
+        func animate(from: CGFloat, to: CGFloat,
+                     write: @escaping (CGFloat) -> Void, completion: (() -> Void)? = nil) {
+            cancel()
+            current = from; target = to; velocity = 0
+            self.write = write; self.completion = completion
+            let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            l.add(to: .main, forMode: .common)
+            link = l
+        }
+        func cancel() { link?.invalidate(); link = nil; write = nil; completion = nil }
+        @objc private func tick(_ l: CADisplayLink) {
+            let dt = CGFloat(min(l.targetTimestamp - l.timestamp, 1.0 / 30.0))
+            // Critically-damped spring, feel-matched to interactiveSpring(response: ~0.34).
+            let k: CGFloat = 340
+            velocity += (k * (target - current) - 2 * sqrt(k) * velocity) * dt
+            current += velocity * dt
+            if abs(target - current) < 0.001, abs(velocity) < 0.02 {
+                current = target
+                write?(current)
+                let done = completion
+                cancel()
+                done?()
+                return
+            }
+            write?(current)
+        }
+    }
+    @State private var sheetAnimator = SheetProgressAnimator()
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
@@ -663,6 +710,8 @@ struct StoryViewer: View {
                 StoryViewersBottomSheet(activeStoryId: sheetStoryId,
                                         progress: $viewersProgress,
                                         arbiter: sheetDragArbiter,
+                                        onSnapOpen: { sheetAnimator.animate(from: viewersProgress, to: 1,
+                                                                            write: { viewersProgress = $0 }) },
                                         onClose: closeViewers)
             }
         }
@@ -729,9 +778,15 @@ struct StoryViewer: View {
             }
         }
         .onChange(of: isPresented) { _, shown in if !shown { onClose() } }
+        // A fresh drag claim takes over from any in-flight snap animation (finger beats spring).
+        .onAppear { sheetDragArbiter.onFreshClaim = { sheetAnimator.cancel() } }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
-        .onDisappear { NotificationCenter.default.post(name: .init("resumeStory"), object: nil) }
+        .onDisappear {
+            sheetAnimator.cancel()
+            NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+            NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
+        }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
             NotificationCenter.default.post(name: up ? .init("pauseStory") : .init("resumeStory"), object: nil)
@@ -817,12 +872,13 @@ struct StoryViewer: View {
         // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
         // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
         // drag so the gesture keeps tracking the finger even after the story has visually faded.
-        // Crossfade timing: the story fades ONLY AFTER the morph card above it is fully opaque
-        // (card opaque by p=0.05 → story fades 0.05→0.13, entirely covered). The story's bars are
-        // a live material (UIVisualEffectView) that DROPS its blur at fractional opacity — fading
-        // it in view was half of the bright flash; now its dropout frames are never visible.
-        // Reversed on close (the chrome fades back in as the morph card grows away).
-        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(max(0, p - 0.05) / 0.08, 1))))
+        // NO crossfade on the image (user spec): the story stays at FULL opacity until the
+        // opaque morph card has popped over it at p=0.07 (identical pixels — the pop is
+        // invisible; only the chrome fades, via the library's storyChromeHidden). The fade
+        // below runs 0.08→0.16, entirely hidden behind the opaque card, purely to free the
+        // GPU from compositing the covered story. Reversed on close: story is back at full
+        // opacity by p≤0.08, before the card leaves at p<0.07.
+        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(max(0, p - 0.08) / 0.08, 1))))
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -872,12 +928,16 @@ struct StoryViewer: View {
                 // currentBucketUid, which is only set AFTER the library's onUserChanged fires — so on a
                 // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
                 guard currentIsMine || mineOnly else { return }
+                sheetAnimator.cancel()   // the finger owns progress; kill any in-flight snap
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                 if !showViewers {
                     sheetStoryId = targetStoryId; showViewers = true
                     // Freeze the story the INSTANT the sheet starts to open (don't wait for the
                     // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
                     NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+                    // Chrome-only exit: progress bar / avatar / name / scrim fade via the library;
+                    // the story IMAGE never animates (user spec: no flash, no re-render).
+                    NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)
                 }
                 openDragging = true   // keep the storyLayer visible/hit-testable through the drag
                 viewersProgress = max(0, min(1, up / sheetH))
@@ -891,7 +951,7 @@ struct StoryViewer: View {
                 // open past 0.4 — a modest upward pull commits, a small nudge settles back.
                 let projected = viewersProgress + (velocity / sheetH) * 0.3
                 if projected > 0.4 {
-                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 }
+                    sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
                 } else {
                     closeViewers()
                 }
@@ -948,6 +1008,13 @@ struct StoryViewer: View {
         //    finger continuously all the way to the slot at 0.9 — no dead "hold" before it responds.
         //  • carIn: neighbours + counts fade in gradually 0.5→0.9 (behind the opaque morph centre).
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
+        // NO fade-in for the morph card (user spec: the image must never crossfade): it pops
+        // at FULL opacity at p=0.07, when it is still full-screen (sizeP engages at 0.08) and
+        // pixel-identical to the story beneath — an invisible swap. The chrome has already
+        // faded via storyChromeHidden. Only the hand-off to the live carousel at the very end
+        // (0.95→1) fades, using the baked backdrop that composites safely at any opacity.
+        // The display-link animator keeps model == presentation, so these thresholds hold
+        // during snap springs too, not just finger drags.
         // The live carousel only appears in the last sliver near rest. Below that, the OPAQUE
         // morph card fully covers it. This makes CLOSING mirror OPENING: on open the morph card already
         // hid the carousel during the size-morph (smooth); on close the carousel used to stay exposed and
@@ -957,7 +1024,7 @@ struct StoryViewer: View {
         // finish its fractional fade WHILE STILL COVERED by the card (card fades out 0.95→1.0), so
         // its material dropout frames are never on screen (the end-of-open flash).
         let carIn = max(0, min(1, (p - 0.85) / 0.1))
-        let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
+        let morphVis: CGFloat = p >= 0.07 ? (1 - max(0, min(1, (p - 0.95) / 0.05))) : 0
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
@@ -1017,7 +1084,7 @@ struct StoryViewer: View {
                     // bounce back over and over ("scroll down to close is soo hard"). A deliberate
                     // downward pull now commits; only a tiny nudge springs back.
                     if projected < 0.8 { closeViewers() }   // collapse → story reopens full screen
-                    else { withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { viewersProgress = 1 } }
+                    else { sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 }) }
                 }
         )
         .ignoresSafeArea()
@@ -1025,29 +1092,27 @@ struct StoryViewer: View {
     private func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
 
     private func openViewers() {
-        // Re-open allowed even while the previous close is still unmounting: setting progress back
-        // to 1 mid-close both cancels the unmount (guard below) and re-raises the sheet — no more
+        // Re-open allowed even while the previous close is still unmounting: animating progress back
+        // to 1 cancels the close animator (and with it the unmount completion) — no more
         // "swipe up does nothing for 0.42s after closing".
         guard currentIsMine else { return }
         closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
+        NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)   // chrome-only exit
         if !showViewers {
             sheetStoryId = targetStoryId
             showViewers = true   // mount at progress 0 (offscreen) …
         }
         DispatchQueue.main.async {   // … then raise it on the next tick so the insertion animates
-            withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84, blendDuration: 0.2)) {
-                viewersProgress = 1
-            }
+            sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
     private func closeViewers() {
         closeDragStart = nil   // never let a cancelled drag leave a stale anchor
-        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86, blendDuration: 0.2)) {
-            viewersProgress = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
-            if viewersProgress == 0 { showViewers = false }   // a re-open set it back to 1 → stay mounted
+        sheetAnimator.animate(from: viewersProgress, to: 0, write: { viewersProgress = $0 }) {
+            // Reaching here means the close actually finished (a re-open cancels this animator).
+            showViewers = false
+            NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)   // chrome back
         }
     }
 
@@ -1580,6 +1645,7 @@ struct StoryViewersBottomSheet: View {
     let activeStoryId: String
     @Binding var progress: CGFloat
     let arbiter: StoryViewer.SheetDragArbiter   // single-owner rule for all progress-writing drags
+    let onSnapOpen: () -> Void                  // released mid-drag, staying open → host's display-link spring
     let onClose: () -> Void
 
     @State private var viewers: [StoryViewerInfo] = []
@@ -1683,11 +1749,7 @@ struct StoryViewersBottomSheet: View {
                 // travel or a hard fling, so ordinary pulls bounced back repeatedly ("soo hard").
                 let close = projected < 0.8 || v.predictedEndTranslation.height > 160
                 if close { onClose() }
-                else {
-                    withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.78, blendDuration: 0.2)) {
-                        progress = 1
-                    }
-                }
+                else { onSnapOpen() }   // host display-link spring: model == presentation every frame
             }
     }
 
