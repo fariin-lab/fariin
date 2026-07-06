@@ -240,7 +240,7 @@ struct StoryEditorView: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {   // user spec: 12px between the caption bar and the tool row
             // Caption bar — dark pill. While typing, Send sits beside it so you can post without
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
             HStack(alignment: .bottom, spacing: 10) {
@@ -269,7 +269,7 @@ struct StoryEditorView: View {
                         capsuleTool("crop", active: croppedSource != nil) { showCrop = true }
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
                     }
-                    .padding(.horizontal, 20).frame(height: 48)
+                    .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
                     .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
 
                     Spacer()
@@ -317,7 +317,7 @@ struct StoryEditorView: View {
                 }
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 22).frame(height: 48)
+            .padding(.horizontal, 22).frame(height: 46)   // user spec: 46px
             // Blue-tinted real Liquid Glass (prominent action), not a flat blue fill.
             .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
         }
