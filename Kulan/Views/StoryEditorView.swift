@@ -87,10 +87,10 @@ struct StoryEditorView: View {
                 // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
                 // earlier vivid full-screen blur, which was rejected). Black frames it above
                 // and below. Editor-only look; the posted image is untouched.
-                // Insets from GEO's own safe area (adding windowSafeTop on top of an already
-                // safe-area-inset layout DOUBLE-COUNTED the notch = the fat black band, user bug 1).
-                let cardTop = geo.safeAreaInsets.top + 8
-                let cardBottomGap = geo.safeAreaInsets.bottom + 64   // clears the Aa/crop/draw + NEXT row
+                // User-tuned: the card hugs the PHYSICAL top edge (tucks under the island, like
+                // the reference), and its bottom reaches down to just above the lowered controls.
+                let cardTop: CGFloat = 8
+                let cardBottomGap = max(12, geo.safeAreaInsets.bottom - 20) + 58
                 let cardH = geo.size.height - cardTop - cardBottomGap
                 let boxed = !imageFillsCanvas(geo.size)
                 if boxed, cardH > 0 {
@@ -210,7 +210,9 @@ struct StoryEditorView: View {
                     VStack {
                         Spacer()
                         bottomBar
-                            .padding(.bottom, captionFocused ? 8 : geo.safeAreaInsets.bottom + 8)
+                            // User-tuned: the Aa/crop/draw + NEXT row sits LOW, into the home-indicator
+                            // strip (was floating ~42pt up with a dead black band beneath it).
+                            .padding(.bottom, captionFocused ? 8 : max(12, geo.safeAreaInsets.bottom - 20))
                     }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
                 }
