@@ -934,7 +934,11 @@ struct StoryViewer: View {
         // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
         .clipShape(StoryCardClip(
             radius: viewersProgress >= 0.97 ? 24 / max(morphScale, 0.2) : 0,
-            contentHeight: morphContentH))
+            // Trim to the photo area ONLY while the sheet morph is engaged. Trimming at rest
+            // sliced the owner footer (Views/Delete) clean off and left a transparent hole the
+            // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
+            // strip below contentHeight.
+            contentHeight: (showViewers && viewersProgress > 0.01) ? morphContentH : .greatestFiniteMagnitude))
         .scaleEffect(morphScale, anchor: .top)
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
