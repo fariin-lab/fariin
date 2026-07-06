@@ -1065,7 +1065,12 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94             // fill most of the free area (cards were too small)
-        let slotW = slotH * 0.62                           // a touch wider; side cards still peek + shrink
+        // Slot width derives from the REAL story's aspect (screen width : story content height),
+        // so the uniformly-shrunk story lands on the slot EXACTLY. The old hand-tuned 0.62 was
+        // wider than the shrunk story — every hand-off (open settling, carousel touch/settle)
+        // visibly jumped between two widths (user screenshots: same card, two sizes).
+        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
