@@ -87,10 +87,11 @@ struct StoryEditorView: View {
                 // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
                 // earlier vivid full-screen blur, which was rejected). Black frames it above
                 // and below. Editor-only look; the posted image is untouched.
-                // User-tuned: the card hugs the PHYSICAL top edge (tucks under the island, like
-                // the reference), and its bottom reaches down to just above the lowered controls.
-                let cardTop: CGFloat = 8
-                let cardBottomGap = max(12, geo.safeAreaInsets.bottom - 20) + 58
+                // User-tuned (round 2, annotated): the card reaches the PHYSICAL top edge — geo
+                // sits inside the safe area, so pull the top out by the real window inset — and
+                // its bottom drops to just above the controls row.
+                let cardTop: CGFloat = 8 - windowSafeTop
+                let cardBottomGap = max(12, geo.safeAreaInsets.bottom - 20) + 44
                 let cardH = geo.size.height - cardTop - cardBottomGap
                 let boxed = !imageFillsCanvas(geo.size)
                 if boxed, cardH > 0 {
@@ -113,19 +114,9 @@ struct StoryEditorView: View {
                                   onTap: { captionFocused = false; selectedID = nil })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
-                    // Zoomed/panned photo must stay INSIDE the card (user bug 2: it spilled over
-                    // the top/bottom controls). A MASK, not a frame change: the zoom math, pan
-                    // limits, and the WYSIWYG flatten all keep their full-canvas geometry.
-                    .mask {
-                        if boxed, cardH > 0 {
-                            Rectangle().fill(.black)
-                                .frame(width: geo.size.width, height: cardH)
-                                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
-                                .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                        } else {
-                            Rectangle().fill(.black)
-                        }
-                    }
+                    // NO card mask on the photo (tried once, user verdict: "zoom is broken, must
+                    // work like before") — pinch-zoom explores over the full screen, exactly the
+                    // original behavior; only the resting letterboxed photo sits within the card.
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
