@@ -198,6 +198,16 @@ struct StoryPager: UIViewControllerRepresentable {
             // DOWN dismiss pan (native UIKit — smooth). Installed for BOTH own and friends now, so the
             // own-story swipe-down uses the exact same buttery pan friends use (no app-level SwiftUI
             // offset). The card moves in pure UIKit; require(toFail:) keeps the horizontal slide separate.
+            if !parent.dismissEnabled {
+                // PASSIVE watcher over Apple's native zoom-dismiss (user rule: never touch the
+                // native close animation): it moves NOTHING — it only (a) pauses the story the
+                // moment a downward drag starts and (b) COMMITS the close on a fast flick, which
+                // the system's interactive dismissal tends to bounce back ("fast doesn't work").
+                let watch = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismissWatch(_:)))
+                watch.delegate = self
+                watch.cancelsTouchesInView = false
+                pager.view.addGestureRecognizer(watch)
+            }
             if parent.dismissEnabled {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
@@ -257,6 +267,31 @@ struct StoryPager: UIViewControllerRepresentable {
                     let undoSlide = CATransform3DMakeTranslation(-relX, 0, 0)
                     sub.layer.transform = CATransform3DConcat(StoryPager.cubeTransform(t, width: w), undoSlide)
                 }
+            }
+        }
+
+        // Rides ALONGSIDE the system zoom-dismiss without influencing it (cancelsTouchesInView
+        // false, simultaneous recognition). Pause on drag-start; commit fast flicks via the
+        // SAME native dismissal (isPresented=false → the zoom-back hero plays — no custom anim).
+        @objc func handleDismissWatch(_ g: UIPanGestureRecognizer) {
+            guard let pager else { return }
+            switch g.state {
+            case .began:
+                NotificationCenter.default.post(name: .pauseStory, object: nil)
+            case .ended:
+                let ty = g.translation(in: pager.view).y
+                let vy = g.velocity(in: pager.view).y
+                if ty > 20, vy > 800 {
+                    NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
+                } else {
+                    // Released gently: the system gesture decides commit/cancel on its own;
+                    // resume so a cancelled drag never leaves the story frozen.
+                    NotificationCenter.default.post(name: .resumeStory, object: nil)
+                }
+            case .cancelled, .failed:
+                NotificationCenter.default.post(name: .resumeStory, object: nil)
+            default: break
             }
         }
 
@@ -368,15 +403,12 @@ struct StoryPager: UIViewControllerRepresentable {
             }
         }
 
-        // Let the dismiss/swipe-up pans coexist with the hosted SwiftUI gestures (tap zones, hold-to-pause)
-        // and the page scroll. Returning false here blocked the pans whenever the content was tracking a
-        // touch, so swipe-down-to-close and swipe-up never fired. The horizontal-scroll relationship is
-        // still ordered by require(toFail:), so this doesn't double-handle paging.
-        // EXCEPTION: never volunteer simultaneity with a SYSTEM ("_UI…") pan — that pairing is the
-        // zoom transition's hidden dismiss riding along with ours on fast flicks (the exploded close).
-        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool {
-            !(o is UIPanGestureRecognizer && NSStringFromClass(type(of: o)).hasPrefix("_UI"))
-        }
+        // Let our pans coexist with EVERYTHING: the hosted SwiftUI gestures (tap zones,
+        // hold-to-pause), the page scroll, and — critically — the system zoom-dismiss pan,
+        // which the passive watcher must ride alongside without ever blocking it. (The old
+        // "_UI…" exclusion protected the CUSTOM card pan from double-driving; that pan is
+        // inert now, and excluding the system pan would kill the native close outright.)
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     }
 }
 

@@ -784,6 +784,12 @@ struct StoryViewer: View {
             }
         }
         .onChange(of: isPresented) { _, shown in if !shown { onClose() } }
+        // Fast downward flick: the system zoom-dismiss tends to bounce it back, so the
+        // library's passive watcher asks us to commit — via the SAME native dismissal
+        // (the zoom-back hero plays; no custom close animation involved).
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyForceClose"))) { _ in
+            isPresented = false
+        }
         // A fresh drag claim takes over from any in-flight snap animation (finger beats spring).
         .onAppear { sheetDragArbiter.onFreshClaim = { sheetAnimator.cancel() } }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
