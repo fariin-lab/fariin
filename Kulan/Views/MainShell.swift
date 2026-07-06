@@ -745,6 +745,16 @@ struct ChatsView: View {
                         // away — that visible cut WAS the "top border" all along. Unclipped, the
                         // cards slide up behind the glass header pills exactly like the chat rows
                         // do once the stories are gone (stage 3, confirmed "looks normal").
+                        // MELT-AWAY (user's 4-stage proof, build 226): the row is a separate layer
+                        // from the List, so its header blur and the List's own edge blur are TWO
+                        // systems — a visible seam where they met ("feels like two pages"). Fade
+                        // the row out over the last stretch of its slide (untouched through the
+                        // approved stage-2 phase), so only ONE blur is ever visible — no seam.
+                        .opacity({
+                            let h = max(1, storiesRowHeight)
+                            let t = (chatScrollY - h * 0.45) / (h * 0.45)
+                            return 1 - min(1, max(0, t))
+                        }())
                     }   // ZStack (stories row scrolling in sync above the list)
                     // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
                     // only when truly unfiltered; a filtered empty result says so instead.
