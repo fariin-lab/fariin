@@ -718,27 +718,29 @@ struct ThreadView: View {
                 })
                 .padding(.top, 14)
                 .padding(.horizontal, 12)
-            HStack(spacing: 18) {
-                attachTile("camera.fill", "Camera", .blue) { showCamera = true }
-                attachTile("photo.fill", "Photos", .green) { showLibrary = true }
-                attachTile("doc.fill", "File", .orange) { showFileImporter = true }
-                attachTile("sparkles", "GIF", .pink) { showGifPicker = true }
+            HStack(spacing: 22) {
+                attachTile("camera", "Camera") { showCamera = true }
+                attachTile("photo.on.rectangle", "Photos") { showLibrary = true }
+                attachTile("doc", "File") { showFileImporter = true }
+                attachTile("sparkles", "GIF") { showGifPicker = true }
             }
             .padding(.top, 18)
             Spacer()
         }
     }
-    private func attachTile(_ icon: String, _ label: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
+    // Kulan's own tile look — the app's round monochrome buttons (composer +, mic,
+    // call-back), not the colored-square grid every other messenger uses.
+    private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
             showAttachPanel = false
             // Let the sheet finish dismissing before presenting the next picker (avoids a clash).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
             VStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 24)).foregroundStyle(.white)
-                    .frame(width: 64, height: 64)
-                    .background(color, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                Text(label).font(.caption).foregroundStyle(.primary)
+                Image(systemName: icon).font(.system(size: 22, weight: .medium)).foregroundStyle(.primary)
+                    .frame(width: 58, height: 58)
+                    .background(Color.primary.opacity(0.07), in: Circle())
+                Text(label).font(.caption).foregroundStyle(.secondary)
             }
         }
         .buttonStyle(.plain)

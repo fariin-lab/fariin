@@ -147,7 +147,11 @@ private struct RecentThumb: View {
                 }
             }
             .frame(width: side, height: side)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {   // hairline so light thumbs don't dissolve into the sheet
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            }
             .overlay(alignment: .bottomTrailing) {
                 if asset.mediaType == .video {
                     HStack(spacing: 3) {
@@ -160,7 +164,7 @@ private struct RecentThumb: View {
                     .padding(5)
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .task(id: asset.localIdentifier) {
