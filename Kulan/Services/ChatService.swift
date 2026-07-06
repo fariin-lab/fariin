@@ -472,7 +472,9 @@ enum ChatService {
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
-            "lastMessage": "🎤 Voice message",
+            // Length rides inside the marker ("🎤 Voice message · 0:53") so the chat list
+            // can show it without a schema change; old plain markers still parse (prefix match).
+            "lastMessage": "🎤 Voice message · " + voiceDurationLabel(duration),
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
@@ -648,7 +650,7 @@ enum ChatService {
     /// Write ONE call record into the shared chat, keyed by callId so both ends can't
     /// create duplicates (whoever writes first wins; the other's create is a no-op).
     /// Stores who the caller was, so each client renders outgoing/incoming for itself.
-    static func recordCall(cid: String, callId: String, callerUid: String, outcome: String, durationSec: Int) async {
+    static func recordCall(cid: String, callId: String, callerUid: String, outcome: String, video: Bool, durationSec: Int) async {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document("call_\(callId)")
         try? await msgRef.setData([
@@ -656,14 +658,24 @@ enum ChatService {
             "authorId": uid,
             "callerUid": callerUid,            // viewer compares to itself for direction
             "callOutcome": outcome,            // answered | missed
+            "callVideo": video,                // placed as a video call (log/preview label)
             "callDuration": durationSec,
             "text": "",
             "createdAt": FieldValue.serverTimestamp(),
         ])
+        let marker = video
+            ? (outcome == "missed" ? "📹 Missed video call" : "📹 Video call")
+            : (outcome == "missed" ? "📞 Missed call" : "📞 Call")
         try? await convRef.setData([
-            "lastMessage": outcome == "missed" ? "📞 Missed call" : "📞 Call",
+            "lastMessage": marker,
             "updatedAt": FieldValue.serverTimestamp(),
         ], merge: true)
+    }
+
+    /// "0:53" — voice-note length for markers and previews.
+    static func voiceDurationLabel(_ seconds: Double) -> String {
+        let d = Int(seconds.rounded())
+        return String(format: "%d:%02d", d / 60, d % 60)
     }
 
     static func deleteMessage(cid: String, messageId: String) async {

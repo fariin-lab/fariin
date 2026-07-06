@@ -37,7 +37,7 @@ final class CallService: NSObject {
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
-                cameraOn = false; remoteCameraOn = false; usingFrontCamera = true
+                cameraOn = false; remoteCameraOn = false; usingFrontCamera = true; startedAsVideo = false
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
             }
@@ -61,6 +61,7 @@ final class CallService: NSObject {
     var cameraOn = false            // is MY camera sending
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
+    private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
     var usingFrontCamera = true
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
@@ -384,6 +385,7 @@ final class CallService: NSObject {
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
+        startedAsVideo = video
         isCaller = true
         otherUid = uid
         otherName = name
@@ -500,6 +502,7 @@ final class CallService: NSObject {
                     self.isCaller = false
                     let isVideoCall = (d["type"] as? String == "video")
                     self.cameraOn = isVideoCall                             // answering a video call turns my camera on
+                    self.startedAsVideo = isVideoCall
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
                     self.state = .incoming
@@ -525,6 +528,7 @@ final class CallService: NSObject {
             return
         }
         self.cameraOn = video   // a video call = my camera on when I answer
+        self.startedAsVideo = video
         self.callId = callId
         self.otherName = name
         self.otherUid = uid
@@ -557,6 +561,7 @@ final class CallService: NSObject {
                     guard let d = snap?.data(),
                           let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
                     self.cameraOn = (d["type"] as? String == "video")
+                    self.startedAsVideo = self.cameraOn
                     if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
                     self.completeAnswer(ref: ref, offerSdp: sdp)
                 }
@@ -726,7 +731,8 @@ final class CallService: NSObject {
             let outcome = connected ? "answered" : "missed"
             let cid = [me, otherUid].sorted().joined(separator: "_")
             let cidCallId = callId ?? UUID().uuidString
-            Task { await ChatService.recordCall(cid: cid, callId: cidCallId, callerUid: callerUidVal, outcome: outcome, durationSec: dur) }
+            let video = startedAsVideo   // capture before the idle reset clears it
+            Task { await ChatService.recordCall(cid: cid, callId: cidCallId, callerUid: callerUidVal, outcome: outcome, video: video, durationSec: dur) }
         }
         if updateRemote, let id = callId {
             db.collection("calls").document(id).updateData(["status": "ended", "endReason": endReason.rawValue])

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import FirebaseFirestore
 
 // Domain models. Field names match the existing Firestore schema EXACTLY so the
@@ -59,6 +60,7 @@ struct Message: Identifiable, Equatable {
     var height: Double? = nil
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
     var callOutcome: String? = nil          // answered | missed
+    var callVideo: Bool = false             // placed as a video call (older records default to voice)
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
 
@@ -134,6 +136,7 @@ struct Message: Identifiable, Equatable {
         self.height = (data["height"] as? NSNumber)?.doubleValue
         self.callerUid = data["callerUid"] as? String
         self.callOutcome = data["callOutcome"] as? String
+        self.callVideo = data["callVideo"] as? Bool ?? false
         self.callDuration = (data["callDuration"] as? NSNumber)?.intValue
         self.edited = data["edited"] as? Bool ?? false
         self.clientId = data["clientId"] as? String
@@ -294,6 +297,69 @@ extension EncMeta {
         self.init(v: (map["v"] as? Int) ?? 1, n: n, k: k, kn: kn,
                   w: map["w"] as? [String: String],   // group per-member wraps (was dropped!)
                   a: map["a"] as? String)              // group author
+    }
+}
+
+// MARK: - Local chat-list state (device-only; never written to the server)
+
+/// Unsent composer drafts, keyed by conversation id: leave a chat with text still in
+/// the box and the chat list shows "Draft: …" until you send or clear it.
+@Observable
+final class Drafts {
+    static let shared = Drafts()
+    private static let key = "chatDrafts"
+    private(set) var map: [String: String]
+    private init() { map = UserDefaults.standard.dictionary(forKey: Self.key) as? [String: String] ?? [:] }
+
+    func text(_ cid: String) -> String { map[cid] ?? "" }
+    func set(_ cid: String, _ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard map[cid] ?? "" != t else { return }   // no-op → no observation churn per keystroke
+        if t.isEmpty { map.removeValue(forKey: cid) } else { map[cid] = t }
+        UserDefaults.standard.set(map, forKey: Self.key)
+    }
+}
+
+/// Which incoming voice notes have been PLAYED (not just seen). Drives the accent
+/// "unheard" mic in the chat list and the dot on the bubble. Opening a chat is not
+/// hearing a voice note, so this is separate from the unread count.
+@Observable
+final class PlayedVoice {
+    static let shared = PlayedVoice()
+    private static let idsKey = "playedVoiceIds"
+    private static let upToKey = "playedVoiceUpTo"
+    private(set) var ids: Set<String>
+    private(set) var upTo: [String: Double]   // cid → createdAt ms of the newest played incoming note
+    private init() {
+        ids = Set(UserDefaults.standard.stringArray(forKey: Self.idsKey) ?? [])
+        upTo = UserDefaults.standard.dictionary(forKey: Self.upToKey) as? [String: Double] ?? [:]
+    }
+
+    /// Chat list: the newest message is an incoming voice note that hasn't been played.
+    func lastVoiceUnplayed(_ conv: Conversation, me: String) -> Bool {
+        guard conv.lastMessageCipher.hasPrefix("🎤 Voice message"),
+              !conv.lastIsMine(me), !conv.leaksBlocked(me) else { return false }
+        return conv.updatedAtMillis > (upTo[conv.id] ?? 0)
+    }
+
+    /// Thread bubble: this specific note hasn't been played on this device.
+    func isUnplayed(cid: String, messageId: String, createdAt: Date) -> Bool {
+        if ids.contains(messageId) { return false }
+        // Anything at/before the newest played note counts as heard — keeps ancient
+        // history quiet even when its ids have been trimmed from the capped set.
+        return createdAt.timeIntervalSince1970 * 1000 > (upTo[cid] ?? 0)
+    }
+
+    func markPlayed(cid: String, messageId: String, createdAt: Date) {
+        guard !ids.contains(messageId) else { return }
+        ids.insert(messageId)
+        var arr = UserDefaults.standard.stringArray(forKey: Self.idsKey) ?? []
+        arr.append(messageId)
+        if arr.count > 600 { arr.removeFirst(arr.count - 600) }   // cap the stored set
+        UserDefaults.standard.set(arr, forKey: Self.idsKey)
+        let ms = createdAt.timeIntervalSince1970 * 1000
+        if ms > (upTo[cid] ?? 0) { upTo[cid] = ms }
+        UserDefaults.standard.set(upTo, forKey: Self.upToKey)
     }
 }
 

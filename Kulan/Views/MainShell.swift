@@ -669,7 +669,9 @@ struct ChatsView: View {
                                         if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
                                             viewerAnonymous = false; viewerGroup = g
                                         }
-                                    })
+                                    },
+                                    draft: Drafts.shared.text(conv.id),
+                                    voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                                 .equatable()   // skip rebuild when this conversation is unchanged
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())   // whole row tappable (incl. empty space)
@@ -990,7 +992,9 @@ struct ArchivedChatsView: View {
                                 path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                                        photo: conv.displayPhoto(me)))
                             } label: {
-                                ChatRow(conv: conv, me: me, dark: dark)
+                                ChatRow(conv: conv, me: me, dark: dark,
+                                        draft: Drafts.shared.text(conv.id),
+                                        voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                             }
                             .buttonStyle(.plain)
                             .tag(conv.id)
@@ -1108,6 +1112,8 @@ struct ChatRow: View, Equatable {
     let dark: Bool
     var storySeen: [Bool] = []      // per-segment seen flags for this person's stories ([] = no active story)
     var onStoryTap: (() -> Void)? = nil   // tap the ringed avatar → open their story (not the chat)
+    var draft: String = ""          // unsent composer text (local-only) → "Draft:" preview
+    var voiceUnplayed: Bool = false // newest incoming voice note not played yet → accent mic
 
     // Skip re-rendering a row whose conversation is unchanged, even when the parent body re-runs on
     // every snapshot (typing/unread/presence on OTHER chats). Conversation is Equatable → covers
@@ -1115,6 +1121,7 @@ struct ChatRow: View, Equatable {
     static func == (l: ChatRow, r: ChatRow) -> Bool {
         l.conv == r.conv && l.me == r.me && l.dark == r.dark
             && l.storySeen == r.storySeen
+            && l.draft == r.draft && l.voiceUnplayed == r.voiceUnplayed
     }
 
     private var decodedLast: String {
@@ -1127,27 +1134,45 @@ struct ChatRow: View, Equatable {
     }
     // Stored plaintext markers → an SF Symbol + clean label (native look, no emoji).
     private func previewBadge(_ s: String) -> (String, String)? {
+        // Newer voice markers carry the length ("🎤 Voice message · 0:53") — prefix match
+        // keeps old plain markers working and surfaces the duration when present.
+        if s.hasPrefix("🎤 Voice message") {
+            return ("mic.fill", "Voice message" + String(s.dropFirst("🎤 Voice message".count)))
+        }
         switch s {
-        case "🎤 Voice message": return ("mic.fill", "Voice message")
-        case "📄 File":          return ("doc.fill", "File")
-        case "GIF":              return ("sparkles", "GIF")
-        case "📞 Missed call":   return ("phone.down.fill", "Missed call")
-        case "📞 Call":          return ("phone.fill", "Call")
+        case "📄 File":              return ("doc.fill", "File")
+        case "GIF":                  return ("sparkles", "GIF")
+        case "📞 Missed call":       return ("phone.down.fill", "Missed call")
+        case "📞 Call":              return ("phone.fill", "Call")
+        case "📹 Missed video call": return ("video.slash.fill", "Missed video call")
+        case "📹 Video call":        return ("video.fill", "Video call")
         default: return nil
         }
     }
-    private func previewRow(_ icon: String, _ text: String) -> some View {
+    private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(iconTint ?? Color.secondary)
             Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         }
+    }
+    // Live "typing…" for the list — the conv doc already syncs the typing map, so this is free.
+    private var typingLabel: String? {
+        guard !conv.isBlockedByMe(me) else { return nil }
+        let typers = conv.others(me).filter { conv.typing[$0] == true }
+        guard !typers.isEmpty else { return nil }
+        if !conv.isGroup { return "typing…" }
+        let names = typers.map { u in
+            let n = conv.names[u] ?? "Someone"
+            return n.split(separator: " ").first.map(String.init) ?? n
+        }
+        return names.count == 1 ? "\(names[0]) is typing…" : "\(names.joined(separator: ", ")) are typing…"
     }
     // "Alice: " prefix for group previews so you can tell who sent the last message.
     // Only for real messages (ciphertext or media markers) — NOT system events like "X added Y".
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         let c = conv.lastMessageCipher
-        guard c.hasPrefix("enc") || c == "📷 Photo" || c == "🎤 Voice message" else { return "" }
+        guard c.hasPrefix("enc") || c == "📷 Photo" || c.hasPrefix("🎤 Voice message") else { return "" }
         let n = conv.names[conv.lastSender] ?? "Someone"
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }
@@ -1158,18 +1183,28 @@ struct ChatRow: View, Equatable {
     private var isPhotoPreview: Bool {
         !conv.leaksBlocked(me) && conv.lastMessageCipher == "📷 Photo" && (conv.lastImageUrl?.isEmpty == false)
     }
-    // Preview area: a real image thumbnail for photo messages, otherwise the text preview.
+    // Preview area, in priority order: blocked freeze → live typing → unsent draft →
+    // photo thumbnail → media/call badge → say-hello → decrypted text.
     @ViewBuilder private var previewContent: some View {
-        if isPhotoPreview {
+        if conv.leaksBlocked(me) {
+            previewRow("hand.raised.fill", "Blocked")
+        } else if let t = typingLabel {
+            Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+        } else if !draft.isEmpty {
+            (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
+                .font(.system(size: 14)).lineLimit(2)
+        } else if isPhotoPreview {
             HStack(spacing: 5) {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
                     .frame(width: 20, height: 20)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 Text("\(lastSenderPrefix)Photo").font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
             }
-        } else if !conv.leaksBlocked(me), let badge = previewBadge(conv.lastMessageCipher) {
-            previewRow(badge.0, badge.1)
-        } else if !conv.leaksBlocked(me), decodedLast.isEmpty {
+        } else if let badge = previewBadge(conv.lastMessageCipher) {
+            // Unheard voice note = accent mic (like an unread badge, but for your ears).
+            previewRow(badge.0, lastSenderPrefix + badge.1,
+                       iconTint: voiceUnplayed ? Theme.accent(dark) : nil)
+        } else if decodedLast.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
         } else {
             Text(lastSenderPrefix + decodedLast)

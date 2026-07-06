@@ -111,11 +111,14 @@ struct ChatPeekPreview: View {
 
     private func callWidget(_ m: Message) -> some View {
         let missed = m.callOutcome == "missed"
+        let video = m.callVideo
         return HStack(spacing: 10) {
-            Image(systemName: missed ? "phone.arrow.down.left" : "phone.fill")
+            Image(systemName: video ? (missed ? "video.slash.fill" : "video.fill")
+                                    : (missed ? "phone.arrow.down.left" : "phone.fill"))
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(missed ? .red : .secondary)
-            Text(missed ? "Missed call" : "Call").font(.system(size: 14))
+            Text(video ? (missed ? "Missed video call" : "Video call")
+                       : (missed ? "Missed call" : "Call")).font(.system(size: 14))
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
         .background(Theme.received(dark))

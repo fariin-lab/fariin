@@ -47,6 +47,11 @@ struct VoiceMessageView: View {
                     .frame(width: 158, height: 26)
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
+                    // "Not heard yet" dot (WhatsApp's blue mic, our way) — fades once played.
+                    if unheard {
+                        Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
+                            .transition(.opacity)
+                    }
                     // Speed toggle (1× / 1.5× / 2×) — appears once the note is loaded, like Signal.
                     if player != nil {
                         Button { cycleRate() } label: {
@@ -65,6 +70,12 @@ struct VoiceMessageView: View {
     // Real captured waveform, or a neutral flat one for older messages that lack it.
     private var displayBars: [Int] {
         message.waveform.isEmpty ? Array(repeating: 35, count: 28) : message.waveform
+    }
+
+    // An incoming note this device has never played (optimistic local notes are mine).
+    private var unheard: Bool {
+        !isMe && message.localAudioData == nil
+            && PlayedVoice.shared.isUnplayed(cid: cid, messageId: message.id, createdAt: message.createdAt)
     }
 
     private func seek(_ pct: Double) {
@@ -104,6 +115,10 @@ struct VoiceMessageView: View {
 
     private func play() {
         guard player != nil else { return }
+        // Playing it = heard: clears the accent mic in the chat list + the dot here.
+        if !isMe { withAnimation(.easeOut(duration: 0.25)) {
+            PlayedVoice.shared.markPlayed(cid: cid, messageId: message.id, createdAt: message.createdAt)
+        } }
         player?.enableRate = true
         player?.rate = rate
         player?.play()

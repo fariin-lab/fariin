@@ -309,6 +309,8 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
             recorder.prepare()                           // pre-warm so hold-to-record is instant
+            // Restore an unsent draft (local-only). Never clobber text already being typed.
+            if input.isEmpty { input = Drafts.shared.text(cid) }
             // Unread count from the cached conversation — only used to place the unread-divider
             // MARKER now (we always open at the bottom, so it no longer drives the scroll position).
             unreadOnOpen = cachedConv?.unread(me) ?? 0
@@ -339,6 +341,11 @@ struct ThreadView: View {
             recordLocked = false; recordDrag = .zero; holdStarted = false
         }
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
+        // Draft follows every edit (so the chat list is correct the moment you leave), but
+        // NOT while inline-editing a sent message — that text is the message, not a draft.
+        .onChange(of: input) { _, v in
+            if editingMessage == nil { Drafts.shared.set(cid, v) }
+        }
     }
 
     private var hasText: Bool {
@@ -895,7 +902,9 @@ struct ThreadView: View {
     private func callRow(_ m: Message) -> some View {
         let mine = m.callerUid == me
         let missed = m.callOutcome == "missed"
-        let statusText = missed ? "Missed voice call" : "Voice call"
+        let video = m.callVideo
+        let statusText = video ? (missed ? "Missed video call" : "Video call")
+                               : (missed ? "Missed voice call" : "Voice call")
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
@@ -903,7 +912,8 @@ struct ThreadView: View {
             if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
             return "\(mine ? "Outgoing" : "Incoming") · \(time)"
         }()
-        let iconName = missed ? "phone.arrow.down.left" : (mine ? "phone.arrow.up.right" : "phone.arrow.down.left")
+        let iconName = video ? (missed ? "video.slash.fill" : "video.fill")
+                             : (missed ? "phone.arrow.down.left" : (mine ? "phone.arrow.up.right" : "phone.arrow.down.left"))
         let iconColor: Color = missed ? .red : (mine ? Theme.onAccent(dark) : Theme.accent(dark))
         let circleBg: Color = mine ? Color.white.opacity(0.22)
             : (missed ? Color.red.opacity(0.14) : Theme.accent(dark).opacity(0.14))
@@ -934,7 +944,7 @@ struct ThreadView: View {
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .onTapGesture { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) }
+            .onTapGesture { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: video) }   // call back the same way it was placed
             .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
         }
@@ -1126,7 +1136,7 @@ struct ThreadView: View {
 
     private func cancelEdit() {
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
-        input = ""
+        input = Drafts.shared.text(cid)   // bring back whatever was drafted before the edit began
         inputFocused = false
     }
 
@@ -1137,7 +1147,7 @@ struct ThreadView: View {
         guard !newText.isEmpty else { return }
         Task { try? await ChatService.editMessage(cid: cid, messageId: e.id, newText: newText, group: isGroup ? groupMembers : nil) }
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
-        input = ""
+        input = Drafts.shared.text(cid)   // the pre-edit draft (if any) was never sent — restore it
         inputFocused = false
     }
 
