@@ -799,6 +799,13 @@ struct StoryViewer: View {
         .onChange(of: viewersProgress > 0.01) { _, open in
             NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
         }
+        // Chrome visibility MIRRORS the morph card: hidden while the card covers the story
+        // (p ≥ 0.07-ish), visible the moment the story is exposed again. Completion-only
+        // restores came back LATE (after the whole close spring) and some early-exit paths
+        // never fired them at all — chrome stuck hidden forever (user screenshot).
+        .onChange(of: viewersProgress < 0.15) { _, exposed in
+            NotificationCenter.default.post(name: .init("storyChromeHidden"), object: !exposed)
+        }
         // BULLETPROOF pause while the viewers sheet is open: reassert the freeze twice a second so the
         // story can NEVER creep forward and auto-advance/auto-close the sheet, even if some other event
         // resumed it meanwhile (the "sheet forcefully dismissed while reading it" bug). pauseStory just
@@ -948,7 +955,13 @@ struct StoryViewer: View {
             onSwipeUpEnded: { _, velocity in
                 guard currentIsMine || mineOnly else { openDragging = false; return }
                 openDragging = false
-                guard viewersProgress > 0 else { return }   // never got an upward drag → nothing to snap
+                guard viewersProgress > 0 else {
+                    // Engaged but the sheet never actually rose: undo the engagement posts, or
+                    // the chrome stays hidden forever (no close path will ever run).
+                    NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
+                    NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+                    return
+                }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
                 // Build 216's exact release rule (the feel the user wants): fling weight 0.3,
                 // open past 0.4 — a modest upward pull commits, a small nudge settles back.
