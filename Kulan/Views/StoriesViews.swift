@@ -35,6 +35,18 @@ struct StoryRingView: View {
 // back/forward, reopening, and app relaunches load instantly with no re-download.
 // The exact dark blur the story viewer uses over its fill backdrop (ImageLoader's
 // UIVisualEffectView(.systemThickMaterialDark)) — so bars look identical in-story and in-sheet.
+// Clips the shrinking story to its CONTENT rect (photo area, not the layer's full height,
+// which extends into the faded footer region) — so all four rounded corners land exactly
+// on the visible card's edges. radius 0 = plain content rect.
+struct StoryCardClip: Shape {
+    var radius: CGFloat
+    var contentHeight: CGFloat
+    func path(in rect: CGRect) -> Path {
+        let r = CGRect(x: 0, y: 0, width: rect.width, height: min(contentHeight, rect.height))
+        return Path(roundedRect: r, cornerRadius: radius, style: .continuous)
+    }
+}
+
 struct StoryDarkBlur: UIViewRepresentable {
     func makeUIView(context: Context) -> UIVisualEffectView {
         UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
@@ -914,9 +926,9 @@ struct StoryViewer: View {
         // Re-clipping the live-material story with a changing radius EVERY finger frame was
         // the "follows then stutters" jank — corners now apply only once the card has
         // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
-        .clipShape(RoundedRectangle(
-            cornerRadius: viewersProgress >= 0.97 ? 24 / max(morphScale, 0.2) : 0,
-            style: .continuous))
+        .clipShape(StoryCardClip(
+            radius: viewersProgress >= 0.97 ? 24 / max(morphScale, 0.2) : 0,
+            contentHeight: morphContentH))
         .scaleEffect(morphScale, anchor: .top)
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
@@ -1048,6 +1060,12 @@ struct StoryViewer: View {
     }
     private var morphScale: CGFloat { morphGeometry.scale }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
+    // The story CONTENT's height (photo card without the footer) — the clip must end HERE,
+    // not at the layer's true bottom (which extends into the faded footer area below the
+    // photo: rounding down there left the VISIBLE bottom corners square, user report).
+    private var morphContentH: CGFloat {
+        UIScreen.main.bounds.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+    }
     // Radius in UNSCALED space so it reads ~24pt constant on screen; 0 at rest (no-op).
     private var morphClipRadius: CGFloat {
         let g = morphGeometry
@@ -1702,7 +1720,7 @@ struct StoryViewersBottomSheet: View {
     // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
     // same value, so the two layers always agree on the layout. Telegram makes the LIST the dominant
     // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
-    static let heightFraction: CGFloat = 0.64   // shorter sheet → more room so the story cards read BIG (was 0.70)
+    static let heightFraction: CGFloat = 0.58   // shorter sheet → more room so the story cards read BIG (user: cards were too small/thin at 0.64 once the slot took the story's true aspect)
 
     let activeStoryId: String
     @Binding var progress: CGFloat
