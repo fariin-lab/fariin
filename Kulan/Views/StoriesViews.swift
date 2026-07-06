@@ -1084,7 +1084,7 @@ struct StoryViewer: View {
     // Radius in UNSCALED space so it reads ~24pt constant on screen; 0 at rest (no-op).
     private var morphClipRadius: CGFloat {
         let g = morphGeometry
-        return g.sizeP <= 0.001 ? 0 : 24 / max(g.scale, 0.2) * g.sizeP
+        return g.sizeP <= 0.001 ? 0 : 24 / max(g.scaleY, 0.2) * g.sizeP
     }
 
     // The layer behind the viewers sheet. Strictly 2D (no rotations anywhere):
