@@ -52,26 +52,28 @@ enum StoryBlurBake {
     static func cached(_ url: String) -> UIImage? { cache.object(forKey: url as NSString) }
     static func bake(_ img: UIImage, url: String) -> UIImage {
         if let hit = cached(url) { return hit }
-        let targetW: CGFloat = 240
-        let scale = targetW / max(1, img.size.width)
-        let size = CGSize(width: targetW, height: max(1, img.size.height * scale))
-        let small = UIGraphicsImageRenderer(size: size).image { _ in
-            img.draw(in: CGRect(origin: .zero, size: size))
+        // Pseudo-gaussian with ZERO CoreImage: collapse the photo to a tiny thumbnail, then
+        // stretch it back up — the interpolation produces the same smooth low-frequency wash
+        // as a heavy blur. The previous CIGaussianBlur pipeline silently produced BLACK on
+        // both the simulator and real devices (measured RGB 0,0,0 in the user's screenshot),
+        // and 50% black over black = the "blur is gone" bug. Pure UIKit drawing cannot fail.
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = 1
+        let tiny = CGSize(width: 16, height: 16)
+        let thumb = UIGraphicsImageRenderer(size: tiny, format: fmt).image { ctx in
+            ctx.cgContext.interpolationQuality = .medium
+            img.draw(in: CGRect(origin: .zero, size: tiny))
         }
-        var base = small
-        if let ci = CIImage(image: small) {
-            var work = ci.clampedToExtent().applyingGaussianBlur(sigma: 16).cropped(to: ci.extent)
-            if let desat = CIFilter(name: "CIColorControls", parameters: [
-                kCIInputImageKey: work, kCIInputSaturationKey: 0.9
-            ])?.outputImage { work = desat }
-            let ctx = CIContext(options: nil)
-            if let cg = ctx.createCGImage(work, from: work.extent) { base = UIImage(cgImage: cg) }
-        }
-        let out = UIGraphicsImageRenderer(size: size).image { c in
-            base.draw(in: CGRect(origin: .zero, size: size))
-            // Material-matched smoke: systemThickMaterialDark ≈ heavy blur + ~50% near-black veil.
-            UIColor.black.withAlphaComponent(0.5).setFill()
-            c.fill(CGRect(origin: .zero, size: size))
+        let outSize = CGSize(width: 240, height: 240)
+        let out = UIGraphicsImageRenderer(size: outSize, format: fmt).image { ctx in
+            ctx.cgContext.interpolationQuality = .high   // smooth stretch = the blur
+            thumb.draw(in: CGRect(origin: .zero, size: outSize))
+            // Calibrated against the REAL systemThickMaterialDark: measured from device
+            // screenshots, the material renders the bars at ~22% of the photo's brightness
+            // (photo luma ~171 → bar luma ~38), so the veil is 0.78 — the earlier 0.5 was
+            // tuned for a different pipeline and would read too bright here.
+            UIColor.black.withAlphaComponent(0.78).setFill()
+            ctx.fill(CGRect(origin: .zero, size: outSize))
         }
         cache.setObject(out, forKey: url as NSString)
         return out
