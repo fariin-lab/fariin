@@ -111,18 +111,16 @@ struct StoryImage: View {
                         ZStack {
                             Color.clear
                                 .overlay {
-                                    if bakedBars {
+                                    if bakedBars, let bg = blurredBG {
                                         // Crossfade-safe backdrop (morph card only): a baked image
-                                        // composites at any opacity; black for the first ms while
-                                        // the bake runs — never the raw bright fill.
-                                        if let bg = blurredBG {
-                                            Image(uiImage: bg).resizable().scaledToFill()
-                                        } else {
-                                            Color.black
-                                        }
+                                        // composites at any opacity — no material dropout flash.
+                                        Image(uiImage: bg).resizable().scaledToFill()
                                     } else {
                                         // BUILD 216's exact recipe (user's explicit choice): the REAL
-                                        // systemThickMaterialDark over the fill copy, same as the story's bars.
+                                        // systemThickMaterialDark over the fill copy, same as the story's
+                                        // bars. ALSO the bakedBars fallback while the bake runs or if it
+                                        // fails (e.g. simulator without GPU CoreImage) — the blur look
+                                        // must NEVER degrade to black (user report: "I lost my blur").
                                         Image(uiImage: image).resizable().scaledToFill()
                                             .overlay(StoryDarkBlur())
                                     }
