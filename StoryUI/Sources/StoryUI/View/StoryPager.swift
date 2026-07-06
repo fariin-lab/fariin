@@ -253,10 +253,14 @@ struct StoryPager: UIViewControllerRepresentable {
             let t = g.translation(in: pager.view)
             switch g.state {
             case .began:
-                // Snapshot the current card, show it (blurred) as the stationary backdrop the drag uncovers.
-                dismissBackdrop.image = snapshot(card)
-                dismissBackdrop.isHidden = false
-                dismissBlur.isHidden = false
+                // SEE-THROUGH dismissal (user reference): the shrinking card must reveal the CHAT
+                // LIST behind the cover, not a blurred copy of itself. The stationary container
+                // goes clear (the cover's presentation background is already clear at rest); the
+                // MOVING card keeps its own solid backing so the story never turns transparent.
+                card.backgroundColor = .black
+                pager.view.backgroundColor = .clear
+                dismissBackdrop.isHidden = true
+                dismissBlur.isHidden = true
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
             case .changed:
                 let ty = max(0, t.y)
@@ -295,8 +299,7 @@ struct StoryPager: UIViewControllerRepresentable {
                         card.transform = .identity
                         card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
                     } completion: { _ in
-                        self.dismissBackdrop.isHidden = true
-                        self.dismissBlur.isHidden = true
+                        self.pager?.view.backgroundColor = .black   // restore the solid backing at rest
                         self.parent.onCancel()
                     }
                 }
