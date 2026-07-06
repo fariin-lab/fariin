@@ -268,7 +268,7 @@ struct ThreadView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.height(230)]) }
+        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.height(330)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
                 Task {
@@ -702,16 +702,29 @@ struct ThreadView: View {
     }
 
     // Custom attach panel (Telegram/WhatsApp-style) — slides up from the + button.
+    // Top: one-tap recents strip (camera-roll photos + videos). Below: the pickers.
     private var attachPanel: some View {
         VStack(spacing: 0) {
             Capsule().fill(.secondary.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
+            AttachRecentsStrip(
+                onPickPhoto: { ui in
+                    showAttachPanel = false
+                    // Let the sheet finish dismissing before the editor cover presents.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editImage = EditImageWrap(image: ui) }
+                },
+                onPickVideo: { url in
+                    showAttachPanel = false
+                    Task { await sendVideo(from: url) }   // straight into the send pipeline
+                })
+                .padding(.top, 14)
+                .padding(.horizontal, 12)
             HStack(spacing: 18) {
                 attachTile("camera.fill", "Camera", .blue) { showCamera = true }
                 attachTile("photo.fill", "Photos", .green) { showLibrary = true }
                 attachTile("doc.fill", "File", .orange) { showFileImporter = true }
                 attachTile("sparkles", "GIF", .pink) { showGifPicker = true }
             }
-            .padding(.top, 26)
+            .padding(.top, 18)
             Spacer()
         }
     }
