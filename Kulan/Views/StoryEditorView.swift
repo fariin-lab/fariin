@@ -231,9 +231,13 @@ struct StoryEditorView: View {
                     VStack {
                         Spacer()
                         bottomBar
-                            // Keyboard rise is MANUAL now (the editor ignores the keyboard's safe
-                            // area): measured height + 8. At rest, the user-tuned low position.
-                            .padding(.bottom, keyboard.height > 0 ? keyboard.height + 8 : -14)
+                            // Keyboard rise is MANUAL (the editor ignores the keyboard's safe area).
+                            // Computed against the GEO's real screen position: the raw height left a
+                            // fat gap (geo's bottom sits above the physical bottom, and the bar has
+                            // 10pt internal lift) — the caption now floats 8pt above the keyboard.
+                            .padding(.bottom, keyboard.height > 0
+                                ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
+                                : -14)
                     }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
                 }
@@ -331,7 +335,15 @@ struct StoryEditorView: View {
     // Shared green Send — used in the toolbar (idle) AND beside the caption (while typing).
     // Compact round send used beside the caption while the keyboard is open (keeps the field wide).
     private var compactSendButton: some View {
-        Button { Task { await send() } } label: {
+        Button {
+            // Presenting the share sheet WHILE the keyboard is dismissing silently failed
+            // (tap closed the keyboard, no sheet). Resign first, let it settle, then send.
+            captionFocused = false
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                await send()
+            }
+        } label: {
             Group {
                 if posting { ProgressView().tint(.white) }
                 else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold)) }
