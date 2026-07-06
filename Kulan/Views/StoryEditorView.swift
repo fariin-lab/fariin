@@ -269,6 +269,7 @@ struct StoryEditorView: View {
                 // field keeps most of the width.
                 if captionFocused { compactSendButton }
             }
+            .padding(.bottom, 10)   // user: caption bar sat too low — lift it for breathing room
 
             // Tool row hides while typing a caption (IG/WA: only the caption field stays, above the keyboard).
             if !captionFocused {
