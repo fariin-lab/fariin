@@ -627,11 +627,20 @@ enum ChatService {
 
     /// Set or clear my emoji reaction on a message. The emoji is E2E-encrypted
     /// (same as text) so the server never sees the reaction.
-    static func setReaction(cid: String, messageId: String, emoji: String?, group: [String]? = nil) async {
+    static func setReaction(cid: String, messageId: String, emoji: String?, toAuthor: String, group: [String]? = nil) async {
         let ref = db.collection("conversations").document(cid)
             .collection("messages").document(messageId)
+        let convRef = db.collection("conversations").document(cid)
         guard let emoji else {
             try? await ref.updateData(["reactions.\(uid)": FieldValue.delete()])
+            // If MY reaction was the one being previewed in the chat list, retract it.
+            let cs = try? await convRef.getDocument()
+            if (cs?.data()?["lastReactionBy"] as? String) == uid {
+                try? await convRef.updateData([
+                    "lastReactionEnc": FieldValue.delete(), "lastReactionBy": FieldValue.delete(),
+                    "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
+                ])
+            }
             return
         }
         // Group reactions are sealed for ALL members (so everyone sees the emoji); 1:1 to the other.
@@ -644,7 +653,18 @@ enum ChatService {
         if let members { enc = try? await Crypto.shared.encryptForGroup(emoji, members: members) }
         else { enc = try? await Crypto.shared.encryptForConversation(cid, emoji) }
         // Dotted field update — only touches my own key, so concurrent reactions never clobber.
-        if let enc { try? await ref.updateData(["reactions.\(uid)": enc]) }
+        if let enc {
+            try? await ref.updateData(["reactions.\(uid)": enc])
+            // Surface it in the chat list ("Reacted 🙏") — a separate best-effort write, so the
+            // reaction itself still lands even if this one is rejected. Deliberately does NOT
+            // bump updatedAt: a reaction shouldn't reorder chats or re-arm unread; the list
+            // preview just changes in place while the reaction is the newest event.
+            try? await convRef.updateData([
+                "lastReactionEnc": enc, "lastReactionBy": uid,
+                "lastReactionToAuthor": toAuthor,
+                "lastReactionAt": FieldValue.serverTimestamp(),
+            ])
+        }
     }
 
     /// Write ONE call record into the shared chat, keyed by callId so both ends can't

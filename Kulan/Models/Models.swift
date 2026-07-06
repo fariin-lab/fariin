@@ -199,6 +199,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var onlyAdminsSend: Bool           // announcement mode: only admins may send (groups)
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
+    var lastReactionEnc: String?       // sealed emoji of the newest reaction (list preview)
+    var lastReactionBy: String         // who reacted ("" = none)
+    var lastReactionToAuthor: String   // author of the reacted-to message
+    var lastReactionAtMillis: Double   // 0 = none; previewed only while newer than updatedAt
     var updatedAtMillis: Double
 
     init(id: String, data: [String: Any]) {
@@ -231,6 +235,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsSend = data["onlyAdminsSend"] as? Bool ?? false
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
+        self.lastReactionEnc = data["lastReactionEnc"] as? String
+        self.lastReactionBy = data["lastReactionBy"] as? String ?? ""
+        self.lastReactionToAuthor = data["lastReactionToAuthor"] as? String ?? ""
+        if let ts = data["lastReactionAt"] as? Timestamp {
+            self.lastReactionAtMillis = ts.dateValue().timeIntervalSince1970 * 1000
+        } else {
+            self.lastReactionAtMillis = 0
+        }
         if let ts = data["updatedAt"] as? Timestamp {
             self.updatedAtMillis = ts.dateValue().timeIntervalSince1970 * 1000
         } else {
@@ -286,6 +298,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func lastReadByOther(_ me: String) -> Bool {
         if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) == 0 } }
         return (unreadCount[otherUid(me)] ?? 0) == 0
+    }
+    /// A reaction newer than the last message → the chat list previews it ("Reacted 🙏").
+    /// Hidden for silently-blocked reactors, and for reactions older than a delete-for-me.
+    func freshReaction(_ me: String) -> Bool {
+        !lastReactionBy.isEmpty && lastReactionEnc != nil
+            && lastReactionAtMillis > updatedAtMillis
+            && lastReactionAtMillis > (clearedAt[me] ?? 0)
+            && !(isBlockedByMe(me) && lastReactionBy != me)
     }
 }
 

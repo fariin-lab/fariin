@@ -1155,6 +1155,21 @@ struct ChatRow: View, Equatable {
             Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
+    // "Reacted 🙏" preview when the newest event in the chat is a reaction (WhatsApp-style).
+    private var reactionPreview: String? {
+        guard conv.freshReaction(me), let enc = conv.lastReactionEnc else { return nil }
+        let emoji = conv.isGroup
+            ? Crypto.shared.decryptGroupCached(enc, cid: conv.id, authorId: conv.lastReactionBy)   // sealed by the reactor
+            : Crypto.shared.decryptCached(enc, cid: conv.id)
+        guard !emoji.isEmpty else { return nil }
+        if conv.lastReactionBy == me { return "You reacted \(emoji)" }
+        if conv.isGroup {
+            let n = conv.names[conv.lastReactionBy] ?? "Someone"
+            let first = n.split(separator: " ").first.map(String.init) ?? n
+            return "\(first) reacted \(emoji)"
+        }
+        return conv.lastReactionToAuthor == me ? "Reacted \(emoji) to your message" : "Reacted \(emoji)"
+    }
     // Live "typing…" for the list — the conv doc already syncs the typing map, so this is free.
     private var typingLabel: String? {
         guard !conv.isBlockedByMe(me) else { return nil }
@@ -1193,6 +1208,8 @@ struct ChatRow: View, Equatable {
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
                 .font(.system(size: 14)).lineLimit(2)
+        } else if let r = reactionPreview {
+            Text(r).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         } else if isPhotoPreview {
             HStack(spacing: 5) {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)

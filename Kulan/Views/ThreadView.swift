@@ -553,7 +553,7 @@ struct ThreadView: View {
                         onReply: { m in withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m } },
                         onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                         onTapImage: { viewerImage = $0 },
-                        onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, group: isGroup ? groupMembers : nil) } },
+                        onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                         onPin: { m in
                             if repo.pinnedMessageIds.contains(m.id) {
                                 Task { await ChatService.removePinnedMessage(cid, m.id) }
@@ -988,7 +988,7 @@ struct ThreadView: View {
         guard m.sendState == nil else { return }   // can't react to a message that isn't on the server yet
         let new = m.reactions[me] == emoji ? nil : emoji
         if let e = new { ReactionRecents.add(e) }
-        Task { await ChatService.setReaction(cid: cid, messageId: m.id, emoji: new, group: isGroup ? groupMembers : nil) }
+        Task { await ChatService.setReaction(cid: cid, messageId: m.id, emoji: new, toAuthor: m.authorId, group: isGroup ? groupMembers : nil) }
     }
 
 
