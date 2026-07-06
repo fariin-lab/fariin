@@ -82,32 +82,34 @@ struct StoryEditorView: View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
-                // Letterboxed photo → soft blurred SELF-backdrop behind the frame (user mock:
-                // the picture extends into a blur instead of flat black bars). Editor-only look.
-                if !imageFillsCanvas(geo.size) {
+                // Story canvas CARD (user reference, "image 2"): a FULL-WIDTH rounded canvas
+                // between the status area and the bottom controls, filled with a heavily muted,
+                // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
+                // earlier vivid full-screen blur, which was rejected). Black frames it above
+                // and below. Editor-only look; the posted image is untouched.
+                let cardTop = max(windowSafeTop - 4, 10)
+                let cardBottomGap = geo.safeAreaInsets.bottom + 72   // stays clear of the Aa/crop/draw + NEXT row
+                let cardH = geo.size.height - cardTop - cardBottomGap
+                if !imageFillsCanvas(geo.size), cardH > 0 {
                     Image(uiImage: edited).resizable().scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .blur(radius: 40, opaque: true)
-                        .clipped()
-                        .overlay(Color.black.opacity(0.18))   // slight dim so the controls stay readable
-                        .ignoresSafeArea()
+                        .frame(width: geo.size.width, height: cardH)
+                        .blur(radius: 90, opaque: true)
+                        .saturation(0.4)
+                        .overlay(Color.black.opacity(0.4))
+                        .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                        .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
                         .allowsHitTesting(false)
                 }
-                // Photo frame: sized to the picture itself (not the whole screen) with rounded
-                // corners when letterboxed — the mock's framed-photo look. Zoom/pan applied
-                // DIRECTLY to a UIImageView's transform in UIKit (no SwiftUI @State write
-                // per touch -> zero re-render mid-pinch -> butter smooth, anchored between the fingers).
+                // Photo: SQUARE-EDGED, full canvas width, lying on the card (the floating
+                // rounded-thumbnail look was rejected). Zoom/pan applied DIRECTLY to a
+                // UIImageView's transform in UIKit (no SwiftUI @State write per touch ->
+                // zero re-render mid-pinch -> butter smooth, anchored between the fingers).
                 // The final scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
-                // NOTE: a hard zoom+pan can put photo content outside this frame; the flatten clips to the
-                // full canvas, so exports can reveal slightly more than the frame showed — acceptable.
-                let fit = photoFitSize(in: geo.size)
-                let boxed = !imageFillsCanvas(geo.size)
                 ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
                                   maxScale: 4, interactive: !isDrawing && editingID == nil,
                                   onTap: { captionFocused = false; selectedID = nil })
-                    .frame(width: boxed ? fit.width : geo.size.width,
-                           height: boxed ? fit.height : geo.size.height)
-                    .clipShape(RoundedRectangle(cornerRadius: boxed ? 22 : 0, style: .continuous))
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
