@@ -1149,7 +1149,13 @@ struct StoryViewer: View {
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
         let blockTop = topInset + (avail - countArea - slotH) / 2
-        let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
+        // 1:1 WITH THE FINGER (user: one small jump mid-swipe, both ways): the shrink used to
+        // run only across p 0.08→0.9, so the photo sat FULL until 8% pulled (start dead zone),
+        // then jumped into motion — and on close it finished at 0.08 and waited (settle jump).
+        // Now it tracks the sheet from the FIRST pixel (0 → 0.9), so it grows/shrinks in
+        // lockstep with the drag, no dead zone at either end. Upper bound kept at 0.9 so the
+        // carousel hand-off is untouched.
+        let sizeP = max(0, min(1, p / 0.9))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         // TELEGRAM RULE: pure uniform zoom of the whole story, centre-anchored, zero cuts.
         // The landing scale (slotH/contentH) makes the story exactly the card's size — the
