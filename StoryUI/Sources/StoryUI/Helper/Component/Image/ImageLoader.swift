@@ -277,7 +277,22 @@ extension ImageLoader {
             drawHierarchy(in: bounds, afterScreenUpdates: false)
         }
         shimmer.isHidden = shimmerWasHidden
-        if let url = imageURL?.absoluteString { StoryCompositeCache.store(img, for: url) }
+        // The CACHE entry is SCREEN-SPACE: the story exactly as the full screen shows it, drawn
+        // at this view's true on-screen position into a screen-sized black canvas. The host's
+        // card windows are computed in screen coordinates, and the media view may be inset from
+        // the screen edges — caching only the media bounds shifted the photo inside the card
+        // (the "image jumping up" hand-off). Skip while mid-page-slide (x offset) or scaled.
+        let origin = convert(CGPoint.zero, to: nil)
+        if let url = imageURL?.absoluteString,
+           abs(origin.x) < 1, transform == .identity {
+            let screen = window?.bounds ?? UIScreen.main.bounds
+            let full = UIGraphicsImageRenderer(bounds: screen).image { ctx in
+                UIColor.black.setFill()
+                ctx.fill(screen)
+                img.draw(in: CGRect(origin: origin, size: bounds.size))
+            }
+            StoryCompositeCache.store(full, for: url)
+        }
         return img
     }
 
