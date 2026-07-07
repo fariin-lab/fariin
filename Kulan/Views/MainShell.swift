@@ -1354,6 +1354,11 @@ struct ChatRow: View, Equatable {
             // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
             AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
                        size: storySeen.isEmpty ? 56 : 49)
+                // This circle is the story's zoom anchor: opening from here grows the viewer out
+                // of THIS ring, and closing shrinks back into it (WhatsApp/Telegram behavior).
+                // Anchored on the PHOTO ONLY — with the ring inside the anchor, the hero
+                // stretched the grey ring segments during the zoom (user glitch screenshot).
+                .modifier(RowStoryAnchor(ns: storyNS, id: "row-\(conv.id)"))
                 .frame(width: 56, height: 56)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
@@ -1361,9 +1366,6 @@ struct ChatRow: View, Equatable {
                             .frame(width: 56, height: 56)
                     }
                 }
-                // This circle is the story's zoom anchor: opening from here grows the viewer out
-                // of THIS ring, and closing shrinks back into it (WhatsApp/Telegram behavior).
-                .modifier(RowStoryAnchor(ns: storyNS, id: "row-\(conv.id)"))
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
                 .modifier(StoryAvatarTap(active: !storySeen.isEmpty && onStoryTap != nil) { onStoryTap?() })
             VStack(alignment: .leading, spacing: 3) {
