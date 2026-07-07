@@ -1687,7 +1687,9 @@ private struct SnapshotCardContent: View {
                 Image(uiImage: snap).resizable()
                     .frame(width: slotW, height: miniH)
             } else {
-                StoryImage(url: url)   // fill crop placeholder — no rebuilt blur, ever
+                // Fit composite stand-in — the same framing the snapshot will have, so the
+                // swap-in is invisible (a fill-crop stand-in visibly popped, audit finding 5).
+                StoryImage(url: url, fitBlur: true)
                     .frame(width: slotW, height: miniH)
             }
         }
@@ -1743,7 +1745,9 @@ struct MyStoriesCarousel: View {
     private func endInteractionSoon() {
         interactGen += 1
         let gen = interactGen
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        // 0.55s, not 0.4: the 0.34s interactiveSpring still has a 1-3pt visible tail at
+        // 0.4s, so the centre hand-off happened on a still-moving card (audit finding 4).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
             if gen == interactGen, !dragging { onInteracting(false) }
         }
     }
