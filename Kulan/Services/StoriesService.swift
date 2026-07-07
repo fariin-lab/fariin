@@ -5,7 +5,7 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
 
-// One photo story. Rules-protected (v1, not E2EE); media is a plain image in Storage.
+// One story (photo or video). Rules-protected (v1, not E2EE); media is a plain file in Storage.
 struct Story: Identifiable, Hashable {
     let id: String
     let authorUid: String
@@ -14,6 +14,14 @@ struct Story: Identifiable, Hashable {
     let mediaUrl: String
     let allowsReplies: Bool
     var caption: String = ""   // Telegram-style overlay caption (stored as text, rendered in the viewer)
+    var isVideo: Bool = false
+    var duration: Double = 0   // video length in seconds (photos: 0 → viewer uses the 5s standard)
+    var thumbUrl: String = ""  // video poster frame (photos: empty)
+
+    // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
+    // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
+    // mediaUrl directly — a video's mediaUrl is an .mp4 and image-decodes to nothing.
+    var previewUrl: String { isVideo && !thumbUrl.isEmpty ? thumbUrl : mediaUrl }
 }
 
 // A person's active (unexpired) stories — the unit behind a ring in the row + the viewer.
@@ -113,6 +121,22 @@ final class StoriesService {
         uploading = false; uploadingImage = nil
     }
 
+    // Snapshot contacts on the MAIN actor (live-mutated there) and resolve the audience:
+    //  • included non-empty -> only those; • excluded non-empty -> everyone minus those; • else everyone.
+    // 1:1 contacts only (a group's otherUid is an arbitrary member → leak). Exclude anyone I've
+    // BLOCKED — `isBlockedByMe`, NOT `leaksBlocked`: the latter is a chat-list freeze test (true only
+    // if they messaged AFTER the block), so a quietly-blocked contact was slipping into the audience.
+    private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>) async -> (Set<String>, String) {
+        let allContacts = await MainActor.run {
+            Set(ConversationsRepository.shared.conversations
+                .filter { !$0.isGroup && !$0.isBlockedByMe(me) }
+                .map { $0.otherUid(me) }.filter { !$0.isEmpty })
+        }
+        if !included.isEmpty { return (included.intersection(allContacts), "only") }
+        if !excluded.isEmpty { return (allContacts.subtracting(excluded), "except") }
+        return (allContacts, "all")
+    }
+
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", expiryHours: Double = 24,
                    excluded: Set<String> = [], included: Set<String> = []) async throws {
@@ -122,22 +146,7 @@ final class StoriesService {
         let storyId = UUID().uuidString
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
-        // Snapshot contacts on the MAIN actor (live-mutated there). Audience:
-        //  • included non-empty -> only those; • excluded non-empty -> everyone minus those; • else everyone.
-        let allContacts = await MainActor.run {
-            Set(ConversationsRepository.shared.conversations
-                // 1:1 contacts only (a group's otherUid is an arbitrary member → leak). Exclude
-                // anyone I've BLOCKED — `isBlockedByMe`, NOT `leaksBlocked`: the latter is a
-                // chat-list freeze test (true only if they messaged AFTER the block), so a quietly-
-                // blocked contact was slipping into the audience and still getting my stories.
-                .filter { !$0.isGroup && !$0.isBlockedByMe(me) }
-                .map { $0.otherUid(me) }.filter { !$0.isEmpty })
-        }
-        let recipients: Set<String>
-        let mode: String
-        if !included.isEmpty { recipients = included.intersection(allContacts); mode = "only" }
-        else if !excluded.isEmpty { recipients = allContacts.subtracting(excluded); mode = "except" }
-        else { recipients = allContacts; mode = "all" }
+        let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
 
         // Empty recipients is OK: it's still MY OWN story (the `mine` query loads by authorUid, so I
         // always see it) — just with no other viewers yet (e.g. a brand-new account with no contacts).
@@ -190,6 +199,105 @@ final class StoriesService {
         } catch {
             try? await docRef.delete()
             try? await Storage.storage().reference().child(path).delete()
+            throw error
+        }
+    }
+
+    // Fire-and-forget VIDEO post — same shape as postStoryBackground. `thumbnail` is the poster
+    // frame the editor already generated; it drives the uploading ring/placeholder immediately
+    // while the transcode + upload run in the background.
+    @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false, caption: String = "",
+                                             excluded: Set<String> = [], included: Set<String> = []) {
+        uploadTask?.cancel()
+        uploadingImage = UIImage(data: thumbnail)
+        uploadStartedAt = Date()
+        if let u = URL(string: Self.uploadingURLString) {
+            let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: thumbnail.count, textEncodingName: nil)
+            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: thumbnail), for: URLRequest(url: u))
+        }
+        uploading = true
+        let token = UUID()
+        currentUploadToken = token
+        uploadTask = Task {
+            var failure: String?
+            var cancelled = false
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, caption: caption, excluded: excluded, included: included) }
+            catch is CancellationError { cancelled = true }
+            catch { failure = error.localizedDescription }
+            if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
+            await MainActor.run {
+                guard self.currentUploadToken == token else { return }
+                self.uploading = false; self.uploadingImage = nil; self.uploadTask = nil; self.uploadError = failure
+            }
+        }
+    }
+
+    // Post a video story: auto-trim to the first 30s (WhatsApp/Signal standard — never reject),
+    // transcode to 720p H.264, upload the poster thumb + the mp4, then fill both URLs atomically
+    // (the repository skips docs with an empty mediaUrl, so nobody sees a half-uploaded story).
+    func postVideoStory(videoURL: URL, muted: Bool = false, caption: String = "", expiryHours: Double = 24,
+                        excluded: Set<String> = [], included: Set<String> = []) async throws {
+        let me = uid
+        guard !me.isEmpty else { return }
+        try Task.checkCancellation()
+
+        // Transcode BEFORE creating the doc — a failed/cancelled transcode leaves zero server state.
+        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted) else {
+            throw NSError(domain: "Kulan", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
+        }
+        try Task.checkCancellation()
+
+        let storyId = UUID().uuidString
+        let videoPath = "stories/\(storyId)/video.mp4"
+        let thumbPath = "stories/\(storyId)/thumb.jpg"
+        let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
+
+        let docRef = db.collection("stories").document(storyId)
+        try await docRef.setData([
+            "authorUid": me,
+            "createdAt": FieldValue.serverTimestamp(),
+            "expiresAt": Timestamp(date: Date().addingTimeInterval(expiryHours * 3600)),
+            "type": "video",
+            "mediaPath": videoPath,
+            "mediaUrl": "",
+            "thumbUrl": "",
+            "duration": prepared.duration,
+            "caption": caption,
+            "audience": ["mode": mode, "listId": "my-story"],
+            "allowsReplies": true,
+            "replyCount": 0,
+            "recipientUids": Array(recipients),
+        ])
+
+        do {
+            try Task.checkCancellation()
+            let thumbRef = Storage.storage().reference().child(thumbPath)
+            let thumbMeta = StorageMetadata(); thumbMeta.contentType = "image/jpeg"
+            _ = try await thumbRef.putDataAsync(prepared.thumbnail, metadata: thumbMeta)
+            try Task.checkCancellation()
+            let videoRef = Storage.storage().reference().child(videoPath)
+            let videoMeta = StorageMetadata(); videoMeta.contentType = "video/mp4"
+            _ = try await videoRef.putDataAsync(prepared.data, metadata: videoMeta)
+            try Task.checkCancellation()
+            let thumbUrl = try await thumbRef.downloadURL().absoluteString
+            let videoUrl = try await videoRef.downloadURL().absoluteString
+            // One atomic update: recipients' listeners either see the full story or nothing.
+            try await docRef.updateData(["mediaUrl": videoUrl, "thumbUrl": thumbUrl])
+            // Warm both caches with the poster so my-story cards + the viewer's first frame are instant.
+            if let img = UIImage(data: prepared.thumbnail) {
+                DiskImageCache.shared.store(img, data: prepared.thumbnail, for: thumbUrl)
+            }
+            if let u = URL(string: thumbUrl) {
+                let resp = URLResponse(url: u, mimeType: "image/jpeg",
+                                       expectedContentLength: prepared.thumbnail.count, textEncodingName: nil)
+                URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: prepared.thumbnail),
+                                                    for: URLRequest(url: u))
+            }
+        } catch {
+            try? await docRef.delete()
+            try? await Storage.storage().reference().child(videoPath).delete()
+            try? await Storage.storage().reference().child(thumbPath).delete()
             throw error
         }
     }
@@ -331,7 +439,10 @@ final class StoriesRepository {
             return Story(id: d.documentID, authorUid: author, createdAt: created,
                          expiresAt: exp, mediaUrl: url,
                          allowsReplies: data["allowsReplies"] as? Bool ?? true,
-                         caption: data["caption"] as? String ?? "")
+                         caption: data["caption"] as? String ?? "",
+                         isVideo: data["type"] as? String == "video",
+                         duration: data["duration"] as? Double ?? 0,
+                         thumbUrl: data["thumbUrl"] as? String ?? "")
         }
     }
 

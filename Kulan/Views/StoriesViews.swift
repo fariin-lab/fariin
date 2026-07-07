@@ -291,7 +291,7 @@ struct StoriesRow: View {
                 ForEach(orderedOthers) { g in
                     // Each friend card is its OWN Equatable view so its long-press survives the row's
                     // re-renders (inline ForEach context menus only fired on the first card).
-                    StoryFriendCard(cover: g.stories.last?.mediaUrl,
+                    StoryFriendCard(cover: g.stories.last?.previewUrl,
                                     name: g.name.isEmpty ? "User" : g.name,
                                     avatar: g.photoUrl,
                                     seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt),
@@ -342,7 +342,7 @@ struct StoriesRow: View {
                     // while the upload keeps running in the background.
                     .onTapGesture { onOpenUploading() }
             } else {
-                card(cover: repo.mine?.stories.last?.mediaUrl ?? mePhoto,
+                card(cover: repo.mine?.stories.last?.previewUrl ?? mePhoto,
                      name: "My Story", avatar: mePhoto,
                      seen: StoryPrefs.seenFlags(repo.mine?.stories ?? [], upTo: repo.mine?.lastViewedAt), onBadge: onCompose) {
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
@@ -353,7 +353,7 @@ struct StoriesRow: View {
                     Button { if let m = repo.mine, !m.stories.isEmpty { onOpen(m) } }
                         label: { Label("Posted Stories", systemImage: "circle.dashed") }
                 } preview: {
-                    coverImage(repo.mine?.stories.last?.mediaUrl ?? mePhoto, name: "My Story", avatar: mePhoto)
+                    coverImage(repo.mine?.stories.last?.previewUrl ?? mePhoto, name: "My Story", avatar: mePhoto)
                         .frame(width: cardW, height: cardH)
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }
@@ -690,6 +690,9 @@ struct StoryViewer: View {
                         isSeen: g.isMine
                             ? StoryPrefs.isStorySeen(s.id)
                             : (StoryPrefs.isStorySeen(s.id) || s.createdAt <= (g.lastViewedAt ?? .distantPast)),
+                        // Video runs its REAL length (the player refines it from the loaded asset);
+                        // photos keep the 5s standard.
+                        duration: s.isVideo && s.duration > 0.5 ? s.duration : 5,
                         // My own story in the MINE-ONLY viewer: WE draw the caption pinned above the
                         // footer (below), so suppress the library's here. In a mixed feed (no footer,
                         // no custom caption) keep the library's caption or it would show nowhere.
@@ -703,7 +706,7 @@ struct StoryViewer: View {
                                                emojis: [["❤️", "😂", "😮"], ["😢", "👏", "🔥"]],
                                                placeholder: "Send message…")
                                     : .plain()),
-                            mediaType: .image
+                            mediaType: s.isVideo ? .video : .image
                         )
                     )
                 }
@@ -772,13 +775,18 @@ struct StoryViewer: View {
         }
         // "…" dropdown menu actions (posted from the library header Menu) — run on LIVE state here.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionSave"))) { _ in
-            saveCurrentImage(currentStory?.mediaUrl)
+            if currentStory?.isVideo == true { saveCurrentVideo(currentStory?.mediaUrl) }
+            else { saveCurrentImage(currentStory?.mediaUrl) }
         }
+        // Forward/Share pipelines are image-based (they re-encode a UIImage); on a video story they
+        // would silently do nothing. Say so honestly instead — proper video forward/share comes later.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionForward"))) { _ in
+            guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { forwardImg = StoryImagePayload(image: img) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShare"))) { _ in
+            guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { shareImg = StoryImagePayload(image: img) } }
         }
@@ -1214,6 +1222,27 @@ struct StoryViewer: View {
         }
     }
 
+    // Video story → Photos: download the mp4 to a temp file, then add it as a video asset.
+    private func saveCurrentVideo(_ mediaUrl: String?) {
+        Task {
+            guard let s = mediaUrl, let url = URL(string: s) else { return }
+            guard let (tmp, _) = try? await URLSession.shared.download(from: url) else { return }
+            // .download hands back an extension-less temp file; PhotoKit needs .mp4 to accept it.
+            let mp4 = FileManager.default.temporaryDirectory.appendingPathComponent("story-save-\(UUID().uuidString).mp4")
+            try? FileManager.default.moveItem(at: tmp, to: mp4)
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else { return }
+            try? await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: mp4)
+            }
+            try? FileManager.default.removeItem(at: mp4)
+            await MainActor.run {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                flashSentToast("Saved")
+            }
+        }
+    }
+
     // Reply text / tapped emoji / like → DM the story's author (mirrors the old sendToAuthor).
     private func handle(storyId: String, message: String?, emoji: String?, isLiked: Bool) {
         let typed = (message?.trimmingCharacters(in: .whitespaces)).flatMap { $0.isEmpty ? nil : $0 }
@@ -1235,7 +1264,7 @@ struct StoryViewer: View {
         guard !text.isEmpty else { return }
         let cid = [me, s.authorUid].sorted().joined(separator: "_")
         // Attach the status reference so the reply shows as a "Status" quote (thumbnail) in chat.
-        let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.mediaUrl)
+        let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.previewUrl)
         let isReaction = typed == nil && (emoji != nil || isLiked)
         Task {
             try? await ChatService.sendText(cid: cid, text: text, replyTo: ref)
@@ -1668,7 +1697,7 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        return StoryImage(url: s.mediaUrl, fitBlur: true)   // whole image + blur, same as the story/morph
+        return StoryImage(url: s.previewUrl, fitBlur: true)   // whole image + blur, same as the story/morph
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
             .frame(width: slotW, height: slotH)

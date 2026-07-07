@@ -1003,7 +1003,7 @@ struct ArchivedChatsView: View {
                     Button { viewerGroup = g } label: {
                         VStack(spacing: 6) {
                             ZStack(alignment: .bottomLeading) {
-                                StoryImage(url: g.stories.last?.mediaUrl ?? "")
+                                StoryImage(url: g.stories.last?.previewUrl ?? "")
                                     .frame(width: storyCardW, height: storyCardW * 1.46)
                                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // match home cards
                                 AvatarView(name: g.name, photoUrl: g.photoUrl, size: 32)

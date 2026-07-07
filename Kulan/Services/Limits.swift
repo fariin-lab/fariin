@@ -21,7 +21,7 @@ enum Limits {
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
     static let storyUploadBytes = 100 * 1024 * 1024              // 100 MB
-    static let storyVideoSeconds = 60
+    static let storyVideoSeconds = 30   // WhatsApp/Signal cap; longer picks are auto-trimmed, never rejected
     static let storyCaptionChars = 700
 
     // Groups

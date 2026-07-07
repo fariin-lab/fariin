@@ -168,7 +168,7 @@ struct MyProfileView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(mine.stories) { s in
-                            AsyncImage(url: URL(string: s.mediaUrl)) { p in
+                            AsyncImage(url: URL(string: s.previewUrl)) { p in
                                 if let img = p.image { img.resizable().scaledToFill() }
                                 else { Color.secondary.opacity(0.2) }
                             }

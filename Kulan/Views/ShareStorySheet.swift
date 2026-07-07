@@ -4,11 +4,17 @@ import UIKit
 // Flattened story image awaiting the audience sheet (used by both the photo editor + text composer).
 struct StoryShareData: Identifiable { let id = UUID(); let data: Data; var caption: String = "" }
 
+// A picked video awaiting the audience sheet: the source file + the poster frame the editor
+// already generated (drives the uploading ring immediately; the transcode runs in the background).
+// muted = the editor's speaker toggle → the upload strips the audio track (real, like WhatsApp).
+struct StoryVideoPayload { let url: URL; let thumbnail: Data; var muted: Bool = false }
+
 // "Share Story" audience sheet: choose who sees the story, then Post.
 // Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
 struct ShareStorySheet: View {
     let image: Data
     var caption: String = ""
+    var video: StoryVideoPayload? = nil   // set → posts a video story instead of the photo
     var onPosted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -155,12 +161,23 @@ struct ShareStorySheet: View {
         UserDefaults.standard.set(Array(included), forKey: "storyAudIncluded")
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         posting = true
-        StoriesService.shared.postStoryBackground(
-            image: image,
-            caption: caption,
-            excluded: mode == 1 ? excluded : [],
-            included: mode == 2 ? included : []
-        )
+        if let video {
+            StoriesService.shared.postVideoStoryBackground(
+                videoURL: video.url,
+                thumbnail: video.thumbnail,
+                muted: video.muted,
+                caption: caption,
+                excluded: mode == 1 ? excluded : [],
+                included: mode == 2 ? included : []
+            )
+        } else {
+            StoriesService.shared.postStoryBackground(
+                image: image,
+                caption: caption,
+                excluded: mode == 1 ? excluded : [],
+                included: mode == 2 ? included : []
+            )
+        }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import Photos
+import AVFoundation
 
 // "Add to Story" picker — clean + minimalist with a Photos / Albums top tab.
 //  • Photos: a Text card + Camera tile + a 4-col grid of recent photos.
@@ -12,6 +13,8 @@ struct AddStorySheet: View {
     @State private var tab = 0                 // 0 = Photos, 1 = Albums
     @State private var openAlbum: AlbumInfo?
     @State private var editorImage: EditorImage?
+    @State private var editorVideo: EditorVideo?
+    @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
     @State private var pendingCapture: UIImage?   // camera shot held until the camera cover dismisses
     @State private var pendingTextStory: StoryShareData?   // text story held until the composer cover dismisses
     @State private var shareTextStory: StoryShareData?     // then shown to the audience sheet
@@ -39,6 +42,11 @@ struct AddStorySheet: View {
             .fullScreenCover(item: $editorImage) { item in
                 StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
             }
+            .fullScreenCover(item: $editorVideo) { item in
+                StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
+            }
+            .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
             // Stash the capture + dismiss the camera; present the editor in onDismiss so two
             // fullScreenCovers never fight (which silently dropped the captured shot).
             .fullScreenCover(isPresented: $showCamera, onDismiss: {
@@ -120,10 +128,38 @@ struct AddStorySheet: View {
         StoryThumb(asset: asset, store: store)
             .aspectRatio(1, contentMode: .fill)
             .clipped()
-            .onTapGesture { Task { if let ui = await store.fullImage(asset) { editorImage = EditorImage(ui) } } }
+            // Video tiles get the standard duration badge (bottom-right, like Photos/WhatsApp).
+            .overlay(alignment: .bottomTrailing) {
+                if asset.mediaType == .video {
+                    Text(durationLabel(asset.duration))
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5))
+                        .padding(4)
+                }
+            }
+            .onTapGesture {
+                if asset.mediaType == .video {
+                    guard !loadingVideo else { return }
+                    loadingVideo = true
+                    Task {
+                        let url = await store.videoURL(asset)
+                        loadingVideo = false
+                        if let url { editorVideo = EditorVideo(url) }
+                    }
+                } else {
+                    Task { if let ui = await store.fullImage(asset) { editorImage = EditorImage(ui) } }
+                }
+            }
+    }
+
+    private func durationLabel(_ s: TimeInterval) -> String {
+        let t = Int(s.rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
     }
 
     struct EditorImage: Identifiable { let id = UUID(); let image: UIImage; init(_ i: UIImage) { image = i } }
+    struct EditorVideo: Identifiable { let id = UUID(); let url: URL; init(_ u: URL) { url = u } }
 
     private var cameraTile: some View {
         Button { showCamera = true } label: {
@@ -192,12 +228,17 @@ final class PhotoGridStore: ObservableObject {
     @Published var albums: [AlbumInfo] = []
     private let manager = PHCachingImageManager()
 
+    // Photos AND videos (stories take both, like every big app).
+    private static let mediaPredicate = NSPredicate(
+        format: "mediaType == %d OR mediaType == %d",
+        PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+
     func load() {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
             guard status == .authorized || status == .limited else { return }
             let opts = PHFetchOptions()
             opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-            opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+            opts.predicate = Self.mediaPredicate
             let result = PHAsset.fetchAssets(with: opts)
             var arr: [PHAsset] = []
             result.enumerateObjects { a, _, _ in arr.append(a) }
@@ -211,7 +252,7 @@ final class PhotoGridStore: ObservableObject {
             guard status == .authorized || status == .limited else { return }
             var out: [AlbumInfo] = []
             let imgOpts = PHFetchOptions()
-            imgOpts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+            imgOpts.predicate = Self.mediaPredicate
             func collect(_ collections: PHFetchResult<PHAssetCollection>) {
                 collections.enumerateObjects { coll, _, _ in
                     let assets = PHAsset.fetchAssets(in: coll, options: imgOpts)
@@ -230,7 +271,7 @@ final class PhotoGridStore: ObservableObject {
     func assets(in collection: PHAssetCollection) -> [PHAsset] {
         let opts = PHFetchOptions()
         opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        opts.predicate = Self.mediaPredicate
         let result = PHAsset.fetchAssets(in: collection, options: opts)
         var arr: [PHAsset] = []
         result.enumerateObjects { a, _, _ in arr.append(a) }
@@ -258,5 +299,29 @@ final class PhotoGridStore: ObservableObject {
                 cont.resume(returning: img)
             }
         }
+    }
+
+    // Resolve a picked video asset to a playable file URL. Plain assets hand back their file
+    // directly (AVURLAsset); edited/slow-mo ones come back as an AVComposition, so fall back to a
+    // passthrough export into a temp file. iCloud-offloaded videos download first (network allowed).
+    func videoURL(_ asset: PHAsset) async -> URL? {
+        let opts = PHVideoRequestOptions()
+        opts.deliveryMode = .highQualityFormat
+        opts.isNetworkAccessAllowed = true
+        let av: AVAsset? = await withCheckedContinuation { cont in
+            var resumed = false   // PhotoKit can call back more than once (degraded → final)
+            manager.requestAVAsset(forVideo: asset, options: opts) { av, _, _ in
+                guard !resumed else { return }
+                resumed = true
+                cont.resume(returning: av)
+            }
+        }
+        guard let av else { return nil }
+        if let urlAsset = av as? AVURLAsset { return urlAsset.url }
+        // AVComposition (slow-mo / edited): export as-is to a temp mp4.
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("story-pick-\(UUID().uuidString).mp4")
+        guard let session = AVAssetExportSession(asset: av, presetName: AVAssetExportPresetPassthrough) else { return nil }
+        do { try await session.export(to: out, as: .mp4) } catch { return nil }
+        return out
     }
 }

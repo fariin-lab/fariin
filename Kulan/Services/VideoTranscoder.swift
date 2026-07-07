@@ -13,14 +13,35 @@ enum VideoTranscoder {
         let height: Double
     }
 
-    static func prepare(_ url: URL) async -> Prepared? {
+    // maxSeconds: hard cap for stories (WhatsApp/Signal rule — longer videos are auto-trimmed
+    // to the first N seconds, never rejected). nil = full length (video messages).
+    // stripAudio: the story editor's mute — re-composes with the video track ONLY, so the
+    // sound is genuinely gone from the uploaded file (not just muted in the preview).
+    static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false) async -> Prepared? {
         let asset = AVURLAsset(url: url)
-        guard let duration = try? await asset.load(.duration).seconds, duration > 0 else { return nil }
+        guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
+        var duration = fullTime.seconds
+
+        var exportAsset: AVAsset = asset
+        if stripAudio {
+            let comp = AVMutableComposition()
+            guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first,
+                  let compTrack = comp.addMutableTrack(withMediaType: .video,
+                                                       preferredTrackID: kCMPersistentTrackID_Invalid),
+                  (try? compTrack.insertTimeRange(CMTimeRange(start: .zero, duration: fullTime),
+                                                  of: videoTrack, at: .zero)) != nil else { return nil }
+            compTrack.preferredTransform = (try? await videoTrack.load(.preferredTransform)) ?? .identity
+            exportAsset = comp
+        }
 
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("send-\(UUID().uuidString).mp4")
         try? FileManager.default.removeItem(at: out)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else { return nil }
+        guard let session = AVAssetExportSession(asset: exportAsset, presetName: AVAssetExportPreset1280x720) else { return nil }
         session.shouldOptimizeForNetworkUse = true
+        if let cap = maxSeconds, duration > cap {
+            session.timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: cap, preferredTimescale: 600))
+            duration = cap
+        }
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
         try? FileManager.default.removeItem(at: out)
