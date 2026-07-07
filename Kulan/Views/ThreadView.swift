@@ -619,7 +619,10 @@ struct ThreadView: View {
                     .equatable()   // skip re-rendering bubbles whose value-inputs are unchanged (H2/H3/M1)
                     .padding(.top, topGap(at: index))   // tight when grouped, wider on sender change
                     .id(msg.id)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))   // Signal-style slide-in
+                    // Slide-in ONLY once the open has settled: the initial load arrives in
+                    // chunks (cache -> live), and rows sliding in from the bottom during those
+                    // chunks read as the whole conversation jumping up and down on open.
+                    .transition(settled ? .move(edge: .bottom).combined(with: .opacity) : .identity)
                 }
             }
             if repo.otherTyping && !repo.iBlocked && typingPref {
@@ -1037,6 +1040,10 @@ struct ThreadView: View {
     // Page in older history and keep the user's position (anchor the current top
     // message to the top after the older page prepends, so the list doesn't jump).
     private func loadOlderWithAnchor(_ proxy: ScrollViewProxy) {
+        // Never paginate while the open is still settling: on a short history the top sentinel
+        // is visible immediately, and the prepend + anchor-scroll fought the bottom pinning -
+        // the conversation visibly jumped up and down right after opening (user report).
+        guard settled else { return }
         guard repo.canLoadOlder, !repo.loadingOlder else { return }
         let anchor = repo.items.first?.id
         repo.loadOlder {
