@@ -1685,7 +1685,10 @@ struct MyStoriesCarousel: View {
         let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
         let active = byStory[focusedID] ?? []
         let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
-        let gap: CGFloat = 12
+        // Layout gap 2 reads as ~20pt on screen: the neighbours' 0.72 scale-down shrinks them
+        // toward their centres, adding ~10pt of AIR per facing edge on top of the layout gap
+        // (user: the old 12 made the cards look far apart).
+        let gap: CGFloat = 2
         let step = slotW + gap
         let n = stories.count
         let totalW = CGFloat(n) * slotW + CGFloat(max(0, n - 1)) * gap
