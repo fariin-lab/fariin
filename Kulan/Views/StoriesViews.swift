@@ -1265,16 +1265,16 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
-    // TELEGRAM-EXACT (user's final call): the centre is the REAL story scaled as ONE living
-    // unit — through the drag AND at rest. No stand-in card renderer, no trimming, no
-    // re-framing. (The settle stand-in existed to mask geometry mismatches now fixed at the
-    // root: aspect-true zoom endpoint == card size, factory frames at contentH, freeze
-    // overlays cropped 1:1.) The story steps aside ONLY while the carousel is actively
-    // swiping; its backdrop is FROZEN pixels (storyFreezeBlur), so scaling never re-blurs.
+    // The REAL story (frozen photograph) is the morph through the whole drag — one unit,
+    // nothing re-blurred. Once SETTLED into the slot it steps aside for the carousel's own
+    // centre card: a card-sized render is crisp and tonally identical to its neighbours,
+    // while the scaled-down full-screen photograph read as "extra blur" on the centre
+    // (user screenshot). The zoom endpoint equals the card exactly, so the swap is invisible;
+    // any pull-down brings the photograph straight back (binary, no fractional material).
     private var storyLayerSteppedAside: Bool {
-        carouselInteracting && viewersProgress > 0.9
+        (carouselInteracting && viewersProgress > 0.9) || viewersProgress >= 0.97
     }
-    private var hideCarouselCentreContent: Bool { !carouselInteracting }
+    private var hideCarouselCentreContent: Bool { false }
 
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
@@ -1732,10 +1732,9 @@ struct MyStoriesCarousel: View {
         let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
         let active = byStory[focusedID] ?? []
         let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
-        // Layout gap 2 reads as ~20pt on screen: the neighbours' 0.72 scale-down shrinks them
-        // toward their centres, adding ~10pt of AIR per facing edge on top of the layout gap
-        // (user: the old 12 made the cards look far apart).
-        let gap: CGFloat = 2
+        // Clear AIR between cards (user: cards were touching) — the neighbours' 0.80
+        // scale-down adds breathing room on top of this layout gap.
+        let gap: CGFloat = 10
         let step = slotW + gap
         let n = stories.count
         let totalW = CGFloat(n) * slotW + CGFloat(max(0, n - 1)) * gap
@@ -1858,15 +1857,15 @@ struct MyStoriesCarousel: View {
             }
             // UNIFORM LAYOUT, VISUAL-ONLY ZOOM (user spec): every card occupies the exact same
             // fixed Story-frame base at all times; this transform never touches layout. Each card
-            // measures its distance from the SCREEN centre: t=0 centred → 1.0, t=1 one slot away
-            // → 0.88 — a SUBTLE zoom-out for the sides (0.72 read as a structural size jump
-            // while swiping). Recomputes live as the row scrolls, so the zoom is continuous.
+            // measures its distance from the SCREEN centre: t=0 centred → 1.0 (clearly ZOOMED
+            // relative to the row), t=1 one slot away → 0.80. Recomputes live as the row
+            // scrolls, so the zoom is continuous while swiping.
             .visualEffect { content, proxy in
                 let t = Self.centreDistance(proxy)
                 return content
-                    .scaleEffect(1.0 - 0.12 * t)
-                    .opacity(1.0 - 0.2 * t)
-                    .saturation(1.0 - 0.3 * t)
+                    .scaleEffect(1.0 - 0.20 * t)
+                    .opacity(1.0 - 0.25 * t)
+                    .saturation(1.0 - 0.35 * t)
             }
             .id(s.id)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
