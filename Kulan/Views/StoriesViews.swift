@@ -40,9 +40,11 @@ struct StoryRingView: View {
 // on the visible card's edges. radius 0 = plain content rect.
 struct StoryCardClip: Shape {
     var radius: CGFloat
-    var contentHeight: CGFloat
+    var topCut: CGFloat = 0        // centre-crop: the window starts this far down (unscaled)
+    var contentHeight: CGFloat     // ...and ends at this absolute bottom edge
     func path(in rect: CGRect) -> Path {
-        let r = CGRect(x: 0, y: 0, width: rect.width, height: min(contentHeight, rect.height))
+        let bottom = min(contentHeight, rect.height)
+        let r = CGRect(x: 0, y: topCut, width: rect.width, height: max(0, bottom - topCut))
         return Path(roundedRect: r, cornerRadius: radius, style: .continuous)
     }
 }
@@ -971,8 +973,9 @@ struct StoryViewer: View {
             // Trim to the photo area ONLY while the sheet morph is engaged. Trimming at rest
             // sliced the owner footer (Views/Delete) clean off and left a transparent hole the
             // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
-            // strip below contentHeight.
-            contentHeight: (showViewers && viewersProgress > 0.01) ? morphContentH : .greatestFiniteMagnitude))
+            // strip below contentHeight. The morph's centre-crop window grows with progress.
+            topCut: (showViewers && viewersProgress > 0.01) ? morphGeometry.topCut : 0,
+            contentHeight: (showViewers && viewersProgress > 0.01) ? morphContentH - morphGeometry.topCut : .greatestFiniteMagnitude))
         .scaleEffect(x: morphGeometry.scaleX, y: morphGeometry.scaleY, anchor: .top)
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
@@ -1095,18 +1098,28 @@ struct StoryViewer: View {
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
     // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
     // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat) {
+    // Telegram-reference card shape (user mockup 2026-07-07): chunkier than the raw screen
+    // aspect. The story scales until its WIDTH fills the slot and the vertical overflow is
+    // centre-CROPPED by the clip window — cropped, never stretched (the card rule).
+    static let viewersCardAspect: CGFloat = 0.65
+
+    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat) {
         let p = viewersProgress
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
         let avail = scr.height - sheetH - topInset
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
+        let slotW = slotH * Self.viewersCardAspect
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let s = 1 - (1 - slotH / max(contentH, 1)) * sizeP
-        return (sizeP, s, s, blockTop * sizeP)
+        let s1 = slotW / scr.width
+        let s = 1 - (1 - s1) * sizeP
+        let cut = max(0, (contentH - slotH / max(s1, 0.01)) / 2) * sizeP
+        // The clip window's top must land at blockTop when settled: the layer's own top sits
+        // cut·s above the window, so the offset compensates for it.
+        return (sizeP, s, s, blockTop * sizeP - cut * s, cut)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
@@ -1137,11 +1150,13 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        // ASPECT-TRUE width (story's real shape → the shrunk story lands on it EXACTLY, no
-        // stretch, no hand-off size change). With the 0.60 sheet the width computes to ~231's
-        // chunky 120pt — the user's chosen look, now stable by construction.
+        // Reference card shape (Telegram mockup): the slot is chunkier than the raw screen
+        // aspect and the story content centre-crops into it — cropped, never stretched. The
+        // cards render the SAME mini-screen composite the morph lands on (miniH tall, window
+        // slotH), so hand-offs stay pixel-identical by construction.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotW = slotH * (scr.width / max(contentH, 1))
+        let slotW = slotH * Self.viewersCardAspect
+        let miniH = slotW * (contentH / scr.width)
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
@@ -1153,7 +1168,7 @@ struct StoryViewer: View {
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
-                              slotW: slotW, slotH: slotH,
+                              slotW: slotW, slotH: slotH, miniH: miniH,
                               onActiveTap: { closeViewers() },
                               // Centre card content shows at FULL SETTLE too (not just while swiping):
                               // the settled 'card' used to be the REAL story scaled 0.3x, and a
@@ -1624,6 +1639,7 @@ struct MyStoriesCarousel: View {
     @Binding var activeId: String
     let slotW: CGFloat
     let slotH: CGFloat
+    let miniH: CGFloat                  // full mini-screen composite height; the card is its slotH centre window
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
     var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
     var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
@@ -1641,13 +1657,14 @@ struct MyStoriesCarousel: View {
     @State private var dragX: CGFloat = 0     // live horizontal finger translation
     @State private var dragging = false
 
-    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat,
+    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
          onInteracting: @escaping (Bool) -> Void = { _ in }) {
         self.stories = stories
         self._activeId = activeId
         self.slotW = slotW
         self.slotH = slotH
+        self.miniH = miniH
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
         self.onInteracting = onInteracting
@@ -1765,10 +1782,11 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true)   // whole image + blur-matched bars (see below)
+        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true)   // the mini-screen composite (photo + blur bars)
+            .frame(width: slotW, height: miniH)                    // full composite, morph-scale sized...
+            .frame(width: slotW, height: slotH)                    // ...centre-cropped to the slot window
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
-            .frame(width: slotW, height: slotH)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(alignment: .bottom) {
                 // Side cards show a small count inside; the CENTRED card hides it (big count below).
