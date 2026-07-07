@@ -339,11 +339,13 @@ extension ImageLoader {
         guard Self.freezeWanted, frozenBlur == nil,
               imageView.image != nil, imageView.contentMode == .scaleAspectFit,
               bounds.width > 0 else { return }
-        // Prefer the already-captured screen-space composite: rasterizing NOW fails subtly when
-        // the view sits under a live transform (the sheet has it scaled after a carousel jump —
-        // the material misrenders darker). The cached capture is the correct vivid original.
+        // LIVE-FIRST (user spec: the frozen blur must be an exact clone of what is on screen —
+        // any difference reads as "the blur changed" the instant the pull starts). At engagement
+        // the view is unscaled, so rasterizing the live pixels is a perfect copy; the cached
+        // composite (possibly rendered offscreen by the factory) is only the fallback for
+        // moments when a live capture isn't possible (e.g. mid-jump).
         let cached = imageURL.flatMap { StoryCompositeCache.image(for: $0.absoluteString) }
-        guard var img = cached ?? rasterizeComposite() else { return }
+        guard var img = rasterizeComposite() ?? cached else { return }
         // The cached composite is SCREEN-space (taller than this media view by the footer
         // strip). Squashing it into bounds shifted every bar up and squeezed the baked black
         // strip into a visible "extra bar" at the card's bottom (audit finding 1) — crop the
