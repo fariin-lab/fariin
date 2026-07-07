@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVKit
 import WebRTC
 
 // Full-screen in-app call UI — rebuilt from scratch to match the reference:
@@ -268,9 +269,7 @@ struct CallView: View {
             if call.cameraOn {
                 callCircle("arrow.triangle.2.circlepath", active: false) { call.switchCamera() }
             }
-            // One steady speaker glyph; ON = filled white circle (the slash icon looked like
-            // something was muted even when it wasn't).
-            callCircle("speaker.wave.2.fill", active: call.isSpeaker) { call.toggleSpeaker() }
+            speakerCircle
             endCircle
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -280,6 +279,29 @@ struct CallView: View {
                 .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
         }
         .padding(.horizontal, 18)
+    }
+
+    // Smart speaker (WhatsApp/FaceTime): no external device → plain earpiece/speaker toggle.
+    // AirPods/Bluetooth/wired connected → the glyph shows the LIVE route and the tap opens the
+    // NATIVE system route picker (AVRoutePickerView) to choose iPhone / AirPods / Speaker.
+    @ViewBuilder private var speakerCircle: some View {
+        if call.externalAudioAvailable {
+            ZStack {
+                Image(systemName: call.audioRoute == .external ? "headphones" : "speaker.wave.2.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .foregroundStyle(call.audioRoute == .earpiece ? .white : .black)
+                    .frame(width: 52, height: 52)
+                    .background(call.audioRoute == .earpiece ? AnyShapeStyle(.clear) : AnyShapeStyle(.white), in: Circle())
+                    .liquidGlass(Circle(), interactive: true, enabled: call.audioRoute == .earpiece)
+                // Invisible native picker on top — owns the tap, opens the system route sheet.
+                AudioRoutePicker().frame(width: 52, height: 52).clipShape(Circle())
+            }
+        } else {
+            // One steady speaker glyph; ON = filled white circle (the slash icon looked like
+            // something was muted even when it wasn't).
+            callCircle("speaker.wave.2.fill", active: call.isSpeaker) { call.toggleSpeaker() }
+        }
     }
 
     private func callCircle(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
@@ -292,7 +314,10 @@ struct CallView: View {
                 .contentTransition(.symbolEffect(.replace))   // mic/speaker/camera slash morphs in
                 .foregroundStyle(active ? .black : .white)
                 .frame(width: 52, height: 52)
-                .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(Color.white.opacity(0.16)), in: Circle())
+                // Idle = real Liquid Glass circle (was a flat white-16% fill); active keeps the
+                // solid white pop (WhatsApp look), where glass would just mute the contrast.
+                .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
+                .liquidGlass(Circle(), interactive: true, enabled: !active)
         }
         .buttonStyle(CallControlStyle())
     }
@@ -304,10 +329,25 @@ struct CallView: View {
         } label: {
             Image(systemName: "phone.down.fill")
                 .font(.system(size: 21, weight: .semibold)).foregroundStyle(.white)
-                .frame(width: 52, height: 52).background(.red, in: Circle())
+                .frame(width: 52, height: 52)
+                // Red Liquid Glass (still unmistakably the hang-up button, but native glass).
+                .liquidGlass(Circle(), interactive: true, tint: Color(.systemRed))
         }
         .buttonStyle(CallControlStyle())
     }
+}
+
+// The system audio-route picker (the exact FaceTime one), rendered invisible so our own
+// glyph shows underneath; the view stays fully tappable and presents the native picker.
+struct AudioRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let v = AVRoutePickerView()
+        v.prioritizesVideoDevices = false
+        v.tintColor = .clear
+        v.activeTintColor = .clear
+        return v
+    }
+    func updateUIView(_ v: AVRoutePickerView, context: Context) {}
 }
 
 // MARK: - CallContainer

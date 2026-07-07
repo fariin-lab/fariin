@@ -29,6 +29,7 @@ final class CallService: NSObject {
             if state == .active {
                 if cameraOn { isSpeaker = true }   // video calls default to speakerphone (like FaceTime)
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
+                startRouteObservation()   // smart speaker button: track where audio actually goes
             }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
@@ -250,6 +251,42 @@ final class CallService: NSObject {
         // RTCAudioSession.lockForConfiguration() can deadlock when called while CallKit
         // is also configuring the session (e.g. right after answer/connect).
         try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
+    }
+
+    // MARK: - Audio route awareness (smart speaker button)
+
+    // Where call audio is coming out right now. With no external device the speaker button is a
+    // plain earpiece/speaker toggle; with AirPods/Bluetooth/wired around, the button shows the
+    // live route and opens the NATIVE route picker instead (FaceTime/WhatsApp behavior).
+    enum AudioRoute { case earpiece, speaker, external }
+    var audioRoute: AudioRoute = .earpiece
+    var externalAudioAvailable = false
+    private var routeObserver: NSObjectProtocol?
+
+    func startRouteObservation() {
+        guard routeObserver == nil else { return }
+        updateAudioRoute()
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.updateAudioRoute()
+        }
+    }
+
+    private func updateAudioRoute() {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs
+        if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
+        else if outputs.contains(where: { $0.portType == .builtInReceiver }) || outputs.isEmpty { audioRoute = .earpiece }
+        else { audioRoute = .external }
+        // Keep the toggle state honest no matter WHAT moved the route (picker, AirPods
+        // connecting mid-call, CallKit) — the button highlight reads from this.
+        isSpeaker = audioRoute == .speaker
+        // Any external playback device around? Bluetooth headsets surface as available INPUTS
+        // during a playAndRecord call; a currently-external route obviously counts too.
+        let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
+                                                  .headphones, .headsetMic, .carAudio]
+        let hasExternalInput = (session.availableInputs ?? []).contains { external.contains($0.portType) }
+        externalAudioAvailable = hasExternalInput || audioRoute == .external
     }
 
     // Ringback the CALLER hears while waiting (generated tone, looped). Ensure the
