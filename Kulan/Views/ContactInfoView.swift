@@ -64,7 +64,6 @@ struct ContactInfoView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)   // show nav bar (back + title) below the notch
         .toolbar(.hidden, for: .tabBar)           // hide the Chats/Calls/Settings bar — match
-        .hidesKulanTabBar()
                                                   // the chat-opened profile (was still showing
                                                   // when opened from the Calls tab)
         .navigationBarBackButtonHidden(false)

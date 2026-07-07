@@ -215,7 +215,6 @@ struct ThreadView: View {
     private var threadCovers: some View {
         threadScroll
         .toolbar(.hidden, for: .tabBar)
-        .hidesKulanTabBar()   // the custom bar floats above the TabView, so it needs its own signal
         // Native nav bar KEPT (real edge-swipe-back that follows your finger + reveals the list), but
         // its BACKGROUND is hidden — no solid bar / border, so the chat scrolls up under a transparent
         // floating header (the Signal "no border, see the background" look). Avatar/name/call buttons
