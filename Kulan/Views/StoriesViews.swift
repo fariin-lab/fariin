@@ -1118,10 +1118,8 @@ struct StoryViewer: View {
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
     // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
     // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    // Telegram-reference card shape (user mockup 2026-07-07): chunkier than the raw screen
-    // aspect. The story scales until its WIDTH fills the slot and the vertical overflow is
-    // centre-CROPPED by the clip window — cropped, never stretched (the card rule).
-    static let viewersCardAspect: CGFloat = 0.65
+    // (The Telegram-reference 0.65 card aspect was retired: a chunky card REQUIRES cropping
+    // the story, and the user's final spec is the whole image, uncropped, always.)
 
     private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat) {
         let p = viewersProgress
@@ -1130,22 +1128,14 @@ struct StoryViewer: View {
         let avail = scr.height - sheetH - topInset
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        let slotW = slotH * Self.viewersCardAspect
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let s1 = slotW / scr.width
-        let s = 1 - (1 - s1) * sizeP
-        // Centre the crop window on the PHOTO, not the content box: aspect-fit photos centre on
-        // the SCREEN, and a content-centred window sat lower — unequal top/bottom bars (user
-        // screenshot). Clamped inside the content so the footer strip never enters the card.
-        let winH = slotH / max(s1, 0.01)
-        let winTopFull = min(max(scr.height / 2 - winH / 2, 0), max(0, contentH - winH))
-        let topCut = winTopFull * sizeP
-        let botCut = max(0, contentH - winTopFull - winH) * sizeP
-        // The clip window's top must land at blockTop when settled: the layer's own top sits
-        // topCut·s above the window, so the offset compensates for it.
-        return (sizeP, s, s, blockTop * sizeP - topCut * s, topCut, botCut)
+        // NO CROPPING, ever (user video: the centre-crop ate the image's top mid-drag). The
+        // WHOLE story scales uniformly until its full content height fits the slot; the card
+        // is the story's own shape. topCut/botCut stay in the signature but are always 0.
+        let s = 1 - (1 - slotH / max(contentH, 1)) * sizeP
+        return (sizeP, s, s, blockTop * sizeP, 0, 0)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
@@ -1176,19 +1166,14 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        // Reference card shape (Telegram mockup): the slot is chunkier than the raw screen
-        // aspect and the story content centre-crops into it — cropped, never stretched. The
-        // cards render the SAME mini-screen composite the morph lands on (miniH tall, window
-        // slotH), so hand-offs stay pixel-identical by construction.
+        // NO CROPPING (user spec): the card is the story's OWN shape — the whole content,
+        // scaled. slotW follows from the content aspect; the screen-aspect mini frame shows
+        // the full composite top-aligned, and the slotH window is exactly the content region
+        // (the strip below it is the footer area, black in the snapshot).
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotW = slotH * Self.viewersCardAspect
-        // SCREEN-aspect mini frame (not content-aspect): the cards render the captured
-        // full-screen composite, and the window maths below are all in screen space.
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let miniH = slotW * (scr.height / scr.width)
-        // MIRROR of morphGeometry's window: photo-centred, clamped into the content.
-        let s1 = slotW / scr.width
-        let winH = slotH / max(s1, 0.01)
-        let cropY = min(max(scr.height / 2 - winH / 2, 0), max(0, contentH - winH)) * s1
+        let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
