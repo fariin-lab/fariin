@@ -525,6 +525,10 @@ private struct StoryFriendCard: View, Equatable {
 // from the story row's long-press instead). `StoryUI.Story` is qualified to avoid colliding with
 // our own `Story` type.
 struct StoryViewer: View {
+    // Presentations WITHOUT the zoom transition (story opened from a chat reply-quote) have no
+    // native interactive dismiss — the library's own swipe-down pan closes them instead. False
+    // everywhere the zoom hero exists (the two dismissals would race — device-proven).
+    let ownSwipeDismiss: Bool
     let groups: [StoryGroup]
     var startIndex: Int = 0
     var anonymous: Bool
@@ -654,18 +658,22 @@ struct StoryViewer: View {
     // the last item, auto-dismissed the whole viewer (taking the sheet with it).
     private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil }
 
-    init(group: StoryGroup, anonymous: Bool = false, onClose: @escaping () -> Void,
+    init(group: StoryGroup, anonymous: Bool = false, ownSwipeDismiss: Bool = false,
+         onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
-        self.init(groups: [group], startIndex: 0, anonymous: anonymous, onClose: onClose, onProfile: onProfile,
+        self.init(groups: [group], startIndex: 0, anonymous: anonymous, ownSwipeDismiss: ownSwipeDismiss,
+                  onClose: onClose, onProfile: onProfile,
                   onDeletedRemaining: onDeletedRemaining)
     }
-    init(groups: [StoryGroup], startIndex: Int = 0, anonymous: Bool = false, onClose: @escaping () -> Void,
+    init(groups: [StoryGroup], startIndex: Int = 0, anonymous: Bool = false, ownSwipeDismiss: Bool = false,
+         onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
         self.groups = groups
         self.startIndex = startIndex
         self.anonymous = anonymous
+        self.ownSwipeDismiss = ownSwipeDismiss
         self.onClose = onClose
         self.onProfile = onProfile
         self.onDeletedRemaining = onDeletedRemaining
@@ -1088,7 +1096,8 @@ struct StoryViewer: View {
                     closeViewers()
                 }
             },
-            dismissEnabled: false,   // Apple's zoom-dismiss is the ONLY swipe-close (user's final call)
+            dismissEnabled: ownSwipeDismiss,   // zoom presentations: Apple's dismiss ONLY (user's final call);
+                                               // reply-quote presentations have no zoom — the library pan closes
             swipeUpEnabled: true   // library's DirectionalPan(.up) owns swipe-up: with the direction-sign
                                    // fix it fires reliably, and it FAILS cleanly on downward drags — unlike
                                    // the removed SwiftUI DragGesture whose activation cancelled the down pan
@@ -1597,7 +1606,7 @@ struct UploadingStoryHandoff: View {
         ZStack {
             Color.black.ignoresSafeArea()   // constant backdrop so the re-feed never blinks
             if let g = group {
-                StoryViewer(group: g, onClose: onClose, onProfile: onProfile)
+                StoryViewer(group: g, ownSwipeDismiss: true, onClose: onClose, onProfile: onProfile)
                     // Re-feed identity when the upload flips done → open on the real just-posted story
                     // (image already URLCache-warm from postStory, so the swap is seamless).
                     .id(svc.uploading)

@@ -241,7 +241,10 @@ struct ThreadView: View {
     private var threadPickers: some View {
         threadCovers
         .fullScreenCover(item: $storyToOpen) { g in
-            StoryViewer(group: g, onClose: { storyToOpen = nil }, onProfile: { _ in storyToOpen = nil })
+            // No zoom hero on this cover -> the viewer's own swipe-down closes it (without
+            // this, scroll-down-to-close simply did nothing here - user report).
+            StoryViewer(group: g, ownSwipeDismiss: true,
+                        onClose: { storyToOpen = nil }, onProfile: { _ in storyToOpen = nil })
         }
         .alert("Status no longer available", isPresented: $statusUnavailable) {
             Button("OK", role: .cancel) {}

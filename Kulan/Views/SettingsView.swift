@@ -138,7 +138,7 @@ struct MyProfileView: View {
         .sheet(isPresented: $showEdit) { EditProfileView() }
         .task { await stories.load() }
         .fullScreenCover(item: $viewerGroup) { g in
-            StoryViewer(group: g) { viewerGroup = nil; Task { await stories.load(force: true) } }
+            StoryViewer(group: g, ownSwipeDismiss: true) { viewerGroup = nil; Task { await stories.load(force: true) } }
         }
     }
 

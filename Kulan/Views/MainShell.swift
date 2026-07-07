@@ -1086,7 +1086,8 @@ struct ArchivedChatsView: View {
                 ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
             .fullScreenCover(item: $viewerGroup) { g in
-                StoryViewer(group: g, onClose: { viewerGroup = nil }, onProfile: { _ in viewerGroup = nil })
+                StoryViewer(group: g, ownSwipeDismiss: true,   // no zoom hero on this cover -> library pan closes
+                            onClose: { viewerGroup = nil }, onProfile: { _ in viewerGroup = nil })
             }
             .toolbar {
                 if selecting {
