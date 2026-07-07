@@ -975,7 +975,7 @@ struct StoryViewer: View {
             // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
             // strip below contentHeight. The morph's centre-crop window grows with progress.
             topCut: (showViewers && viewersProgress > 0.01) ? morphGeometry.topCut : 0,
-            contentHeight: (showViewers && viewersProgress > 0.01) ? morphContentH - morphGeometry.topCut : .greatestFiniteMagnitude))
+            contentHeight: (showViewers && viewersProgress > 0.01) ? morphContentH - morphGeometry.botCut : .greatestFiniteMagnitude))
         .scaleEffect(x: morphGeometry.scaleX, y: morphGeometry.scaleY, anchor: .top)
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
@@ -1103,7 +1103,7 @@ struct StoryViewer: View {
     // centre-CROPPED by the clip window — cropped, never stretched (the card rule).
     static let viewersCardAspect: CGFloat = 0.65
 
-    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat) {
+    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat) {
         let p = viewersProgress
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
@@ -1116,10 +1116,16 @@ struct StoryViewer: View {
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         let s1 = slotW / scr.width
         let s = 1 - (1 - s1) * sizeP
-        let cut = max(0, (contentH - slotH / max(s1, 0.01)) / 2) * sizeP
+        // Centre the crop window on the PHOTO, not the content box: aspect-fit photos centre on
+        // the SCREEN, and a content-centred window sat lower — unequal top/bottom bars (user
+        // screenshot). Clamped inside the content so the footer strip never enters the card.
+        let winH = slotH / max(s1, 0.01)
+        let winTopFull = min(max(scr.height / 2 - winH / 2, 0), max(0, contentH - winH))
+        let topCut = winTopFull * sizeP
+        let botCut = max(0, contentH - winTopFull - winH) * sizeP
         // The clip window's top must land at blockTop when settled: the layer's own top sits
-        // cut·s above the window, so the offset compensates for it.
-        return (sizeP, s, s, blockTop * sizeP - cut * s, cut)
+        // topCut·s above the window, so the offset compensates for it.
+        return (sizeP, s, s, blockTop * sizeP - topCut * s, topCut, botCut)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
@@ -1157,6 +1163,10 @@ struct StoryViewer: View {
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         let slotW = slotH * Self.viewersCardAspect
         let miniH = slotW * (contentH / scr.width)
+        // MIRROR of morphGeometry's window: photo-centred, clamped into the content.
+        let s1 = slotW / scr.width
+        let winH = slotH / max(s1, 0.01)
+        let cropY = min(max(scr.height / 2 - winH / 2, 0), max(0, contentH - winH)) * s1
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
@@ -1168,7 +1178,7 @@ struct StoryViewer: View {
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
-                              slotW: slotW, slotH: slotH, miniH: miniH,
+                              slotW: slotW, slotH: slotH, miniH: miniH, cropY: cropY,
                               onActiveTap: { closeViewers() },
                               // Centre card content shows at FULL SETTLE too (not just while swiping):
                               // the settled 'card' used to be the REAL story scaled 0.3x, and a
@@ -1639,7 +1649,8 @@ struct MyStoriesCarousel: View {
     @Binding var activeId: String
     let slotW: CGFloat
     let slotH: CGFloat
-    let miniH: CGFloat                  // full mini-screen composite height; the card is its slotH centre window
+    let miniH: CGFloat                  // full mini-screen composite height; the card shows a slotH window of it
+    let cropY: CGFloat                  // the window's top within the composite (photo-centred, mirrors the morph)
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
     var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
     var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
@@ -1657,7 +1668,7 @@ struct MyStoriesCarousel: View {
     @State private var dragX: CGFloat = 0     // live horizontal finger translation
     @State private var dragging = false
 
-    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat,
+    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
          onInteracting: @escaping (Bool) -> Void = { _ in }) {
         self.stories = stories
@@ -1665,6 +1676,7 @@ struct MyStoriesCarousel: View {
         self.slotW = slotW
         self.slotH = slotH
         self.miniH = miniH
+        self.cropY = cropY
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
         self.onInteracting = onInteracting
@@ -1790,7 +1802,8 @@ struct MyStoriesCarousel: View {
         // blur next to the frozen real story in the centre slot.
         return StoryImage(url: s.previewUrl, fitBlur: true)   // the mini-screen composite (photo + blur bars)
             .frame(width: slotW, height: miniH)                    // full composite, morph-scale sized...
-            .frame(width: slotW, height: slotH)                    // ...centre-cropped to the slot window
+            .offset(y: -cropY)                                     // ...slid so the photo-centred window shows
+            .frame(width: slotW, height: slotH, alignment: .top)   // ...cropped to the slot window
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
