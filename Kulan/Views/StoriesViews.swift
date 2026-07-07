@@ -835,20 +835,7 @@ struct StoryViewer: View {
         // the open spring kills the animator via the arbiter's fresh-claim hook. Every write
         // re-arms this; if progress then sits mid-air untouched for 0.8s — no finger writes,
         // no animator ticks — snap to the nearest rest state.
-        .onChange(of: viewersProgress) { _, p in
-            progressWatchdog?.cancel(); progressWatchdog = nil
-            guard showViewers, p > 0.02, p < 0.97 else { return }
-            progressWatchdog = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 800_000_000)
-                guard !Task.isCancelled, showViewers,
-                      viewersProgress > 0.02, viewersProgress < 0.97 else { return }
-                if viewersProgress >= 0.5 {
-                    sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
-                } else {
-                    closeViewers()
-                }
-            }
-        }
+        .onChange(of: viewersProgress) { _, p in rearmProgressWatchdog(p) }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
@@ -1216,6 +1203,22 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
+    // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
+    private func rearmProgressWatchdog(_ p: CGFloat) {
+        progressWatchdog?.cancel(); progressWatchdog = nil
+        guard showViewers, p > 0.02, p < 0.97 else { return }
+        progressWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled, showViewers,
+                  viewersProgress > 0.02, viewersProgress < 0.97 else { return }
+            if viewersProgress >= 0.5 {
+                sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
+            } else {
+                closeViewers()
+            }
+        }
+    }
+
     private func closeViewers() {
         closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         sheetAnimator.animate(from: viewersProgress, to: 0, write: { viewersProgress = $0 }) {
