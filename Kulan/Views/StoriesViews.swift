@@ -1137,10 +1137,9 @@ struct StoryViewer: View {
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
     // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
     // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    // The card's fixed shape: 9:16, the natural story ratio (user's final spec 2026-07-08:
-    // "must strictly maintain the native story aspect ratio... never stretch or add blur
-    // padding"). The symmetric window trims blur padding, never the photo.
-    static let viewersCardAspect: CGFloat = 9.0 / 16.0
+    // (Fixed-aspect cards retired for good — the TELEGRAM RULE: the card is the zoom's
+    // endpoint, the story's own shape. Any fixed card shape forces trimming or a settle
+    // mismatch; both were user-rejected.)
 
     private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat) {
         let p = viewersProgress
@@ -1149,17 +1148,12 @@ struct StoryViewer: View {
         let avail = scr.height - sheetH - topInset
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        let slotW = slotH * Self.viewersCardAspect
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // PURE ZOOM, whole image, centre-anchored (user spec: "the whole image should shrink
-        // smoothly from its original position... not cropped, only a smooth zoom"). The story
-        // scales uniformly with NO window cropping; its CENTRE travels linearly from the
-        // screen's content centre to the slot centre, so top and bottom converge together —
-        // scaling from the top read as "only the top part shrinks". The 9:16 cards take over
-        // in the final crossfade (carIn) and at settle (the card-to-card rest state).
-        _ = slotW   // the fixed card shape lives in viewersBackdrop; the morph is aspect-true
+        // TELEGRAM RULE: pure uniform zoom of the whole story, centre-anchored, zero cuts.
+        // The landing scale (slotH/contentH) makes the story exactly the card's size — the
+        // settle swap is pixel-identical, so the image can never jump.
         let s1 = slotH / max(contentH, 1)
         let s = 1 - (1 - s1) * sizeP
         let restCentre = contentH / 2
@@ -1196,14 +1190,14 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        // MIRROR of morphGeometry: fixed 9:16 card, symmetric content-centred window — trims
-        // the blur padding equally top+bottom, the photo (content-centred) never moves.
+        // TELEGRAM RULE (user's final spec, reference video): the image NEVER changes — it
+        // only zooms. So the card must be the zoom's exact endpoint: the story's OWN shape,
+        // the whole content, zero trimming. Morph endpoint == card content == pixel identical,
+        // which kills the settle jump by construction.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotW = slotH * Self.viewersCardAspect
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let miniH = slotW * (scr.height / scr.width)
-        let s1 = slotW / scr.width
-        let winH = slotH / max(s1, 0.01)
-        let cropY = max(0, (contentH - winH) / 2) * s1
+        let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
