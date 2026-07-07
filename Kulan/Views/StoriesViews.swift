@@ -18,7 +18,7 @@ struct StoryRingView: View {
         // 0.62 read as white on the dark card).
         let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C759), Color(hex: 0x0A84FF)],
                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-        let grey = AnyShapeStyle(Color(white: 0.46))
+        let grey = AnyShapeStyle(Color(hex: 0x49494B))   // user-picked seen-ring grey
         ZStack {
             ForEach(0..<n, id: \.self) { i in
                 let isSeen = i < seen.count ? seen[i] : false
