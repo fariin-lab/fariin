@@ -339,11 +339,22 @@ extension ImageLoader {
         guard Self.freezeWanted, frozenBlur == nil,
               imageView.image != nil, imageView.contentMode == .scaleAspectFit,
               bounds.width > 0 else { return }
-        // Prefer the already-captured screen-space composite: rasterizing NOW fails subtly when
-        // the view sits under a live transform (the sheet has it scaled after a carousel jump —
-        // the material misrenders darker). The cached capture is the correct vivid original.
+        // ROOT-CAUSE FIX (user: "blur broke, sometimes"): Apple's UIVisualEffectView blur does
+        // NOT render when the story is captured OFFSCREEN (StorySnapshotFactory.warm renders it
+        // behind the window root) — that yields a weak, see-through backdrop which then gets
+        // cached and reused, so the frozen blur looks broken. At the FIRST pull-up the story is
+        // on screen at full size, so a FRESH capture (afterScreenUpdates: true = blur guaranteed
+        // committed) is the correct, fully-blurred original. Only fall back to the cache when the
+        // view is under the sheet's scale (a carousel jump — a live rasterize there misrenders
+        // the material darker; the older comment's warning still holds for THAT case only).
+        let onScreenFullSize: Bool = {
+            guard window != nil else { return false }
+            let inWindow = convert(bounds, to: nil)
+            return abs(inWindow.width - bounds.width) < 2 && abs(inWindow.height - bounds.height) < 2
+        }()
+        let live = onScreenFullSize ? rasterizeComposite(afterScreenUpdates: true) : nil
         let cached = imageURL.flatMap { StoryCompositeCache.image(for: $0.absoluteString) }
-        guard var img = cached ?? rasterizeComposite() else { return }
+        guard var img = live ?? cached ?? rasterizeComposite() else { return }
         // The cached composite is SCREEN-space (taller than this media view by the footer
         // strip). Squashing it into bounds shifted every bar up and squeezed the baked black
         // strip into a visible "extra bar" at the card's bottom (audit finding 1) — crop the
@@ -366,15 +377,18 @@ extension ImageLoader {
     // The container's blur samples only its own fill subview, so drawing the hierarchy captures
     // the material composite correctly. Every capture also feeds StoryCompositeCache so the
     // viewers-sheet cards can render the ORIGINAL blur for this story.
-    private func rasterizeComposite() -> UIImage? {
+    private func rasterizeComposite(afterScreenUpdates: Bool = false) -> UIImage? {
         guard bounds.width > 0, window != nil,
               imageView.image != nil,
               imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars
         else { return nil }
         let shimmerWasHidden = shimmer.isHidden
         shimmer.isHidden = true
+        // afterScreenUpdates: true forces the pending blur pass to commit BEFORE the snapshot,
+        // so the freeze can never catch a half-rendered (weak) UIVisualEffectView. Used at
+        // pull-up freeze time; the cheap background cache-capture stays false (no frame hitch).
         let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
-            drawHierarchy(in: bounds, afterScreenUpdates: false)
+            drawHierarchy(in: bounds, afterScreenUpdates: afterScreenUpdates)
         }
         shimmer.isHidden = shimmerWasHidden
         // The CACHE entry is SCREEN-SPACE: the story exactly as the full screen shows it, drawn
