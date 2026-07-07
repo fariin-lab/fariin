@@ -69,6 +69,7 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var isAtBottom = true
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
+    @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
     @State private var replyStoryAnchorId = ""                // the tapped quote's anchor (per-message unique)
     @State private var newWhileAway = 0
@@ -122,6 +123,16 @@ struct ThreadView: View {
                     )
             }
             .defaultScrollAnchor(.bottom)
+            // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
+            // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
+            .opacity(revealed ? 1 : 0)
+            .onChange(of: repo.items.isEmpty) { _, empty in
+                if !empty, !revealed { DispatchQueue.main.async { revealed = true } }
+            }
+            .task {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                revealed = true   // empty/slow chats still show (composer, announcement bars)
+            }
             .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
             .onChange(of: repo.items.count) { old, new in
                 guard new > old else { return }
@@ -1054,8 +1065,12 @@ struct ThreadView: View {
         guard settled else { return }
         guard repo.canLoadOlder, !repo.loadingOlder else { return }
         let anchor = repo.items.first?.id
+        let pinnedAtBottom = isAtBottom
         repo.loadOlder {
-            guard let anchor else { return }
+            // Pinned at the bottom, a top-prepend doesn't move what you see — the anchor
+            // scroll was the thing CAUSING the lurch ~1s after opening (user video). Only
+            // preserve position when the user is actually reading history.
+            guard let anchor, !pinnedAtBottom else { return }
             DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) }
         }
     }
