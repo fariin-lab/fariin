@@ -55,7 +55,10 @@ final class PlayerView: UIView {
             case .success(let url):
                 self?.setupPlayer(url)
             case .failure(let error):
+                // Never leave the viewer on an eternal spinner: AVPlayer streams https mp4s
+                // fine, so a cache failure falls back to playing the remote URL directly.
                 print(error)
+                DispatchQueue.main.async { self?.setupPlayer(validatedUrl) }
             }
         }
     }
