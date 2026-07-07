@@ -969,7 +969,11 @@ struct StoryViewer: View {
         // the "follows then stutters" jank — corners now apply only once the card has
         // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
         .clipShape(StoryCardClip(
-            radius: viewersProgress >= 0.97 ? 24 / max(morphScale, 0.2) : 0,
+            // Rounded through the WHOLE morph (radius eases in with sizeP; 24pt on screen at
+            // settle). Historically settle-only: a per-frame variable radius over the LIVE
+            // material stuttered — but the blur is FROZEN pixels during the morph now, so
+            // rounding is cheap and the corners no longer pop off mid-drag (user screenshot).
+            radius: morphClipRadius,
             // Trim to the photo area ONLY while the sheet morph is engaged. Trimming at rest
             // sliced the owner footer (Views/Delete) clean off and left a transparent hole the
             // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
