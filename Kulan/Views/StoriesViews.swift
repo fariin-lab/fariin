@@ -1782,7 +1782,10 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true)   // the mini-screen composite (photo + blur bars)
+        // ORIGINAL blur only (user: "remove the second blur"): the card renders the same live
+        // material the full-screen story uses — the baked imitation read as a different, darker
+        // blur next to the frozen real story in the centre slot.
+        return StoryImage(url: s.previewUrl, fitBlur: true)   // the mini-screen composite (photo + blur bars)
             .frame(width: slotW, height: miniH)                    // full composite, morph-scale sized...
             .frame(width: slotW, height: slotH)                    // ...centre-cropped to the slot window
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
