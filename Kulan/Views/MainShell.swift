@@ -469,6 +469,10 @@ struct ChatsView: View {
     @State private var showCompose = false
     @State private var viewerGroup: StoryGroup?
     @State private var viewerAnonymous = false
+    // WHERE the story was opened from — the zoom grows out of (and closes back into) the
+    // exact circle the user tapped: a top stories-row card (its group id) or a chat-row
+    // ring ("row-<cid>"). Set BEFORE viewerGroup at every open site.
+    @State private var viewerSourceID: String = ""
     @State private var showUploadViewer = false   // live viewer for the still-uploading story
     @State private var profileGroup: StoryGroup?
     @Namespace private var storyNS   // zoom transition: story card ⇄ full-screen viewer
@@ -720,9 +724,11 @@ struct ChatsView: View {
                                     storySeen: storySeen(conv),
                                     onStoryTap: {   // open this person's story in the same viewer the stories row uses
                                         if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
+                                            viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
                                             viewerAnonymous = false; viewerGroup = g
                                         }
                                     },
+                                    storyNS: storyNS,
                                     draft: Drafts.shared.text(conv.id),
                                     voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                                 .equatable()   // skip rebuild when this conversation is unchanged
@@ -788,10 +794,10 @@ struct ChatsView: View {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                  storyNS: storyNS,
                                  onCompose: { showCompose = true },
-                                 onOpen: { g in viewerAnonymous = false; viewerGroup = g },
+                                 onOpen: { g in viewerSourceID = g.id; viewerAnonymous = false; viewerGroup = g },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
-                                 onOpenAnon: { g in viewerAnonymous = true; viewerGroup = g },
+                                 onOpenAnon: { g in viewerSourceID = g.id; viewerAnonymous = true; viewerGroup = g },
                                  onOpenUploading: { showUploadViewer = true })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
@@ -873,7 +879,9 @@ struct ChatsView: View {
                 // fold is now gated to real horizontal page swipes only, and the library's custom
                 // dismiss pan is REMOVED (dismissEnabled: false) so exactly ONE close gesture
                 // exists — Apple's. Do not reintroduce a custom dismiss pan alongside this.
-                .navigationTransition(.zoom(sourceID: g.id, in: storyNS))
+                // Zoom from WHEREVER the story was opened: a top stories-row card or a chat-row
+                // ring — viewerSourceID is set at every open site (falls back to the card).
+                .navigationTransition(.zoom(sourceID: viewerSourceID.isEmpty ? g.id : viewerSourceID, in: storyNS))
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting
@@ -1153,6 +1161,21 @@ private struct ChatRowPressStyle: ButtonStyle {
     }
 }
 
+// Registers the ringed avatar as a zoom-transition anchor when a namespace is provided —
+// the story viewer grows out of, and closes back into, this exact circle. The namespace is
+// constant for the view's lifetime, so the branch never changes identity.
+private struct RowStoryAnchor: ViewModifier {
+    let ns: Namespace.ID?
+    let id: String
+    func body(content: Content) -> some View {
+        if let ns {
+            content.matchedTransitionSource(id: id, in: ns)
+        } else {
+            content
+        }
+    }
+}
+
 // Adds a high-priority tap ONLY when the avatar has a story, so it opens the story instead of the
 // chat; otherwise the row's normal open-chat tap is untouched.
 private struct StoryAvatarTap: ViewModifier {
@@ -1170,6 +1193,7 @@ struct ChatRow: View, Equatable {
     let dark: Bool
     var storySeen: [Bool] = []      // per-segment seen flags for this person's stories ([] = no active story)
     var onStoryTap: (() -> Void)? = nil   // tap the ringed avatar → open their story (not the chat)
+    var storyNS: Namespace.ID? = nil      // zoom namespace: the ringed avatar anchors the story open/close
     var draft: String = ""          // unsent composer text (local-only) → "Draft:" preview
     var voiceUnplayed: Bool = false // newest incoming voice note not played yet → accent mic
 
@@ -1336,6 +1360,9 @@ struct ChatRow: View, Equatable {
                             .frame(width: 56, height: 56)
                     }
                 }
+                // This circle is the story's zoom anchor: opening from here grows the viewer out
+                // of THIS ring, and closing shrinks back into it (WhatsApp/Telegram behavior).
+                .modifier(RowStoryAnchor(ns: storyNS, id: "row-\(conv.id)"))
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
                 .modifier(StoryAvatarTap(active: !storySeen.isEmpty && onStoryTap != nil) { onStoryTap?() })
             VStack(alignment: .leading, spacing: 3) {
