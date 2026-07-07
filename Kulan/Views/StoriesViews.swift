@@ -126,6 +126,14 @@ struct StoryImage: View {
                             .overlay(Image(uiImage: image).resizable().scaledToFill())
                             .clipped()
                             .transition(.opacity)
+                    } else if let frozen = StoryCompositeCache.image(for: url) {
+                        // THE ORIGINAL, guaranteed: the story exactly as it rendered full screen
+                        // (photo + its real material bars, captured by ImageLoader). No re-built
+                        // blur anywhere (user spec: the card must be the original image + blur).
+                        Color.clear
+                            .overlay(Image(uiImage: frozen).resizable().scaledToFill())
+                            .clipped()
+                            .transition(.opacity)
                     } else {
                         // ORIGINAL nesting (build 216): fill INSIDE the first overlay, the blur layer as a
                         // SECOND overlay on Color.clear — so the blur is sized to the CARD, never to the
@@ -1166,7 +1174,9 @@ struct StoryViewer: View {
         // slotH), so hand-offs stay pixel-identical by construction.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         let slotW = slotH * Self.viewersCardAspect
-        let miniH = slotW * (contentH / scr.width)
+        // SCREEN-aspect mini frame (not content-aspect): the cards render the captured
+        // full-screen composite, and the window maths below are all in screen space.
+        let miniH = slotW * (scr.height / scr.width)
         // MIRROR of morphGeometry's window: photo-centred, clamped into the content.
         let s1 = slotW / scr.width
         let winH = slotH / max(s1, 0.01)

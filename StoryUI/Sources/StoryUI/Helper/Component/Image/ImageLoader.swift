@@ -34,6 +34,16 @@ enum StoryDiskCache {
     }
 }
 
+// The story exactly as it renders FULL SCREEN — photo + its real material bars, one image.
+// Captured whenever a fit story is displayed; the host app's viewers-sheet cards render THIS
+// (the original blur, guaranteed) instead of re-building fill+material at card size, which
+// reads as a different, darker blur (heavier relative blur + dimming at small sizes).
+public enum StoryCompositeCache {
+    private static let cache = NSCache<NSString, UIImage>()
+    public static func image(for url: String) -> UIImage? { cache.object(forKey: url as NSString) }
+    static func store(_ img: UIImage, for url: String) { cache.setObject(img, forKey: url as NSString) }
+}
+
 // Shimmering skeleton placeholder (instead of a spinner) while an image is fetched — feels faster.
 final class ShimmerView: UIView {
     private let gradient = CAGradientLayer()
@@ -123,6 +133,7 @@ final class ImageLoader: UIView {
         imageView.image = image
         backgroundImageView.image = image
         decideContentMode()        // fixed for this image; never recomputed on layout/drag
+        if image != nil { scheduleCompositeCapture() }
     }
 
     private func showShimmer(_ show: Bool) {
@@ -243,25 +254,44 @@ extension ImageLoader {
     // (fill + material composite) into plain pixels and hides the live blur: frozen pixels scale
     // like a photograph, identical at every size. Unfreeze restores the live material at full screen.
     @objc private func freezeBlur() {
-        guard frozenBlur == nil,
-              bounds.width > 0,
-              imageView.image != nil,
-              imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars to freeze
-        else { return }
-        let shimmerWasHidden = shimmer.isHidden
-        shimmer.isHidden = true
-        // This container's blur samples only its own fill subview, so drawing the hierarchy
-        // captures the material composite correctly.
-        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
-            drawHierarchy(in: bounds, afterScreenUpdates: false)
-        }
-        shimmer.isHidden = shimmerWasHidden
+        guard frozenBlur == nil, let img = rasterizeComposite() else { return }
         let iv = UIImageView(image: img)
         iv.frame = bounds
         iv.contentMode = .scaleToFill
         insertSubview(iv, aboveSubview: blurView)
         blurView.isHidden = true
         frozenBlur = iv
+    }
+
+    // The container's blur samples only its own fill subview, so drawing the hierarchy captures
+    // the material composite correctly. Every capture also feeds StoryCompositeCache so the
+    // viewers-sheet cards can render the ORIGINAL blur for this story.
+    private func rasterizeComposite() -> UIImage? {
+        guard bounds.width > 0, window != nil,
+              imageView.image != nil,
+              imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars
+        else { return nil }
+        let shimmerWasHidden = shimmer.isHidden
+        shimmer.isHidden = true
+        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            drawHierarchy(in: bounds, afterScreenUpdates: false)
+        }
+        shimmer.isHidden = shimmerWasHidden
+        if let url = imageURL?.absoluteString { StoryCompositeCache.store(img, for: url) }
+        return img
+    }
+
+    // Capture the full-screen composite shortly after a fit image is shown (view settled,
+    // material rendered). Cheap, once per story per session (cache hit skips it).
+    private func scheduleCompositeCapture() {
+        guard imageView.contentMode == .scaleAspectFit,
+              let url = imageURL?.absoluteString,
+              StoryCompositeCache.image(for: url) == nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, let current = self.imageURL?.absoluteString, current == url,
+                  StoryCompositeCache.image(for: url) == nil else { return }
+            _ = self.rasterizeComposite()
+        }
     }
 
     @objc private func unfreezeBlur() {
