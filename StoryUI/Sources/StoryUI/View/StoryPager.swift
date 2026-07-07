@@ -278,12 +278,6 @@ struct StoryPager: UIViewControllerRepresentable {
             switch g.state {
             case .began:
                 NotificationCenter.default.post(name: .pauseStory, object: nil)
-                // The IG status-bar strip is the pager's black backing showing above the media
-                // card. The native zoom-dismiss scales the WHOLE cover, so a black backing rode
-                // along as a slab on top of the shrinking card (user screenshot). Go clear the
-                // moment a dismiss drag starts — the opaque media card alone shrinks over the
-                // chat list; restored if the drag springs back.
-                pager.view.backgroundColor = .clear
             case .ended:
                 let ty = g.translation(in: pager.view).y
                 let vy = g.velocity(in: pager.view).y
@@ -292,18 +286,11 @@ struct StoryPager: UIViewControllerRepresentable {
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
                 } else {
                     // Released gently: the system gesture decides commit/cancel on its own;
-                    // resume so a cancelled drag never leaves the story frozen. The system
-                    // needs a beat to decide — restore the backing only if we are still here.
+                    // resume so a cancelled drag never leaves the story frozen.
                     NotificationCenter.default.post(name: .resumeStory, object: nil)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-                        self?.pager?.view.backgroundColor = .black
-                    }
                 }
             case .cancelled, .failed:
                 NotificationCenter.default.post(name: .resumeStory, object: nil)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-                    self?.pager?.view.backgroundColor = .black
-                }
             default: break
             }
         }

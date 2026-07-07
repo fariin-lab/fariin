@@ -1141,13 +1141,10 @@ struct StoryViewer: View {
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         // NO CROPPING, ever (user video: the centre-crop ate the image's top mid-drag). The
-        // WHOLE story card scales uniformly until it fits the slot. The card now starts BELOW
-        // the status bar (IG top strip), so the window's top is that inset — black strip
-        // excluded, image pixels never touched.
-        let mediaTop = topInset
-        let s = 1 - (1 - slotH / max(contentH - mediaTop, 1)) * sizeP
-        let cut = mediaTop * sizeP
-        return (sizeP, s, s, blockTop * sizeP - cut * s, cut, 0)
+        // WHOLE story scales uniformly until its full content height fits the slot; the card
+        // is the story's own shape. topCut/botCut stay in the signature but are always 0.
+        let s = 1 - (1 - slotH / max(contentH, 1)) * sizeP
+        return (sizeP, s, s, blockTop * sizeP, 0, 0)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
@@ -1178,13 +1175,14 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        // NO CROPPING (user spec): the card is the story card's OWN shape — the whole content,
-        // scaled. The media region is [topInset, contentH] now (IG top strip), so the card
-        // aspect and the snapshot slice both start at the inset.
+        // NO CROPPING (user spec): the card is the story's OWN shape — the whole content,
+        // scaled. slotW follows from the content aspect; the screen-aspect mini frame shows
+        // the full composite top-aligned, and the slotH window is exactly the content region
+        // (the strip below it is the footer area, black in the snapshot).
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotW = slotH * (scr.width / max(contentH - topInset, 1))
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let miniH = slotW * (scr.height / scr.width)
-        let cropY: CGFloat = topInset * (slotW / scr.width)
+        let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
