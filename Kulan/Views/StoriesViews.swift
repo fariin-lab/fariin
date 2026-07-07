@@ -827,7 +827,10 @@ struct StoryViewer: View {
         // Safety net: the sheet unmounting must NEVER leave a stray progress value behind
         // (a tiny leftover hid the owner footer with no sheet in sight — user screenshot).
         .onChange(of: showViewers) { _, on in
-            if !on { sheetAnimator.cancel(); viewersProgress = 0 }
+            if !on {
+                sheetAnimator.cancel(); viewersProgress = 0
+                NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
+            }
         }
         // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
         // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a
@@ -842,6 +845,7 @@ struct StoryViewer: View {
             sheetAnimator.cancel()
             NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
+            NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
@@ -1016,6 +1020,9 @@ struct StoryViewer: View {
                     // Freeze the story the INSTANT the sheet starts to open (don't wait for the
                     // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
                     NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+                    // Freeze the blurred backdrop AS IT LOOKS RIGHT NOW (user spec: the pull-up
+                    // must keep the exact pre-pull blur, never re-compute it at the smaller size).
+                    NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)
                     // Chrome-only exit: progress bar / avatar / name / scrim fade via the library;
                     // the story IMAGE never animates (user spec: no flash, no re-render).
                     NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)
@@ -1030,6 +1037,7 @@ struct StoryViewer: View {
                     // Engaged but the sheet never actually rose: undo the engagement posts, or
                     // the chrome stays hidden forever (no close path will ever run).
                     NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
+                    NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
                     NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
                     return
                 }
@@ -1194,6 +1202,7 @@ struct StoryViewer: View {
         guard currentIsMine else { return }
         closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
+        NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)   // keep the exact pre-pull blur
         NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)   // chrome-only exit
         if !showViewers {
             sheetStoryId = targetStoryId
@@ -1203,17 +1212,13 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
-    // The real story steps aside (binary, no animation) while the carousel is swiping AND at
-    // full settle — at settle the centre card shows its own content instead (a scaled
-    // UIVisualEffectView renders fit-image bars far darker than the original blur).
+    // The real story steps aside (binary, no animation) ONLY while the carousel is swiping.
+    // At settle the real story rests in the slot — its blurred backdrop is FROZEN pixels from
+    // before the pull-up (storyFreezeBlur), so scaling can't re-compute/darken it (user spec 2).
     private var storyLayerSteppedAside: Bool {
-        (carouselInteracting || viewersProgress >= 0.97) && viewersProgress > 0.9
+        carouselInteracting && viewersProgress > 0.9
     }
-    // Centre card content shows while swiping OR at full settle; hidden only mid-morph
-    // (the real story owns those frames).
-    private var hideCarouselCentreContent: Bool {
-        !carouselInteracting && viewersProgress < 0.97
-    }
+    private var hideCarouselCentreContent: Bool { !carouselInteracting }
 
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
@@ -1237,6 +1242,7 @@ struct StoryViewer: View {
             // Reaching here means the close actually finished (a re-open cancels this animator).
             showViewers = false
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)   // chrome back
+            NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)     // live material again
         }
     }
 

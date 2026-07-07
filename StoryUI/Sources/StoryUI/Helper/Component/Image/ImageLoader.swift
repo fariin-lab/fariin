@@ -72,6 +72,8 @@ final class ImageLoader: UIView {
     private let backgroundImageView = UIImageView()
     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
     private let shimmer = ShimmerView()
+    // The frozen fill+blur composite while the viewers sheet scales the story (see freezeBlur).
+    private var frozenBlur: UIImageView?
 
     // MARK: - Initializers
     init() {
@@ -89,6 +91,7 @@ final class ImageLoader: UIView {
         blurView.frame = bounds
         imageView.frame = bounds
         shimmer.frame = bounds
+        frozenBlur?.frame = bounds
         applyCornerMask()
         // NB: the fit/fill decision is NOT recomputed here — it's fixed once per image in apply(),
         // so a swipe-down's transient bounds changes can never flip it (that flip was the "shaking").
@@ -223,5 +226,47 @@ private extension ImageLoader {
 
        shimmer.isHidden = true
        addSubview(shimmer)
+
+       // Viewers-sheet pull-up: freeze/unfreeze the blurred backdrop (posted by the host app).
+       NotificationCenter.default.addObserver(self, selector: #selector(freezeBlur),
+                                              name: Notification.Name("storyFreezeBlur"), object: nil)
+       NotificationCenter.default.addObserver(self, selector: #selector(unfreezeBlur),
+                                              name: Notification.Name("storyUnfreezeBlur"), object: nil)
    }
+}
+
+// MARK: - Blur freeze (viewers-sheet pull-up)
+extension ImageLoader {
+    // A LIVE material re-computes itself as the story scales down, rendering the fit-image bars far
+    // darker/flatter than they looked full screen (user spec: "keep the exact blur from before the
+    // pull-up — never generate a new one"). Freezing rasterizes the CURRENT on-screen appearance
+    // (fill + material composite) into plain pixels and hides the live blur: frozen pixels scale
+    // like a photograph, identical at every size. Unfreeze restores the live material at full screen.
+    @objc private func freezeBlur() {
+        guard frozenBlur == nil,
+              bounds.width > 0,
+              imageView.image != nil,
+              imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars to freeze
+        else { return }
+        let shimmerWasHidden = shimmer.isHidden
+        shimmer.isHidden = true
+        // This container's blur samples only its own fill subview, so drawing the hierarchy
+        // captures the material composite correctly.
+        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            drawHierarchy(in: bounds, afterScreenUpdates: false)
+        }
+        shimmer.isHidden = shimmerWasHidden
+        let iv = UIImageView(image: img)
+        iv.frame = bounds
+        iv.contentMode = .scaleToFill
+        insertSubview(iv, aboveSubview: blurView)
+        blurView.isHidden = true
+        frozenBlur = iv
+    }
+
+    @objc private func unfreezeBlur() {
+        frozenBlur?.removeFromSuperview()
+        frozenBlur = nil
+        blurView.isHidden = false
+    }
 }
