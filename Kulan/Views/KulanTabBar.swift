@@ -1,8 +1,12 @@
 import SwiftUI
 
 // Kulan's own floating tab bar (the Threads/WhatsApp pattern, our look): a glass capsule with
-// outline→filled icons and a REAL Liquid Glass pill that slides to the selected tab, plus the
+// outline→filled icons and a REAL Liquid Glass lens pill over the selected tab, plus the
 // detached circular search button. Replaces the native bar on the modern (iOS 26) path only.
+//
+// The pill is ONE persistent glass view (it never unmounts): tapping another tab makes it
+// GLIDE there, and holding it lets you DRAG it between tabs with your finger — release
+// commits the tab under it (the native iOS 26 bar's hold-and-slide behavior).
 //
 // Visibility: the native bar auto-hid inside pushed screens (thread, contact info) and in the
 // chat list's selection mode via .toolbar(.hidden, for: .tabBar). This bar floats ABOVE the
@@ -41,20 +45,44 @@ struct KulanTabBar: View {
     @Binding var tab: Int
     var missedBadge: Int
     var settingsIcon: UIImage?
-    @Namespace private var pillNS
+    // Live finger x (in capsule space) while holding/dragging the pill; nil at rest.
+    @State private var dragX: CGFloat?
+
+    private let itemW: CGFloat = 76
+    private let itemH: CGFloat = 52
+    private let pad: CGFloat = 4
+
+    private var currentSlot: Int { min(max(tab, 0), 2) }
+    private var hoveredSlot: Int? { dragX.map { slot(at: $0) } }
+    private func slot(at x: CGFloat) -> Int { min(2, max(0, Int((x - pad) / itemW))) }
 
     var body: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 0) {
-                item(0, "message", "Chats")
-                item(1, "phone", "Calls")
-                item(2, "person.crop.circle", "Settings")
+            ZStack(alignment: .leading) {
+                // The lens pill — follows the finger mid-drag, else sits on the selected slot.
+                Color.clear
+                    .frame(width: itemW, height: itemH)
+                    .liquidGlass(Capsule(), interactive: true)
+                    .scaleEffect(dragX != nil ? 1.06 : 1)   // lifts slightly while held, like a lens
+                    .offset(x: pillX)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: dragX != nil)
+
+                HStack(spacing: 0) {
+                    item(0, "message", "Chats")
+                    item(1, "phone", "Calls")
+                    item(2, "person.crop.circle", "Settings")
+                }
             }
-            .padding(4)
+            .padding(pad)
             .liquidGlass(Capsule())
+            .contentShape(Capsule())
+            .gesture(barGesture)
 
             // Detached circular search (mirrors the iOS 26 two-piece layout we replaced).
-            Button { select(3) } label: {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                tab = 3
+            } label: {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 19, weight: .medium))
                     .foregroundStyle(.primary)
@@ -67,54 +95,61 @@ struct KulanTabBar: View {
         .padding(.horizontal, 24)
     }
 
-    private func select(_ v: Int) {
-        guard tab != v else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        // The withAnimation drives the pill's matchedGeometry slide between tabs.
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { tab = v }
+    private var pillX: CGFloat {
+        if let x = dragX { return min(max(x - pad - itemW / 2, 0), itemW * 2) }
+        return CGFloat(currentSlot) * itemW
+    }
+
+    // One gesture drives everything: touch-down brings the pill to the finger, dragging slides
+    // it (haptic tick crossing each tab), release commits the tab under it. A plain tap is just
+    // the degenerate case — down + release on the same spot.
+    private var barGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                let before = hoveredSlot
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { dragX = g.location.x }
+                if let before, let now = hoveredSlot, before != now {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+            }
+            .onEnded { g in
+                let target = slot(at: g.location.x)
+                if tab != target { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    dragX = nil
+                    tab = target
+                }
+            }
     }
 
     @ViewBuilder private func item(_ v: Int, _ icon: String, _ label: String) -> some View {
-        let active = tab == v
-        Button { select(v) } label: {
-            VStack(spacing: 2) {
-                ZStack(alignment: .topTrailing) {
-                    Group {
-                        // Settings shows your profile photo when set (same as the native bar did).
-                        if v == 2, let ui = settingsIcon {
-                            Image(uiImage: ui).resizable().scaledToFill()
-                                .frame(width: 24, height: 24).clipShape(Circle())
-                        } else {
-                            Image(systemName: active ? icon + ".fill" : icon)
-                                .font(.system(size: 20, weight: .medium))
-                                .contentTransition(.symbolEffect(.replace))
-                        }
-                    }
-                    .frame(width: 30, height: 26)
-                    if v == 1 && missedBadge > 0 {
-                        Text("\(missedBadge)")
-                            .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                            .padding(.horizontal, 4).frame(minWidth: 15, minHeight: 15)
-                            .background(.red, in: Capsule())
-                            .offset(x: 10, y: -4)
+        let active = (hoveredSlot ?? currentSlot) == v
+        VStack(spacing: 2) {
+            ZStack(alignment: .topTrailing) {
+                Group {
+                    // Settings shows your profile photo when set (same as the native bar did).
+                    if v == 2, let ui = settingsIcon {
+                        Image(uiImage: ui).resizable().scaledToFill()
+                            .frame(width: 24, height: 24).clipShape(Circle())
+                    } else {
+                        Image(systemName: active ? icon + ".fill" : icon)
+                            .font(.system(size: 20, weight: .medium))
+                            .contentTransition(.symbolEffect(.replace))
                     }
                 }
-                Text(label)
-                    .font(.system(size: 10.5, weight: active ? .semibold : .medium))
-            }
-            .foregroundStyle(.primary)
-            .frame(width: 76, height: 52)
-            .contentShape(Capsule())
-            .background {
-                // The sliding selection pill — REAL Liquid Glass (light-bending edge), moved
-                // between tabs by matchedGeometry so it glides instead of popping.
-                if active {
-                    Color.clear
-                        .liquidGlass(Capsule(), interactive: true)
-                        .matchedGeometryEffect(id: "pill", in: pillNS)
+                .frame(width: 30, height: 26)
+                if v == 1 && missedBadge > 0 {
+                    Text("\(missedBadge)")
+                        .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 4).frame(minWidth: 15, minHeight: 15)
+                        .background(.red, in: Capsule())
+                        .offset(x: 10, y: -4)
                 }
             }
+            Text(label)
+                .font(.system(size: 10.5, weight: active ? .semibold : .medium))
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .frame(width: itemW, height: itemH)
     }
 }
