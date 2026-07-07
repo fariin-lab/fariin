@@ -9,6 +9,25 @@ import SwiftUI
 import AVKit
 
 // Bottom-two-corners rounded rectangle (iOS 14 safe — UnevenRoundedRectangle is iOS 16+).
+// Different top/bottom corner radii (UnevenRoundedRectangle is iOS 16+; this package targets lower).
+struct CardCornersShape: Shape {
+    var top: CGFloat
+    var bottom: CGFloat
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.minY + top))
+        p.addQuadCurve(to: CGPoint(x: r.minX + top, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX - top, y: r.minY))
+        p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY + top), control: CGPoint(x: r.maxX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - bottom))
+        p.addQuadCurve(to: CGPoint(x: r.maxX - bottom, y: r.maxY), control: CGPoint(x: r.maxX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX + bottom, y: r.maxY))
+        p.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY - bottom), control: CGPoint(x: r.minX, y: r.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
 struct BottomRoundedShape: Shape {
     var radius: CGFloat
     func path(in rect: CGRect) -> Path {
@@ -107,12 +126,7 @@ struct StoryDetailView: View {
                         // composites separately and spills past the mask, so the bottom stayed square).
                         // compositingGroup forces a single layer the round-corner mask can actually cut.
                         .compositingGroup()
-                        .clipShape(UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12,
-                                               bottomLeading: isReplyBar ? 24 : 0,
-                                               bottomTrailing: isReplyBar ? 24 : 0,
-                                               topTrailing: 12),
-                            style: .continuous))   // IG top corners; bottom matches the own-story card (24)
+                        .clipShape(CardCornersShape(top: 12, bottom: isReplyBar ? 24 : 0))   // IG top corners; bottom matches the own-story card (24)
                         .overlay(
                             tapStory()
                                 .offset(
