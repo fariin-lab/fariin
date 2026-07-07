@@ -94,6 +94,13 @@ struct StoryPager: UIViewControllerRepresentable {
         private var didInstallPan = false
         private weak var dismissPan: DirectionalPanGestureRecognizer?   // ours — system pans defer to it
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
+        // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
+        // begins after the finger has already travelled ~its 8pt threshold plus whatever it moved
+        // while the competing pans were failing — so translation(in:) is already ~30-40pt at the
+        // first .changed. Reporting that raw value made the card JUMP ~5% the moment the sheet
+        // engaged (user's red-border test: a 12px snap at t=0.94). Subtracting this baseline makes
+        // the drag start from ZERO at engagement, so the card tracks smoothly from full size.
+        private var swipeUpBaselineY: CGFloat?
 
         init(_ parent: StoryPager) { self.parent = parent }
         deinit { cubeLink?.invalidate() }
@@ -379,12 +386,20 @@ struct StoryPager: UIViewControllerRepresentable {
             let v = g.velocity(in: space)
             // Report the drag CONTINUOUSLY so the host tracks the viewers sheet 1:1 with the finger
             // (native feel), then decides open/close on release. Direction-locked to .up, so it never
-            // fights the down dismiss pan.
+            // fights the down dismiss pan. The drag is measured from the ENGAGEMENT point (baseline),
+            // not from touch-down, so the first frame reports ~0 instead of the accumulated wake-up
+            // distance (that was the ~5% engagement snap the user measured).
             switch g.state {
+            case .began:
+                swipeUpBaselineY = t.y
             case .changed:
-                parent.onSwipeUpChanged(max(0, -t.y))          // +up
+                if swipeUpBaselineY == nil { swipeUpBaselineY = t.y }
+                let up = -(t.y - (swipeUpBaselineY ?? t.y))    // +up, zeroed at engagement
+                parent.onSwipeUpChanged(max(0, up))
             case .ended, .cancelled:
-                parent.onSwipeUpEnded(-t.y, -v.y)              // translation +up, velocity +up
+                let up = -(t.y - (swipeUpBaselineY ?? t.y))
+                parent.onSwipeUpEnded(up, -v.y)                // translation +up (from engagement), velocity +up
+                swipeUpBaselineY = nil
             default: break
             }
         }
