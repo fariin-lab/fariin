@@ -1282,19 +1282,16 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
-    // The real story steps aside (binary, no animation) ONLY while the carousel is swiping.
-    // At settle the real story rests in the slot — its blurred backdrop is FROZEN pixels from
-    // before the pull-up (storyFreezeBlur), so scaling can't re-compute/darken it (user spec 2).
-    // AT REST the centre shows the CAROUSEL CARD, not the real story (user evidence: the
-    // side cards are pixel-perfect; the pop happened exactly when the real story replaced
-    // the card after a swipe settled). The real story owns only the MORPH frames (sheet
-    // dragging, p < 0.97) — becoming-centre is now card→card, nothing can shift.
+    // TELEGRAM-EXACT (user's final call): the centre is the REAL story scaled as ONE living
+    // unit — through the drag AND at rest. No stand-in card renderer, no trimming, no
+    // re-framing. (The settle stand-in existed to mask geometry mismatches now fixed at the
+    // root: aspect-true zoom endpoint == card size, factory frames at contentH, freeze
+    // overlays cropped 1:1.) The story steps aside ONLY while the carousel is actively
+    // swiping; its backdrop is FROZEN pixels (storyFreezeBlur), so scaling never re-blurs.
     private var storyLayerSteppedAside: Bool {
-        (carouselInteracting || viewersProgress >= 0.97) && viewersProgress > 0.9
+        carouselInteracting && viewersProgress > 0.9
     }
-    private var hideCarouselCentreContent: Bool {
-        !carouselInteracting && viewersProgress < 0.97
-    }
+    private var hideCarouselCentreContent: Bool { !carouselInteracting }
 
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
