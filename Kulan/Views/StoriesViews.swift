@@ -40,14 +40,11 @@ struct StoryRingView: View {
 // on the visible card's edges. radius 0 = plain content rect.
 struct StoryCardClip: Shape {
     var radius: CGFloat
-    var topCut: CGFloat = 0        // window top (unscaled layer coords)
-    var sideCut: CGFloat = 0       // symmetric horizontal inset (tall photos' side bars)
-    var contentHeight: CGFloat     // absolute bottom edge of the window
+    var topCut: CGFloat = 0        // centre-crop: the window starts this far down (unscaled)
+    var contentHeight: CGFloat     // ...and ends at this absolute bottom edge
     func path(in rect: CGRect) -> Path {
         let bottom = min(contentHeight, rect.height)
-        let r = CGRect(x: sideCut, y: topCut,
-                       width: max(0, rect.width - 2 * sideCut),
-                       height: max(0, bottom - topCut))
+        let r = CGRect(x: 0, y: topCut, width: rect.width, height: max(0, bottom - topCut))
         return Path(roundedRect: r, cornerRadius: radius, style: .continuous)
     }
 }
@@ -1013,7 +1010,6 @@ struct StoryViewer: View {
             // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
             // strip below contentHeight. The morph's centre-crop window grows with progress.
             topCut: (showViewers && viewersProgress > 0.08) ? morphGeometry.topCut : 0,
-            sideCut: (showViewers && viewersProgress > 0.08) ? morphGeometry.sideCut : 0,
             contentHeight: (showViewers && viewersProgress > 0.08) ? morphContentH - morphGeometry.botCut : .greatestFiniteMagnitude))
         .scaleEffect(x: morphGeometry.scaleX, y: morphGeometry.scaleY, anchor: .top)
         .offset(y: morphOffsetY)
@@ -1141,41 +1137,11 @@ struct StoryViewer: View {
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
     // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
     // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    // PHOTO-FRAME CARDS (user's final spec: "the window card must use my frame story
-    // size"): the card takes each story PHOTO's own aspect; the blur padding around fit
-    // photos is decoration and dissolves during the pull — the photo itself is never cut.
+    // (Fixed-aspect cards retired for good — the TELEGRAM RULE: the card is the zoom's
+    // endpoint, the story's own shape. Any fixed card shape forces trimming or a settle
+    // mismatch; both were user-rejected.)
 
-    // The photo's aspect (w/h) — from the cached image; content-box fallback until cached.
-    private func photoAspect(_ s: Story) -> CGFloat {
-        let scr = UIScreen.main.bounds
-        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        guard let img = DiskImageCache.shared.memoryImage(s.previewUrl), img.size.height > 0 else {
-            return scr.width / max(contentH, 1)
-        }
-        let a = img.size.width / img.size.height
-        // Full-bleed images display as the whole content box (the viewer FILLS them).
-        return a <= scr.width / scr.height ? scr.width / max(contentH, 1) : a
-    }
-
-    // The photo's on-screen rect inside the full-screen story (fit images centre in the
-    // content box; full-bleed = the whole box).
-    private func photoRect(aspect a: CGFloat) -> CGRect {
-        let scr = UIScreen.main.bounds
-        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let w = min(scr.width, contentH * a)
-        let h = w / a
-        return CGRect(x: (scr.width - w) / 2, y: (contentH - h) / 2, width: w, height: h)
-    }
-
-    // The card size for a photo aspect: portrait fills the slot height; wide photos are
-    // width-capped and shorter (their natural shape).
-    private func cardSize(aspect a: CGFloat, slotH: CGFloat) -> CGSize {
-        let scr = UIScreen.main.bounds
-        let w = min(scr.width - 120, slotH * a)
-        return CGSize(width: w, height: w / a)
-    }
-
-    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat, sideCut: CGFloat) {
+    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat) {
         let p = viewersProgress
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
@@ -1185,21 +1151,15 @@ struct StoryViewer: View {
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // PHOTO-FRAME: the PHOTO rect zooms uniformly onto its own-shaped card; the clip
-        // window converges from the full content onto the photo rect, so the blur padding
-        // dissolves during the pull and the photo itself is never touched.
-        let a = currentStory.map(photoAspect) ?? (scr.width / max(contentH, 1))
-        let photo = photoRect(aspect: a)
-        let card = cardSize(aspect: a, slotH: slotH)
-        let s1 = card.height / max(photo.height, 1)
+        // TELEGRAM RULE: pure uniform zoom of the whole story, centre-anchored, zero cuts.
+        // The landing scale (slotH/contentH) makes the story exactly the card's size — the
+        // settle swap is pixel-identical, so the image can never jump.
+        let s1 = slotH / max(contentH, 1)
         let s = 1 - (1 - s1) * sizeP
-        let topCut = photo.minY * sizeP
-        let botCut = max(0, contentH - photo.maxY) * sizeP
-        let sideCut = photo.minX * sizeP
-        let restCentre = photo.midY
+        let restCentre = contentH / 2
         let targetCentre = blockTop + slotH / 2
         let centre = restCentre + (targetCentre - restCentre) * sizeP
-        return (sizeP, s, s, centre - restCentre * s, topCut, botCut, sideCut)
+        return (sizeP, s, s, centre - restCentre * s, 0, 0)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
@@ -1230,12 +1190,14 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        // PHOTO-FRAME CARDS: every story's card is its own photo's shape — pure photo,
-        // no blur padding anywhere in the row.
-        let liveStoriesForSizes = StoriesRepository.shared.mine?.stories ?? myStories
-        let sizes: [String: CGSize] = Dictionary(uniqueKeysWithValues: liveStoriesForSizes.map {
-            ($0.id, cardSize(aspect: photoAspect($0), slotH: slotH))
-        })
+        // TELEGRAM RULE (user's final spec, reference video): the image NEVER changes — it
+        // only zooms. So the card must be the zoom's exact endpoint: the story's OWN shape,
+        // the whole content, zero trimming. Morph endpoint == card content == pixel identical,
+        // which kills the settle jump by construction.
+        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        let slotW = slotH * (scr.width / max(contentH, 1))
+        let miniH = slotW * (scr.height / scr.width)
+        let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
@@ -1247,8 +1209,13 @@ struct StoryViewer: View {
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
-                              sizes: sizes, slotH: slotH,
+                              slotW: slotW, slotH: slotH, miniH: miniH, cropY: cropY,
                               onActiveTap: { closeViewers() },
+                              // Centre card content shows at FULL SETTLE too (not just while swiping):
+                              // the settled 'card' used to be the REAL story scaled 0.3x, and a
+                              // UIVisualEffectView under that transform renders its fit-image bars far
+                              // darker/flatter than the story's original blur (user: 'use original blur').
+                              // A card-sized view samples its own fill correctly.
                               hideActiveContent: hideCarouselCentreContent,
                               onInteracting: { carouselInteracting = $0 })
                 .padding(.top, blockTop)
@@ -1716,12 +1683,41 @@ struct SeenBySheet: View {
 // ONLY the rounded photos — no captions, no avatars, no progress bars. Side cards carry a small
 // eye+heart count inside their bottom edge; the CENTRED card shows its count BIG underneath.
 // Swiping (or tapping a side card) re-centres a story and re-targets the viewers list below.
+// One story card's pixels: the NATIVE snapshot of its full-screen render (photo + real
+// material bars, photographed by StorySnapshotFactory — the app-switcher pattern). Until the
+// offscreen render lands (first frames only), a plain photo crop stands in, then swaps.
+private struct SnapshotCardContent: View {
+    let url: String
+    let slotW: CGFloat
+    let miniH: CGFloat
+    @State private var snap: UIImage?
+    var body: some View {
+        Group {
+            if let snap {
+                Image(uiImage: snap).resizable()
+                    .frame(width: slotW, height: miniH)
+            } else {
+                // Fit composite stand-in — the same framing the snapshot will have, so the
+                // swap-in is invisible (a fill-crop stand-in visibly popped, audit finding 5).
+                StoryImage(url: url, fitBlur: true)
+                    .frame(width: slotW, height: miniH)
+            }
+        }
+        .onAppear { snap = StoryCompositeCache.image(for: url) }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storySnapshotReady"))) { n in
+            guard (n.object as? String) == url else { return }
+            snap = StoryCompositeCache.image(for: url)   // later (corrected) captures replace earlier ones
+        }
+    }
+}
 
 struct MyStoriesCarousel: View {
     let stories: [Story]
     @Binding var activeId: String
-    let sizes: [String: CGSize]         // per-story card size (the PHOTO's own shape)
-    let slotH: CGFloat                  // the row's height envelope (portrait cards fill it)
+    let slotW: CGFloat
+    let slotH: CGFloat
+    let miniH: CGFloat                  // full mini-screen composite height; the card shows a slotH window of it
+    let cropY: CGFloat                  // the window's top within the composite (photo-centred, mirrors the morph)
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
     var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
     var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
@@ -1739,25 +1735,19 @@ struct MyStoriesCarousel: View {
     @State private var dragX: CGFloat = 0     // live horizontal finger translation
     @State private var dragging = false
 
-    init(stories: [Story], activeId: Binding<String>, sizes: [String: CGSize], slotH: CGFloat,
+    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
          onInteracting: @escaping (Bool) -> Void = { _ in }) {
         self.stories = stories
         self._activeId = activeId
-        self.sizes = sizes
+        self.slotW = slotW
         self.slotH = slotH
+        self.miniH = miniH
+        self.cropY = cropY
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
         self.onInteracting = onInteracting
         self._index = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
-    }
-
-    private func size(_ id: String) -> CGSize { sizes[id] ?? CGSize(width: slotH * 0.51, height: slotH) }
-    // Centre x of card i in row coordinates (variable widths).
-    private func centreX(of i: Int, gap: CGFloat) -> CGFloat {
-        var x: CGFloat = 0
-        for j in 0..<max(0, min(i, stories.count)) { x += size(stories[j].id).width + gap }
-        return x + size(stories[min(i, max(0, stories.count - 1))].id).width / 2
     }
 
     @State private var interactGen = 0   // invalidates a stale "settled" callback when a new swipe starts
@@ -1780,12 +1770,10 @@ struct MyStoriesCarousel: View {
         // toward their centres, adding ~10pt of AIR per facing edge on top of the layout gap
         // (user: the old 12 made the cards look far apart).
         let gap: CGFloat = 2
+        let step = slotW + gap
         let n = stories.count
-        // Variable card widths (each card = its photo's shape): step for gesture thresholds
-        // uses the CURRENT card's width; centring uses cumulative widths.
-        let step = (stories.indices.contains(index) ? size(stories[index].id).width : slotH * 0.51) + gap
-        let totalW = stories.reduce(CGFloat(0)) { $0 + size($1.id).width } + CGFloat(max(0, n - 1)) * gap
-        let offsetX = totalW / 2 - centreX(of: index, gap: gap) + dragX
+        let totalW = CGFloat(n) * slotW + CGFloat(max(0, n - 1)) * gap
+        let offsetX = totalW / 2 - (CGFloat(index) * step + slotW / 2) + dragX
         VStack(spacing: 12) {
             Color.clear
                 .frame(maxWidth: .infinity)
@@ -1888,14 +1876,18 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        let sz = size(s.id)
-        // PHOTO-FRAME (user's final spec): the card IS the photo — its own shape, whole,
-        // no blur padding, nothing that can read as "too long".
-        return StoryImage(url: s.previewUrl)
-            .frame(width: sz.width, height: sz.height)
+        // NATIVE, the Apple way (app-switcher pattern): iOS never scales a live blur — it
+        // photographs the rendered screen and scales the picture. Every card here is that
+        // photograph: the story's full-screen render (real photo + real material bars),
+        // captured natively offscreen by StorySnapshotFactory, shrunk into the slot. One
+        // path for every story; nothing is ever re-blurred at card size.
+        return SnapshotCardContent(url: s.previewUrl, slotW: slotW, miniH: miniH)
+            .offset(y: -cropY)                                     // slid so the photo-centred window shows
+            .frame(width: slotW, height: slotH, alignment: .top)   // cropped to the slot window
+            .clipped()
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(alignment: .bottom) {
                 // Side cards show a small count inside; the CENTRED card hides it (big count below).
                 countRow(views: vs.count, likes: reacts, big: false)
