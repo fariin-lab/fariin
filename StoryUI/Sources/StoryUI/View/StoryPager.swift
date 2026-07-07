@@ -383,8 +383,13 @@ struct StoryPager: UIViewControllerRepresentable {
         }
         @objc func handleSwipeUp(_ g: UIPanGestureRecognizer) {
             guard let pager else { return }
-            let t = g.translation(in: pager.view)
-            let v = g.velocity(in: pager.view)
+            // WINDOW space, not pager space: the sheet-open morph SCALES the pager while this
+            // pan is live, so pager-space deltas get amplified by 1/scale — a compounding
+            // feedback loop that made the sheet leave the finger at ~50% and fly open on its
+            // own (user report; same disease as the sheet drag's old .local-space bug).
+            let space: UIView = pager.view.window ?? pager.view
+            let t = g.translation(in: space)
+            let v = g.velocity(in: space)
             // Report the drag CONTINUOUSLY so the host tracks the viewers sheet 1:1 with the finger
             // (native feel), then decides open/close on release. Direction-locked to .up, so it never
             // fights the down dismiss pan.
