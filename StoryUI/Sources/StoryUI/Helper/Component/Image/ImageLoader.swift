@@ -96,7 +96,9 @@ final class ImageLoader: UIView {
         blurView.frame = bounds
         imageView.frame = bounds
         shimmer.frame = bounds
-        frozenBlur?.frame = bounds
+        // frozenBlur is deliberately NOT re-laid-out: it is pinned to its capture-time frame.
+        // Mid-morph bounds changes re-fit the LIVE image (it visibly jumped inside the card,
+        // user screenshots) — the frozen photograph must stay exactly where it was taken.
         applyCornerMask()
         // NB: the fit/fill decision is NOT recomputed here — it's fixed once per image in apply(),
         // so a swipe-down's transient bounds changes can never flip it (that flip was the "shaking").
@@ -159,6 +161,8 @@ final class ImageLoader: UIView {
         frozenBlur?.removeFromSuperview()
         frozenBlur = nil
         blurView.isHidden = false
+        imageView.isHidden = false
+        backgroundImageView.isHidden = false
 
         guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
 
@@ -270,27 +274,32 @@ extension ImageLoader {
 
     func installFreezeIfReady() {
         guard Self.freezeWanted, frozenBlur == nil,
-              imageView.image != nil, imageView.contentMode == .scaleAspectFit,
+              imageView.image != nil,
               bounds.width > 0 else { return }
-        // LIVE ONLY (user spec: the frozen blur must be an exact clone of what is on screen —
-        // any difference reads as "the blur changed" the instant the pull starts). This view
-        // rasterizes ITS OWN subtree, so the copy can only ever be this story's real pixels;
-        // no cache, no offscreen render, nothing that could hold the wrong picture.
+        // ONE SINGLE UNIT (user spec): the story must move through the zoom "exactly as it
+        // appears" — image + its existing blur together, geometry untouched. So the freeze is
+        // a photograph of the WHOLE story (this view rasterizes its own live subtree: fill +
+        // material + photo in one picture) and every live layer hides behind it. During the
+        // morph there is no live layout at all — a mid-drag bounds change re-fit the LIVE
+        // image and it jumped inside the stable blur (user screenshots); a photograph cannot
+        // re-fit. The frame is pinned to the capture moment (layoutSubviews leaves it alone).
         guard let img = rasterizeComposite() else { return }
         let iv = UIImageView(image: img)
         iv.frame = bounds
         iv.contentMode = .scaleToFill
-        insertSubview(iv, aboveSubview: blurView)
+        addSubview(iv)                       // above every live layer (photo included)
         blurView.isHidden = true
+        imageView.isHidden = true
+        backgroundImageView.isHidden = true
         frozenBlur = iv
     }
 
     // The container's blur samples only its own fill subview, so drawing the hierarchy captures
-    // the material composite correctly — this story's real pixels, nothing else.
+    // the material composite correctly — this story's real pixels, nothing else. Full-bleed
+    // stories freeze too (no bars, but their live fill can also re-fit on a bounds change).
     private func rasterizeComposite() -> UIImage? {
         guard bounds.width > 0, window != nil,
-              imageView.image != nil,
-              imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars
+              imageView.image != nil
         else { return nil }
         let shimmerWasHidden = shimmer.isHidden
         shimmer.isHidden = true
@@ -306,5 +315,7 @@ extension ImageLoader {
         frozenBlur?.removeFromSuperview()
         frozenBlur = nil
         blurView.isHidden = false
+        imageView.isHidden = false
+        backgroundImageView.isHidden = false
     }
 }
