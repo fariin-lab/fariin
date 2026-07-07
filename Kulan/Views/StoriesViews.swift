@@ -1183,14 +1183,14 @@ struct StoryViewer: View {
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
-        // NO CROPPING (user spec): the card is the story's OWN shape — the whole content,
-        // scaled. slotW follows from the content aspect; the screen-aspect mini frame shows
-        // the full composite top-aligned, and the slotH window is exactly the content region
-        // (the strip below it is the footer area, black in the snapshot).
+        // MIRROR of morphGeometry: fixed 9:16 card, symmetric content-centred window — trims
+        // the blur padding equally top+bottom, the photo (content-centred) never moves.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotW = slotH * (scr.width / max(contentH, 1))
+        let slotW = slotH * Self.viewersCardAspect
         let miniH = slotW * (scr.height / scr.width)
-        let cropY: CGFloat = 0
+        let s1 = slotW / scr.width
+        let winH = slotH / max(s1, 0.01)
+        let cropY = max(0, (contentH - winH) / 2) * s1
         let blockTop = topInset + (avail - countArea - slotH) / 2
         // NO DUPLICATE CARD (user's final call): the REAL story layer — rendered ABOVE this
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
