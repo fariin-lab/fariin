@@ -8,6 +8,7 @@ struct MainShell: View {
     private var call: CallService { CallService.shared }
     private var profile = ProfileStore.shared
     private var callsRepo = CallsRepository.shared   // @Observable: drives the missed-call tab badge
+    private var tabChrome = TabBarChrome.shared      // @Observable: pushed screens hide the custom bar
     @State private var settingsIcon: UIImage?
     @State private var tab = 0
     @State private var previousTab = 0   // last non-search tab → drives what the search circle searches
@@ -73,27 +74,41 @@ struct MainShell: View {
         }
     }
 
+    // Modern path: the NATIVE bar is hidden on every tab and replaced by KulanTabBar — our own
+    // floating glass capsule with the sliding Liquid Glass selection pill (the Threads/WhatsApp
+    // pattern the user asked for) + the detached search circle. Content switching, lazy loading
+    // and state preservation still come from the real TabView underneath.
     @available(iOS 26.0, *)
     private var modernTabView: some View {
         TabView(selection: $tab) {
-            Tab("Chats", systemImage: tab == 0 ? "message.fill" : "message", value: 0) {
-                ChatsView(onSignOut: onSignOut)
+            Tab("Chats", systemImage: "message", value: 0) {
+                ChatsView(onSignOut: onSignOut).toolbar(.hidden, for: .tabBar)
             }
-            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
-                CallsView()
+            Tab("Calls", systemImage: "phone", value: 1) {
+                CallsView().toolbar(.hidden, for: .tabBar)
             }
-            .badge(missedBadge)   // 0 hides it
             Tab(value: 2) {
-                SettingsView(onSignOut: onSignOut, asTab: true)
+                SettingsView(onSignOut: onSignOut, asTab: true).toolbar(.hidden, for: .tabBar)
             } label: {
                 settingsTabLabel
             }
-            // Detached circular search button (native iOS 26 search role). Context-aware:
-            // searches Chats / Calls / Settings depending on the tab you came from.
-            Tab(value: 3, role: .search) {
+            // Context-aware search: searches Chats / Calls / Settings depending on the tab you
+            // came from. Reached via OUR circular search button now (native role dropped).
+            Tab(value: 3) {
                 SearchHubView(context: previousTab, onSignOut: onSignOut, onCancel: { tab = previousTab })
+                    .toolbar(.hidden, for: .tabBar)
             }
         }
+        .floatingBottomBar {
+            // Hidden inside search (it owns the screen) and wherever a pushed screen asks
+            // (thread, contact info, chat-list selection mode) — same rules the native bar had.
+            if tab != 3 && !tabChrome.hidden {
+                KulanTabBar(tab: $tab, missedBadge: missedBadge, settingsIcon: settingsIcon)
+                    .padding(.bottom, 2)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: tabChrome.hidden)
     }
 
     private var legacyTabView: some View {
@@ -943,6 +958,7 @@ struct ChatsView: View {
                 Button("Cancel", role: .cancel) { pendingMute = nil }
             }
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
+            .kulanTabBarHidden(selecting)   // the custom bar mirrors the native hide in selection mode
             .sheet(isPresented: $showArchived) { ArchivedChatsView() }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
