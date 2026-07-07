@@ -565,6 +565,8 @@ struct StoryViewer: View {
             return nil
         }
         func release(_ id: String) { if owner == id { owner = nil } }
+        // A finger is actively driving progress (events within the fresh-claim window).
+        var ownedRecently: Bool { owner != nil && Date().timeIntervalSince(lastEvent) < 0.25 }
     }
     @State private var sheetDragArbiter = SheetDragArbiter()
     @State private var progressWatchdog: Task<Void, Never>?   // parked-sheet self-heal (see onChange below)
@@ -843,7 +845,18 @@ struct StoryViewer: View {
         // Safety net: the sheet unmounting must NEVER leave a stray progress value behind
         // (a tiny leftover hid the owner footer with no sheet in sight — user screenshot).
         .onChange(of: showViewers) { _, on in
-            if !on {
+            if on {
+                // Photograph every story's full-screen render offscreen (app-switcher pattern)
+                // so each card shows NATIVE pixels the moment it appears. Same media height as
+                // the live viewer (audit M1) and STAGGERED — parallel material renders during
+                // the opening spring caused hitching.
+                let mediaH = morphContentH
+                for (i, s) in (StoriesRepository.shared.mine?.stories ?? myStories).enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
+                        StorySnapshotFactory.warm(urlString: s.previewUrl, contentHeight: mediaH)
+                    }
+                }
+            } else {
                 sheetAnimator.cancel(); viewersProgress = 0
                 NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
             }
@@ -978,8 +991,8 @@ struct StoryViewer: View {
             // sliced the owner footer (Views/Delete) clean off and left a transparent hole the
             // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
             // strip below contentHeight. The morph's centre-crop window grows with progress.
-            topCut: (showViewers && viewersProgress > 0.01) ? morphGeometry.topCut : 0,
-            contentHeight: (showViewers && viewersProgress > 0.01) ? morphContentH - morphGeometry.botCut : .greatestFiniteMagnitude))
+            topCut: (showViewers && viewersProgress > 0.08) ? morphGeometry.topCut : 0,
+            contentHeight: (showViewers && viewersProgress > 0.08) ? morphContentH - morphGeometry.botCut : .greatestFiniteMagnitude))
         .scaleEffect(x: morphGeometry.scaleX, y: morphGeometry.scaleY, anchor: .top)
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
@@ -1056,7 +1069,10 @@ struct StoryViewer: View {
                 openDragging = false
                 guard viewersProgress > 0 else {
                     // Engaged but the sheet never actually rose: undo the engagement posts, or
-                    // the chrome stays hidden forever (no close path will ever run).
+                    // the chrome stays hidden forever (no close path will ever run) — and the
+                    // mount itself (audit C2: a stuck showViewers kept the cover's backing black
+                    // and skipped pause/freeze on the NEXT swipe-up).
+                    showViewers = false
                     NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
                     NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
                     NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
@@ -1268,11 +1284,16 @@ struct StoryViewer: View {
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
         progressWatchdog?.cancel(); progressWatchdog = nil
-        guard showViewers, p > 0.02, p < 0.97 else { return }
+        guard showViewers, p > 0.02, p < 0.995 else { return }
         progressWatchdog = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, showViewers,
-                  viewersProgress > 0.02, viewersProgress < 0.97 else { return }
+                  viewersProgress > 0.02, viewersProgress < 0.995,
+                  // Never snap under a LIVE finger (audit M3): a held-still drag writes nothing
+                  // for 0.8s but is still owned; a cancelled drag's stale owner goes quiet and
+                  // the heal proceeds.
+                  !openDragging, closeDragStart == nil, !sheetDragArbiter.ownedRecently
+            else { return }
             if viewersProgress >= 0.5 {
                 sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
             } else {
@@ -1650,6 +1671,32 @@ struct SeenBySheet: View {
 // ONLY the rounded photos — no captions, no avatars, no progress bars. Side cards carry a small
 // eye+heart count inside their bottom edge; the CENTRED card shows its count BIG underneath.
 // Swiping (or tapping a side card) re-centres a story and re-targets the viewers list below.
+// One story card's pixels: the NATIVE snapshot of its full-screen render (photo + real
+// material bars, photographed by StorySnapshotFactory — the app-switcher pattern). Until the
+// offscreen render lands (first frames only), a plain photo crop stands in, then swaps.
+private struct SnapshotCardContent: View {
+    let url: String
+    let slotW: CGFloat
+    let miniH: CGFloat
+    @State private var snap: UIImage?
+    var body: some View {
+        Group {
+            if let snap {
+                Image(uiImage: snap).resizable()
+                    .frame(width: slotW, height: miniH)
+            } else {
+                StoryImage(url: url)   // fill crop placeholder — no rebuilt blur, ever
+                    .frame(width: slotW, height: miniH)
+            }
+        }
+        .onAppear { snap = StoryCompositeCache.image(for: url) }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storySnapshotReady"))) { n in
+            guard (n.object as? String) == url else { return }
+            snap = StoryCompositeCache.image(for: url)   // later (corrected) captures replace earlier ones
+        }
+    }
+}
+
 struct MyStoriesCarousel: View {
     let stories: [Story]
     @Binding var activeId: String
@@ -1803,20 +1850,14 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        // ORIGINAL blur, structurally guaranteed: the composite is laid out at FULL SCREEN
-        // size — Apple's material renders identically to the real story there — and the
-        // RESULT is scaled down (user proof: a story re-blurred AT card size comes out darker/
-        // flatter; the same story scaled-after-render looks original). One path for every
-        // story, seen or not — no cache dependency, no fallback that can diverge.
-        let scr = UIScreen.main.bounds
-        return ZStack(alignment: .topLeading) {
-            StoryImage(url: s.previewUrl, fitBlur: true)
-                .frame(width: scr.width, height: scr.height)
-                .scaleEffect(slotW / scr.width, anchor: .topLeading)
-        }
-            .frame(width: slotW, height: miniH, alignment: .topLeading)   // the scaled composite's box...
-            .offset(y: -cropY)                                     // ...slid so the photo-centred window shows
-            .frame(width: slotW, height: slotH, alignment: .top)   // ...cropped to the slot window
+        // NATIVE, the Apple way (app-switcher pattern): iOS never scales a live blur — it
+        // photographs the rendered screen and scales the picture. Every card here is that
+        // photograph: the story's full-screen render (real photo + real material bars),
+        // captured natively offscreen by StorySnapshotFactory, shrunk into the slot. One
+        // path for every story; nothing is ever re-blurred at card size.
+        return SnapshotCardContent(url: s.previewUrl, slotW: slotW, miniH: miniH)
+            .offset(y: -cropY)                                     // slid so the photo-centred window shows
+            .frame(width: slotW, height: slotH, alignment: .top)   // cropped to the slot window
             .clipped()
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
@@ -1949,6 +1990,12 @@ struct StoryViewersBottomSheet: View {
             .offset(y: (1 - min(progress, 1)) * sheetH - overshoot(progress) )
         }
         .ignoresSafeArea()
+        // A system-CANCELLED drag skips onEnded and would leave dragStart set forever — which
+        // keeps the viewer list scroll-locked (audit M4). Progress settling at a rest state
+        // means no drag owns the sheet: clear the anchor.
+        .onChange(of: progress) { _, p in
+            if p >= 1 || p <= 0 { dragStart = nil }
+        }
         .task(id: activeStoryId) {
             // Debounce: .task(id:) cancels+restarts on every carousel-centre change, so a short sleep
             // here means a fast scrub across many stories only fires ONE fetch when it settles.

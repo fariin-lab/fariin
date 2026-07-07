@@ -39,9 +39,66 @@ enum StoryDiskCache {
 // (the original blur, guaranteed) instead of re-building fill+material at card size, which
 // reads as a different, darker blur (heavier relative blur + dimming at small sizes).
 public enum StoryCompositeCache {
-    private static let cache = NSCache<NSString, UIImage>()
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 180 * 1024 * 1024   // screen-sized composites are ~12MB each @3x
+        return c
+    }()
     public static func image(for url: String) -> UIImage? { cache.object(forKey: url as NSString) }
-    static func store(_ img: UIImage, for url: String) { cache.setObject(img, forKey: url as NSString) }
+    static func store(_ img: UIImage, for url: String) {
+        let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
+        cache.setObject(img, forKey: url as NSString, cost: cost)
+        // Cards showing the placeholder re-check the cache on this signal.
+        NotificationCenter.default.post(name: Notification.Name("storySnapshotReady"), object: url)
+    }
+}
+
+// Renders a story's full-screen composite (photo + native material bars) EXACTLY as the viewer
+// renders it — offscreen, behind the app's content — and photographs it into the cache. This is
+// the iOS app-switcher pattern: the system never scales a live blur; it snapshots the rendered
+// result and scales the picture. Cards built from these snapshots are pixel-native by definition.
+@MainActor
+public enum StorySnapshotFactory {
+    private static var inFlight = Set<String>()
+
+    // contentHeight: the height the LIVE viewer gives the media (screen minus the owner-footer
+    // strip). The offscreen render must match it exactly or the photo centres ~20pt differently
+    // than the morphing real story and the card jumps at hand-off (audit M1).
+    public static func warm(urlString: String, contentHeight: CGFloat) {
+        guard !urlString.isEmpty,
+              StoryCompositeCache.image(for: urlString) == nil,
+              !inFlight.contains(urlString),
+              let scene = UIApplication.shared.connectedScenes
+                  .compactMap({ $0 as? UIWindowScene })
+                  .first(where: { $0.activationState == .foregroundActive }),
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        else { return }
+        inFlight.insert(urlString)
+        let loader = ImageLoader()
+        let mediaFrame = CGRect(x: 0, y: 0, width: window.bounds.width,
+                                height: min(contentHeight, window.bounds.height))
+        loader.frame = mediaFrame
+        window.insertSubview(loader, at: 0)   // behind the root view — never user-visible
+        loader.loadImageWithUrl(urlString) {
+            // One committed frame so the material composites, then photograph.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                let bounds = window.bounds
+                var rendered = false
+                let img = UIGraphicsImageRenderer(bounds: bounds).image { ctx in
+                    UIColor.black.setFill()
+                    ctx.fill(bounds)
+                    rendered = loader.drawHierarchy(in: mediaFrame, afterScreenUpdates: true)
+                }
+                loader.removeFromSuperview()
+                inFlight.remove(urlString)
+                // Only cache real renders: a failed drawHierarchy leaves the black canvas, and a
+                // loader that never got its image has nothing to show (audit M2).
+                if rendered, loader.imageView.image != nil {
+                    StoryCompositeCache.store(img, for: urlString)
+                }
+            }
+        }
+    }
 }
 
 // Shimmering skeleton placeholder (instead of a spinner) while an image is fetched — feels faster.
@@ -154,6 +211,11 @@ final class ImageLoader: UIView {
         }
 
         imageURL = URL(string: validatedUrl)
+
+        // Reused for a different story (carousel jump mid-sheet): the previous story's FROZEN
+        // blur overlay must never survive under the new photo (audit C1 — story A's bars were
+        // showing beneath story B). The live material returns; the host re-freezes if needed.
+        unfreezeBlur()
 
         guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
 
@@ -284,7 +346,7 @@ extension ImageLoader {
         // (the "image jumping up" hand-off). Skip while mid-page-slide (x offset) or scaled.
         let origin = convert(CGPoint.zero, to: nil)
         if let url = imageURL?.absoluteString,
-           abs(origin.x) < 1, transform == .identity {
+           abs(origin.x) < 1, abs(origin.y) < 2, transform == .identity {
             let screen = window?.bounds ?? UIScreen.main.bounds
             let full = UIGraphicsImageRenderer(bounds: screen).image { ctx in
                 UIColor.black.setFill()
