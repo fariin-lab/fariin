@@ -436,7 +436,31 @@ struct StoryEditorView: View {
         }
         .frame(width: size.width, height: size.height)
         let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
-        return r.uiImage?.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
+        guard let full = r.uiImage else { return base.jpegData(compressionQuality: quality) ?? Data() }
+        // SAME AS NORMAL POSTS (user's call): the posted file keeps the PHOTO's own shape — the
+        // canvas's empty black areas are cropped away, so the viewer adds its normal live blur
+        // around a text-edited photo exactly like an untouched one. (Text dragged outside the
+        // photo gets cropped with the black — accepted limit of this design.) The photo's
+        // canvas footprint mirrors the editor layout: aspect-fit, centred, scaled about the
+        // centre by photoZoom, then shifted by photoOffset.
+        let fit = photoFitSize(in: size)
+        let scaled = CGSize(width: fit.width * photoZoom, height: fit.height * photoZoom)
+        let centre = CGPoint(x: size.width / 2 + photoOffset.width, y: size.height / 2 + photoOffset.height)
+        let photoRect = CGRect(x: centre.x - scaled.width / 2, y: centre.y - scaled.height / 2,
+                               width: scaled.width, height: scaled.height)
+            .intersection(CGRect(origin: .zero, size: size))
+        if !photoRect.isEmpty,
+           photoRect.width < size.width - 1 || photoRect.height < size.height - 1,   // full-bleed → nothing to crop
+           let cg = full.cgImage {
+            let s = full.scale
+            let px = CGRect(x: photoRect.minX * s, y: photoRect.minY * s,
+                            width: photoRect.width * s, height: photoRect.height * s).integral
+            if let cropped = cg.cropping(to: px) {
+                return UIImage(cgImage: cropped, scale: s, orientation: .up)
+                    .jpegData(compressionQuality: quality) ?? Data()
+            }
+        }
+        return full.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
     }
 
     // The picture's aspect-fit size within the canvas — the photo frame's real footprint.
