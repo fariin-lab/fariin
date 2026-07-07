@@ -88,6 +88,7 @@ private extension MessageView {
                       onCommit: onCommitAction)
             .placeholder(when: text.isEmpty, view: {
                 Text(placeholder).foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.45), radius: 1.5)   // readable on white photos
             })
             .onChange(of: text, perform: { newValue in
                 showEmoji = newValue.isEmpty
@@ -103,12 +104,14 @@ private extension MessageView {
             // or a reopened story always shows an empty heart despite being liked.
             .onAppear { likeButtonTapped = story.isLiked }
             .foregroundColor(.white)
+            .shadow(color: .black.opacity(0.45), radius: 1.5)   // typed text stays readable on white photos
             .padding(.leading, 10)                              // small left space so text isn't flush to the edge
             .frame(height: Constant.MessageView.height)
             .padding(Constant.MessageView.padding)
-            .background(Capsule().fill(.black.opacity(0.3)))   // filled pill, more native than a bare stroke
+            .background(Capsule().fill(.black.opacity(0.38)))   // filled pill, more native than a bare stroke
             .overlay(Capsule().stroke(.white.opacity(0.5), lineWidth: 1))
-            .shadow(color: .black.opacity(0.28), radius: 6, y: 1)   // WhatsApp-style soft shadow so it pops on any photo
+            // Deeper soft shadow (user: the bar vanished on a bright photo) — still subtle on dark ones.
+            .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
 
             // Send button appears once you've typed (heart shows when empty) — was Return-key only.
             if text.isEmpty {
