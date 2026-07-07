@@ -1135,8 +1135,10 @@ struct StoryViewer: View {
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
     // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
     // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    // (The Telegram-reference 0.65 card aspect was retired: a chunky card REQUIRES cropping
-    // the story, and the user's final spec is the whole image, uncropped, always.)
+    // The card's fixed shape: 9:16, the natural story ratio (user's final spec 2026-07-08:
+    // "must strictly maintain the native story aspect ratio... never stretch or add blur
+    // padding"). The symmetric window trims blur padding, never the photo.
+    static let viewersCardAspect: CGFloat = 9.0 / 16.0
 
     private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat) {
         let p = viewersProgress
@@ -1145,14 +1147,19 @@ struct StoryViewer: View {
         let avail = scr.height - sheetH - topInset
         let countArea: CGFloat = 40
         let slotH = (avail - countArea) * 0.94
+        let slotW = slotH * Self.viewersCardAspect
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // NO CROPPING, ever (user video: the centre-crop ate the image's top mid-drag). The
-        // WHOLE story scales uniformly until its full content height fits the slot; the card
-        // is the story's own shape. topCut/botCut stay in the signature but are always 0.
-        let s = 1 - (1 - slotH / max(contentH, 1)) * sizeP
-        return (sizeP, s, s, blockTop * sizeP, 0, 0)
+        // FIXED 9:16 card: the window trims SYMMETRICALLY from the content's top and bottom
+        // (blur padding first); fit photos centre at the content centre (audit-verified media
+        // height), so the photo itself never moves through the whole morph.
+        let s1 = slotW / scr.width
+        let s = 1 - (1 - s1) * sizeP
+        let winH = slotH / max(s1, 0.01)
+        let winTop = max(0, (contentH - winH) / 2)
+        let cut = winTop * sizeP
+        return (sizeP, s, s, blockTop * sizeP - cut * s, cut, cut)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
