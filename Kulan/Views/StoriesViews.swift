@@ -716,6 +716,12 @@ struct StoryViewer: View {
     }
 
     var body: some View {
+        // The modifier chain outgrew the Swift type-checker (CI: "unable to type-check in
+        // reasonable time") — body is now three separately-checked pieces. Purely structural.
+        lifecycleGlue(sheetsAndMenus(coreLayers))
+    }
+
+    private var coreLayers: some View {
         ZStack {
             // Solid black canvas behind the story while the viewers sheet is up (so the see-through
             // cover never shows the light chat list through the shrinking card = the "white" bug).
@@ -741,6 +747,10 @@ struct StoryViewer: View {
                                         onClose: closeViewers)
             }
         }
+    }
+
+    private func sheetsAndMenus(_ v: some View) -> some View {
+        v
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
         .sheet(item: $forwardImg) { p in StoryForwardSheet(image: p.image, onSent: { flashSentToast() }) }
         .sheet(item: $profileSheet) { g in
@@ -819,6 +829,10 @@ struct StoryViewer: View {
         // pauses (user ask) so it can never tick away and auto-advance mid-upload. Leaving
         // it (or the upload finishing and swapping in the real item) resumes normally —
         // every other item keeps its usual timer.
+    }
+
+    private func lifecycleGlue(_ v: some View) -> some View {
+        v
         .onChange(of: isUploadingItem) { _, up in
             NotificationCenter.default.post(name: .init(up ? "pauseStory" : "resumeStory"), object: nil)
         }
