@@ -126,6 +126,8 @@ struct StoryVideoEditorView: View {
                 HStack(spacing: 10) {
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
+                        // ...and the text itself carries a hairline shadow so it reads on white.
+                        .shadow(color: .black.opacity(0.45), radius: 1.5)
                         .lineLimit(1...5)
                         .onChange(of: caption) { _, v in
                             if v.count > Limits.storyCaptionChars { caption = String(v.prefix(Limits.storyCaptionChars)) }
@@ -133,6 +135,9 @@ struct StoryVideoEditorView: View {
                 }
                 .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                // Light photos made the white caption text invisible (user screenshot: white-on-
+                // white). A soft bar shadow lifts the pill off bright backgrounds...
+                .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
 
                 if captionFocused { compactSendButton }
             }
@@ -157,9 +162,9 @@ struct StoryVideoEditorView: View {
                 send()
             }
         } label: {
-            Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
+            Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 46, height: 46)
+                .frame(width: 40, height: 40)
                 .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
         }
         .buttonStyle(StoryPressStyle()).disabled(thumbnailData == nil)

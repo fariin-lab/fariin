@@ -288,12 +288,17 @@ struct StoryEditorView: View {
                     // Grows with the text (up to 5 lines) instead of staying a single truncated line.
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
+                        // ...and the text itself carries a hairline shadow so it reads on white.
+                        .shadow(color: .black.opacity(0.45), radius: 1.5)
                         .lineLimit(1...5)
                         .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
                 }
                 .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)   // user spec: 40px
                 // Real Apple Liquid Glass pill (matches the toolbar buttons) instead of a flat dark fill.
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                // Light photos made the white caption text invisible (user screenshot: white-on-
+                // white). A soft bar shadow lifts the pill off bright backgrounds...
+                .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
 
                 // While typing, a SMALL round send button (not the wide NEXT pill) so the caption
                 // field keeps most of the width.
@@ -346,10 +351,10 @@ struct StoryEditorView: View {
         } label: {
             Group {
                 if posting { ProgressView().tint(.white) }
-                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold)) }
+                else { Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)) }
             }
             .foregroundStyle(.white)
-            .frame(width: 46, height: 46)
+            .frame(width: 40, height: 40)
             .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
