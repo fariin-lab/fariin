@@ -1820,7 +1820,10 @@ struct MyStoriesCarousel: View {
                                 guard abs(pw) > step * 0.5,
                                       abs(v.translation.width) > abs(v.translation.height) else { dragX = 0; return }
                                 onInteracting(true)
-                                let ni = pw < 0 ? min(index + 1, max(0, n - 1)) : max(index - 1, 0)
+                                // MOMENTUM (user spec): a hard flick skips as many cards as the
+                                // fling would carry, not just one.
+                                let skip = max(1, Int((abs(pw) / step).rounded()))
+                                let ni = pw < 0 ? min(index + skip, max(0, n - 1)) : max(index - skip, 0)
                                 withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
                                     index = ni
                                     dragX = 0
@@ -1835,7 +1838,14 @@ struct MyStoriesCarousel: View {
                             let commit = step * 0.30
                             let predicted = v.predictedEndTranslation.width
                             var ni = index
-                            if v.translation.width <= -commit || predicted <= -step * 0.5 {
+                            // MOMENTUM (user spec): the fling's predicted landing decides how many
+                            // cards to cross — a fast/long swipe skips several; a gentle pull past
+                            // 30% still advances exactly one (the old feel preserved).
+                            let travelled = Int((abs(predicted) / step).rounded())
+                            if travelled >= 2 {
+                                ni = predicted < 0 ? min(index + travelled, max(0, n - 1))
+                                                  : max(index - travelled, 0)
+                            } else if v.translation.width <= -commit || predicted <= -step * 0.5 {
                                 ni = min(index + 1, max(0, n - 1))
                             } else if v.translation.width >= commit || predicted >= step * 0.5 {
                                 ni = max(index - 1, 0)
