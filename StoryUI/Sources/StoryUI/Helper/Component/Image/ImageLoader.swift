@@ -75,10 +75,15 @@ public enum StorySnapshotFactory {
         else { return }
         inFlight.insert(urlString)
         let loader = ImageLoader()
-        // Mirror the live layout: the media card sits BELOW the status bar (IG-style top strip).
+        // Mirror the live layout EXACTLY: the media card sits below the status bar (IG top
+        // strip) and runs to the SCREEN BOTTOM — the live story is not capped at the footer
+        // line (the card WINDOW excludes the footer region). Capping it here made fit-images
+        // centre ~45pt higher and their blur strip shorter than the real story's, so the
+        // centre card showed an "extra bar" the side cards didn't (user screenshots).
         let topInset = window.safeAreaInsets.top
+        _ = contentHeight   // kept for API stability; the live frame is what must be mirrored
         let mediaFrame = CGRect(x: 0, y: topInset, width: window.bounds.width,
-                                height: min(contentHeight, window.bounds.height) - topInset)
+                                height: window.bounds.height - topInset)
         loader.frame = mediaFrame
         window.insertSubview(loader, at: 0)   // behind the root view — never user-visible
         loader.loadImageWithUrl(urlString) {
