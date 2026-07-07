@@ -1325,11 +1325,15 @@ struct ChatRow: View, Equatable {
     var body: some View {
         // 56pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
         HStack(spacing: 12) {
-            AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me), size: 56)
-                .overlay {   // story ring around the avatar when this person has an active story (Telegram)
+            // WhatsApp rule: a story ring must NOT enlarge the row — the photo shrinks a hair
+            // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
+            AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
+                       size: storySeen.isEmpty ? 56 : 49)
+                .frame(width: 56, height: 56)
+                .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
                         StoryRingView(seen: storySeen, lineWidth: 2)
-                            .frame(width: 63, height: 63)
+                            .frame(width: 56, height: 56)
                     }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
