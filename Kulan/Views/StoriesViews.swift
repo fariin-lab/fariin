@@ -126,14 +126,6 @@ struct StoryImage: View {
                             .overlay(Image(uiImage: image).resizable().scaledToFill())
                             .clipped()
                             .transition(.opacity)
-                    } else if let frozen = StoryCompositeCache.image(for: url) {
-                        // THE ORIGINAL, guaranteed: the story exactly as it rendered full screen
-                        // (photo + its real material bars, captured by ImageLoader). No re-built
-                        // blur anywhere (user spec: the card must be the original image + blur).
-                        Color.clear
-                            .overlay(Image(uiImage: frozen).resizable().scaledToFill())
-                            .clipped()
-                            .transition(.opacity)
                     } else {
                         // ORIGINAL nesting (build 216): fill INSIDE the first overlay, the blur layer as a
                         // SECOND overlay on Color.clear — so the blur is sized to the CARD, never to the
@@ -1811,13 +1803,21 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        // ORIGINAL blur only (user: "remove the second blur"): the card renders the same live
-        // material the full-screen story uses — the baked imitation read as a different, darker
-        // blur next to the frozen real story in the centre slot.
-        return StoryImage(url: s.previewUrl, fitBlur: true)   // the mini-screen composite (photo + blur bars)
-            .frame(width: slotW, height: miniH)                    // full composite, morph-scale sized...
+        // ORIGINAL blur, structurally guaranteed: the composite is laid out at FULL SCREEN
+        // size — Apple's material renders identically to the real story there — and the
+        // RESULT is scaled down (user proof: a story re-blurred AT card size comes out darker/
+        // flatter; the same story scaled-after-render looks original). One path for every
+        // story, seen or not — no cache dependency, no fallback that can diverge.
+        let scr = UIScreen.main.bounds
+        return ZStack(alignment: .topLeading) {
+            StoryImage(url: s.previewUrl, fitBlur: true)
+                .frame(width: scr.width, height: scr.height)
+                .scaleEffect(slotW / scr.width, anchor: .topLeading)
+        }
+            .frame(width: slotW, height: miniH, alignment: .topLeading)   // the scaled composite's box...
             .offset(y: -cropY)                                     // ...slid so the photo-centred window shows
             .frame(width: slotW, height: slotH, alignment: .top)   // ...cropped to the slot window
+            .clipped()
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
