@@ -69,6 +69,8 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var isAtBottom = true
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
+    @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
+    @State private var replyStoryAnchorId = ""                // the tapped quote's anchor (per-message unique)
     @State private var newWhileAway = 0
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
@@ -241,10 +243,12 @@ struct ThreadView: View {
     private var threadPickers: some View {
         threadCovers
         .fullScreenCover(item: $storyToOpen) { g in
-            // No zoom hero on this cover -> the viewer's own swipe-down closes it (without
-            // this, scroll-down-to-close simply did nothing here - user report).
-            StoryViewer(group: g, ownSwipeDismiss: true,
+            // FULLY NATIVE (user's final call): the zoom hero anchors on the tapped reply-quote
+            // thumbnail, so Apple's interactive scroll-down-to-close works here exactly like
+            // the main story flow — the custom pan is gone from this cover.
+            StoryViewer(group: g,
                         onClose: { storyToOpen = nil }, onProfile: { _ in storyToOpen = nil })
+                .navigationTransition(.zoom(sourceID: replyStoryAnchorId, in: replyStoryNS))
         }
         .alert("Status no longer available", isPresented: $statusUnavailable) {
             Button("OK", role: .cancel) {}
@@ -611,7 +615,8 @@ struct ThreadView: View {
                         isPinned: repo.pinnedMessageIds.contains(msg.id),
                         onResend: { m in resend(m) },
                         onJumpTo: { id in jump(to: id, proxy) },
-                        onTapStory: { id, author in openStory(id, author) },
+                        onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
+                        replyStoryNS: replyStoryNS,
                         isHighlighted: msg.id == highlightId,
                         isFirstInCluster: isFirstInCluster(at: index),
                         isLastInCluster: isLastInCluster(at: index),
@@ -1066,7 +1071,8 @@ struct ThreadView: View {
 
     // Tapped a "Status" reply quote → open that status if it's still live, else say it's gone.
     // The repo only holds unexpired stories, so "found" == still viewable.
-    private func openStory(_ storyId: String, _ authorId: String) {
+    private func openStory(_ storyId: String, _ authorId: String, anchorId: String = "") {
+        replyStoryAnchorId = anchorId
         let repo = StoriesRepository.shared
         let active = (repo.others + [repo.mine].compactMap { $0 })
             .first { $0.authorUid == authorId && $0.stories.contains { $0.id == storyId } }
@@ -1655,7 +1661,8 @@ struct MessageBubble: View, Equatable {
     var onLongPress: (Message) -> Void = { _ in }
     var onResend: (Message) -> Void = { _ in }
     var onJumpTo: (String) -> Void = { _ in }
-    var onTapStory: (_ storyId: String, _ authorId: String) -> Void = { _, _ in }
+    var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
+    var replyStoryNS: Namespace.ID? = nil   // native zoom anchor for the story-quote thumbnail
     var isHighlighted: Bool = false
     var isFirstInCluster: Bool = true
     var isLastInCluster: Bool = true
@@ -2132,6 +2139,9 @@ struct MessageBubble: View, Equatable {
                     StoryImage(url: thumb)
                         .frame(width: 30, height: 38)
                         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        // Unique per MESSAGE (two replies can quote the same story — duplicate
+                        // hero ids glitch the transition).
+                        .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(reply.authorId == AuthService.shared.uid ? "You" : nameFor(reply.authorId))
@@ -2148,9 +2158,23 @@ struct MessageBubble: View, Equatable {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
-                if reply.isStatus { onTapStory(reply.id, reply.authorId) }   // open the status (or "no longer available")
+                if reply.isStatus { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }   // open the status (or "no longer available")
                 else { onJumpTo(reply.id) }                                  // jump to the original message
             }
+        }
+    }
+}
+
+// Marks a reply-quote thumbnail as the story cover's zoom hero source (optional ns so
+// bubbles without the namespace are untouched).
+private struct ReplyStoryAnchor: ViewModifier {
+    let ns: Namespace.ID?
+    let id: String
+    func body(content: Content) -> some View {
+        if let ns {
+            content.matchedTransitionSource(id: id, in: ns)
+        } else {
+            content
         }
     }
 }
