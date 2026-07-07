@@ -1285,10 +1285,16 @@ struct StoryViewer: View {
     // The real story steps aside (binary, no animation) ONLY while the carousel is swiping.
     // At settle the real story rests in the slot — its blurred backdrop is FROZEN pixels from
     // before the pull-up (storyFreezeBlur), so scaling can't re-compute/darken it (user spec 2).
+    // AT REST the centre shows the CAROUSEL CARD, not the real story (user evidence: the
+    // side cards are pixel-perfect; the pop happened exactly when the real story replaced
+    // the card after a swipe settled). The real story owns only the MORPH frames (sheet
+    // dragging, p < 0.97) — becoming-centre is now card→card, nothing can shift.
     private var storyLayerSteppedAside: Bool {
-        carouselInteracting && viewersProgress > 0.9
+        (carouselInteracting || viewersProgress >= 0.97) && viewersProgress > 0.9
     }
-    private var hideCarouselCentreContent: Bool { !carouselInteracting }
+    private var hideCarouselCentreContent: Bool {
+        !carouselInteracting && viewersProgress < 0.97
+    }
 
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
