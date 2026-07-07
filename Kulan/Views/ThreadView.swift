@@ -1454,7 +1454,9 @@ struct ThreadView: View {
             .background(Circle().fill(recordingHeld ? (recordCancelArmed ? Color.red : Theme.accent(dark)) : Color.clear))
             .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
             // scaleEffect overflows the footprint, so the bar height never stretches.
-            .scaleEffect(recordingHeld ? 1.5 : 1, anchor: .center)
+            // 1.25 of 40 = the 50px the user asked for; 1.5 grew to 60 and sat visibly
+            // misaligned against the 40px recording bar (user screenshot).
+            .scaleEffect(recordingHeld ? 1.25 : 1, anchor: .center)
             .offset(recordingHeld ? clampedDrag : .zero)
             .overlay(alignment: .top) { if recordingHeld { lockHint } }
             .highPriorityGesture(recordGesture)
