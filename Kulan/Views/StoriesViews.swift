@@ -1151,15 +1151,19 @@ struct StoryViewer: View {
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // FIXED 9:16 card: the window trims SYMMETRICALLY from the content's top and bottom
-        // (blur padding first); fit photos centre at the content centre (audit-verified media
-        // height), so the photo itself never moves through the whole morph.
-        let s1 = slotW / scr.width
+        // PURE ZOOM, whole image, centre-anchored (user spec: "the whole image should shrink
+        // smoothly from its original position... not cropped, only a smooth zoom"). The story
+        // scales uniformly with NO window cropping; its CENTRE travels linearly from the
+        // screen's content centre to the slot centre, so top and bottom converge together —
+        // scaling from the top read as "only the top part shrinks". The 9:16 cards take over
+        // in the final crossfade (carIn) and at settle (the card-to-card rest state).
+        _ = slotW   // the fixed card shape lives in viewersBackdrop; the morph is aspect-true
+        let s1 = slotH / max(contentH, 1)
         let s = 1 - (1 - s1) * sizeP
-        let winH = slotH / max(s1, 0.01)
-        let winTop = max(0, (contentH - winH) / 2)
-        let cut = winTop * sizeP
-        return (sizeP, s, s, blockTop * sizeP - cut * s, cut, cut)
+        let restCentre = contentH / 2
+        let targetCentre = blockTop + slotH / 2
+        let centre = restCentre + (targetCentre - restCentre) * sizeP
+        return (sizeP, s, s, centre - restCentre * s, 0, 0)
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
