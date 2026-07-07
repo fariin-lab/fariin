@@ -565,6 +565,7 @@ struct StoryViewer: View {
         func release(_ id: String) { if owner == id { owner = nil } }
     }
     @State private var sheetDragArbiter = SheetDragArbiter()
+    @State private var progressWatchdog: Task<Void, Never>?   // parked-sheet self-heal (see onChange below)
 
     // Drives `viewersProgress` frame-by-frame with a display-link spring instead of
     // withAnimation. With withAnimation the MODEL value jumps to the target instantly and
@@ -828,6 +829,26 @@ struct StoryViewer: View {
         .onChange(of: showViewers) { _, on in
             if !on { sheetAnimator.cancel(); viewersProgress = 0 }
         }
+        // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
+        // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a
+        // system-CANCELLED drag skips onEnded so no snap ever fires, and a stray touch during
+        // the open spring kills the animator via the arbiter's fresh-claim hook. Every write
+        // re-arms this; if progress then sits mid-air untouched for 0.8s — no finger writes,
+        // no animator ticks — snap to the nearest rest state.
+        .onChange(of: viewersProgress) { _, p in
+            progressWatchdog?.cancel(); progressWatchdog = nil
+            guard showViewers, p > 0.02, p < 0.97 else { return }
+            progressWatchdog = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                guard !Task.isCancelled, showViewers,
+                      viewersProgress > 0.02, viewersProgress < 0.97 else { return }
+                if viewersProgress >= 0.5 {
+                    sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
+                } else {
+                    closeViewers()
+                }
+            }
+        }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
@@ -951,7 +972,7 @@ struct StoryViewer: View {
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
         // while the carousel is swiping, so the cards slide as smoothly as they always did.
-        .opacity(carouselInteracting && viewersProgress > 0.9 ? 0 : 1)
+        .opacity((carouselInteracting || viewersProgress >= 0.97) && viewersProgress > 0.9 ? 0 : 1)
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -1125,7 +1146,12 @@ struct StoryViewer: View {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH,
                               onActiveTap: { closeViewers() },
-                              hideActiveContent: !carouselInteracting,
+                              // Centre card content shows at FULL SETTLE too (not just while swiping):
+                              // the settled 'card' used to be the REAL story scaled 0.3x, and a
+                              // UIVisualEffectView under that transform renders its fit-image bars far
+                              // darker/flatter than the story's original blur (user: 'use original blur').
+                              // A card-sized view samples its own fill correctly.
+                              hideActiveContent: !carouselInteracting && viewersProgress < 0.97,
                               onInteracting: { carouselInteracting = $0 })
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
@@ -1148,7 +1174,14 @@ struct StoryViewer: View {
                     if claim == .fresh || closeDragStart == nil {
                         closeDragStart = viewersProgress + v.translation.height / h   // anchor so current touch maps to current progress
                     }
-                    viewersProgress = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
+                    var next = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
+                    // Same stale-anchor teleport guard as the sheet drag: a cancelled stroke's
+                    // leftover anchor must never let the next stroke's first event jump the story.
+                    if abs(next - viewersProgress) > 0.12 {
+                        closeDragStart = viewersProgress + v.translation.height / h
+                        next = viewersProgress
+                    }
+                    viewersProgress = next
                 }
                 .onEnded { v in
                     sheetDragArbiter.release("backdrop")
@@ -1697,7 +1730,7 @@ struct MyStoriesCarousel: View {
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        return StoryImage(url: s.previewUrl, fitBlur: true)   // whole image + blur, same as the story/morph
+        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true)   // whole image + blur-matched bars (see below)
             // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
             .frame(width: slotW, height: slotH)
@@ -1871,7 +1904,16 @@ struct StoryViewersBottomSheet: View {
                     dragStart = progress + v.translation.height / sheetH
                 }
                 // Track the finger 1:1; allow a little past 1.0 so overshoot() rubber-bands; clamp bottom at 0.
-                progress = max(0, min(1.14, (dragStart ?? 1) - v.translation.height / sheetH))
+                var next = max(0, min(1.14, (dragStart ?? 1) - v.translation.height / sheetH))
+                // A system-CANCELLED stroke skips onEnded and leaves dragStart behind; the next quick
+                // stroke's first event would then TELEPORT the sheet by the difference between the two
+                // strokes' translations (the "violent bounce/jump-cut" mid-close). A finger cannot move
+                // 12% of the sheet between two ~8ms events — re-anchor instead of jumping.
+                if abs(next - progress) > 0.12 {
+                    dragStart = progress + v.translation.height / sheetH
+                    next = progress
+                }
+                progress = next
             }
             .onEnded { v in
                 arbiter.release(fromList ? "list" : "header")
