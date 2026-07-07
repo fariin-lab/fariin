@@ -835,7 +835,9 @@ struct StoryViewer: View {
         // library's passive watcher asks us to commit — via the SAME native dismissal
         // (the zoom-back hero plays; no custom close animation involved).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyForceClose"))) { _ in
-            isPresented = false
+            // Snappier zoom-back (user: sluggish): the dismissal follows this transaction.
+            var t = Transaction(animation: .spring(response: 0.28, dampingFraction: 0.92))
+            withTransaction(t) { isPresented = false }
         }
         // The still-UPLOADING placeholder is not a watchable story yet: ITS progress bar
         // pauses (user ask) so it can never tick away and auto-advance mid-upload. Leaving

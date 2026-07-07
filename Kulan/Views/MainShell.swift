@@ -846,7 +846,10 @@ struct ChatsView: View {
                 // Match the row: don't let swiping land on a HIDDEN person's story (M1).
                 let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
                 let close: () -> Void = {
-                    viewerGroup = nil
+                    // Snappier zoom-back into the ring (user: the default felt sluggish): the
+                    // cover dismissal follows the transaction's animation.
+                    var t = Transaction(animation: .spring(response: 0.28, dampingFraction: 0.92))
+                    withTransaction(t) { viewerGroup = nil }
                     // Defer the reload so the hero shrink animation lands BEFORE the row re-sorts (the
                     // just-seen bucket moves, which would otherwise make the zoom shrink toward a moving card).
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
