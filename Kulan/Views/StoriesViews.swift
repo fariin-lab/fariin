@@ -959,7 +959,7 @@ struct StoryViewer: View {
         .offset(y: morphOffsetY)
         // BINARY (no animation → no fractional material frames): the real story steps aside
         // while the carousel is swiping, so the cards slide as smoothly as they always did.
-        .opacity((carouselInteracting || viewersProgress >= 0.97) && viewersProgress > 0.9 ? 0 : 1)
+        .opacity(storyLayerSteppedAside ? 0 : 1)
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -1138,7 +1138,7 @@ struct StoryViewer: View {
                               // UIVisualEffectView under that transform renders its fit-image bars far
                               // darker/flatter than the story's original blur (user: 'use original blur').
                               // A card-sized view samples its own fill correctly.
-                              hideActiveContent: !carouselInteracting && viewersProgress < 0.97,
+                              hideActiveContent: hideCarouselCentreContent,
                               onInteracting: { carouselInteracting = $0 })
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
@@ -1203,6 +1203,18 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
+    // The real story steps aside (binary, no animation) while the carousel is swiping AND at
+    // full settle — at settle the centre card shows its own content instead (a scaled
+    // UIVisualEffectView renders fit-image bars far darker than the original blur).
+    private var storyLayerSteppedAside: Bool {
+        (carouselInteracting || viewersProgress >= 0.97) && viewersProgress > 0.9
+    }
+    // Centre card content shows while swiping OR at full settle; hidden only mid-morph
+    // (the real story owns those frames).
+    private var hideCarouselCentreContent: Bool {
+        !carouselInteracting && viewersProgress < 0.97
+    }
+
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
         progressWatchdog?.cancel(); progressWatchdog = nil
