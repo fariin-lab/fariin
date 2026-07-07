@@ -75,8 +75,10 @@ public enum StorySnapshotFactory {
         else { return }
         inFlight.insert(urlString)
         let loader = ImageLoader()
-        let mediaFrame = CGRect(x: 0, y: 0, width: window.bounds.width,
-                                height: min(contentHeight, window.bounds.height))
+        // Mirror the live layout: the media card sits BELOW the status bar (IG-style top strip).
+        let topInset = window.safeAreaInsets.top
+        let mediaFrame = CGRect(x: 0, y: topInset, width: window.bounds.width,
+                                height: min(contentHeight, window.bounds.height) - topInset)
         loader.frame = mediaFrame
         window.insertSubview(loader, at: 0)   // behind the root view — never user-visible
         loader.loadImageWithUrl(urlString) {
@@ -346,7 +348,7 @@ extension ImageLoader {
         // (the "image jumping up" hand-off). Skip while mid-page-slide (x offset) or scaled.
         let origin = convert(CGPoint.zero, to: nil)
         if let url = imageURL?.absoluteString,
-           abs(origin.x) < 1, abs(origin.y) < 2, transform == .identity {
+           abs(origin.x) < 1, origin.y >= 0, origin.y < 120, transform == .identity {
             let screen = window?.bounds ?? UIScreen.main.bounds
             let full = UIGraphicsImageRenderer(bounds: screen).image { ctx in
                 UIColor.black.setFill()
