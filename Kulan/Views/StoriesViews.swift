@@ -921,6 +921,14 @@ struct StoryViewer: View {
         .onChange(of: sheetStoryId) { _, id in
             guard showViewers, currentIsMine, !id.isEmpty else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
+            // The jumped-to item arrives UNFROZEN (the stale-freeze fix clears it on URL change),
+            // and its live blur misrenders under the sheet's scale — the centre card grew an
+            // "extra blur" bar and the photo read as jumping (user report). Re-freeze once the
+            // new item has rendered; the freeze uses the cached composite, so it's exact.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                guard showViewers else { return }
+                NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)
+            }
         }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner

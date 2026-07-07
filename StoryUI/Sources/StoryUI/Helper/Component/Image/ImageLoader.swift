@@ -320,7 +320,14 @@ extension ImageLoader {
     // (fill + material composite) into plain pixels and hides the live blur: frozen pixels scale
     // like a photograph, identical at every size. Unfreeze restores the live material at full screen.
     @objc private func freezeBlur() {
-        guard frozenBlur == nil, let img = rasterizeComposite() else { return }
+        guard frozenBlur == nil else { return }
+        // Prefer the already-captured screen-space composite: rasterizing NOW fails subtly when
+        // the view sits under a live transform (the sheet has it scaled after a carousel jump —
+        // the material misrenders darker, which read as "extra blur + the photo jumping" on the
+        // centre card). The cached capture is the correct vivid original at any moment.
+        let cached = imageURL.flatMap { StoryCompositeCache.image(for: $0.absoluteString) }
+        guard let img = cached ?? rasterizeComposite() else { return }
+        guard imageView.image != nil, imageView.contentMode == .scaleAspectFit else { return }
         let iv = UIImageView(image: img)
         iv.frame = bounds
         iv.contentMode = .scaleToFill
