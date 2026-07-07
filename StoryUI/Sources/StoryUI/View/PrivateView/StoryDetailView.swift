@@ -117,16 +117,19 @@ struct StoryDetailView: View {
                     let footerH: CGFloat = isReplyBar ? Constant.MessageView.height + 32 + winInsets.bottom : 0
                     getStoryView(with: index, story: story)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        // IG-style: the story is a CARD below the status bar — black strip above,
-                        // clock/battery always readable on any photo (user reference).
-                        .padding(.top, winInsets.top)
-                        .padding(.bottom, footerH)
                         // Flatten the card (photo + UIKit blur backdrop) into ONE layer first: a bare
                         // .clipShape does NOT clip the ImageLoader's UIVisualEffectView (its backdrop
                         // composites separately and spills past the mask, so the bottom stayed square).
                         // compositingGroup forces a single layer the round-corner mask can actually cut.
                         .compositingGroup()
+                        // Clip FIRST, inset AFTER: with the paddings inside the clip, the top radius
+                        // rounded the SCREEN edge (hidden in the black strip) and the visible card
+                        // stayed square (user screenshot).
                         .clipShape(CardCornersShape(top: 12, bottom: isReplyBar ? 24 : 0))   // IG top corners; bottom matches the own-story card (24)
+                        // IG-style: the story is a CARD below the status bar — black strip above,
+                        // clock/battery always readable on any photo (user reference).
+                        .padding(.top, winInsets.top)
+                        .padding(.bottom, footerH)
                         .overlay(
                             tapStory()
                                 .offset(
