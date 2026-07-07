@@ -1856,16 +1856,17 @@ struct MyStoriesCarousel: View {
                         content.opacity(Self.centreDistance(proxy) < 0.35 ? 0 : 1)
                     }
             }
-            // GEOMETRY-based scale (scrollTransition's phase barely moved for the visible neighbours,
-            // so all cards looked the same size). Each card measures its own distance from the SCREEN
-            // centre: t=0 centred → scale 1.0 (large), t=1 one slot away → scale 0.72 (clearly smaller),
-            // matching the mockup's focus hierarchy. Recomputes live as the row scrolls.
+            // UNIFORM LAYOUT, VISUAL-ONLY ZOOM (user spec): every card occupies the exact same
+            // fixed Story-frame base at all times; this transform never touches layout. Each card
+            // measures its distance from the SCREEN centre: t=0 centred → 1.0, t=1 one slot away
+            // → 0.88 — a SUBTLE zoom-out for the sides (0.72 read as a structural size jump
+            // while swiping). Recomputes live as the row scrolls, so the zoom is continuous.
             .visualEffect { content, proxy in
                 let t = Self.centreDistance(proxy)
                 return content
-                    .scaleEffect(1.0 - 0.28 * t)
-                    .opacity(1.0 - 0.3 * t)
-                    .saturation(1.0 - 0.45 * t)
+                    .scaleEffect(1.0 - 0.12 * t)
+                    .opacity(1.0 - 0.2 * t)
+                    .saturation(1.0 - 0.3 * t)
             }
             .id(s.id)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
