@@ -100,7 +100,11 @@ enum StoryBlurBake {
             // screenshots, the material renders the bars at ~22% of the photo's brightness
             // (photo luma ~171 → bar luma ~38), so the veil is 0.78 — the earlier 0.5 was
             // tuned for a different pipeline and would read too bright here.
-            UIColor.black.withAlphaComponent(0.78).setFill()
+            // 0.88 (was 0.78): the real systemThickMaterialDark reads DARKER than the old linear
+            // calibration on bright photos, so the baked morph looked visibly lighter than the live
+            // bars at both ends of the pull-up (user: "blur is going to be weak"). A heavier veil
+            // keeps the mid-drag morph close to the live material the story + carousel now use.
+            UIColor.black.withAlphaComponent(0.88).setFill()
             ctx.fill(CGRect(origin: .zero, size: outSize))
         }
         cache.setObject(out, forKey: url as NSString)
@@ -1971,7 +1975,12 @@ struct MyStoriesCarousel: View {
         // IMAGE + BLUR (build 213, user: keep both): the card is a live StoryImage(fitBlur:) — the
         // whole image over its own blur — exactly what the morph card shows, so the morph→carousel
         // hand-off at full-open is seamless (same view, same size).
-        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true)   // static baked blur (never re-blurs at card size)
+        // LIVE material (bakedBars:false), NOT the baked imitation: the baked bake reads WEAKER/
+        // lighter than the real systemThickMaterialDark the full-screen story uses (user: "blur is
+        // going to be weak"). The carousel card sits at rest (no opacity crossfade), so the live
+        // UIVisualEffectView never drops out here — using it makes the card's bars IDENTICAL to the
+        // story's own bars. (Only the morph card, which crossfades, still needs the baked copy.)
+        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false)
             .frame(width: slotW, height: slotH)
             .clipped()
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
