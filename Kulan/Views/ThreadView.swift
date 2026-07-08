@@ -1522,9 +1522,10 @@ struct ThreadView: View {
     // The hold-to-record mic: grows + tints while held, follows the finger, shows a lock
     // hint above. Drag up to lock, drag left to cancel, release to send.
     private var micButton: some View {
-        Image(systemName: "mic.fill")
-            .font(.system(size: 20, weight: .medium))
+        Image("ic_mic")
+            .renderingMode(.template).resizable().scaledToFit()
             .foregroundStyle(recordingHeld ? Theme.onAccent(dark) : .primary)
+            .frame(width: 18, height: 22)   // custom mic glyph size
             .frame(width: 40, height: 40)   // standalone target, same size as "+"
             // Held: solid colored (red when armed-to-cancel) circle. Idle: liquid glass like "+".
             // Glass goes OFF while held (isEnabled keeps the view mounted so the drag survives):
