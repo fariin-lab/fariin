@@ -41,7 +41,7 @@ struct GifPickerView: View {
             }
             .navigationTitle("GIF")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } } }
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 5) {
                     Text("POWERED BY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
