@@ -4,6 +4,20 @@ import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 
+// Custom-SVG row label (template asset tinted like an SF Symbol, sized to a list row).
+private struct SettingsRowLabel: View {
+    let title: String
+    let image: String
+    init(_ title: String, _ image: String) { self.title = title; self.image = image }
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(image).renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22)
+        }
+    }
+}
+
 // Parent settings — profile cell on top, then grouped rows that push to dedicated
 // sub-screens (the Signal/Telegram structure), built our way with native List.
 struct SettingsView: View {
@@ -36,30 +50,30 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink { AccountSettingsView(onSignOut: onSignOut) } label: {
-                        Label("Account", systemImage: "person.crop.circle")
+                        SettingsRowLabel("Account", "ic_account")
                     }
                     NavigationLink { DevicesView() } label: {
-                        Label("Linked Devices", systemImage: "laptopcomputer.and.iphone")
+                        SettingsRowLabel("Linked Devices", "ic_linked_devices")
                     }
                 }
 
                 Section {
                     NavigationLink { NotificationsSettingsView() } label: {
-                        Label("Notifications", systemImage: "bell.badge")
+                        SettingsRowLabel("Notifications", "ic_notifications")
                     }
                     NavigationLink { AppearanceSettingsView() } label: {
                         Label("Appearance", systemImage: "paintbrush")
                     }
                     NavigationLink { StorySettingsView() } label: {
-                        Label("Stories", systemImage: "circle.dashed")
+                        SettingsRowLabel("Stories", "ic_stories")
                     }
                     NavigationLink { PrivacySettingsView() } label: {
-                        Label("Privacy & Security", systemImage: "lock.shield")
+                        SettingsRowLabel("Privacy & Security", "ic_privacy")
                     }
                 }
 
                 Section {
-                    Button { showQR = true } label: { Label("My QR Code", systemImage: "qrcode") }
+                    Button { showQR = true } label: { SettingsRowLabel("My QR Code", "ic_qr") }
                     ShareLink(item: inviteText) { Label("Invite Friends", systemImage: "person.badge.plus") }
                     NavigationLink { AboutView() } label: {
                         Label("Help & About", systemImage: "questionmark.circle")

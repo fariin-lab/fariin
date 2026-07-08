@@ -1417,14 +1417,16 @@ struct ThreadView: View {
     // Camera lives INSIDE the field (right), only when not typing/recording.
     private var inFieldCamera: some View {
         Button { showCamera = true } label: {
-            Image(systemName: "camera").font(.system(size: 22)).foregroundStyle(.secondary)
+            Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 24, height: 24).foregroundStyle(.secondary)
         }
         .padding(.trailing, 12).padding(.bottom, 7)
     }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     private var inFieldGif: some View {
         Button { showGifPicker = true } label: {
-            Image(systemName: "sparkles").font(.system(size: 22)).foregroundStyle(.secondary)
+            Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 24, height: 24).foregroundStyle(.secondary)
         }
         .padding(.trailing, 2).padding(.bottom, 7)
     }

@@ -76,7 +76,7 @@ struct MainShell: View {
     @available(iOS 26.0, *)
     private var modernTabView: some View {
         TabView(selection: $tab) {
-            Tab("Chats", systemImage: tab == 0 ? "message.fill" : "message", value: 0) {
+            Tab("Chats", image: "ic_chat", value: 0) {
                 ChatsView(onSignOut: onSignOut)
             }
             Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
@@ -99,7 +99,7 @@ struct MainShell: View {
     private var legacyTabView: some View {
         TabView(selection: $tab) {
             ChatsView(onSignOut: onSignOut)
-                .tabItem { Label("Chats", systemImage: tab == 0 ? "message.fill" : "message") }
+                .tabItem { Label("Chats", image: "ic_chat") }
                 .tag(0)
             CallsView()
                 .tabItem { Label("Calls", systemImage: tab == 1 ? "phone.fill" : "phone") }
