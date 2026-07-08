@@ -52,6 +52,7 @@ struct ThreadView: View {
     @State private var sendError: String?
     @State private var showCamera = false
     @State private var showAttachPanel = false
+    @State private var showPollSoon = false   // Poll tile → "coming soon" sheet
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
@@ -290,7 +291,8 @@ struct ThreadView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.height(330)]) }
+        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.fraction(0.7), .large]) }
+        .sheet(isPresented: $showPollSoon) { pollSoonSheet.presentationDetents([.fraction(0.6)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
                 Task {
@@ -739,7 +741,12 @@ struct ThreadView: View {
     private var attachPanel: some View {
         VStack(spacing: 0) {
             Capsule().fill(.secondary.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
+            // Grid: Camera tile first, then the recent photos/videos (4 columns, scrollable).
             AttachRecentsStrip(
+                onCamera: {
+                    showAttachPanel = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showCamera = true }
+                },
                 onPickPhoto: { ui in
                     showAttachPanel = false
                     // Let the sheet finish dismissing before the editor cover presents.
@@ -749,17 +756,29 @@ struct ThreadView: View {
                     showAttachPanel = false
                     Task { await sendVideo(from: url) }   // straight into the send pipeline
                 })
-                .padding(.top, 14)
-                .padding(.horizontal, 12)
+                .padding(.top, 10)
+            // Fixed bottom row of sources (Camera lives in the grid now).
             HStack(spacing: 22) {
-                attachTile("camera", "Camera") { showCamera = true }
                 attachTile("photo.on.rectangle", "Photos") { showLibrary = true }
-                attachTile("doc", "File") { showFileImporter = true }
+                attachTile("doc", "Files") { showFileImporter = true }
                 attachTile("sparkles", "GIF") { showGifPicker = true }
+                attachTile("chart.bar.xaxis", "Poll") { showPollSoon = true }
             }
-            .padding(.top, 18)
+            .padding(.vertical, 12)
+        }
+    }
+
+    // Polls aren't built yet — a small "coming soon" sheet at a 60% detent (user request).
+    private var pollSoonSheet: some View {
+        VStack(spacing: 14) {
+            Capsule().fill(.secondary.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
+            Spacer()
+            Image(systemName: "chart.bar.xaxis").font(.system(size: 52, weight: .regular)).foregroundStyle(.secondary)
+            Text("Polls").font(.title2.weight(.bold))
+            Text("Coming soon.").font(.body).foregroundStyle(.secondary)
             Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     // Kulan's own tile look — the app's round monochrome buttons (composer +, mic,
     // call-back), not the colored-square grid every other messenger uses.

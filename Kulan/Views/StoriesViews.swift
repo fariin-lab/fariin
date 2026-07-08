@@ -1266,9 +1266,14 @@ struct StoryViewer: View {
         // width and just loses a little height; the story is CENTER-CROPPED to fill it (the cards
         // render in fill mode below), so there are no side blur bars.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotHRef = (avail - countArea) * 0.94
-        let slotW = slotHRef * (scr.width / max(contentH, 1))
-        let slotH = slotHRef * 0.88   // modest 12% shorter — "don't cut too much"
+        // ASPECT-TRUE card (slotW derived from slotH at the SCREEN's aspect): the card renders the
+        // story EXACTLY as full-screen — a full-bleed (no-blur) image fills with NO bars, a
+        // letterboxed image keeps its own blur. A shorter/other card aspect makes a tall no-blur
+        // image narrower than the card, so fitBlur adds SIDE blur bars (user: "long no-blur image
+        // gets blurred when I scroll up"). Keeping card aspect == screen aspect makes side bars
+        // impossible and the morph a single uniform scale.
+        let slotH = (avail - countArea) * 0.94
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let miniH = slotW * (scr.height / scr.width)
         let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2

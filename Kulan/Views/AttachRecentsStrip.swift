@@ -8,6 +8,7 @@ import UIKit
 // access it simply shows whatever the user granted. Photos open the chat editor
 // (crop/caption); videos go straight into the send pipeline.
 struct AttachRecentsStrip: View {
+    var onCamera: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
 
@@ -15,50 +16,61 @@ struct AttachRecentsStrip: View {
     @State private var assets: [PHAsset] = []
     @State private var loadingPick = false   // fetching the full-size asset after a tap
 
-    private let side: CGFloat = 96
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
     var body: some View {
-        Group {
-            switch status {
-            case .authorized, .limited:
-                if assets.isEmpty { placeholder("No recent photos", icon: "photo.on.rectangle") }
-                else { strip }
-            case .notDetermined:
-                actionCard("Show recent photos here", icon: "photo.on.rectangle.angled") { request() }
-            default:
-                actionCard("Photo access is off — open Settings", icon: "photo.on.rectangle.angled") {
-                    if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVGrid(columns: cols, spacing: 6) {
+                cameraTile                                   // first cell = Camera (Telegram/WhatsApp)
+                switch status {
+                case .authorized, .limited:
+                    ForEach(assets, id: \.localIdentifier) { a in
+                        RecentThumb(asset: a) { pick(a) }
+                    }
+                case .notDetermined:
+                    accessTile("Allow Photos", icon: "photo.on.rectangle.angled") { request() }
+                default:
+                    accessTile("Settings", icon: "photo.on.rectangle.angled") {
+                        if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                    }
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 2)
         }
-        .frame(height: side)
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
         .task { if status == .authorized || status == .limited { load() } }
     }
 
-    private var strip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 6) {
-                ForEach(assets, id: \.localIdentifier) { a in
-                    RecentThumb(asset: a, side: side) { pick(a) }
+    // The Camera tile is the first cell of the grid; tap to open the camera.
+    private var cameraTile: some View {
+        Button(action: onCamera) {
+            Color.clear.aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    VStack(spacing: 6) {
+                        Image(systemName: "camera.fill").font(.system(size: 21, weight: .medium))
+                        Text("Camera").font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.primary)
                 }
-            }
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .disabled(loadingPick)
+        .buttonStyle(.plain)
     }
 
-    private func placeholder(_ text: String, icon: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon).font(.system(size: 18))
-            Text(text).font(.system(size: 14))
+    private func accessTile(_ text: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Color.clear.aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    VStack(spacing: 6) {
+                        Image(systemName: icon).font(.system(size: 19))
+                        Text(text).font(.system(size: 10, weight: .medium)).multilineTextAlignment(.center)
+                    }
+                    .foregroundStyle(.secondary).padding(4)
+                }
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func actionCard(_ text: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { placeholder(text, icon: icon) }.buttonStyle(.plain)
+        .buttonStyle(.plain)
     }
 
     private func request() {
@@ -125,10 +137,10 @@ struct AttachRecentsStrip: View {
     }
 }
 
-// One thumbnail cell; videos wear a length chip.
+// One thumbnail cell; videos wear a length chip. Flexible size: it fills its grid column as a
+// square (Color.clear.aspectRatio keeps it 1:1 whatever the column width).
 private struct RecentThumb: View {
     let asset: PHAsset
-    let side: CGFloat
     let onTap: () -> Void
     @State private var image: UIImage?
 
@@ -139,32 +151,33 @@ private struct RecentThumb: View {
 
     var body: some View {
         Button(action: onTap) {
-            ZStack {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
-                } else {
-                    Rectangle().fill(Color.secondary.opacity(0.12))
-                }
-            }
-            .frame(width: side, height: side)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {   // hairline so light thumbs don't dissolve into the sheet
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if asset.mediaType == .video {
-                    HStack(spacing: 3) {
-                        Image(systemName: "video.fill").font(.system(size: 9))
-                        Text(durationLabel).font(.system(size: 11, weight: .semibold))
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFill()
+                    } else {
+                        Rectangle().fill(Color.secondary.opacity(0.12))
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(.black.opacity(0.45), in: Capsule())
-                    .padding(5)
                 }
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {   // hairline so light thumbs don't dissolve into the sheet
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if asset.mediaType == .video {
+                        HStack(spacing: 3) {
+                            Image(systemName: "video.fill").font(.system(size: 9))
+                            Text(durationLabel).font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .padding(4)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
         .task(id: asset.localIdentifier) {
@@ -173,7 +186,7 @@ private struct RecentThumb: View {
             o.resizeMode = .fast
             o.isNetworkAccessAllowed = true
             PHImageManager.default().requestImage(for: asset,
-                                                  targetSize: CGSize(width: side * 3, height: side * 3),
+                                                  targetSize: CGSize(width: 300, height: 300),
                                                   contentMode: .aspectFill, options: o) { img, _ in
                 if let img { image = img }
             }
