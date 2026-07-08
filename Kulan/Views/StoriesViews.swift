@@ -378,6 +378,7 @@ struct StoriesRow: View {
                     // posted stories, that viewer offers a "‹" / swipe-right to step back into them
                     // while the upload keeps running in the background.
                     .onTapGesture { onOpenUploading() }
+                    .matchedTransitionSource(id: "my-story", in: storyNS)   // hero source for the native zoom close
             } else {
                 card(cover: repo.mine?.stories.last?.previewUrl ?? mePhoto,
                      name: "My Story", avatar: mePhoto,
@@ -1735,7 +1736,9 @@ struct UploadingStoryHandoff: View {
         ZStack {
             Color.black.ignoresSafeArea()   // constant backdrop so the re-feed never blinks
             if let g = group {
-                StoryViewer(group: g, ownSwipeDismiss: true, onClose: onClose, onProfile: onProfile)
+                // ownSwipeDismiss:false → the library's custom pan is OFF; the cover's native zoom
+                // transition owns the scroll-down-to-close, same as every other story.
+                StoryViewer(group: g, ownSwipeDismiss: false, onClose: onClose, onProfile: onProfile)
                     // Re-feed identity when the upload flips done → open on the real just-posted story
                     // (image already URLCache-warm from postStory, so the swap is seamless).
                     .id(svc.uploading)

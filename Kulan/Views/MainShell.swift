@@ -902,6 +902,9 @@ struct ChatsView: View {
                         Task { await StoriesRepository.shared.load(force: true) }   // refresh seen rings
                     },
                     onProfile: { grp in profileGroup = grp })
+                // Same native zoom close as every other story (user: uploading story used the custom
+                // scroll-down pan — use Apple's zoom dismiss instead). Heroes from the uploading card.
+                .navigationTransition(.zoom(sourceID: "my-story", in: storyNS))
             }
             .sheet(item: $profileGroup) { g in
                 NavigationStack {
