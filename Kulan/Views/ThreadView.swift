@@ -58,6 +58,7 @@ struct ThreadView: View {
     @State private var showLibrary = false
     @State private var showVideoSoon = false
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
+    @State private var showWallpaper = false      // "Change Wallpaper" from the profile menu opens the picker here
     // Hold-to-record voice gesture state (WhatsApp/Telegram-style).
     @State private var recordLocked = false        // recording continues after finger lifts
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
@@ -221,6 +222,9 @@ struct ThreadView: View {
                 .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
             }
             }
+            // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
+            // plain app background, so chats without a wallpaper look exactly as before.
+            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
         }
     }
 
@@ -318,6 +322,13 @@ struct ThreadView: View {
 
     var body: some View {
         threadContent
+        // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
+        // posts this notification, so the picker opens here (over the live chat, previewing behind).
+        .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid) }
+        .onReceive(NotificationCenter.default.publisher(for: .openChatWallpaper)) { note in
+            guard (note.object as? String) == cid else { return }
+            showWallpaper = true
+        }
         .sheet(item: $tappedMember) { m in
             GroupMemberSheet(cid: cid, member: m,
                              iAmAdmin: conversation?.isAdmin(me) ?? false,

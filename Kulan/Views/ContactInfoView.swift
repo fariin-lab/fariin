@@ -40,6 +40,7 @@ struct ContactInfoView: View {
     @State private var disappearSeconds = 0
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for both of you" confirm
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
 
     private var dark: Bool { scheme == .dark }
     private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }
@@ -229,6 +230,18 @@ struct ContactInfoView: View {
 
             Button { showShare = true } label: {
                 Label("Share Contact", systemImage: "square.and.arrow.up")
+            }
+
+            // Change Wallpaper: pop back to the chat, then ask it to open the wallpaper picker
+            // (the small delay lets the pop finish so the sheet presents cleanly on the chat).
+            Button {
+                let target = cid
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    NotificationCenter.default.post(name: .openChatWallpaper, object: target)
+                }
+            } label: {
+                Label("Change Wallpaper", systemImage: "photo")
             }
 
             Divider()
