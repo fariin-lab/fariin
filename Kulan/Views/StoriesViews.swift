@@ -626,6 +626,7 @@ struct StoryViewer: View {
     // Horizontal carousel swipe in flight: all cards show + slide normally while the REAL
     // story steps aside; it takes the centre back once the swipe settles (identical pixels
     // at both hand-off moments = invisible swaps, and the swipe stays as smooth as ever).
+    @State private var carouselInteracting = false
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
     private var myStories: [Story] { groups.first { $0.isMine }?.stories ?? [] }
@@ -998,23 +999,22 @@ struct StoryViewer: View {
         // Re-clipping the live-material story with a changing radius EVERY finger frame was
         // the "follows then stutters" jank — corners now apply only once the card has
         // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
+        // NATIVE ZOOM (user request: remove the custom per-frame morph, use a native iOS zoom).
+        // The story now snaps between full-screen and the card with SwiftUI's own spring animation
+        // (.animation(value: storyZoomedOut)) instead of hand-interpolating scale/offset every
+        // finger frame. The sheet itself is unchanged — it still tracks the finger; the story
+        // zoom triggers when the pull commits past halfway (and reverses on close).
         .clipShape(StoryCardClip(
-            // Rounded through the WHOLE morph (radius eases in with sizeP; 24pt on screen at
-            // settle). Historically settle-only: a per-frame variable radius over the LIVE
-            // material stuttered — but the blur is FROZEN pixels during the morph now, so
-            // rounding is cheap and the corners no longer pop off mid-drag (user screenshot).
-            radius: morphClipRadius,
-            // Trim to the photo area ONLY while the sheet morph is engaged. Trimming at rest
-            // sliced the owner footer (Views/Delete) clean off and left a transparent hole the
-            // tab bar showed through (user screenshot on build 234) — the footer LIVES in the
-            // strip below contentHeight. The morph's centre-crop window grows with progress.
-            topCut: (showViewers && viewersProgress > 0.08) ? morphGeometry.topCut : 0,
-            contentHeight: (showViewers && viewersProgress > 0.08) ? morphContentH - morphGeometry.botCut : .greatestFiniteMagnitude))
-        .scaleEffect(x: morphGeometry.scaleX, y: morphGeometry.scaleY, anchor: .top)
-        .offset(y: morphOffsetY)
+            radius: storyZoomedOut ? 24 / max(storyZoomOpen.scale, 0.2) : 0,
+            topCut: 0,
+            contentHeight: (showViewers && viewersProgress > 0.08) ? morphContentH : .greatestFiniteMagnitude))
+        .scaleEffect(x: storyZoomedOut ? storyZoomOpen.scale : 1,
+                     y: storyZoomedOut ? storyZoomOpen.scale : 1, anchor: .top)
+        .offset(y: storyZoomedOut ? storyZoomOpen.offsetY : 0)
+        .animation(.smooth(duration: 0.4), value: storyZoomedOut)
         // BINARY (no animation → no fractional material frames): the real story steps aside
         // while the carousel is swiping, so the cards slide as smoothly as they always did.
-        .opacity(1 - Double(carouselIn))   // crossfade to the native carousel card at full-open (frozen pixels → safe)
+        .opacity(storyLayerSteppedAside ? 0 : 1)
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -1168,6 +1168,22 @@ struct StoryViewer: View {
     }
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
+
+    // NATIVE ZOOM state + endpoint. `storyZoomedOut` flips true once the pull commits past
+    // halfway (and back on close), so SwiftUI's spring animates the story between full-screen and
+    // the card — no custom per-frame interpolation. The endpoint mirrors the carousel slot exactly
+    // (scale = slotH/contentH, offset = blockTop) so the story lands on the card's size/position.
+    private var storyZoomedOut: Bool { showViewers && viewersProgress > 0.5 }
+    private var storyZoomOpen: (scale: CGFloat, offsetY: CGFloat) {
+        let scr = UIScreen.main.bounds
+        let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
+        let avail = scr.height - sheetH - topInset
+        let countArea: CGFloat = 40
+        let slotH = (avail - countArea) * 0.94
+        let blockTop = topInset + (avail - countArea - slotH) / 2
+        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        return (slotH / max(contentH, 1), blockTop)
+    }
     // The story CONTENT's height (photo card without the footer) — the clip must end HERE,
     // not at the layer's true bottom (which extends into the faded footer area below the
     // photo: rounding down there left the VISIBLE bottom corners square, user report).
@@ -1208,14 +1224,21 @@ struct StoryViewer: View {
         // backdrop — scales itself into the centre slot (see morphGeometry). This backdrop
         // only supplies the carousel (neighbours + counts); its CENTRE card keeps its frame
         // for layout/taps but hides its content, since the shrunk real story sits on top.
-        let carIn = carouselIn
+        let carIn = max(0, min(1, (p - 0.85) / 0.1))
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH, miniH: miniH, cropY: cropY,
-                              onActiveTap: { closeViewers() })
+                              onActiveTap: { closeViewers() },
+                              // Centre card content shows at FULL SETTLE too (not just while swiping):
+                              // the settled 'card' used to be the REAL story scaled 0.3x, and a
+                              // UIVisualEffectView under that transform renders its fit-image bars far
+                              // darker/flatter than the story's original blur (user: 'use original blur').
+                              // A card-sized view samples its own fill correctly.
+                              hideActiveContent: hideCarouselCentreContent,
+                              onInteracting: { carouselInteracting = $0 })
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
@@ -1280,17 +1303,16 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
-    // NATIVE CAROUSEL hand-off: the real story morphs into the slot during the pull, then at
-    // full-open the NATIVE paging carousel (its own centre card) takes over so its system swipe
-    // physics own the row. The real story steps aside once open (p ≥ 0.92); its zoom-in on
-    // close brings it straight back before the carousel fades out.
-    // Crossfade weight: 0 until the story has nearly finished morphing into the slot, then 1 as
-    // the NATIVE carousel card takes over. The real story fades out (1 - carouselIn) exactly as
-    // the carousel card fades in (carouselIn), so there is never a duplicate at full opacity nor
-    // a gap. The story's blur is frozen pixels here, so fractional opacity is safe.
-    private var carouselIn: CGFloat {
-        max(0, min(1, (viewersProgress - 0.85) / 0.1))
+    // TELEGRAM-EXACT (user's final call): the centre is the REAL story scaled as ONE living
+    // unit — through the drag AND at rest. No stand-in card renderer, no trimming, no
+    // re-framing. (The settle stand-in existed to mask geometry mismatches now fixed at the
+    // root: aspect-true zoom endpoint == card size, factory frames at contentH, freeze
+    // overlays cropped 1:1.) The story steps aside ONLY while the carousel is actively
+    // swiping; its backdrop is FROZEN pixels (storyFreezeBlur), so scaling never re-blurs.
+    private var storyLayerSteppedAside: Bool {
+        carouselInteracting && viewersProgress > 0.9
     }
+    private var hideCarouselCentreContent: Bool { !carouselInteracting }
 
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
@@ -1718,60 +1740,156 @@ struct MyStoriesCarousel: View {
     let miniH: CGFloat                  // full mini-screen composite height; the card shows a slotH window of it
     let cropY: CGFloat                  // the window's top within the composite (photo-centred, mirrors the morph)
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
+    var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
+    var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
+    // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
+    // so the row opens centred on it; SwiftUI's .viewAligned physics follow the finger 1:1 and snap to
+    // the nearest card on release (swipe past ~50% → next). It only updates when the scroll SETTLES, so
+    // the parent no longer re-renders every frame mid-swipe (that was the jank / "hard to swipe").
+    // Custom finger-tracking pager (replaces a .viewAligned ScrollView, which needed a ~50% drag or a
+    // hard flick to advance and snapped back otherwise — the "hard to swipe"). `index` is the centred
+    // card; the row is a plain offset HStack so the drag follows the finger 1:1 and commits to the next
+    // card at just 30%. Seeding `index` in init also kills the old .scrollPosition centring race.
+    @State private var index = 0
+    @State private var dragX: CGFloat = 0     // live horizontal finger translation
+    @State private var dragging = false
 
-    // NATIVE PAGING (user request: replace the custom finger-tracking pager with a 100% native
-    // iOS swipe). A horizontal ScrollView with .scrollTargetBehavior(.viewAligned) gives Apple's
-    // own paging physics — the finger tracks 1:1, momentum and snapping are the system's. The
-    // side padding centres the aligned card so neighbours peek; the per-card cover-flow scale is
-    // a .scrollTransition (native, phase-driven). scrollPosition binds the centred card to activeId.
-    @State private var scrolledID: String?
-    private let gap: CGFloat = 10
+    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
+         onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
+         onInteracting: @escaping (Bool) -> Void = { _ in }) {
+        self.stories = stories
+        self._activeId = activeId
+        self.slotW = slotW
+        self.slotH = slotH
+        self.miniH = miniH
+        self.cropY = cropY
+        self.onActiveTap = onActiveTap
+        self.hideActiveContent = hideActiveContent
+        self.onInteracting = onInteracting
+        self._index = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
+    }
+
+    @State private var interactGen = 0   // invalidates a stale "settled" callback when a new swipe starts
+    // Swipe finished settling → hand the centre back to the real story (identical pixels = invisible swap).
+    private func endInteractionSoon() {
+        interactGen += 1
+        let gen = interactGen
+        // 0.55s, not 0.4: the 0.34s interactiveSpring still has a 1-3pt visible tail at
+        // 0.4s, so the centre hand-off happened on a still-moving card (audit finding 4).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+            if gen == interactGen, !dragging { onInteracting(false) }
+        }
+    }
 
     var body: some View {
-        let focusedID = scrolledID ?? activeId
+        let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
         let active = byStory[focusedID] ?? []
         let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
+        // Layout gap 2 reads as ~20pt on screen: the neighbours' 0.72 scale-down shrinks them
+        // toward their centres, adding ~10pt of AIR per facing edge on top of the layout gap
+        // (user: the old 12 made the cards look far apart).
+        let gap: CGFloat = 2
+        let step = slotW + gap
+        let n = stories.count
+        let totalW = CGFloat(n) * slotW + CGFloat(max(0, n - 1)) * gap
+        let offsetX = totalW / 2 - (CGFloat(index) * step + slotW / 2) + dragX
         VStack(spacing: 12) {
-            GeometryReader { geo in
-                let sidePad = max(0, (geo.size.width - slotW) / 2)
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: gap) {
-                        ForEach(stories, id: \.id) { s in
-                            card(s)
-                                .scrollTransition(axis: .horizontal) { content, phase in
-                                    content
-                                        .scaleEffect(1.0 - 0.20 * abs(phase.value))
-                                        .opacity(1.0 - 0.30 * abs(phase.value))
-                                        .saturation(1.0 - 0.45 * abs(phase.value))
-                                }
-                                .id(s.id)
-                        }
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: slotH)   // centre card fills the slot; neighbours peek + scale DOWN (not clipped)
+                .overlay {
+                    HStack(spacing: gap) {
+                        ForEach(stories, id: \.id) { s in card(s) }
                     }
-                    .scrollTargetLayout()
-                    .padding(.horizontal, sidePad)
+                    .offset(x: offsetX)   // follows the finger via dragX; centres `index` otherwise
                 }
-                .scrollTargetBehavior(.viewAligned)
-                .scrollPosition(id: $scrolledID, anchor: .center)
-                .scrollIndicators(.hidden)
-                .frame(height: slotH)
-            }
-            .frame(height: slotH)
+                .contentShape(Rectangle())
+                // Horizontal drag pages the cards, tracking the finger 1:1. A vertical drag is left to the
+                // backdrop's collapse gesture (each guards its own axis) so the two never fight.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { v in
+                            // Engage ONLY on a decisive horizontal move, and lock to it. A vertical (close)
+                            // drag must never page or wobble the cards — that wobble was the close "shake";
+                            // the backdrop owns the downward close.
+                            if !dragging {
+                                guard abs(v.translation.width) > 12,
+                                      abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
+                                dragging = true
+                                interactGen += 1
+                                onInteracting(true)   // all cards show + slide; the real story steps aside
+                            }
+                            dragX = v.translation.width
+                        }
+                        .onEnded { v in
+                            let wasDragging = dragging
+                            dragging = false
+                            guard wasDragging else {
+                                // A FAST short flick can end before the 12pt engagement gate ever
+                                // passes — don't swallow it: a decisively horizontal fling still
+                                // turns the page ("fast swipe not working", user report).
+                                let pw = v.predictedEndTranslation.width
+                                guard abs(pw) > step * 0.5,
+                                      abs(v.translation.width) > abs(v.translation.height) else { dragX = 0; return }
+                                onInteracting(true)
+                                // MOMENTUM (user spec): a hard flick skips as many cards as the
+                                // fling would carry, not just one.
+                                let skip = max(1, Int((abs(pw) / step).rounded()))
+                                let ni = pw < 0 ? min(index + skip, max(0, n - 1)) : max(index - skip, 0)
+                                withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                                    index = ni
+                                    dragX = 0
+                                }
+                                if stories.indices.contains(ni) { activeId = stories[ni].id }
+                                endInteractionSoon()
+                                return
+                            }
+                            // Commit to the neighbour at just 30% of a card step (or a flick), so the next
+                            // card is EASY to reach; otherwise settle back. predictedEndTranslation carries
+                            // the fling so a quick short flick still advances.
+                            let commit = step * 0.30
+                            let predicted = v.predictedEndTranslation.width
+                            var ni = index
+                            // MOMENTUM (user spec): the fling's predicted landing decides how many
+                            // cards to cross — a fast/long swipe skips several; a gentle pull past
+                            // 30% still advances exactly one (the old feel preserved).
+                            let travelled = Int((abs(predicted) / step).rounded())
+                            if travelled >= 2 {
+                                ni = predicted < 0 ? min(index + travelled, max(0, n - 1))
+                                                  : max(index - travelled, 0)
+                            } else if v.translation.width <= -commit || predicted <= -step * 0.5 {
+                                ni = min(index + 1, max(0, n - 1))
+                            } else if v.translation.width >= commit || predicted >= step * 0.5 {
+                                ni = max(index - 1, 0)
+                            }
+                            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                                index = ni
+                                dragX = 0
+                            }
+                            if stories.indices.contains(ni) { activeId = stories[ni].id }
+                            endInteractionSoon()   // centre hands back to the real story after the spring
+                        }
+                )
             // The centred card's count, big + centred under the carousel (mockup).
             countRow(views: active.count, likes: activeReacts, big: true)
         }
-        // Seed the centred card to the opened-on story.
-        .onAppear { if scrolledID == nil { scrolledID = activeId } }
-        // The system snaps a card to centre → make it the active story (drives the sheet's list + close).
-        .onChange(of: scrolledID) { _, id in
-            guard let id, id != activeId else { return }
-            activeId = id
+        // The CENTRED card is the single source of truth: keep sheetStoryId (activeId) in lockstep with
+        // it, so the story behind + the close ALWAYS land on exactly the card you see. Without this the
+        // seeded `index` and `activeId` could drift (open on A, close showed B).
+        .onChange(of: index) { _, i in
+            guard stories.indices.contains(i), stories[i].id != activeId else { return }
+            activeId = stories[i].id
         }
-        // External retarget (rare) → scroll to it natively.
+        // External retarget (rare) → recentre, but never while the finger is dragging.
         .onChange(of: activeId) { _, v in
-            guard scrolledID != v else { return }
-            withAnimation(.snappy) { scrolledID = v }
+            guard !dragging, let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
+            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) { index = ni }
+        }
+        // Re-seed from the opened-on story in case `stories` was still loading at init.
+        .onAppear {
+            if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { index = ni }
         }
         .task { await loadAll() }
     }
@@ -1788,6 +1906,8 @@ struct MyStoriesCarousel: View {
             .offset(y: -cropY)                                     // slid so the photo-centred window shows
             .frame(width: slotW, height: slotH, alignment: .top)   // cropped to the slot window
             .clipped()
+            // Centre slot: the REAL shrunk story sits on top — hide these pixels (frame + tap stay).
+            .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(alignment: .bottom) {
                 // Side cards show a small count inside; the CENTRED card hides it (big count below).
@@ -1797,14 +1917,31 @@ struct MyStoriesCarousel: View {
                         content.opacity(Self.centreDistance(proxy) < 0.35 ? 0 : 1)
                     }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            // GEOMETRY-based scale (scrollTransition's phase barely moved for the visible neighbours,
+            // so all cards looked the same size). Each card measures its own distance from the SCREEN
+            // centre: t=0 centred → scale 1.0 (large), t=1 one slot away → scale 0.72 (clearly smaller),
+            // matching the mockup's focus hierarchy. Recomputes live as the row scrolls.
+            .visualEffect { content, proxy in
+                let t = Self.centreDistance(proxy)
+                return content
+                    .scaleEffect(1.0 - 0.28 * t)
+                    .opacity(1.0 - 0.3 * t)
+                    .saturation(1.0 - 0.45 * t)
+            }
+            .id(s.id)
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
             .onTapGesture {
                 if s.id == activeId { onActiveTap() }
-                else { withAnimation(.snappy) { scrolledID = s.id }; activeId = s.id }
+                else if let ni = stories.firstIndex(where: { $0.id == s.id }) {
+                    onInteracting(true)   // tap-to-recentre animates cards too — same hand-off dance
+                    withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84)) { index = ni }
+                    activeId = s.id
+                    endInteractionSoon()
+                }
             }
     }
 
-    // 0 when the card is centred on screen, → 1 one slot-width away (clamped). Drives the count fade.
+    // 0 when the card is centred on screen, → 1 one slot-width away (clamped). Drives the cover-flow scale.
     private static func centreDistance(_ proxy: GeometryProxy) -> CGFloat {
         let screenMid = UIScreen.main.bounds.width / 2
         let mid = proxy.frame(in: .global).midX
