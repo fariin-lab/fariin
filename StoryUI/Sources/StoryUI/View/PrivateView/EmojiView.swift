@@ -43,12 +43,16 @@ struct EmojiView: View {
                 }
             }
             // Compact DARK reaction bar (user: smaller + darker, no chevron): ~62pt tall,
-            // full width minus 16pt each screen edge, 24pt radius, dark-tinted Liquid Glass.
+            // 24pt radius, dark-tinted Liquid Glass. WIDTH matches the "Send message" pill below it
+            // (user: "make it the size of the pill"): same 16pt left edge, and the right edge stops
+            // ~44pt short of the screen — exactly where the pill ends before its heart button — so
+            // the bar and the input pill line up as one matched stack instead of the bar overhanging.
             .padding(.horizontal, 14)
             .frame(height: 62)
             .frame(maxWidth: .infinity)
             .reactionGlass(24)
-            .padding(.horizontal, 16)   // 16pt from the screen edges
+            .padding(.leading, 16)
+            .padding(.trailing, 44)
         }
     }
     
