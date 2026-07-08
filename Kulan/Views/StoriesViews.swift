@@ -119,7 +119,6 @@ struct StoryImage: View {
     var bakedBars = false
     @State private var image: UIImage?
     @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
-    @State private var failed = false
     var body: some View {
         Group {
             if let image {
@@ -163,9 +162,11 @@ struct StoryImage: View {
                     Image(uiImage: image).resizable().scaledToFill()
                         .transition(.opacity)
                 }
-            } else if failed {
-                ZStack { Color.black; Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.5)) }
             } else {
+                // No black placeholder ever (user report): whether still loading OR a fetch failed,
+                // show the shimmer skeleton. load() retries with backoff so a transient failure —
+                // a brief network blip, or a cold disk cache right after an app update — recovers on
+                // its own instead of freezing the card on a dead black "photo" icon.
                 SkeletonFill()
             }
         }
@@ -181,14 +182,25 @@ struct StoryImage: View {
     }
 
     @MainActor private func load() async {
-        failed = false
         if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
-        guard let u = URL(string: url) else { failed = true; return }
-        guard let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) else {
-            failed = true; return
+        guard let u = URL(string: url), !url.isEmpty else { return }
+        // Retry with backoff so a card never gets stuck on a black placeholder. The two reported
+        // failures — "sometimes a black image" and "after updating the app I can't see my story" —
+        // are both a single failed fetch (a network blip, or a cold disk cache after a fresh
+        // install) that used to be permanent. Now we re-attempt a few times, keeping the shimmer
+        // skeleton up between tries, and recover the instant the fetch succeeds.
+        let delays: [UInt64] = [0, 600_000_000, 1_500_000_000, 3_000_000_000, 6_000_000_000]
+        for delay in delays {
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            if Task.isCancelled { return }
+            if let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) {
+                DiskImageCache.shared.store(img, data: data, for: url)
+                await apply(img)
+                return
+            }
         }
-        DiskImageCache.shared.store(img, data: data, for: url)
-        await apply(img)
+        // Still failing after all attempts (rare for a live story URL) — leave the skeleton up
+        // rather than the old black card; a repo reload with a fresh URL retriggers this task.
     }
 
     @MainActor private func apply(_ img: UIImage) async {
