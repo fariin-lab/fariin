@@ -53,7 +53,7 @@ struct AttachRecentsStrip: View {
                     }
                     .foregroundStyle(.primary)
                 }
-                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -68,7 +68,7 @@ struct AttachRecentsStrip: View {
                     }
                     .foregroundStyle(.secondary).padding(4)
                 }
-                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -160,9 +160,9 @@ private struct RecentThumb: View {
                         Rectangle().fill(Color.secondary.opacity(0.12))
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay {   // hairline so light thumbs don't dissolve into the sheet
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(Color.primary.opacity(0.06), lineWidth: 1)
                 }
                 .overlay(alignment: .bottomTrailing) {
@@ -177,7 +177,7 @@ private struct RecentThumb: View {
                         .padding(4)
                     }
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
         .task(id: asset.localIdentifier) {

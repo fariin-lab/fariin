@@ -1,11 +1,12 @@
 import SwiftUI
 import PhotosUI
 
-// Telegram-style "Select Theme" sheet, our own look. A native sheet (standard sheet material — no
-// custom floating card, which double-stacked with the sheet chrome). A row of gradient swatches +
-// None + a Photos tile; picking a swatch LIVE-previews it on the chat behind. The bottom button is
-// "Apply Wallpaper", tinted with the selected wallpaper's own colour. Closing (X / swipe) without
-// applying reverts to what it was. Local per-chat only.
+// Telegram-style "Select Theme" sheet, our own look. A native sheet with a row of gradient swatches
+// + None (+ a Photos tile when a custom photo is the pick). Picking a swatch LIVE-previews it on the
+// chat behind. The bottom button is contextual: "Choose Wallpaper from Photos" when nothing new is
+// selected (settled), and morphs to "Apply Wallpaper" — tinted with the pick's own colour — the
+// moment you choose a DIFFERENT wallpaper. On open it auto-scrolls to the wallpaper you're using so
+// you can see it selected. Local per-chat only. Closing without applying reverts.
 struct WallpaperPickerSheet: View {
     let cid: String
     @Environment(\.dismiss) private var dismiss
@@ -13,9 +14,8 @@ struct WallpaperPickerSheet: View {
     private var store: WallpaperStore { .shared }
 
     @State private var selected: ChatWallpaper
-    @State private var committed = false          // Apply pressed → don't revert on disappear
     @State private var photoItem: PhotosPickerItem?
-    private let original: ChatWallpaper            // restore this if the user cancels
+    private let original: ChatWallpaper            // the wallpaper in use when the sheet opened
 
     init(cid: String) {
         self.cid = cid
@@ -25,6 +25,16 @@ struct WallpaperPickerSheet: View {
     }
 
     private var dark: Bool { scheme == .dark }
+    private var hasPendingChange: Bool { selected != original }
+
+    // Stable id per selection, for the auto-scroll on open.
+    private func tileID(_ w: ChatWallpaper) -> String {
+        switch w {
+        case .none:            return "none"
+        case .gradient(let g): return g
+        case .photo:           return "photo"
+        }
+    }
 
     // The vivid colour of the current pick → the Apply button's Liquid Glass tint.
     private var applyTint: Color {
@@ -38,30 +48,39 @@ struct WallpaperPickerSheet: View {
     var body: some View {
         VStack(spacing: 16) {
             header
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    noneTile
-                    ForEach(ChatWallpapers.all) { g in gradientTile(g) }
-                    photosTile
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        noneTile.id("none")
+                        ForEach(ChatWallpapers.all) { g in gradientTile(g).id(g.id) }
+                        if case .photo = selected { photosTile.id("photo") }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 4)
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 4)
+                // Open scrolled to the wallpaper currently in use, so it's visible + clearly selected.
+                .onAppear {
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(tileID(selected), anchor: .center) }
+                    }
+                }
             }
-            applyButton
+            bottomBar
         }
         .padding(.vertical, 18)
         .presentationDetents([.height(300)])
         .presentationDragIndicator(.visible)
-        // Cancel path (X or swipe-down without Apply) restores the wallpaper that was there on open.
-        .onDisappear { if !committed { store.set(original, for: cid) } }
+        // No live-apply and no revert: selecting only SELECTS (previews in the picker). The chat's
+        // wallpaper is written to the store ONLY when Apply is pressed (user: "apply means save; when
+        // chosen but not applied, don't put that wallpaper — only when apply").
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let img = UIImage(data: data) {
                     await MainActor.run {
-                        store.savePhoto(img, for: cid)
-                        preview(.photo)
+                        store.savePhoto(img, for: cid)   // save the file so the tile can show it
+                        preview(.photo)                  // select (highlight) — NOT applied yet
                     }
                 }
             }
@@ -82,6 +101,36 @@ struct WallpaperPickerSheet: View {
             }
         }
         .padding(.horizontal, 20)
+    }
+
+    // Contextual bottom button: settled → "Choose Wallpaper from Photos"; pending change → "Apply".
+    @ViewBuilder private var bottomBar: some View {
+        if hasPendingChange {
+            Button {
+                store.set(selected, for: cid)   // Apply = actually write the wallpaper now
+                dismiss()
+            } label: {
+                Text("Apply Wallpaper").fontWeight(.semibold).font(.system(size: 17))
+                    .foregroundStyle(selected == .none ? Color.primary : Color.white)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .liquidGlass(Capsule(), interactive: true, tint: applyTint)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
+            }
+            .padding(.horizontal, 20)
+            .transition(.opacity)
+        } else {
+            PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+                HStack(spacing: 8) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                    Text("Choose Wallpaper from Photos").fontWeight(.semibold)
+                }
+                .font(.system(size: 16)).foregroundStyle(.primary)
+                .frame(maxWidth: .infinity).frame(height: 52)
+                .liquidGlass(Capsule(), interactive: true)
+            }
+            .padding(.horizontal, 20)
+            .transition(.opacity)
+        }
     }
 
     // "None" swatch — clears back to the default app background.
@@ -108,48 +157,20 @@ struct WallpaperPickerSheet: View {
         } action: { preview(.gradient(g.id)) }
     }
 
-    // Photos tile — opens the picker; once picked it shows the chosen photo and stays selectable.
+    // Shown only when a custom photo is the current pick — displays it, selected; tap re-picks.
     private var photosTile: some View {
         PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-            let isSel = selected == .photo
-            tileFrame(isSelected: isSel) {
+            tileFrame(isSelected: true) {
                 Group {
-                    if isSel, let img = store.photo(for: cid) {
+                    if let img = store.photo(for: cid) {
                         Image(uiImage: img).resizable().scaledToFill()
                     } else {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.secondary.opacity(0.12))
-                            .overlay {
-                                VStack(spacing: 6) {
-                                    Image(systemName: "photo.on.rectangle.angled").font(.system(size: 21))
-                                    Text("Photos").font(.system(size: 12, weight: .medium))
-                                }
-                                .foregroundStyle(.secondary)
-                            }
+                        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.secondary.opacity(0.12))
                     }
                 }
             }
         }
         .buttonStyle(.plain)
-    }
-
-    private var applyButton: some View {
-        Button {
-            committed = true
-            store.set(selected, for: cid)
-            dismiss()
-        } label: {
-            Text("Apply Wallpaper").fontWeight(.semibold)
-                .font(.system(size: 17))
-                .foregroundStyle(selected == .none ? Color.primary : Color.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                // Liquid Glass tinted with the chosen wallpaper's colour (physics: the tint springs
-                // when you switch swatches).
-                .liquidGlass(Capsule(), interactive: true, tint: applyTint)
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
-        }
-        .padding(.horizontal, 20)
     }
 
     // Common swatch frame + selection ring + spring pop.
@@ -185,9 +206,8 @@ struct WallpaperPickerSheet: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
     }
 
-    // Live-preview a pick on the chat behind (store is observed) with a smooth spring.
+    // Select (highlight in the picker) only — does NOT touch the chat's wallpaper; Apply does that.
     private func preview(_ w: ChatWallpaper) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = w }
-        store.set(w, for: cid)
     }
 }
