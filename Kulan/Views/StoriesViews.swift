@@ -1903,22 +1903,27 @@ struct MyStoriesCarousel: View {
                     .onEnded { v in
                         let wasDragging = dragging
                         dragging = false
-                        let screenW = UIScreen.main.bounds.width
-                        // TELEGRAM snap: next if fraction ≤ -0.3 OR (≤ -0.05 and a left fling);
-                        // prev if fraction ≥ 0.3 OR (≥ 0.05 and a right fling). fling = predicted−current.
-                        let fraction = v.translation.width / screenW
-                        let fling = v.predictedEndTranslation.width - v.translation.width
-                        var ni = index
-                        if fraction <= -0.3 || (fraction <= -0.05 && fling <= -80) { ni = min(index + 1, n - 1) }
-                        else if fraction >= 0.3 || (fraction >= 0.05 && fling >= 80) { ni = max(index - 1, 0) }
                         if !wasDragging {
-                            // fast flick that never passed the engage gate still turns the page
-                            let pf = v.predictedEndTranslation.width / screenW
-                            if pf <= -0.15, index < n - 1 { ni = index + 1; onInteracting(true) }
-                            else if pf >= 0.15, index > 0 { ni = index - 1; onInteracting(true) }
-                            else { dragX = 0; return }
+                            // A fast flick that never crossed the engage gate still turns the page —
+                            // otherwise it's a tap: engage so the momentum path below runs.
+                            if abs(v.predictedEndTranslation.width) < fullDist * 0.15 { dragX = 0; return }
+                            onInteracting(true)
                         }
-                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) {
+                        // MOMENTUM: predictedEndTranslation already carries the gesture VELOCITY (UIKit
+                        // projects where the finger would coast to). Convert that projected landing to
+                        // card-steps so a quick flick GLIDES across as many cards as the fling would
+                        // carry (capped so it never flies off), and a gentle pull past ~40% advances one.
+                        let predicted = v.predictedEndTranslation.width
+                        let hardSteps = Int((predicted / fullDist).rounded())          // velocity-driven
+                        let softStep = abs(v.translation.width) > fullDist * 0.4        // gentle-drag commit
+                            ? (v.translation.width < 0 ? -1 : 1) : 0
+                        var steps = abs(hardSteps) >= 1 ? hardSteps : softStep
+                        steps = max(-4, min(4, steps))                                  // never fly off
+                        // Drag/flick RIGHT (+) reveals the PREVIOUS card → index decreases.
+                        let ni = max(0, min(n - 1, index - steps))
+                        // Fluid, velocity-matched spring (premium-messenger glide, not a stiff snap):
+                        // response 0.42 gives it room to coast; damping 0.80 lands cleanly, tiny glide.
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.80)) {
                             index = ni
                             dragX = 0
                         }
