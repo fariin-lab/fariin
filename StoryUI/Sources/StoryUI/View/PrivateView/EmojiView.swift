@@ -17,41 +17,41 @@ struct EmojiView: View {
     
     let userClosure: UserCompletionHandler?
     
-    private var emojiSize: CGFloat {
-        if emojiArray?.count == 1 {
-            return 55
-        }
-        return CGFloat(100/(emojiArray?.count ?? .zero))
-    }
-    
-    private var spacing: CGFloat {
-        if emojiArray?.count == 1 {
-            return 40
-        }
-        return CGFloat(80/(emojiArray?.count ?? .zero))
-    }
-    
+    // TELEGRAM LOOK (story reply reactions): one compact row of small emojis inside a rounded
+    // translucent pill with a "Send reaction as a private message" caption and a trailing chevron
+    // — instead of the old big 50pt 2-row grid.
+    private var flatEmojis: [String] { emojiArray?.flatMap { $0 } ?? [] }
+
     var body: some View {
-        if let emojiArray {
-            VStack(spacing: spacing) {
-                ForEach(emojiArray.lazy.indices) { index in
-                    HStack(spacing: spacing) {
-                        ForEach(emojiArray[index].lazy.indices) { icon in
-                            Button(emojiArray[index][icon]) {
-                                let emoji = emojiArray[index][icon]
-                                startAnimate()
-                                select(emoji: emoji)
-                                dismissKeyboard()
-                                userClosure?(story, nil, emoji, false)
-                            }
-                            .font(.system(size: emojiSize))
-                            .shadow(color: .black.opacity(0.3), radius: 4, y: 1)   // WhatsApp-style soft shadow on any photo
+        if !flatEmojis.isEmpty {
+            VStack(spacing: 8) {
+                Text("Send reaction as a private message")
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.6))
+                HStack(spacing: 0) {
+                    ForEach(flatEmojis.indices, id: \.self) { i in
+                        Button(flatEmojis[i]) {
+                            let emoji = flatEmojis[i]
+                            startAnimate()
+                            select(emoji: emoji)
+                            dismissKeyboard()
+                            userClosure?(story, nil, emoji, false)
                         }
+                        .font(.system(size: 30))
+                        .frame(maxWidth: .infinity)
                     }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.5))
+                        .frame(width: 22)
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .environment(\.colorScheme, .dark)
+            .padding(.horizontal, 14)
         }
-        
     }
     
     private func dismissKeyboard() {

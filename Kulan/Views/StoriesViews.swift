@@ -716,7 +716,7 @@ struct StoryViewer: View {
                                 ? .plain()
                                 : (s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: true),
-                                               emojis: [["❤️", "😂", "😮"], ["😢", "👏", "🔥"]],
+                                               emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
                                     : .plain()),
                             mediaType: s.isVideo ? .video : .image
