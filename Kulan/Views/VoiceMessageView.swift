@@ -184,7 +184,10 @@ struct WaveformBars: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+            // highPriorityGesture: scrubbing the waveform must WIN over the bubble's swipe-to-reply,
+            // so dragging here seeks instead of opening a reply (user: touching this area acted like a
+            // reply). Priority also stops the horizontal drag from reaching the reply gesture.
+            .highPriorityGesture(DragGesture(minimumDistance: 0).onChanged { v in
                 onSeek(Double(v.location.x / max(1, geo.size.width)))
             })
         }
