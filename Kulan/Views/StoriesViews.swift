@@ -1236,7 +1236,7 @@ struct StoryViewer: View {
         // made the cards touch the top and the side cards overflow the screen edge). The narrower
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        // BUILD 213 card sizes (user: use exactly build 213's centre + side sizes).
+        // BUILD 213 card sizes (user: use exactly build 213's centre + side sizes — do NOT change).
         let slotH = (avail - countArea) * 0.94
         let slotW = slotH * 0.62
         let miniH = slotW * (scr.height / scr.width)
@@ -1878,16 +1878,18 @@ struct MyStoriesCarousel: View {
             .frame(height: slotH)
             .contentShape(Rectangle())
             .simultaneousGesture(
-                DragGesture(minimumDistance: 8)
+                DragGesture(minimumDistance: 4)
                     .onChanged { v in
                         if !dragging {
-                            guard abs(v.translation.width) > 12,
-                                  abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
+                            // Engage almost immediately (5pt, was 12) so the cards start tracking the
+                            // finger right away — the 12pt dead-zone read as laggy vs Telegram.
+                            guard abs(v.translation.width) > 5,
+                                  abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
                             dragging = true
                             interactGen += 1
                             onInteracting(true)
                         }
-                        dragX = v.translation.width
+                        dragX = v.translation.width   // 1:1 finger tracking
                     }
                     .onEnded { v in
                         let wasDragging = dragging
@@ -1907,7 +1909,7 @@ struct MyStoriesCarousel: View {
                             else if pf >= 0.15, index > 0 { ni = index - 1; onInteracting(true) }
                             else { dragX = 0; return }
                         }
-                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) {
                             index = ni
                             dragX = 0
                         }
@@ -1928,7 +1930,7 @@ struct MyStoriesCarousel: View {
         // External retarget (rare) → recentre, but never while the finger is dragging.
         .onChange(of: activeId) { _, v in
             guard !dragging, let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
-            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) { index = ni }
+            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) { index = ni }
         }
         // Re-seed from the opened-on story in case `stories` was still loading at init.
         .onAppear {
