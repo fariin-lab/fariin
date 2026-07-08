@@ -291,7 +291,7 @@ private extension StoryDetailView {
                         selectedEmoji: $selectedEmoji,
                         userClosure: userClosure
                     )
-                    .animation(.easeOut(duration: keyboardManager.animationDuration), value: messageViewPosition)
+                    .animation(.spring(response: keyboardManager.animationDuration, dampingFraction: 1.0), value: messageViewPosition)
                     .offset(y: emojiViewPosition)
                     .opacity(messageViewPosition == 0 ? 0 : 1)
                 }
@@ -357,7 +357,11 @@ private extension StoryDetailView {
         .padding()
         .padding(.bottom, winInsets.bottom)   // keep the reply bar above the home indicator (host no longer insets)
         .background(showBlackFooter ? AnyView(Color.black.ignoresSafeArea(edges: .bottom)) : AnyView(Color.clear))
-        .animation(.easeOut(duration: keyboardManager.animationDuration), value: messageViewPosition)
+        // Ride the keyboard's own timing (critically-damped spring keyed to the keyboard duration):
+        // front-loaded like the keyboard, so the reply pill stays just above the keyboard's top edge
+        // the whole way up instead of trailing behind it and popping in at the end (user: "bar comes
+        // after the keyboard — make it same time").
+        .animation(.spring(response: keyboardManager.animationDuration, dampingFraction: 1.0), value: messageViewPosition)
         .offset(y: messageViewPosition)
     }
 
