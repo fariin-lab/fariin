@@ -2142,7 +2142,7 @@ struct MessageBubble: View, Equatable {
                     if message.sendState == .sending {
                         ZStack {
                             Color.black.opacity(0.18)
-                            Spinner(size: 26, color: .white)
+                            ProgressView().progressViewStyle(.circular).tint(.white)
                                 .padding(15)
                                 .background(.ultraThinMaterial, in: Circle())
                                 .environment(\.colorScheme, .dark)
@@ -2196,7 +2196,7 @@ struct MessageBubble: View, Equatable {
                     if message.sendState == .sending {
                         ZStack {
                             Color.black.opacity(0.18)
-                            Spinner(size: 26, color: .white)
+                            ProgressView().progressViewStyle(.circular).tint(.white)
                                 .padding(15)
                                 .background(.ultraThinMaterial, in: Circle())
                                 .environment(\.colorScheme, .dark)

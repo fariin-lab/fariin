@@ -764,12 +764,11 @@ struct ChatsView: View {
                             }
                             .tint(.orange)
                         }
-                        // Native peek: a REAL conversation preview (mini message timeline) above the
-                        // action menu, like Messages (user request) — the .contextMenu(preview:) API.
+                        // Native long-press: no custom preview closure, so iOS lifts the actual chat
+                        // row itself (the system-native peek, like Mail/Messages list) above the menu —
+                        // zero custom rendering, so none of the cut/overflow bugs the mini-timeline had.
                         .contextMenu {
                             chatMenu(conv)
-                        } preview: {
-                            ChatPeekPreview(conv: conv, me: me, dark: dark)
                         }
                       }
                     }

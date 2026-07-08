@@ -419,7 +419,7 @@ struct StoriesRow: View {
 
                 ZStack {
                     AvatarView(name: meName, photoUrl: mePhoto, size: 32)   // my profile avatar in the center
-                    Spinner(size: 37, color: .white)                        // ring hugs the avatar like the story rings (37)
+                    ProgressView().progressViewStyle(.circular).tint(.white).controlSize(.large)   // native spinner hugging the avatar
                 }
                 .padding(8)
             }
