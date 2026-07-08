@@ -1114,8 +1114,16 @@ struct StoryViewer: View {
                 openDragging = true   // keep the storyLayer visible/hit-testable through the drag
                 viewersProgress = max(0, min(1, up / sheetH))
             },
-            onSwipeUpEnded: { _, velocity in
-                guard currentIsMine || mineOnly else { openDragging = false; return }
+            onSwipeUpEnded: { translation, velocity in
+                guard currentIsMine || mineOnly else {
+                    // Friend's story: a swipe UP opens the reply keyboard (like tapping the reply
+                    // pill). StoryUI's MessageView focuses its TextField on this notification.
+                    openDragging = false
+                    if translation > 40 || velocity > 300 {
+                        NotificationCenter.default.post(name: .init("focusStoryReply"), object: nil)
+                    }
+                    return
+                }
                 openDragging = false
                 guard viewersProgress > 0 else {
                     // Engaged but the sheet never actually rose: undo the engagement posts, or

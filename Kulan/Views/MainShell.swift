@@ -197,7 +197,7 @@ struct CallsView: View {
                     ContentUnavailableView("No Calls Yet", systemImage: "phone",
                                            description: Text("Your call history will appear here."))
                 } else {
-                    List(selection: selecting ? $selection : nil) {   // nil when not editing -> taps OPEN the row (not select)
+                    List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                         ForEach(shownRuns) { run in
                             let call = run.latest
                             CallHistoryRow(
@@ -232,7 +232,7 @@ struct CallsView: View {
                                     AppRouter.shared.pendingChatId = call.cid
                                 } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
                                 Button {
-                                    withAnimation(.easeInOut(duration: 0.3)) { selecting = true; selection = [run.id] }
+                                    withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
                                 } label: { Label("Select", systemImage: "checkmark.circle") }
                                 Divider()
                                 Button(role: .destructive) { deleteRun(run) } label: { Label("Delete", systemImage: "trash") }
@@ -250,7 +250,7 @@ struct CallsView: View {
             .toolbar {
                 if selecting {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button { withAnimation(.easeInOut(duration: 0.3)) { selecting = false; selection = [] } } label: { Image(systemName: "xmark") }.tint(.primary)
+                        Button { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } } label: { Image(systemName: "xmark") }.tint(.primary)
                     }
                     ToolbarItem(placement: .principal) {
                         Text(selection.isEmpty ? "Select Calls" : "\(selection.count) Selected").font(.headline)
@@ -264,7 +264,7 @@ struct CallsView: View {
                 } else {
                     if !repo.calls.isEmpty {
                         ToolbarItem(placement: .topBarLeading) {
-                            Button("Edit") { withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) { selecting = true } }.tint(.primary)
+                            Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
                         }
                     }
                     ToolbarItem(placement: .principal) {
@@ -550,7 +550,7 @@ struct ChatsView: View {
     // Avatar dropdown menu: Select Chats / Settings / Archive (Telegram-style).
     // Left: Edit (multi-select). Settings moved to its own tab, so no avatar here anymore.
     private var editButton: some View {
-        Button("Edit") { withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) { selecting = true } }.tint(.primary)
+        Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
     }
     // Right: Mark all read + filter (All / Unread / Groups) + Archived + Add Story.
     private var filterMenu: some View {
@@ -642,7 +642,7 @@ struct ChatsView: View {
         Task { await ChatService.setPinOrder(moved.id, newRank) }
     }
 
-    private func exitSelect() { withAnimation(.easeInOut(duration: 0.3)) { selecting = false; selection = [] } }
+    private func exitSelect() { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } }
     private func selectAll() { selection = Set(visible.map { $0.id }) }
 
     // System action list for a chat row's context menu (HIG order + SF Symbols).
@@ -704,7 +704,12 @@ struct ChatsView: View {
                     // filtering to Unread with nothing unread made all stories vanish + showed a
                     // wrong "No chats yet". The row now always stays; only the list area goes empty.
                     ZStack(alignment: .top) {
-                      List(selection: selecting ? $selection : nil) {   // nil when not editing -> taps OPEN the row
+                      // Selection is ALWAYS bound (a Set only selects in edit mode, so taps still OPEN
+                      // the row when not editing). Swapping the binding nil<->$selection reconfigured
+                      // the List and made the edit-mode transition POP; a stable binding lets the
+                      // native circles-slide-in + rows-shift-right animate smoothly (withAnimation on
+                      // `selecting` at the tap sites drives it).
+                      List(selection: $selection) {
                       ForEach(visible) { conv in
                         // Full-row Button instead of a NavigationLink: a NavigationLink in a
                         // List always draws the trailing disclosure chevron (the arrow). A
@@ -1049,7 +1054,7 @@ struct ArchivedChatsView: View {
                     ContentUnavailableView("Nothing archived", systemImage: "archivebox",
                                            description: Text("Chats you archive and stories you hide will show here."))
                 } else {
-                    List(selection: selecting ? $selection : nil) {   // nil when not editing -> taps OPEN the row (not select)
+                    List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                         if !archivedStories.isEmpty {
                             archivedStoriesRow
                                 .listRowInsets(EdgeInsets())
@@ -1113,7 +1118,7 @@ struct ArchivedChatsView: View {
                 } else {
                     if hasAnyArchived {
                         ToolbarItem(placement: .topBarLeading) {
-                            Button("Select") { withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) { selecting = true } }.tint(.primary)
+                            Button("Select") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
@@ -1128,7 +1133,7 @@ struct ArchivedChatsView: View {
         .onAppear { repo.start() }
     }
 
-    private func exitSelect() { withAnimation(.easeInOut(duration: 0.3)) { selecting = false; selection = [] } }
+    private func exitSelect() { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } }
     private func unarchiveSelected() {
         let ids = selection
         Task { for id in ids { await ChatService.setArchived(id, false) } }

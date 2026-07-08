@@ -19,8 +19,9 @@ struct MessageView: View {
     @State private var text: String = ""
     @State private var likeButtonTapped: Bool = false
     @State private var clearText: Bool = false
-   
-    
+    @FocusState private var replyFocused: Bool   // swipe-up on a friend's story focuses the reply field
+
+
     var body: some View {
         HStack(spacing: 16) {
             ZStack {
@@ -34,6 +35,11 @@ struct MessageView: View {
                     messageViewBuilder(config, placeholder)
                 }
             }
+        }
+        // Swipe-up on a friend's story opens the keyboard, exactly like tapping the reply pill
+        // (the host posts this when it detects an upward swipe on a non-owner story).
+        .onReceive(NotificationCenter.default.publisher(for: .init("focusStoryReply"))) { _ in
+            replyFocused = true
         }
     }
 }
@@ -86,6 +92,7 @@ private extension MessageView {
             TextField("",
                       text: $text,
                       onCommit: onCommitAction)
+            .focused($replyFocused)
             .placeholder(when: text.isEmpty, view: {
                 Text(placeholder).foregroundColor(.white)
                     .shadow(color: .black.opacity(0.45), radius: 1.5)   // readable on white photos
