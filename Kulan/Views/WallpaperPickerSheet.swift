@@ -47,6 +47,10 @@ struct WallpaperPickerSheet: View {
     }
 
     var body: some View {
+        // Observe the store's version so picking a DIFFERENT photo re-renders the tile (the photo
+        // caches are observation-ignored, and `selected` stays .photo, so without this the tile kept
+        // showing the first photo). Keyed on the photo id below so the Image reloads too.
+        let _ = store.version
         VStack(spacing: 16) {
             header
             ScrollViewReader { proxy in
