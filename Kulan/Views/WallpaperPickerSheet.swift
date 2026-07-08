@@ -104,19 +104,20 @@ struct WallpaperPickerSheet: View {
         ZStack {
             Text("Chat Wallpaper").font(.headline)
             HStack {
-                Spacer()
-                // Apple's canonical modal close button: the system xmark.circle.fill glyph,
-                // hierarchical grey, in the top-TRAILING corner (Maps / App Store sheets).
+                // 48pt Liquid Glass X, top-leading, vertically centred with the title.
                 Button { dismiss() } label: {   // X = cancel (onDisappear reverts)
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 30))
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 48, height: 48)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
                 }
-                .accessibilityLabel("Close")
+                .buttonStyle(.plain)
+                Spacer()
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.leading, 16)
+        .padding(.trailing, 20)
     }
 
     // Contextual bottom button: settled → "Choose Wallpaper from Photos"; pending change → "Apply".
