@@ -1006,24 +1006,19 @@ struct StoryViewer: View {
         // image tracks the finger directly; on release the sheet's own spring animates
         // viewersProgress and the image rides that spring home (the native-feeling settle).
         // Minimal: a clean lerp between full-screen (frac 0) and the card slot (frac 1).
-        .clipShape(StoryCardClip(
-            radius: 24 * storyZoomFrac / max(storyZoomOpen.scale, 0.2),
-            topCut: 0,
-            // ROOT CAUSE (shared by BOTH implementations): the clip height used to SWITCH
-            // discretely — .greatestFiniteMagnitude ↔ morphContentH — the instant viewersProgress
-            // crossed 0.08. That binary flip forced SwiftUI to re-lay-out the LIVE story view
-            // mid-gesture, so for one frame the scale/offset/clip disagreed and the top edge broke
-            // out then snapped (measured: the spike lands exactly at viewersProgress≈0.08). Every
-            // prior fix tuned the animation and never touched this switch, so it always came back.
-            // FIX: interpolate the clip height CONTINUOUSLY with the drag — full screen at rest
-            // (frac 0 → footer shown, no rest-trim hole) to the media bottom when open (frac 1 →
-            // footer trimmed). No state boundary = nothing to re-lay-out = no pop, no snap.
-            contentHeight: showViewers
-                ? UIScreen.main.bounds.height - (UIScreen.main.bounds.height - morphContentH) * storyZoomFrac
-                : .greatestFiniteMagnitude))
-        .scaleEffect(x: 1 - (1 - storyZoomOpen.scale) * storyZoomFrac,
-                     y: 1 - (1 - storyZoomOpen.scale) * storyZoomFrac, anchor: .top)
-        .offset(y: storyZoomOpen.offsetY * storyZoomFrac)
+        // TELEGRAM ZOOM (ported verbatim from StoryItemSetContainerComponent): the story content
+        // is scaled about its OWN CENTRE and its CENTRE is moved to the card slot — NOT anchored to
+        // the top with a separate offset and a trimming clip. Telegram:
+        //   currentContentScale = contentMinScale * fraction + 1.0 * (1 - fraction)
+        //   transform = CATransform3DMakeScale(scale, scale, 1)   // about the layer centre
+        //   setPosition(contentContainerView, contentFrame.centre) // move the centre
+        //   cornerRadius = 12.0 / scale
+        // Centre-anchored scaling makes the top edge move INWARD (down) as it shrinks, so it can
+        // never break out upward — that top-anchor was the shared root cause of both prior versions.
+        .clipShape(StoryCardClip(radius: 12 / max(tgZoom.scale, 0.2) * storyZoomFrac,
+                                 topCut: 0, contentHeight: .greatestFiniteMagnitude))
+        .scaleEffect(tgZoom.scale, anchor: UnitPoint(x: 0.5, y: tgZoom.anchorY))
+        .offset(y: tgZoom.centerShift)
         // BINARY (no animation → no fractional material frames): the real story steps aside
         // while the carousel is swiping, so the cards slide as smoothly as they always did.
         .opacity(storyLayerSteppedAside ? 0 : 1)
@@ -1186,8 +1181,11 @@ struct StoryViewer: View {
     // tracks the finger exactly like the sheet; on release the sheet's spring drives viewersProgress
     // and the story rides it home. The endpoint mirrors the carousel slot exactly (scale =
     // slotH/contentH, offset = blockTop) so the story lands on the card's size/position.
-    private var storyZoomFrac: CGFloat { max(0, min(1, viewersProgress)) }
-    private var storyZoomOpen: (scale: CGFloat, offsetY: CGFloat) {
+    private var storyZoomFrac: CGFloat { max(0, min(1, viewersProgress)) }   // = Telegram contentScaleFraction
+    // TELEGRAM zoom parameters. scale = contentMinScale·frac + 1·(1-frac); anchorY = the media's
+    // own centre as a fraction of the full-screen layer (so the scale pivots on the content
+    // centre); centreShift = how far to move that centre to land on the card slot's centre.
+    private var tgZoom: (scale: CGFloat, anchorY: CGFloat, centerShift: CGFloat) {
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
         let avail = scr.height - sheetH - topInset
@@ -1195,7 +1193,12 @@ struct StoryViewer: View {
         let slotH = (avail - countArea) * 0.94
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        return (slotH / max(contentH, 1), blockTop)
+        let minScale = slotH / max(contentH, 1)                       // contentMinScale
+        let s = minScale * storyZoomFrac + 1.0 * (1 - storyZoomFrac)  // Telegram formula
+        let mediaCenterRest = contentH / 2                           // content centre at rest
+        let mediaCenterTarget = blockTop + slotH / 2                 // slot centre
+        return (s, mediaCenterRest / scr.height,
+                (mediaCenterTarget - mediaCenterRest) * storyZoomFrac)
     }
     // The story CONTENT's height (photo card without the footer) — the clip must end HERE,
     // not at the layer's true bottom (which extends into the faded footer area below the
