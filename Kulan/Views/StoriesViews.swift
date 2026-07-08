@@ -121,6 +121,10 @@ struct StoryImage: View {
     // bakedBars = the fit-case backdrop is a PRE-BAKED blur image instead of the live material.
     // Only the morph card (which crossfades) uses it — materials break at fractional opacity.
     var bakedBars = false
+    // cardFillThreshold = the fill-vs-blur decision uses THIS aspect (image height/width) instead of
+    // the screen's. The shorter viewer cards pass slotH/slotW so any image as tall as the card fills
+    // (no side bars) and only wider images get blur bars; nil = decide against the full screen.
+    var cardFillThreshold: CGFloat? = nil
     @State private var image: UIImage?
     @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
     var body: some View {
@@ -177,12 +181,16 @@ struct StoryImage: View {
         .animation(.easeOut(duration: 0.25), value: image != nil)   // fade in when loaded
         .task(id: url) { await load() }
     }
-    // Fill vs fit decided against the STABLE screen aspect, identical to ImageLoader.decideContentMode()
-    // (including the 0.02 tolerance) — so a photo looks the same in the story and in the viewers sheet.
+    // Fill vs fit. Against the STABLE screen aspect by default (identical to ImageLoader.decideContent
+    // Mode, incl. the 0.02 tolerance — so a photo looks the same in the story and the sheet), OR
+    // against cardFillThreshold when a (shorter) card passes its own aspect, so an image as tall as
+    // the card fills it with no side bars.
     private func fillsScreen(_ img: UIImage) -> Bool {
         guard img.size.width > 0 else { return false }
+        let ratio = img.size.height / img.size.width
+        if let t = cardFillThreshold { return ratio >= t - 0.02 }
         let screen = UIScreen.main.bounds
-        return img.size.height / img.size.width >= screen.height / screen.width - 0.02
+        return ratio >= screen.height / screen.width - 0.02
     }
 
     @MainActor private func load() async {
@@ -1273,14 +1281,16 @@ struct StoryViewer: View {
         // width and just loses a little height; the story is CENTER-CROPPED to fill it (the cards
         // render in fill mode below), so there are no side blur bars.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // ASPECT-TRUE card (slotW derived from slotH at the SCREEN's aspect): the card renders the
-        // story EXACTLY as full-screen — a full-bleed (no-blur) image fills with NO bars, a
-        // letterboxed image keeps its own blur. A shorter/other card aspect makes a tall no-blur
-        // image narrower than the card, so fitBlur adds SIDE blur bars (user: "long no-blur image
-        // gets blurred when I scroll up"). Keeping card aspect == screen aspect makes side bars
-        // impossible and the morph a single uniform scale.
-        let slotH = (avail - countArea) * 0.94
-        let slotW = slotH * (scr.width / max(contentH, 1))
+        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"): 12% shorter than
+        // aspect-true. slotW comes from the aspect-true reference so the WIDTH is unchanged; only the
+        // height is cut. A shorter card is WIDER than the screen aspect, which would make a near-
+        // full-screen image narrower than the card → fitBlur would add SIDE blur bars. The fix is
+        // NOT a taller card but deciding fill-vs-blur against the CARD's own aspect (cardFillThreshold
+        // = slotH/slotW below): any image at least as tall as the card FILLS (no side bars), only
+        // clearly wide/square images keep top/bottom blur — so 249's size AND no side bars.
+        let slotHRef = (avail - countArea) * 0.94
+        let slotW = slotHRef * (scr.width / max(contentH, 1))
+        let slotH = slotHRef * 0.88
         let miniH = slotW * (scr.height / scr.width)
         let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
@@ -1310,7 +1320,7 @@ struct StoryViewer: View {
                 // a full-bleed story just fills (no blur added). bakedBars = static blur for the
                 // crossfade (a live material breaks at fractional opacity).
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true, bakedBars: true)
+                StoryImage(url: url, fitBlur: true, bakedBars: true, cardFillThreshold: slotH / slotW)
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
@@ -1998,7 +2008,7 @@ struct MyStoriesCarousel: View {
         // fitBlur keeps the story exactly as full-screen (user rule: keep image + blur if it has
         // blur; fill with no blur if it doesn't). bakedBars:false = the real live material, so the
         // resting card's dark bars match the story's own bars (the baked copy read weaker).
-        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false)
+        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false, cardFillThreshold: slotH / slotW)
             .frame(width: slotW, height: slotH)
             .clipped()
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
