@@ -65,7 +65,6 @@ struct ThreadView: View {
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
-    @State private var micPulse = false             // continuous "breathing" of the recording halo
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
     @State private var recorder = AudioRecorder()
@@ -1520,21 +1519,15 @@ struct ThreadView: View {
             // scaled + dragged glass melts into the composer capsule's glass inside the
             // GlassEffectContainer — the amorphous white blob behind the mic (user screenshot).
             .background(Circle().fill(recordingHeld ? (recordCancelArmed ? Color.red : Theme.accent(dark)) : Color.clear))
-            // Recording EFFECT (user request): a soft halo BEHIND the mic that breathes continuously
-            // AND swells with your live voice level (the recorder's metered amplitude) — an
-            // audio-reactive, physical pulse. Red = "live"; it intensifies when armed to cancel.
+            // Recording EFFECT: a soft halo behind the mic that breathes + swells with your live voice
+            // level. It lives in its OWN view (RecordingHalo) so the 30 Hz metering re-render stays
+            // ISOLATED there — reading recorder.levels inline here re-rendered the whole mic button
+            // every tick and made the drag stutter/freeze. Colour = app accent (monochrome, on-brand);
+            // only turns red when you're armed to cancel.
             .background {
                 if recordingHeld {
-                    let lvl = CGFloat(recorder.levels.last ?? 0)
-                    Circle()
-                        .fill(Color.red.opacity(0.30))
-                        .scaleEffect(1.12 + 0.75 * lvl + (micPulse ? 0.10 : 0.0))
-                        .blur(radius: 5)
-                        .animation(.spring(response: 0.16, dampingFraction: 0.55), value: lvl)
-                        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: micPulse)
-                        .onAppear { micPulse = true }
-                        .onDisappear { micPulse = false }
-                        .allowsHitTesting(false)
+                    RecordingHalo(recorder: recorder,
+                                  color: recordCancelArmed ? Color.red : Theme.accent(dark))
                 }
             }
             .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
@@ -2341,6 +2334,25 @@ private struct MessageActionDialogs: ViewModifier {
 // Recording timer + waveform isolated into their OWN views, so the AudioRecorder's 20Hz
 // updates re-render only these tiny views — never ThreadView's body (which would re-render
 // the whole message list on every tick: the cause of voice-recording stutter/frame drops).
+// Audio-reactive recording halo, isolated so its 30 Hz metering re-render never touches the mic
+// button (which owns the drag-to-lock offset). Breathes continuously and swells with the live level.
+private struct RecordingHalo: View {
+    var recorder: AudioRecorder
+    var color: Color
+    @State private var pulse = false
+    var body: some View {
+        let lvl = CGFloat(recorder.levels.last ?? 0)
+        Circle()
+            .fill(color.opacity(0.28))
+            .scaleEffect(1.12 + 0.7 * lvl + (pulse ? 0.10 : 0.0))
+            .blur(radius: 5)
+            .animation(.spring(response: 0.16, dampingFraction: 0.55), value: lvl)
+            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { pulse = true }
+            .allowsHitTesting(false)
+    }
+}
+
 private struct RecordTimerText: View {
     var recorder: AudioRecorder
     var body: some View {

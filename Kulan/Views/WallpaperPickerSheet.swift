@@ -73,9 +73,9 @@ struct WallpaperPickerSheet: View {
             Text("Chat Wallpaper").font(.headline)
             HStack {
                 Button { dismiss() } label: {   // X = cancel (onDisappear reverts)
-                    Image(systemName: "xmark").font(.system(size: 15, weight: .bold))
+                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 48, height: 48)   // 48pt, real Liquid Glass
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
