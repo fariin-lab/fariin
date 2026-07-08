@@ -19,7 +19,7 @@ struct AttachRecentsStrip: View {
     @State private var showAlbums = false
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
-    @State private var albums: [AlbumInfo] = []
+    @State private var albums: [AttachAlbum] = []
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
@@ -102,7 +102,7 @@ struct AttachRecentsStrip: View {
         }
     }
 
-    private func selectAlbum(_ album: AlbumInfo) {
+    private func selectAlbum(_ album: AttachAlbum) {
         selectedAlbum = album.isAllRecents ? nil : album.collection
         albumTitle = album.title
         withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
@@ -163,7 +163,7 @@ struct AttachRecentsStrip: View {
 
     // Build the album list: Recents (whole library) + non-empty smart albums + user albums.
     private func loadAlbums() {
-        var out: [AlbumInfo] = [AlbumInfo(id: "recents", title: "Recents", collection: nil, isAllRecents: true)]
+        var out: [AttachAlbum] = [AttachAlbum(id: "recents", title: "Recents", collection: nil, isAllRecents: true)]
         let smart: [(PHAssetCollectionSubtype, String)] = [
             (.smartAlbumFavorites, "Favorites"), (.smartAlbumVideos, "Videos"),
             (.smartAlbumSelfPortraits, "Selfies"), (.smartAlbumLivePhotos, "Live Photos"),
@@ -172,12 +172,12 @@ struct AttachRecentsStrip: View {
         for (subtype, name) in smart {
             if let c = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil).firstObject,
                PHAsset.fetchAssets(in: c, options: nil).count > 0 {
-                out.append(AlbumInfo(id: c.localIdentifier, title: name, collection: c, isAllRecents: false))
+                out.append(AttachAlbum(id: c.localIdentifier, title: name, collection: c, isAllRecents: false))
             }
         }
         PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil).enumerateObjects { c, _, _ in
             if PHAsset.fetchAssets(in: c, options: nil).count > 0 {
-                out.append(AlbumInfo(id: c.localIdentifier, title: c.localizedTitle ?? "Album", collection: c, isAllRecents: false))
+                out.append(AttachAlbum(id: c.localIdentifier, title: c.localizedTitle ?? "Album", collection: c, isAllRecents: false))
             }
         }
         albums = out
@@ -227,7 +227,7 @@ struct AttachRecentsStrip: View {
 }
 
 // One album row's model. `collection == nil` (isAllRecents) = the whole library ("Recents").
-struct AlbumInfo: Identifiable {
+struct AttachAlbum: Identifiable {
     let id: String
     let title: String
     let collection: PHAssetCollection?
