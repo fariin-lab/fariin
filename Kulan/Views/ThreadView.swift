@@ -128,12 +128,19 @@ struct ThreadView: View {
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             .opacity(revealed ? 1 : 0)
-            .onChange(of: repo.items.isEmpty) { _, empty in
-                if !empty, !revealed { DispatchQueue.main.async { revealed = true } }
+            // Reveal only once the FULL first page is loaded + laid out (didInitialLoad) — NOT on the
+            // first single message. Revealing on the first message showed the chat while cache→live
+            // chunks were still landing, so the pinned-bottom layout re-flowed DURING the push and the
+            // chat visibly jumped. didInitialLoad means the initial page is decrypted and settled, so
+            // it fades in stable. Demo chats set didInitialLoad synchronously — hence their smoothness.
+            .onChange(of: repo.didInitialLoad) { _, done in
+                if done, !revealed { DispatchQueue.main.async { revealed = true } }
             }
             .task {
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                revealed = true   // empty/slow chats still show (composer, announcement bars)
+                // Safety net: if didInitialLoad is slow (or the chat is genuinely empty), still reveal
+                // so the composer / empty state shows.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                revealed = true
             }
             .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
             .onChange(of: repo.items.count) { old, new in
