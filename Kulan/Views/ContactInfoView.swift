@@ -159,7 +159,7 @@ struct ContactInfoView: View {
                 Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
             }
             .padding(14)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -318,11 +318,13 @@ struct ContactInfoView: View {
     }
 
     private var bioCard: some View {
-        Text(about)
-            .font(.body)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        VStack(alignment: .leading, spacing: 3) {
+            Text("bio").font(.footnote).foregroundStyle(.secondary)   // small label (user: like image 2)
+            Text(about).font(.body)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
     }
 
     private var mediaCard: some View {
@@ -333,7 +335,7 @@ struct ContactInfoView: View {
                         if let url = m.imageUrl {
                             SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
                                 .frame(width: 84, height: 84)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .onTapGesture { viewerImage = m }
                         }
                     }
@@ -344,7 +346,7 @@ struct ContactInfoView: View {
                 .tint(.primary)
         }
         .padding(14)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
     }
 
     // MARK: - Logic
