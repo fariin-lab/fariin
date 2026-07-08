@@ -121,23 +121,12 @@ struct StoryImage: View {
     // bakedBars = the fit-case backdrop is a PRE-BAKED blur image instead of the live material.
     // Only the morph card (which crossfades) uses it — materials break at fractional opacity.
     var bakedBars = false
-    // fillCrop = always center-crop the story to FILL the frame (no blur bars, no letterbox),
-    // cropping whatever doesn't fit. The SHORTER viewer cards use it so a card that's less tall
-    // than the story just shows a tighter centre crop instead of growing side bars.
-    var fillCrop = false
     @State private var image: UIImage?
     @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
     var body: some View {
         Group {
             if let image {
-                if fillCrop {
-                    // Center-crop fill (no bars). Wrapped in Color.clear.overlay(...).clipped() so a
-                    // scaledToFill can never report an oversized layout (the panorama-blowup bug).
-                    Color.clear
-                        .overlay(Image(uiImage: image).resizable().scaledToFill())
-                        .clipped()
-                        .transition(.opacity)
-                } else if fitBlur {
+                if fitBlur {
                     // Match the story viewer's ImageLoader EXACTLY, both rules:
                     //  • an image at least as TALL as the screen (9:16 photos, text statuses) fills
                     //    edge-to-edge with NO blur bars — don't add bars the story never had;
@@ -1296,11 +1285,12 @@ struct StoryViewer: View {
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
             if morphVis > 0.001, let url = morphURL {
-                // The morph card FRAME-lerps full-screen → slot. fillCrop: the story fills the frame
-                // and centre-crops as the card shrinks below the story's aspect — so the shorter card
-                // stays a clean crop (no side bars) and the morph end matches the carousel exactly.
+                // The morph card FRAME-lerps full-screen → slot. fitBlur KEEPS the story exactly as it
+                // looks full-screen (user rule): a story WITH blur bars keeps its image AND its blur;
+                // a full-bleed story just fills (no blur added). bakedBars = static blur for the
+                // crossfade (a live material breaks at fractional opacity).
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fillCrop: true)
+                StoryImage(url: url, fitBlur: true, bakedBars: true)
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
@@ -1985,9 +1975,10 @@ struct MyStoriesCarousel: View {
         // IMAGE + BLUR (build 213, user: keep both): the card is a live StoryImage(fitBlur:) — the
         // whole image over its own blur — exactly what the morph card shows, so the morph→carousel
         // hand-off at full-open is seamless (same view, same size).
-        // fillCrop: the resting card centre-crops the story to fill the (shorter) slot — no side
-        // bars, matching the morph endpoint exactly so the hand-off is pixel-identical.
-        return StoryImage(url: s.previewUrl, fillCrop: true)
+        // fitBlur keeps the story exactly as full-screen (user rule: keep image + blur if it has
+        // blur; fill with no blur if it doesn't). bakedBars:false = the real live material, so the
+        // resting card's dark bars match the story's own bars (the baked copy read weaker).
+        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false)
             .frame(width: slotW, height: slotH)
             .clipped()
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
