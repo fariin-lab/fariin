@@ -1368,7 +1368,10 @@ struct ThreadView: View {
     }
 
     private var inputRow: some View {
-        composerGlassContainer {
+        // Bypass the GlassEffectContainer WHILE RECORDING: as the mic offsets up to lock, the
+        // container morphs a fluid glass "bridge" that tracks the drag (the blur trail the user
+        // wants gone). No grouping during recording = no morph.
+        composerGlassContainer(grouped: !recordingHeld) {
         HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left, everything else in the field
             if !recordingHeld {
                 Button { showAttachPanel = true } label: {
@@ -1404,7 +1407,8 @@ struct ThreadView: View {
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
             // Liquid-glass field (iMessage on iOS 26 look), soft edges, no hard border.
-            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
+            // Non-interactive while recording so the field's glass doesn't lens/blur-track the drag.
+            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: !recordingHeld)
 
             // Mic (hold-to-record) OR Send — a standalone button OUTSIDE the field, like "+".
             rightButton
@@ -1417,8 +1421,8 @@ struct ThreadView: View {
     // Native iOS 26: group the composer's glass shapes (the + and the field) so they
     // render as ONE cohesive liquid-glass system, the way Apple's own bars do — instead
     // of two disconnected glass blobs. No-op layout-wise; pure native glass rendering.
-    @ViewBuilder private func composerGlassContainer<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        if #available(iOS 26.0, *) {
+    @ViewBuilder private func composerGlassContainer<C: View>(grouped: Bool = true, @ViewBuilder _ content: () -> C) -> some View {
+        if grouped, #available(iOS 26.0, *) {
             GlassEffectContainer(spacing: 8) { content() }
         } else {
             content()
