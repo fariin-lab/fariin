@@ -1069,13 +1069,11 @@ struct StoryViewer: View {
         // inverted signs — fixed — and being direction-locked it FAILS cleanly on a downward drag, so
         // the down dismiss pan can never be starved or cancelled by it.
         .ignoresSafeArea()
-        // Round the fading full-screen story in step with the pull-up (0 at rest → 24pt by the time
-        // it has faded, over the SAME 0→0.08 window as the opacity), applied AFTER ignoresSafeArea so
-        // the corners land on the SCREEN edges. Without it the story's SQUARE full-screen corners show
-        // through the rounded morph card's rounded corners during the pull (user: "rounded corner is
-        // not working when I scroll up"). The story only FADES here (no scale) so a changing clip
-        // radius is a cheap mask — not the old scale+material re-clip jank.
-        .clipShape(RoundedRectangle(cornerRadius: 24 * min(viewersProgress / 0.08, 1), style: .continuous))
+        // NOTE: do NOT add a .clipShape here to round the story during the pull — a clipShape after
+        // ignoresSafeArea re-insets to the SAFE-AREA bounds, so the status-bar + home-indicator strips
+        // stopped being covered and the clear cover showed the chat list through them (white top/
+        // bottom bug). The rounded corners during the pull are handled by the morph card, which now
+        // pops opaque from p≈0 and covers the story's square corners anyway.
     }
 
     private var storyContent: some View {
