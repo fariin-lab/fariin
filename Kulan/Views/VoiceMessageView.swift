@@ -205,6 +205,9 @@ struct LiveWaveform: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            // Light interpolating spring on top of the recorder's meter ballistics: gives each bar a
+            // touch of momentum as it settles, so the waveform reads fluid rather than stepped.
+            .animation(.interpolatingSpring(stiffness: 260, damping: 26), value: levels)
         }
     }
 }

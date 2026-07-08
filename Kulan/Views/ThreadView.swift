@@ -65,6 +65,7 @@ struct ThreadView: View {
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
+    @State private var micPulse = false             // continuous "breathing" of the recording halo
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
     @State private var recorder = AudioRecorder()
@@ -1321,8 +1322,18 @@ struct ThreadView: View {
     private var recordingHeld: Bool { holdStarted && !recordLocked }
     // Live finger translation, clamped to up/left (the two meaningful directions).
     private var clampedDrag: CGSize {
-        CGSize(width: max(-90, min(0, recordDrag.width)),
-               height: max(-100, min(0, recordDrag.height)))
+        // Rubber-band the visual mic offset: 1:1 up to the lock/cancel limit, then diminishing
+        // resistance past it (the UIScrollView overscroll curve) so it feels physical, not hard-clamped.
+        CGSize(width: Self.rubberband(recordDrag.width, limit: 90),
+               height: Self.rubberband(recordDrag.height, limit: 100))
+    }
+    // iOS overscroll: within `limit` it's linear; beyond, r = limit + (1 − 1/(over·c/dim + 1))·dim.
+    private static func rubberband(_ x: CGFloat, limit: CGFloat, dim: CGFloat = 220, c: CGFloat = 0.55) -> CGFloat {
+        guard x < 0 else { return 0 }          // only up/left drags move the mic
+        let d = -x
+        if d <= limit { return x }
+        let over = d - limit
+        return -(limit + (1 - 1 / (over * c / dim + 1)) * dim)
     }
 
     private var composer: some View {
@@ -1509,6 +1520,23 @@ struct ThreadView: View {
             // scaled + dragged glass melts into the composer capsule's glass inside the
             // GlassEffectContainer — the amorphous white blob behind the mic (user screenshot).
             .background(Circle().fill(recordingHeld ? (recordCancelArmed ? Color.red : Theme.accent(dark)) : Color.clear))
+            // Recording EFFECT (user request): a soft halo BEHIND the mic that breathes continuously
+            // AND swells with your live voice level (the recorder's metered amplitude) — an
+            // audio-reactive, physical pulse. Red = "live"; it intensifies when armed to cancel.
+            .background {
+                if recordingHeld {
+                    let lvl = CGFloat(recorder.levels.last ?? 0)
+                    Circle()
+                        .fill(Color.red.opacity(0.30))
+                        .scaleEffect(1.12 + 0.75 * lvl + (micPulse ? 0.10 : 0.0))
+                        .blur(radius: 5)
+                        .animation(.spring(response: 0.16, dampingFraction: 0.55), value: lvl)
+                        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: micPulse)
+                        .onAppear { micPulse = true }
+                        .onDisappear { micPulse = false }
+                        .allowsHitTesting(false)
+                }
+            }
             .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
             // scaleEffect overflows the footprint, so the bar height never stretches.
             // 1.25 of 40 = the 50px the user asked for; 1.5 grew to 60 and sat visibly
