@@ -1799,95 +1799,89 @@ struct MyStoriesCarousel: View {
         }
     }
 
+    // TELEGRAM CAROUSEL geometry (ported from StoryItemSetContainerComponent). itemSpacing=12;
+    // side cards are 54pt narrower (sideVisibleItemWidth); fullItemScrollDistance / halfItemScroll-
+    // Distance are the exact Telegram metrics; sideVisibleItemScale is the side card's relative
+    // scale. Each card's x + scale come straight from Telegram's combinedFraction math.
+    private var itemSpacing: CGFloat { 12 }
+    private var sideW: CGFloat { max(1, slotW - 54) }                          // sideVisibleItemWidth
+    private var fullDist: CGFloat { slotW * 0.5 + itemSpacing + sideW * 0.5 }  // fullItemScrollDistance
+    private var halfDist: CGFloat { sideW * 0.5 + itemSpacing + sideW * 0.5 }  // halfItemScrollDistance
+    private var sideRelScale: CGFloat { sideW / slotW }                        // sideVisibleItemScale (relative)
+
     var body: some View {
         let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
         let active = byStory[focusedID] ?? []
         let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
-        // Layout gap 2 reads as ~20pt on screen: the neighbours' 0.72 scale-down shrinks them
-        // toward their centres, adding ~10pt of AIR per facing edge on top of the layout gap
-        // (user: the old 12 made the cards look far apart).
-        let gap: CGFloat = 2
-        let step = slotW + gap
         let n = stories.count
-        let totalW = CGFloat(n) * slotW + CGFloat(max(0, n - 1)) * gap
-        let offsetX = totalW / 2 - (CGFloat(index) * step + slotW / 2) + dragX
         VStack(spacing: 12) {
-            Color.clear
-                .frame(maxWidth: .infinity)
-                .frame(height: slotH)   // centre card fills the slot; neighbours peek + scale DOWN (not clipped)
-                .overlay {
-                    HStack(spacing: gap) {
-                        ForEach(stories, id: \.id) { s in card(s) }
+            GeometryReader { geo in
+                let centralX = geo.size.width / 2
+                let dragFrac = dragX / fullDist          // live finger, in item units (Telegram scroll fraction)
+                ZStack {
+                    ForEach(Array(stories.enumerated()), id: \.element.id) { pair in
+                        let i = pair.offset
+                        let s = pair.element
+                        // Telegram: combinedFraction = (index offset) + scroll fraction.
+                        let cf = CGFloat(i - index) + dragFrac
+                        let sign: CGFloat = cf < 0 ? -1 : 1
+                        let acf = abs(cf)
+                        // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
+                        let posX = centralX
+                            + min(1, acf) * sign * fullDist
+                            + max(0, acf - 1) * sign * halfDist
+                        // scaleFraction = |clamp(cf,-1,1)|; itemScale = centre(1)…side(sideRelScale)
+                        let scaleFraction = min(1, acf)
+                        let itemScale = 1.0 * (1 - scaleFraction) + sideRelScale * scaleFraction
+                        card(s)
+                            .scaleEffect(itemScale)
+                            .opacity(1 - 0.20 * scaleFraction)
+                            .position(x: posX, y: slotH / 2)
+                            .zIndex(Double(2 - acf))     // centred card on top
                     }
-                    .offset(x: offsetX)   // follows the finger via dragX; centres `index` otherwise
                 }
-                .contentShape(Rectangle())
-                // Horizontal drag pages the cards, tracking the finger 1:1. A vertical drag is left to the
-                // backdrop's collapse gesture (each guards its own axis) so the two never fight.
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .onChanged { v in
-                            // Engage ONLY on a decisive horizontal move, and lock to it. A vertical (close)
-                            // drag must never page or wobble the cards — that wobble was the close "shake";
-                            // the backdrop owns the downward close.
-                            if !dragging {
-                                guard abs(v.translation.width) > 12,
-                                      abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
-                                dragging = true
-                                interactGen += 1
-                                onInteracting(true)   // all cards show + slide; the real story steps aside
-                            }
-                            dragX = v.translation.width
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: slotH)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { v in
+                        if !dragging {
+                            guard abs(v.translation.width) > 12,
+                                  abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
+                            dragging = true
+                            interactGen += 1
+                            onInteracting(true)
                         }
-                        .onEnded { v in
-                            let wasDragging = dragging
-                            dragging = false
-                            guard wasDragging else {
-                                // A FAST short flick can end before the 12pt engagement gate ever
-                                // passes — don't swallow it: a decisively horizontal fling still
-                                // turns the page ("fast swipe not working", user report).
-                                let pw = v.predictedEndTranslation.width
-                                guard abs(pw) > step * 0.5,
-                                      abs(v.translation.width) > abs(v.translation.height) else { dragX = 0; return }
-                                onInteracting(true)
-                                // MOMENTUM (user spec): a hard flick skips as many cards as the
-                                // fling would carry, not just one.
-                                let skip = max(1, Int((abs(pw) / step).rounded()))
-                                let ni = pw < 0 ? min(index + skip, max(0, n - 1)) : max(index - skip, 0)
-                                withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
-                                    index = ni
-                                    dragX = 0
-                                }
-                                if stories.indices.contains(ni) { activeId = stories[ni].id }
-                                endInteractionSoon()
-                                return
-                            }
-                            // Commit to the neighbour at just 30% of a card step (or a flick), so the next
-                            // card is EASY to reach; otherwise settle back. predictedEndTranslation carries
-                            // the fling so a quick short flick still advances.
-                            let commit = step * 0.30
-                            let predicted = v.predictedEndTranslation.width
-                            var ni = index
-                            // MOMENTUM (user spec): the fling's predicted landing decides how many
-                            // cards to cross — a fast/long swipe skips several; a gentle pull past
-                            // 30% still advances exactly one (the old feel preserved).
-                            let travelled = Int((abs(predicted) / step).rounded())
-                            if travelled >= 2 {
-                                ni = predicted < 0 ? min(index + travelled, max(0, n - 1))
-                                                  : max(index - travelled, 0)
-                            } else if v.translation.width <= -commit || predicted <= -step * 0.5 {
-                                ni = min(index + 1, max(0, n - 1))
-                            } else if v.translation.width >= commit || predicted >= step * 0.5 {
-                                ni = max(index - 1, 0)
-                            }
-                            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
-                                index = ni
-                                dragX = 0
-                            }
-                            if stories.indices.contains(ni) { activeId = stories[ni].id }
-                            endInteractionSoon()   // centre hands back to the real story after the spring
+                        dragX = v.translation.width
+                    }
+                    .onEnded { v in
+                        let wasDragging = dragging
+                        dragging = false
+                        let screenW = UIScreen.main.bounds.width
+                        // TELEGRAM snap: next if fraction ≤ -0.3 OR (≤ -0.05 and a left fling);
+                        // prev if fraction ≥ 0.3 OR (≥ 0.05 and a right fling). fling = predicted−current.
+                        let fraction = v.translation.width / screenW
+                        let fling = v.predictedEndTranslation.width - v.translation.width
+                        var ni = index
+                        if fraction <= -0.3 || (fraction <= -0.05 && fling <= -80) { ni = min(index + 1, n - 1) }
+                        else if fraction >= 0.3 || (fraction >= 0.05 && fling >= 80) { ni = max(index - 1, 0) }
+                        if !wasDragging {
+                            // fast flick that never passed the engage gate still turns the page
+                            let pf = v.predictedEndTranslation.width / screenW
+                            if pf <= -0.15, index < n - 1 { ni = index + 1; onInteracting(true) }
+                            else if pf >= 0.15, index > 0 { ni = index - 1; onInteracting(true) }
+                            else { dragX = 0; return }
                         }
-                )
+                        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.86)) {
+                            index = ni
+                            dragX = 0
+                        }
+                        if stories.indices.contains(ni) { activeId = stories[ni].id }
+                        endInteractionSoon()
+                    }
+            )
             // The centred card's count, big + centred under the carousel (mockup).
             countRow(views: active.count, likes: activeReacts, big: true)
         }
@@ -1933,17 +1927,8 @@ struct MyStoriesCarousel: View {
                         content.opacity(Self.centreDistance(proxy) < 0.35 ? 0 : 1)
                     }
             }
-            // GEOMETRY-based scale (scrollTransition's phase barely moved for the visible neighbours,
-            // so all cards looked the same size). Each card measures its own distance from the SCREEN
-            // centre: t=0 centred → scale 1.0 (large), t=1 one slot away → scale 0.72 (clearly smaller),
-            // matching the mockup's focus hierarchy. Recomputes live as the row scrolls.
-            .visualEffect { content, proxy in
-                let t = Self.centreDistance(proxy)
-                return content
-                    .scaleEffect(1.0 - 0.28 * t)
-                    .opacity(1.0 - 0.3 * t)
-                    .saturation(1.0 - 0.45 * t)
-            }
+            // (Cover-flow scale now comes from Telegram's itemScale applied in body — no per-card
+            // visualEffect scale here, or it would double.)
             .id(s.id)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
             .onTapGesture {
