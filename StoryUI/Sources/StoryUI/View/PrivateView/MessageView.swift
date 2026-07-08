@@ -111,12 +111,14 @@ private extension MessageView {
     private func replyPill(_ placeholder: String) -> some View {
         // The styling is collapsed into ReplyPillStyle (a ViewModifier, type-checked on its own) so
         // adding .focused() no longer pushes the pill's chain past the type-checker's time limit.
+        // .placeholder is defined on TextField specifically, so it must come FIRST (before .focused,
+        // which returns some View).
         TextField("", text: $text, onCommit: onCommitAction)
-            .focused($replyFocused)
             .placeholder(when: text.isEmpty, view: {
                 Text(placeholder).foregroundColor(Color.white)
                     .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // readable on white photos
             })
+            .focused($replyFocused)
             .modifier(ReplyPillStyle())
             .onChange(of: text, perform: { newValue in showEmoji = newValue.isEmpty })
             .onChange(of: clearText, perform: { newValue in text = ""; showEmoji = newValue })
