@@ -923,10 +923,12 @@ struct ChatsView: View {
                     showNew = false
                 }
             }
-            .confirmationDialog("Delete this chat?",
-                                isPresented: Binding(get: { pendingDelete != nil },
-                                                     set: { if !$0 { pendingDelete = nil } }),
-                                titleVisibility: .visible) {
+            // Native alert (the confirmationDialog rendered as an anchored popover bubble on iOS 26,
+            // which read as non-native). A destructive-action confirmation as an alert with a red
+            // Delete button is the textbook Apple HIG pattern.
+            .alert("Delete this chat?",
+                   isPresented: Binding(get: { pendingDelete != nil },
+                                        set: { if !$0 { pendingDelete = nil } })) {
                 Button("Delete Chat", role: .destructive) {
                     if let c = pendingDelete { Task { await ChatService.deleteForMe(c.id) } }
                     pendingDelete = nil

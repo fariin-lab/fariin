@@ -109,18 +109,14 @@ private extension MessageView {
     // Extracted so the type-checker has a bounded expression (adding .focused() to the inline chain
     // pushed it past the "cannot infer contextual base" limit).
     private func replyPill(_ placeholder: String) -> some View {
-        TextField("", text: $text, onCommit: onCommitAction)
+        // Split into two type-check units via `let` — adding .focused() to the single inline chain
+        // pushed the type-checker past its time limit; the `let` bounds each half.
+        let field = TextField("", text: $text, onCommit: onCommitAction)
             .focused($replyFocused)
             .placeholder(when: text.isEmpty, view: {
                 Text(placeholder).foregroundColor(Color.white)
                     .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // readable on white photos
             })
-            .onChange(of: text, perform: { newValue in showEmoji = newValue.isEmpty })
-            .onChange(of: clearText, perform: { newValue in text = ""; showEmoji = newValue })
-            .onChange(of: story, perform: { newValue in likeButtonTapped = newValue.isLiked })
-            // onChange only fires on later swipes — seed the FIRST item's heart state too,
-            // or a reopened story always shows an empty heart despite being liked.
-            .onAppear { likeButtonTapped = story.isLiked }
             .foregroundColor(Color.white)
             .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // typed text stays readable on white photos
             .padding(.leading, 10)                              // small left space so text isn't flush to the edge
@@ -131,6 +127,13 @@ private extension MessageView {
             // Deeper soft shadow (user round 2: still read flat over bright media) — the pill
             // lifts clearly off any photo; effectively invisible on dark ones.
             .shadow(color: Color.black.opacity(0.5), radius: 10, y: 3)
+        return field
+            .onChange(of: text, perform: { newValue in showEmoji = newValue.isEmpty })
+            .onChange(of: clearText, perform: { newValue in text = ""; showEmoji = newValue })
+            .onChange(of: story, perform: { newValue in likeButtonTapped = newValue.isLiked })
+            // onChange only fires on later swipes — seed the FIRST item's heart state too,
+            // or a reopened story always shows an empty heart despite being liked.
+            .onAppear { likeButtonTapped = story.isLiked }
     }
 }
 
