@@ -38,10 +38,12 @@ struct WallpaperPickerSheet: View {
     }
 
     // The vivid colour of the current pick → the Apply button's Liquid Glass tint.
+    // A photo has no representative colour, so it uses a fixed brand blue — Theme.accent is
+    // white in dark mode, which made the Apply button a white capsule with invisible white text.
     private var applyTint: Color {
         switch selected {
-        case .gradient(let id): return ChatWallpapers.gradient(id)?.tint ?? Theme.accent(dark)
-        case .photo:            return Theme.accent(dark)
+        case .gradient(let id): return ChatWallpapers.gradient(id)?.tint ?? Color(hex: 0x3DA1FD)
+        case .photo:            return Color(hex: 0x3DA1FD)
         case .none:             return Color.secondary
         }
     }
@@ -68,6 +70,11 @@ struct WallpaperPickerSheet: View {
                     DispatchQueue.main.async {
                         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(tileID(selected), anchor: .center) }
                     }
+                }
+                // Picking a photo appends its tile at the far right — scroll to whatever's selected
+                // so the chosen photo (or gradient) always scrolls into view.
+                .onChange(of: selected) { _, w in
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(tileID(w), anchor: .center) }
                 }
             }
             bottomBar
@@ -97,13 +104,16 @@ struct WallpaperPickerSheet: View {
         ZStack {
             Text("Chat Wallpaper").font(.headline)
             HStack {
-                Button { dismiss() } label: {   // X = cancel (onDisappear reverts)
-                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)   // 48pt, real Liquid Glass
-                        .liquidGlass(Circle(), interactive: true)
-                }
                 Spacer()
+                // Apple's canonical modal close button: the system xmark.circle.fill glyph,
+                // hierarchical grey, in the top-TRAILING corner (Maps / App Store sheets).
+                Button { dismiss() } label: {   // X = cancel (onDisappear reverts)
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 30))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Close")
             }
         }
         .padding(.horizontal, 20)
