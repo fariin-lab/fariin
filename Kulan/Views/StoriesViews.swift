@@ -1302,7 +1302,13 @@ struct StoryViewer: View {
         //  • carIn: neighbours + counts fade in 0.9→1 behind the opaque morph card.
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
         let carIn = max(0, min(1, (p - 0.9) / 0.1))
-        let morphVis = min(p / 0.05, 1) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
+        // Morph card POPS to full opacity immediately (no fade-IN): at p≈0 it is full-screen and
+        // pixel-identical to the story, so the swap is invisible — and it means the deep baked blur
+        // covers the story from the very first pixel of the pull. The old fade-in cross-faded the
+        // baked morph against the fading LIVE-blur story, so for that window BOTH blur layers sat at
+        // partial opacity and went translucent/weak (user: "blur weakens as I drag the sheet up").
+        // Keep only the fade-OUT into the carousel at the very end.
+        let morphVis = (p > 0.001 ? 1.0 : 0.0) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
@@ -1320,8 +1326,15 @@ struct StoryViewer: View {
                 // a full-bleed story just fills (no blur added). bakedBars = static blur for the
                 // crossfade (a live material breaks at fractional opacity).
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true, bakedBars: true, cardFillThreshold: slotH / slotW)
-                    .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
+                let mW = lerp(scr.width, slotW, sizeP)
+                let mH = lerp(startH, slotH, sizeP)
+                // Fill/blur decided against the morph's CURRENT frame aspect (screen-shaped at the
+                // start of the pull → card-shaped at the end), so at pull-start the morph matches the
+                // full-screen story (letterboxed = keeps its blur) and by the card it fills (no side
+                // bars). A fixed card threshold would make a letterboxed story FILL from the first
+                // pixel — its blur bars would vanish as you drag, reading as "the blur disappears".
+                StoryImage(url: url, fitBlur: true, bakedBars: true, cardFillThreshold: mH / mW)
+                    .frame(width: mW, height: mH)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
                     .frame(maxWidth: .infinity)
