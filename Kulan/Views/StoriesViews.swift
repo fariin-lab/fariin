@@ -1270,8 +1270,11 @@ struct StoryViewer: View {
                 .allowsHitTesting(carIn > 0.5)
             if morphVis > 0.001, let url = morphURL {
                 // The morph card: whole image + its blur (fitBlur), FRAME-lerped full-screen → slot.
+                // bakedBars: the blur is a STATIC baked image (scaled as one piece), NOT a live
+                // UIVisualEffectView — a live material re-blurs weaker/lighter as the card shrinks
+                // (user: "the blur becomes too light/weak after it opens"). Baked = never changes.
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true)
+                StoryImage(url: url, fitBlur: true, bakedBars: true)
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
@@ -1951,7 +1954,7 @@ struct MyStoriesCarousel: View {
         // IMAGE + BLUR (build 213, user: keep both): the card is a live StoryImage(fitBlur:) — the
         // whole image over its own blur — exactly what the morph card shows, so the morph→carousel
         // hand-off at full-open is seamless (same view, same size).
-        return StoryImage(url: s.previewUrl, fitBlur: true)
+        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true)   // static baked blur (never re-blurs at card size)
             .frame(width: slotW, height: slotH)
             .clipped()
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
