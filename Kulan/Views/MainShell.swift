@@ -764,11 +764,12 @@ struct ChatsView: View {
                             }
                             .tint(.orange)
                         }
-                        // Native peek + system actions. The preview-based API coexists with
-                        // swipeActions (the legacy closure form was eating the trailing swipe).
-                        // Native Apple peek: iOS lifts the row itself (no custom preview view).
+                        // Native peek: a REAL conversation preview (mini message timeline) above the
+                        // action menu, like Messages (user request) — the .contextMenu(preview:) API.
                         .contextMenu {
                             chatMenu(conv)
+                        } preview: {
+                            ChatPeekPreview(conv: conv, me: me, dark: dark)
                         }
                       }
                     }
