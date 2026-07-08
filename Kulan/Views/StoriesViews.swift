@@ -999,19 +999,20 @@ struct StoryViewer: View {
         // Re-clipping the live-material story with a changing radius EVERY finger frame was
         // the "follows then stutters" jank — corners now apply only once the card has
         // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
-        // NATIVE ZOOM (user request: remove the custom per-frame morph, use a native iOS zoom).
-        // The story now snaps between full-screen and the card with SwiftUI's own spring animation
-        // (.animation(value: storyZoomedOut)) instead of hand-interpolating scale/offset every
-        // finger frame. The sheet itself is unchanged — it still tracks the finger; the story
-        // zoom triggers when the pull commits past halfway (and reverses on close).
+        // FINGER-TRACKED NATIVE ZOOM (user request): the story's scale + position interpolate 1:1
+        // with viewersProgress — the SAME value that drives the sheet — so the image, the sheet,
+        // and the finger all move together in real time (no fixed-duration animation, no "sheet
+        // first then image" delay). There is deliberately NO .animation here: during the drag the
+        // image tracks the finger directly; on release the sheet's own spring animates
+        // viewersProgress and the image rides that spring home (the native-feeling settle).
+        // Minimal: a clean lerp between full-screen (frac 0) and the card slot (frac 1).
         .clipShape(StoryCardClip(
-            radius: storyZoomedOut ? 24 / max(storyZoomOpen.scale, 0.2) : 0,
+            radius: 24 * storyZoomFrac / max(storyZoomOpen.scale, 0.2),
             topCut: 0,
             contentHeight: (showViewers && viewersProgress > 0.08) ? morphContentH : .greatestFiniteMagnitude))
-        .scaleEffect(x: storyZoomedOut ? storyZoomOpen.scale : 1,
-                     y: storyZoomedOut ? storyZoomOpen.scale : 1, anchor: .top)
-        .offset(y: storyZoomedOut ? storyZoomOpen.offsetY : 0)
-        .animation(.smooth(duration: 0.4), value: storyZoomedOut)
+        .scaleEffect(x: 1 - (1 - storyZoomOpen.scale) * storyZoomFrac,
+                     y: 1 - (1 - storyZoomOpen.scale) * storyZoomFrac, anchor: .top)
+        .offset(y: storyZoomOpen.offsetY * storyZoomFrac)
         // BINARY (no animation → no fractional material frames): the real story steps aside
         // while the carousel is swiping, so the cards slide as smoothly as they always did.
         .opacity(storyLayerSteppedAside ? 0 : 1)
@@ -1169,11 +1170,12 @@ struct StoryViewer: View {
     private var morphScale: CGFloat { morphGeometry.scaleY }
     private var morphOffsetY: CGFloat { morphGeometry.offsetY }
 
-    // NATIVE ZOOM state + endpoint. `storyZoomedOut` flips true once the pull commits past
-    // halfway (and back on close), so SwiftUI's spring animates the story between full-screen and
-    // the card — no custom per-frame interpolation. The endpoint mirrors the carousel slot exactly
-    // (scale = slotH/contentH, offset = blockTop) so the story lands on the card's size/position.
-    private var storyZoomedOut: Bool { showViewers && viewersProgress > 0.5 }
+    // FINGER-TRACKED NATIVE ZOOM. `storyZoomFrac` is viewersProgress clamped 0…1 — the fraction of
+    // the way from full-screen to the card. The story reads it directly (no animation), so it
+    // tracks the finger exactly like the sheet; on release the sheet's spring drives viewersProgress
+    // and the story rides it home. The endpoint mirrors the carousel slot exactly (scale =
+    // slotH/contentH, offset = blockTop) so the story lands on the card's size/position.
+    private var storyZoomFrac: CGFloat { max(0, min(1, viewersProgress)) }
     private var storyZoomOpen: (scale: CGFloat, offsetY: CGFloat) {
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
