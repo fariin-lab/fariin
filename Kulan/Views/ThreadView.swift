@@ -700,24 +700,29 @@ struct ThreadView: View {
         if !isGroup && cid.contains("_") {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) } label: {
-                    Image(systemName: "phone.fill")
+                    callGlyph("ic_call_voice")
                 }
                 .tint(.primary)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) } label: {
-                    Image(systemName: "video.fill")
+                    callGlyph("ic_call_video")
                 }
                 .tint(.primary)
             }
         } else if isGroup {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { startGroupCall(video: false) } label: { Image(systemName: "phone.fill") }.tint(.primary)
+                Button { startGroupCall(video: false) } label: { callGlyph("ic_call_voice") }.tint(.primary)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { startGroupCall(video: true) } label: { Image(systemName: "video.fill") }.tint(.primary)
+                Button { startGroupCall(video: true) } label: { callGlyph("ic_call_video") }.tint(.primary)
             }
         }
+    }
+
+    // Custom call/video toolbar glyphs (template-tinted, sized to the toolbar).
+    private func callGlyph(_ asset: String) -> some View {
+        Image(asset).renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22)
     }
 
     private func startGroupCall(video: Bool) {
