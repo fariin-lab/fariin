@@ -136,7 +136,10 @@ final class AudioRecorder {
         recorder = nil
         levels = []
         allLevels = []
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        prepare()   // re-warm so the NEXT hold-to-record is instant too
+        // Do NOT setActive(false) here: prepare() below immediately setActive(true)s again, so the
+        // deactivate→reactivate churn only made the next hold-to-record re-activate the session from
+        // cold (the "long sluggish delay before recording starts"). Keeping the session warm lets
+        // requestAndStart's record() fire instantly on touch-down.
+        prepare()   // re-warm the recorder so the NEXT hold-to-record is instant too
     }
 }
