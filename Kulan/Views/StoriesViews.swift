@@ -9,25 +9,36 @@ import StoryUI
 // Colorful gradient when unviewed, grey when viewed. Reused on story cards AND chat-list avatars.
 struct StoryRingView: View {
     let seen: [Bool]                 // per segment, oldest→newest; true = viewed (grey), false = colorful
-    var lineWidth: CGFloat = 2.5
+    var lineWidth: CGFloat = 2.0     // Telegram activeLineWidth (unseen); seen is drawn thinner
     var body: some View {
-        let n = max(1, seen.count)
-        let gap: CGFloat = n > 1 ? 0.045 : 0          // gap between segments (fraction of the circle)
-        let seg: CGFloat = 1.0 / CGFloat(n)
-        // Unviewed: green→blue gradient (Telegram/WhatsApp style). Viewed: a real medium grey (the old
-        // 0.62 read as white on the dark card).
-        let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C759), Color(hex: 0x0A84FF)],
-                                                    startPoint: .topLeading, endPoint: .bottomTrailing))
-        let grey = AnyShapeStyle(Color(hex: 0x49494B))   // user-picked seen-ring grey
-        ZStack {
-            ForEach(0..<n, id: \.self) { i in
-                let isSeen = i < seen.count ? seen[i] : false
-                Circle()
-                    .trim(from: CGFloat(i) * seg + gap / 2, to: CGFloat(i + 1) * seg - gap / 2)
-                    .stroke(isSeen ? grey : gradient, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        // TELEGRAM spec (AvatarStoryIndicatorComponent + default dark theme):
+        //  • UNSEEN gradient storyUnseenColors = 0x34C76F (green) → 0x3DA1FD (blue)
+        //  • SEEN solid storySeenColors = 0x48484A (grey)
+        //  • the SEEN ring is thinner than the unseen ring (inactiveLineWidth < activeLineWidth)
+        //  • segment gap = activeLineWidth * 2  (points along the circumference)
+        GeometryReader { geo in
+            let d = min(geo.size.width, geo.size.height)
+            let n = max(1, seen.count)
+            let activeW = lineWidth
+            let seenW = max(1, lineWidth * 0.66)                       // inactiveLineWidth
+            let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
+                                                        startPoint: .top, endPoint: .bottom))
+            let grey = AnyShapeStyle(Color(hex: 0x48484A))
+            let gapPts: CGFloat = n > 1 ? activeW * 2.0 : 0           // Telegram: spacing = activeLineWidth·2
+            let gap = d > 0 ? gapPts / (CGFloat.pi * d) : 0
+            let seg = 1.0 / CGFloat(n)
+            ZStack {
+                ForEach(0..<n, id: \.self) { i in
+                    let isSeen = i < seen.count ? seen[i] : false
+                    Circle()
+                        .inset(by: activeW / 2)                       // keep the stroke inside the frame
+                        .trim(from: CGFloat(i) * seg + gap / 2, to: CGFloat(i + 1) * seg - gap / 2)
+                        .stroke(isSeen ? grey : gradient,
+                                style: StrokeStyle(lineWidth: isSeen ? seenW : activeW, lineCap: .round))
+                }
             }
+            .rotationEffect(.degrees(-90))                            // first segment starts at the top
         }
-        .rotationEffect(.degrees(-90))                // first segment starts at the top
     }
 }
 
