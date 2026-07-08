@@ -1300,14 +1300,16 @@ struct StoryViewer: View {
         //    cleanly at every size — no scaleEffect, so nothing can break out or snap).
         //  • carIn: neighbours + counts fade in 0.9→1 behind the opaque morph card.
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
-        let carIn = max(0, min(1, (p - 0.9) / 0.1))
-        // Morph card POPS to full opacity immediately (no fade-IN): at p≈0 it is full-screen and
-        // pixel-identical to the story, so the swap is invisible — and it means the deep baked blur
-        // covers the story from the very first pixel of the pull. The old fade-in cross-faded the
-        // baked morph against the fading LIVE-blur story, so for that window BOTH blur layers sat at
-        // partial opacity and went translucent/weak (user: "blur weakens as I drag the sheet up").
-        // Keep only the fade-OUT into the carousel at the very end.
-        let morphVis = (p > 0.001 ? 1.0 : 0.0) * (1 - max(0, min(1, (p - 0.95) / 0.05)))
+        // Carousel is fully opaque by p=0.97 (see morphVis) so the morph→carousel hand-off is a clean
+        // swap between two IDENTICAL live-material cards, never a fractional-opacity crossfade.
+        let carIn = max(0, min(1, (p - 0.9) / 0.07))
+        // The morph card is now LIVE material (bakedBars:false) so its blur is IDENTICAL to the
+        // full-screen story's — the baked copy read lighter/weaker (user: "blur weakens when I scroll
+        // up, keep the original blur"). A live UIVisualEffectView drops its blur at FRACTIONAL
+        // opacity, so morphVis is strictly BINARY (0 or 1) — never a crossfade: it pops opaque at
+        // p>0.001 (pixel-identical to the story, invisible) and HARD-hides at p≥0.97 once the carousel
+        // (also live, same size) is fully opaque behind it. No fractional opacity anywhere = no flash.
+        let morphVis = (p > 0.001 && p < 0.97) ? 1.0 : 0.0
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
@@ -1332,7 +1334,7 @@ struct StoryViewer: View {
                 // full-screen story (letterboxed = keeps its blur) and by the card it fills (no side
                 // bars). A fixed card threshold would make a letterboxed story FILL from the first
                 // pixel — its blur bars would vanish as you drag, reading as "the blur disappears".
-                StoryImage(url: url, fitBlur: true, bakedBars: true, cardFillThreshold: mH / mW)
+                StoryImage(url: url, fitBlur: true, bakedBars: false, cardFillThreshold: mH / mW)
                     .frame(width: mW, height: mH)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
