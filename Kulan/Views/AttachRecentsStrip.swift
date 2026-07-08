@@ -9,16 +9,55 @@ import UIKit
 // (crop/caption); videos go straight into the send pipeline.
 struct AttachRecentsStrip: View {
     var onCamera: () -> Void = {}
+    var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
     @State private var loadingPick = false   // fetching the full-size asset after a tap
+    @State private var showAlbums = false
+    @State private var albumTitle = "Recents"
+    @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
+    @State private var albums: [AlbumInfo] = []
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
     var body: some View {
+        VStack(spacing: 0) {
+            header
+            if showAlbums { albumsList } else { grid }
+        }
+        .overlay { if loadingPick { ProgressView().tint(.secondary) } }
+        .task { if status == .authorized || status == .limited { load(); loadAlbums() } }
+    }
+
+    // X close (48pt glass) + a "Recents ▾" title that flips open the album list.
+    private var header: some View {
+        ZStack {
+            Button { withAnimation(.snappy(duration: 0.25)) { showAlbums.toggle() } } label: {
+                HStack(spacing: 5) {
+                    Text(albumTitle).font(.headline)
+                    Image(systemName: "chevron.down").font(.system(size: 13, weight: .bold))
+                        .rotationEffect(.degrees(showAlbums ? 180 : 0))
+                }
+                .foregroundStyle(.primary)
+            }
+            HStack {
+                Button { onClose() } label: {
+                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 48, height: 48)
+                        .liquidGlass(Circle(), interactive: true)
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private var grid: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVGrid(columns: cols, spacing: 6) {
                 cameraTile                                   // first cell = Camera (Telegram/WhatsApp)
@@ -38,8 +77,36 @@ struct AttachRecentsStrip: View {
             .padding(.horizontal, 12)
             .padding(.top, 2)
         }
-        .overlay { if loadingPick { ProgressView().tint(.secondary) } }
-        .task { if status == .authorized || status == .limited { load() } }
+    }
+
+    // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
+    private var albumsList: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(spacing: 0) {
+                ForEach(albums) { album in
+                    Button { selectAlbum(album) } label: {
+                        HStack(spacing: 14) {
+                            AlbumThumb(collection: album.collection)
+                            Text(album.title).font(.system(size: 17)).foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Divider().padding(.leading, 78)
+                }
+            }
+        }
+    }
+
+    private func selectAlbum(_ album: AlbumInfo) {
+        selectedAlbum = album.isAllRecents ? nil : album.collection
+        albumTitle = album.title
+        withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
+        load()
     }
 
     // The Camera tile is the first cell of the grid; tap to open the camera.
@@ -85,13 +152,35 @@ struct AttachRecentsStrip: View {
     private func load() {
         let f = PHFetchOptions()
         f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        f.fetchLimit = 40
-        let res = PHAsset.fetchAssets(with: f)
+        f.fetchLimit = 60
+        let res = selectedAlbum.map { PHAsset.fetchAssets(in: $0, options: f) } ?? PHAsset.fetchAssets(with: f)
         var out: [PHAsset] = []
         res.enumerateObjects { a, _, _ in
             if a.mediaType == .image || a.mediaType == .video { out.append(a) }
         }
         assets = out
+    }
+
+    // Build the album list: Recents (whole library) + non-empty smart albums + user albums.
+    private func loadAlbums() {
+        var out: [AlbumInfo] = [AlbumInfo(id: "recents", title: "Recents", collection: nil, isAllRecents: true)]
+        let smart: [(PHAssetCollectionSubtype, String)] = [
+            (.smartAlbumFavorites, "Favorites"), (.smartAlbumVideos, "Videos"),
+            (.smartAlbumSelfPortraits, "Selfies"), (.smartAlbumLivePhotos, "Live Photos"),
+            (.smartAlbumPanoramas, "Panoramas"), (.smartAlbumScreenshots, "Screenshots"),
+        ]
+        for (subtype, name) in smart {
+            if let c = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil).firstObject,
+               PHAsset.fetchAssets(in: c, options: nil).count > 0 {
+                out.append(AlbumInfo(id: c.localIdentifier, title: name, collection: c, isAllRecents: false))
+            }
+        }
+        PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil).enumerateObjects { c, _, _ in
+            if PHAsset.fetchAssets(in: c, options: nil).count > 0 {
+                out.append(AlbumInfo(id: c.localIdentifier, title: c.localizedTitle ?? "Album", collection: c, isAllRecents: false))
+            }
+        }
+        albums = out
     }
 
     private func pick(_ a: PHAsset) {
@@ -133,6 +222,38 @@ struct AttachRecentsStrip: View {
                     cont.resume(returning: dest)
                 } catch { cont.resume(returning: nil) }
             }
+        }
+    }
+}
+
+// One album row's model. `collection == nil` (isAllRecents) = the whole library ("Recents").
+struct AlbumInfo: Identifiable {
+    let id: String
+    let title: String
+    let collection: PHAssetCollection?
+    let isAllRecents: Bool
+}
+
+// Album cover thumbnail (newest asset in the album / library).
+private struct AlbumThumb: View {
+    let collection: PHAssetCollection?
+    @State private var image: UIImage?
+    var body: some View {
+        ZStack {
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else { Rectangle().fill(Color.secondary.opacity(0.12)) }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .task {
+            let f = PHFetchOptions()
+            f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            f.fetchLimit = 1
+            let asset = collection.map { PHAsset.fetchAssets(in: $0, options: f).firstObject } ?? PHAsset.fetchAssets(with: f).firstObject
+            guard let a = asset else { return }
+            let o = PHImageRequestOptions(); o.deliveryMode = .opportunistic; o.isNetworkAccessAllowed = true
+            PHImageManager.default().requestImage(for: a, targetSize: CGSize(width: 150, height: 150),
+                                                  contentMode: .aspectFill, options: o) { img, _ in if let img { image = img } }
         }
     }
 }

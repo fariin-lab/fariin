@@ -746,12 +746,13 @@ struct ThreadView: View {
     private var attachPanel: some View {
         VStack(spacing: 0) {
             Capsule().fill(.secondary.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
-            // Grid: Camera tile first, then the recent photos/videos (4 columns, scrollable).
+            // Grid: X + "Recents ▾" album dropdown header, Camera tile, then recent photos/videos.
             AttachRecentsStrip(
                 onCamera: {
                     showAttachPanel = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showCamera = true }
                 },
+                onClose: { showAttachPanel = false },
                 onPickPhoto: { ui in
                     showAttachPanel = false
                     // Let the sheet finish dismissing before the editor cover presents.

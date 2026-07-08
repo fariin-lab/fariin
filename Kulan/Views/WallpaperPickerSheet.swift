@@ -14,6 +14,7 @@ struct WallpaperPickerSheet: View {
     private var store: WallpaperStore { .shared }
 
     @State private var selected: ChatWallpaper
+    @State private var committed = false          // Apply pressed → keep it; otherwise revert on close
     @State private var photoItem: PhotosPickerItem?
     private let original: ChatWallpaper            // the wallpaper in use when the sheet opened
 
@@ -70,9 +71,10 @@ struct WallpaperPickerSheet: View {
         .padding(.vertical, 18)
         .presentationDetents([.height(300)])
         .presentationDragIndicator(.visible)
-        // No live-apply and no revert: selecting only SELECTS (previews in the picker). The chat's
-        // wallpaper is written to the store ONLY when Apply is pressed (user: "apply means save; when
-        // chosen but not applied, don't put that wallpaper — only when apply").
+        // Selecting LIVE-PREVIEWS the pick on the chat behind (user: "must show preview live behind
+        // chat when I choose"), but it is NOT saved: closing without Apply reverts to the original, so
+        // a chosen-but-not-applied wallpaper never sticks. Apply is what commits it.
+        .onDisappear { if !committed { store.set(original, for: cid) } }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -107,7 +109,8 @@ struct WallpaperPickerSheet: View {
     @ViewBuilder private var bottomBar: some View {
         if hasPendingChange {
             Button {
-                store.set(selected, for: cid)   // Apply = actually write the wallpaper now
+                committed = true                // keep the live-previewed wallpaper (don't revert)
+                store.set(selected, for: cid)
                 dismiss()
             } label: {
                 Text("Apply Wallpaper").fontWeight(.semibold).font(.system(size: 17))
@@ -206,8 +209,10 @@ struct WallpaperPickerSheet: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
     }
 
-    // Select (highlight in the picker) only — does NOT touch the chat's wallpaper; Apply does that.
+    // Select + LIVE-PREVIEW on the chat behind (store is observed). Not persisted until Apply — the
+    // onDisappear revert restores the original if the user closes without applying.
     private func preview(_ w: ChatWallpaper) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = w }
+        store.set(w, for: cid)
     }
 }
