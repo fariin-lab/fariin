@@ -796,10 +796,10 @@ struct ChatsView: View {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                  storyNS: storyNS,
                                  onCompose: { showCompose = true },
-                                 onOpen: { g in viewerSourceID = g.id; viewerAnonymous = false; viewerGroup = g },
+                                 onOpen: { g in viewerSourceID = g.isMine ? g.id : "story-\(g.id)"; viewerAnonymous = false; viewerGroup = g },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
-                                 onOpenAnon: { g in viewerSourceID = g.id; viewerAnonymous = true; viewerGroup = g },
+                                 onOpenAnon: { g in viewerSourceID = g.isMine ? g.id : "story-\(g.id)"; viewerAnonymous = true; viewerGroup = g },
                                  onOpenUploading: { showUploadViewer = true })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
@@ -886,7 +886,7 @@ struct ChatsView: View {
                 // exists — Apple's. Do not reintroduce a custom dismiss pan alongside this.
                 // Zoom from WHEREVER the story was opened: a top stories-row card or a chat-row
                 // ring — viewerSourceID is set at every open site (falls back to the card).
-                .navigationTransition(.zoom(sourceID: viewerSourceID.isEmpty ? g.id : viewerSourceID, in: storyNS))
+                .navigationTransition(.zoom(sourceID: viewerSourceID.isEmpty ? (g.isMine ? g.id : "story-\(g.id)") : viewerSourceID, in: storyNS))
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting

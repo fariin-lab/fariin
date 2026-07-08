@@ -537,7 +537,11 @@ private struct StoryFriendCard: View, Equatable {
                 .frame(width: cardW, height: cardH)
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
-        .matchedTransitionSource(id: groupID, in: storyNS)   // hero grow source
+        // "story-" prefix so the top card's source id is NOT the raw group id (which is ALSO the
+        // story viewer's destination identity). Without the prefix, SwiftUI's zoom auto-matched the
+        // destination to this card even when it was scrolled off-screen, overriding the explicit
+        // chat-row source ("row-<cid>") and anchoring the zoom to the wrong (top, hidden) avatar.
+        .matchedTransitionSource(id: "story-\(groupID)", in: storyNS)   // hero grow source
     }
 
     @ViewBuilder private var coverView: some View {
