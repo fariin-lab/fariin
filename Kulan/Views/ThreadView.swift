@@ -363,8 +363,9 @@ struct ThreadView: View {
                 }
             }
         }
-        .modifier(MessageActionDialogs(cid: cid, title: title,
-                                       pendingDelete: $pendingDelete, reportTarget: $reportTarget))
+        .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
+                                       pendingDelete: $pendingDelete, reportTarget: $reportTarget,
+                                       onDeleteForMe: { m in repo.hideForMe(m.id) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
@@ -804,7 +805,7 @@ struct ThreadView: View {
             VStack(spacing: 8) {
                 Image(systemName: icon).font(.system(size: 22, weight: .medium)).foregroundStyle(.primary)
                     .frame(width: 58, height: 58)
-                    .background(Color.primary.opacity(0.07), in: Circle())
+                    .liquidGlass(Circle(), interactive: true)   // real Liquid Glass (user request)
                 Text(label).font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -1436,13 +1437,12 @@ struct ThreadView: View {
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
-            // While RECORDING: a bounded solid material bar, NOT Liquid Glass. Standalone Liquid Glass
-            // (the composer bypasses its GlassEffectContainer during recording) renders a large soft
-            // outer blur halo that spilled up over the messages (user: "remove the recording blur").
-            // A plain material has no halo. Normal state keeps the interactive iMessage glass field.
+            // While RECORDING: a SOLID pill (no blur at all). Any material/glass here rendered a blur
+            // (and a blurred ghost that read as a duplicate input bar) — user wants the recording bar
+            // clean. Normal state keeps the interactive iMessage glass field.
             .background {
                 if recordingHeld {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color(.secondarySystemBackground))
                 }
             }
             .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true, enabled: !recordingHeld)
@@ -2320,18 +2320,29 @@ struct TypingBubble: View {
 private struct MessageActionDialogs: ViewModifier {
     let cid: String
     let title: String
+    let me: String
     @Binding var pendingDelete: Message?
     @Binding var reportTarget: Message?
+    var onDeleteForMe: (Message) -> Void = { _ in }
 
     func body(content: Content) -> some View {
         content
-            .confirmationDialog("Delete this message?",
-                                isPresented: Binding(get: { pendingDelete != nil },
-                                                     set: { if !$0 { pendingDelete = nil } }),
-                                titleVisibility: .visible) {
-                Button("Delete", role: .destructive) {
-                    if let m = pendingDelete { Task { await ChatService.deleteMessage(cid: cid, messageId: m.id) } }
-                    pendingDelete = nil
+            // Native alert (the confirmationDialog rendered as an anchored popover on iOS 26). My own
+            // message → "Delete for Everyone" (removes the doc) + "Delete for Me" (local hide);
+            // someone else's → "Delete for Me" only.
+            .alert("Delete this message?",
+                   isPresented: Binding(get: { pendingDelete != nil },
+                                        set: { if !$0 { pendingDelete = nil } })) {
+                if let m = pendingDelete {
+                    if m.authorId == me {
+                        Button("Delete for Everyone", role: .destructive) {
+                            Task { await ChatService.deleteMessage(cid: cid, messageId: m.id) }
+                            pendingDelete = nil
+                        }
+                    }
+                    Button("Delete for Me", role: .destructive) {
+                        onDeleteForMe(m); pendingDelete = nil
+                    }
                 }
                 Button("Cancel", role: .cancel) { pendingDelete = nil }
             }

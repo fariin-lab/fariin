@@ -3,6 +3,19 @@ import Observation
 import FirebaseAuth
 import FirebaseFirestore
 
+// Locally-hidden message ids ("delete for me"): the message doc stays in Firestore for the other
+// person, but we never show it here. Persisted in UserDefaults, cached in memory for cheap reads.
+enum HiddenMessages {
+    private static var cache = Set<String>((UserDefaults.standard.string(forKey: "hiddenMessages") ?? "")
+        .split(separator: " ").map(String.init))
+    static func isHidden(_ id: String) -> Bool { cache.contains(id) }
+    static func hide(_ id: String) {
+        guard !id.isEmpty, !cache.contains(id) else { return }
+        cache.insert(id)
+        UserDefaults.standard.set(cache.joined(separator: " "), forKey: "hiddenMessages")
+    }
+}
+
 /// Live messages for one conversation. Loads a bounded WINDOW (most-recent page)
 /// with a live listener, pages OLDER messages in on scroll-to-top, and reuses
 /// already-decrypted messages so each snapshot only decrypts new/changed docs.
@@ -50,10 +63,14 @@ final class ThreadRepository {
     private(set) var items: [Message] = []
     private func refreshItems() {
         let echoed = Set(messages.compactMap { $0.clientId })
-        items = messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) }
+        items = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+            .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
+    // "Delete for me" — hide a single message locally (the doc stays for the other person). Deleting
+    // "for everyone" removes the Firestore doc instead (ChatService.deleteMessage).
+    func hideForMe(_ id: String) { HiddenMessages.hide(id); refreshItems() }
     #if DEBUG
     func addDemoMessage(_ text: String, from authorId: String) {
         messages.append(Message(demoId: UUID().uuidString, from: authorId, text, Date()))

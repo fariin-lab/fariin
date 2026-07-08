@@ -89,16 +89,13 @@ extension View {
         }
     }
 
-    /// Floats a bar at the bottom over the scroll content. iOS 26 uses `safeAreaBar`,
-    /// which adds the native glass dim behind it (content blurs/dims as it scrolls
-    /// under, like iMessage); older iOS falls back to `safeAreaInset` (floats, no dim).
+    /// Floats a bar at the bottom over the scroll content — a CLEAN float, no glass dim.
+    /// (safeAreaBar's iOS-26 dim blurred the chat as it scrolled under the composer; over a chat
+    /// wallpaper that read as a border + a blurred duplicate of the messages/recording bar. Users
+    /// repeatedly flagged the "blur" — safeAreaInset floats the composer with no dim.)
     @ViewBuilder
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
-        if #available(iOS 26.0, *) {
-            self.safeAreaBar(edge: .bottom, content: content)
-        } else {
-            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
-        }
+        self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
     }
 }
 
