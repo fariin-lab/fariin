@@ -1524,15 +1524,16 @@ struct ThreadView: View {
     // Floating lock pill above the mic; fills in as the finger approaches the lock point.
     private var lockHint: some View {
         let progress = min(1.0, Double(-clampedDrag.height) / 100.0)
-        return VStack(spacing: 5) {
+        return VStack(spacing: 7) {
             Image(systemName: progress > 0.55 ? "lock.fill" : "lock.open.fill")
             Image(systemName: "chevron.up")
         }
-        .font(.system(size: 13, weight: .semibold))
+        .font(.system(size: 18, weight: .semibold))   // bigger, clearer lock affordance (user: too small)
         .foregroundStyle(progress > 0.55 ? Theme.accent(dark) : .secondary)
-        .padding(.vertical, 10).padding(.horizontal, 9)
+        .frame(width: 44)                              // wider pill so the icons have room
+        .padding(.vertical, 14)
         .liquidGlass(Capsule(), interactive: true)
-        .offset(y: -100)   // fixed gap above the mic (moves with the mic) — no overlap with the 1.5x-scaled mic
+        .offset(y: -108)   // fixed gap above the mic (moves with the mic) — clears the 1.25x-scaled mic
         .opacity(0.6 + progress * 0.4)
         .transition(.opacity)
     }
