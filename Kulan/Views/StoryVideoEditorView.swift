@@ -124,7 +124,7 @@ struct StoryVideoEditorView: View {
         VStack(spacing: 12) {
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 10) {
-                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)), axis: .vertical)
+                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
                         // ...and the text itself carries a hairline shadow so it reads on white.
                         .shadow(color: .black.opacity(0.45), radius: 1.5)
@@ -134,7 +134,8 @@ struct StoryVideoEditorView: View {
                         }
                 }
                 .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)
-                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                // Dark pill (readable white text on bright video frames) instead of light Liquid Glass.
+                .background(Color.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 // Light photos made the white caption text invisible (user screenshot: white-on-
                 // white). A soft bar shadow lifts the pill off bright backgrounds...
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
