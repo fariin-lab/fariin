@@ -48,8 +48,9 @@ struct EmojiView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 11)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .environment(\.colorScheme, .dark)
+            // Translucent dark fill (not .ultraThinMaterial — the StoryUI package targets an
+            // older iOS where materials aren't available).
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.5)))
             .padding(.horizontal, 14)
         }
     }

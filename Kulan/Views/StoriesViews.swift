@@ -1489,19 +1489,16 @@ struct StoryViewer: View {
         }
     }
 
-    // Shown in place of the Views/trash controls while THIS item is the uploading placeholder.
-    // Per the user's choice, BOTH the X and the trash cancel the in-progress upload and close.
+    // TELEGRAM LOOK: the cancel X lives INSIDE the loading ring (one element, not a separate X +
+    // spinner + trash), then the "Uploading…" label. Tapping the ring cancels the upload. (Telegram's
+    // ring is determinate — grows with % — but we only track an uploading flag, so the ring spins.)
     private var uploadingControls: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             Button { uploadSvc.cancelUpload(); onClose() } label: {
-                Image(systemName: "xmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                UploadCancelRing(diameter: 28)
             }.buttonStyle(.plain)
-            Spinner(size: 20, color: .white)
             Text("Uploading…").font(.subheadline).foregroundStyle(.white)
             Spacer()
-            Button { uploadSvc.cancelUpload(); onClose() } label: {
-                Image(systemName: "trash").font(.title3).foregroundStyle(.white)
-            }.buttonStyle(.plain)
         }
     }
 
@@ -1601,17 +1598,13 @@ struct UploadingStoryViewer: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 8)
                 Spacer()
-                // Bottom upload status bar: X (close) · spinner · "Uploading…" · trash (cancel).
-                HStack(spacing: 14) {
-                    Button { onClose() } label: {
-                        Image(systemName: "xmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    }
-                    Spinner(size: 20, color: .white)
+                // Telegram look: cancel X INSIDE the loading ring, then "Uploading…".
+                HStack(spacing: 12) {
+                    Button { stories.cancelUpload(); onClose() } label: {
+                        UploadCancelRing(diameter: 28)
+                    }.buttonStyle(.plain)
                     Text("Uploading…").font(.subheadline).foregroundStyle(.white)
                     Spacer()
-                    Button { stories.cancelUpload(); onClose() } label: {
-                        Image(systemName: "trash").font(.system(size: 18)).foregroundStyle(.white)
-                    }
                 }
                 .padding(.horizontal, 20).padding(.vertical, 16)
                 .background(Color.black)
@@ -1744,6 +1737,31 @@ private struct SnapshotCardContent: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storySnapshotReady"))) { n in
             guard (n.object as? String) == url else { return }
             snap = StoryCompositeCache.image(for: url)   // later (corrected) captures replace earlier ones
+        }
+    }
+}
+
+// TELEGRAM-style upload indicator: a thin ring with the cancel X inside it (one control).
+// Tapping it cancels the upload. The ring spins (we track an uploading flag, not a % — Telegram's
+// grows with real progress). Generous frame so the whole ring is an easy tap target.
+struct UploadCancelRing: View {
+    var diameter: CGFloat = 28
+    @State private var spin = false
+    var body: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0, to: 0.72)
+                .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(spin ? 360 : 0))
+            Image(systemName: "xmark")
+                .font(.system(size: diameter * 0.42, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: diameter, height: diameter)
+        .padding(6)                       // bigger tap target around the ring
+        .contentShape(Rectangle())
+        .onAppear {
+            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
         }
     }
 }

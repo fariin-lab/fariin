@@ -179,6 +179,7 @@ struct StoryVideoEditorView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 22).frame(height: 46)
             .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
+            .contentShape(Capsule())   // whole pill tappable (not just the text)
         }
         .buttonStyle(StoryPressStyle()).disabled(thumbnailData == nil)
     }

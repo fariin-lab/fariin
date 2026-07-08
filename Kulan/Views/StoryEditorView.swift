@@ -374,6 +374,9 @@ struct StoryEditorView: View {
             .padding(.horizontal, 22).frame(height: 46)   // user spec: 46px
             // Blue-tinted real Liquid Glass (prominent action), not a flat blue fill.
             .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
+            // WHOLE PILL tappable (user: only the "NEXT" text responded). Without an explicit
+            // contentShape, SwiftUI hit-tests only the opaque text/chevron, not the padded capsule.
+            .contentShape(Capsule())
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
     }
