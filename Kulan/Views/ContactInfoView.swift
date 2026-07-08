@@ -241,7 +241,7 @@ struct ContactInfoView: View {
                     NotificationCenter.default.post(name: .openChatWallpaper, object: target)
                 }
             } label: {
-                Label("Change Wallpaper", systemImage: "photo")
+                Label("Change Wallpaper", image: "ic_wallpaper")
             }
 
             Divider()
