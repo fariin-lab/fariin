@@ -1853,7 +1853,7 @@ struct MyStoriesCarousel: View {
                         let itemScale = 1.0 * (1 - scaleFraction) + sideRelScale * scaleFraction
                         card(s)
                             .scaleEffect(itemScale)
-                            .opacity(1 - 0.20 * scaleFraction)
+                            .opacity(1.0 - 0.20 * Double(scaleFraction))
                             .position(x: posX, y: slotH / 2)
                             .zIndex(Double(2 - acf))     // centred card on top
                     }
