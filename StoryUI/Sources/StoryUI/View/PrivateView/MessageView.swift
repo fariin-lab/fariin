@@ -82,7 +82,7 @@ private extension MessageView {
     
     
     func messageViewBuilder(_ config: StoryInteractionConfig?, _ placeholder: String) -> some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 8) {   // spec: 8pt between the text pill and the side icon (heart/send)
             TextField("",
                       text: $text,
                       onCommit: onCommitAction)

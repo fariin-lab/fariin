@@ -21,7 +21,7 @@ enum Constant {
     }
     
     enum MessageView {
-        static let height: CGFloat = 48
+        static let height: CGFloat = 44   // spec: 40–44pt pill (Capsule → 22pt radius)
         static let padding = EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
         static let cornerRadius: CGFloat = 24
         static let likeImage: String = "heart"

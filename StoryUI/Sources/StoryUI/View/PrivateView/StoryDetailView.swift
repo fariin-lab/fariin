@@ -71,7 +71,11 @@ struct StoryDetailView: View {
     }
     
     private var emojiViewPosition: CGFloat {
-        return (messageViewPosition * 1.5)
+        // SPEC: the reaction bar sits exactly 12pt above the input bar. The input pill's top is
+        // messageViewPosition minus its own height (Constant.MessageView.height) and its 16pt top
+        // padding, above the home-indicator inset. The reaction bar is bottom-anchored, so lift it
+        // that far plus the 12pt gap. (Was messageViewPosition*1.5 — a huge, uneven gap.)
+        return messageViewPosition - Constant.MessageView.height - 16 - 12 - winInsets.bottom
     }
 
     // Real device safe-area insets (the host no longer applies them — see StoryPageHostVC). Used to keep the

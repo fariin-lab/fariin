@@ -46,12 +46,13 @@ struct EmojiView: View {
                         .frame(width: 22)
                 }
             }
+            // SPEC: reaction container = 88pt tall, full width minus 16pt on each screen edge,
+            // 26pt corner radius, REAL Apple Liquid Glass (iOS 26 .glassEffect, Apple guidelines).
             .padding(.horizontal, 16)
-            .padding(.vertical, 11)
-            // Translucent dark fill (not .ultraThinMaterial — the StoryUI package targets an
-            // older iOS where materials aren't available).
-            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.5)))
-            .padding(.horizontal, 14)
+            .frame(height: 88)
+            .frame(maxWidth: .infinity)
+            .reactionGlass(26)
+            .padding(.horizontal, 16)   // 16pt from the screen edges
         }
     }
     
@@ -65,6 +66,19 @@ struct EmojiView: View {
     
     private func startAnimate() {
        startAnimating = true
+    }
+}
+
+private extension View {
+    // Real Apple Liquid Glass (iOS 26) when available; a translucent dark fill on older iOS
+    // (the StoryUI package deploys below iOS 26, so the glass must be availability-guarded).
+    @ViewBuilder func reactionGlass(_ radius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self.background(shape.fill(Color.black.opacity(0.5)))
+        }
     }
 }
 
