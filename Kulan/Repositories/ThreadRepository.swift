@@ -54,6 +54,12 @@ final class ThreadRepository {
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
+    #if DEBUG
+    func addDemoMessage(_ text: String, from authorId: String) {
+        messages.append(Message(demoId: UUID().uuidString, from: authorId, text, Date()))
+        refreshItems()
+    }
+    #endif
     func markFailed(clientId: String) {
         if let i = pending.firstIndex(where: { $0.clientId == clientId }) { pending[i].sendState = .failed }
         refreshItems()
@@ -61,6 +67,17 @@ final class ThreadRepository {
     func removePending(clientId: String) { pending.removeAll { $0.clientId == clientId }; refreshItems() }
 
     func start() {
+        #if DEBUG
+        if DemoMode.active {
+            // Preview: serve the local demo conversation directly — no Firestore, no decryption.
+            messages = DemoMode.messages(for: cid)
+            didInitialLoad = true
+            canLoadOlder = false
+            otherOnline = true
+            refreshItems()
+            return
+        }
+        #endif
         guard let uid = Auth.auth().currentUser?.uid else { return }
         // 1:1 cid is "uidA_uidB"; a group cid is a random doc id (no underscore).
         let isOneToOne = cid.contains("_")

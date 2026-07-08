@@ -66,22 +66,83 @@ enum DemoMode {
                        lastViewedAt: nil, isMine: false),
         ]
 
-        // Demo chat rows (names + timestamps; message previews are E2EE so they stay blank in demo).
+        // Demo chat rows with real (plaintext) previews. In demo mode the previews + the opened
+        // conversation both render straight from these strings — no E2EE (see decodedLast + start()).
         ConversationsRepository.shared.conversations = [
-            chat("demo-c1", me, "demo-aisha", "Aisha", now.addingTimeInterval(-300)),
-            chat("demo-c2", me, "demo-omar", "Omar", now.addingTimeInterval(-3600)),
-            chat("demo-c3", me, "demo-sara", "Sara", now.addingTimeInterval(-86400)),
+            chat("demo-c1", me, "demo-aisha", "Aisha", now.addingTimeInterval(-240),  "For sure, call me around 2 😊"),
+            chat("demo-c2", me, "demo-omar",  "Omar",  now.addingTimeInterval(-3600), "Sounds good, see you there 👍"),
+            chat("demo-c3", me, "demo-sara",  "Sara",  now.addingTimeInterval(-9000), "Haha that's hilarious 😂"),
+            chat("demo-c4", me, "demo-yusuf", "Yusuf", now.addingTimeInterval(-86400),"Thanks for the help earlier!"),
+            chat("demo-c5", me, "demo-lina",  "Lina",  now.addingTimeInterval(-172800),"Let's catch up this weekend"),
         ]
         ConversationsRepository.shared.hasLoaded = true
     }
 
-    private static func chat(_ id: String, _ me: String, _ other: String, _ name: String, _ at: Date) -> Conversation {
+    private static func chat(_ id: String, _ me: String, _ other: String, _ name: String, _ at: Date, _ last: String) -> Conversation {
         Conversation(id: id, data: [
             "users": [me, other],
             "names": [other: name, me: "You"],
             "lastSender": other,
+            "lastMessage": last,
             "updatedAt": Timestamp(date: at),
         ])
+    }
+
+    // The full (plaintext) conversation shown when a demo chat is opened. Rendered directly by
+    // ThreadRepository in demo mode — no Firestore, no decryption.
+    static func messages(for cid: String) -> [Message] {
+        let me = Auth.auth().currentUser?.uid ?? "demo-me"
+        let n = Date()
+        func t(_ s: Double) -> Date { n.addingTimeInterval(s) }
+        func them(_ uid: String, _ lines: [(String, String, Double)]) -> [Message] {
+            lines.enumerated().map { i, l in
+                Message(demoId: "\(cid)-\(i)", from: l.0 == "me" ? me : uid, l.1, t(l.2))
+            }
+        }
+        switch cid {
+        case "demo-c1":
+            return them("demo-aisha", [
+                ("aisha", "Heyy! Did you see the new update? 👀", -7200),
+                ("me",    "Yesss it looks so clean 🔥", -7100),
+                ("aisha", "Right?? The stories part is my favourite", -7000),
+                ("me",    "Same. The blur on the cards is so smooth now", -6800),
+                ("aisha", "Wanna test the voice notes later?", -3600),
+                ("me",    "For sure 😊", -3400),
+                ("aisha", "For sure, call me around 2 😊", -240),
+            ])
+        case "demo-c2":
+            return them("demo-omar", [
+                ("omar", "Yo, still on for football tomorrow?", -9000),
+                ("me",   "Definitely. 5pm at the usual pitch?", -8900),
+                ("omar", "Perfect. I'll bring the ball", -8800),
+                ("me",   "Nice, I'll grab drinks after 🥤", -3700),
+                ("omar", "Sounds good, see you there 👍", -3600),
+            ])
+        case "demo-c3":
+            return them("demo-sara", [
+                ("sara", "You will NOT believe what happened today", -12000),
+                ("me",   "go on 👀", -11900),
+                ("sara", "I walked into the glass door at work 🤦‍♀️", -11800),
+                ("me",   "NO WAY 😂😂", -11700),
+                ("sara", "Everyone saw. I wanted to disappear", -9100),
+                ("me",   "Haha that's hilarious 😂", -9000),
+            ])
+        case "demo-c4":
+            return them("demo-yusuf", [
+                ("yusuf", "Hey, do you have the notes from the meeting?", -90000),
+                ("me",    "Yeah one sec, sending them over", -89900),
+                ("me",    "📄 Meeting-notes.pdf", -89800),
+                ("yusuf", "Thanks for the help earlier!", -86400),
+            ])
+        case "demo-c5":
+            return them("demo-lina", [
+                ("lina", "It's been ages! How are you?", -180000),
+                ("me",   "I know! Doing great, super busy though", -179900),
+                ("lina", "Let's catch up this weekend", -172800),
+            ])
+        default:
+            return []
+        }
     }
 
     private static var cached = Set<String>()
@@ -112,6 +173,17 @@ enum DemoMode {
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: data), for: URLRequest(url: url))
         }
         return urlStr
+    }
+}
+
+// Plaintext text message for the demo conversations (no E2EE — text is set directly for display).
+extension Message {
+    init(demoId: String, from authorId: String, _ text: String, _ createdAt: Date) {
+        self.id = demoId
+        self.authorId = authorId
+        self.text = text
+        self.reactions = [:]
+        self.createdAt = createdAt
     }
 }
 #endif

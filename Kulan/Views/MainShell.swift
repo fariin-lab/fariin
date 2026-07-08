@@ -716,12 +716,8 @@ struct ChatsView: View {
                         // plain Button does not, and in edit mode it is auto-disabled so the
                         // List's native multi-select still toggles via the row tag.
                         Button {
-                            #if DEBUG
-                            // Demo chats are fake (no real messages/keys) — opening one crashes
-                            // ThreadView. They're only here to populate the preview list, so tapping
-                            // is a safe no-op in demo mode.
-                            if DemoMode.active { return }
-                            #endif
+                            // Demo chats now open a real (local, plaintext) conversation in the
+                            // preview — ThreadRepository serves DemoMode.messages(for:) directly.
                             path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                                    photo: conv.displayPhoto(me)))
                         } label: {
@@ -1221,6 +1217,9 @@ struct ChatRow: View, Equatable {
     }
 
     private var decodedLast: String {
+        #if DEBUG
+        if DemoMode.active { return conv.lastMessageCipher }   // demo previews are stored plaintext
+        #endif
         if conv.leaksBlocked(me) { return "" }   // don't leak a blocked person's message into the list
         // Group last-message is sealed by its sender → decrypt with the sender's key, not the cid pair.
         if conv.isGroup {

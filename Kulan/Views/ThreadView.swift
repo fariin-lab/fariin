@@ -885,6 +885,13 @@ struct ThreadView: View {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         impact(.light)   // tactile send (parity with voice release)
+        #if DEBUG
+        if DemoMode.active {   // preview: echo locally, no encryption/Firestore
+            input = ""; typingSent = false
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { repo.addDemoMessage(text, from: me) }
+            return
+        }
+        #endif
         // Resolve which inserted @mentions are still present in the final text.
         let mentions = mentionMap.compactMap { text.contains("@\($0.key)") ? $0.value : nil }
         mentionMap = [:]
