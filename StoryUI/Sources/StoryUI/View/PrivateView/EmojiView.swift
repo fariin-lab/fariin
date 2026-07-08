@@ -24,10 +24,10 @@ struct EmojiView: View {
 
     var body: some View {
         if !flatEmojis.isEmpty {
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 Text("Send reaction as a private message")
-                    .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.6))
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.55))
                 HStack(spacing: 0) {
                     ForEach(flatEmojis.indices, id: \.self) { i in
                         Button(flatEmojis[i]) {
@@ -37,21 +37,17 @@ struct EmojiView: View {
                             dismissKeyboard()
                             userClosure?(story, nil, emoji, false)
                         }
-                        .font(.system(size: 30))
+                        .font(.system(size: 26))
                         .frame(maxWidth: .infinity)
                     }
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.5))
-                        .frame(width: 22)
                 }
             }
-            // SPEC: reaction container = 88pt tall, full width minus 16pt on each screen edge,
-            // 26pt corner radius, REAL Apple Liquid Glass (iOS 26 .glassEffect, Apple guidelines).
-            .padding(.horizontal, 16)
-            .frame(height: 88)
+            // Compact DARK reaction bar (user: smaller + darker, no chevron): ~62pt tall,
+            // full width minus 16pt each screen edge, 24pt radius, dark-tinted Liquid Glass.
+            .padding(.horizontal, 14)
+            .frame(height: 62)
             .frame(maxWidth: .infinity)
-            .reactionGlass(26)
+            .reactionGlass(24)
             .padding(.horizontal, 16)   // 16pt from the screen edges
         }
     }
@@ -75,9 +71,10 @@ private extension View {
     @ViewBuilder func reactionGlass(_ radius: CGFloat) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         if #available(iOS 26.0, *) {
-            self.glassEffect(.regular, in: shape)
+            // DARK-tinted Liquid Glass (user: make it darker than the default light glass).
+            self.glassEffect(.regular.tint(Color.black.opacity(0.45)), in: shape)
         } else {
-            self.background(shape.fill(Color.black.opacity(0.5)))
+            self.background(shape.fill(Color.black.opacity(0.6)))
         }
     }
 }

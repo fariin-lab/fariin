@@ -1236,9 +1236,15 @@ struct StoryViewer: View {
         // made the cards touch the top and the side cards overflow the screen edge). The narrower
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        // BUILD 213 card sizes (user: use exactly build 213's centre + side sizes — do NOT change).
         let slotH = (avail - countArea) * 0.94
-        let slotW = slotH * 0.62
+        // STORY-ASPECT card (blur fix): a fixed 0.62 card is a DIFFERENT shape than the story, so
+        // StoryImage(fitBlur:) has to RE-FIT the story into it and adds dark blur bars a full-bleed
+        // (no-blur) story never had — and the bars grow in from the edges as the frame morphs to
+        // 0.62. Making the card the story's OWN aspect (scr.width / contentH) means the morph
+        // frame keeps ONE constant aspect from full-screen to slot, so the story scales as a single
+        // flattened unit: full-bleed stays blur-free, a story with blur keeps its exact same blur.
+        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        let slotW = slotH * (scr.width / max(contentH, 1))
         let miniH = slotW * (scr.height / scr.width)
         let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
