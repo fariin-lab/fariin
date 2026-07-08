@@ -1009,7 +1009,18 @@ struct StoryViewer: View {
         .clipShape(StoryCardClip(
             radius: 24 * storyZoomFrac / max(storyZoomOpen.scale, 0.2),
             topCut: 0,
-            contentHeight: (showViewers && viewersProgress > 0.08) ? morphContentH : .greatestFiniteMagnitude))
+            // ROOT CAUSE (shared by BOTH implementations): the clip height used to SWITCH
+            // discretely — .greatestFiniteMagnitude ↔ morphContentH — the instant viewersProgress
+            // crossed 0.08. That binary flip forced SwiftUI to re-lay-out the LIVE story view
+            // mid-gesture, so for one frame the scale/offset/clip disagreed and the top edge broke
+            // out then snapped (measured: the spike lands exactly at viewersProgress≈0.08). Every
+            // prior fix tuned the animation and never touched this switch, so it always came back.
+            // FIX: interpolate the clip height CONTINUOUSLY with the drag — full screen at rest
+            // (frac 0 → footer shown, no rest-trim hole) to the media bottom when open (frac 1 →
+            // footer trimmed). No state boundary = nothing to re-lay-out = no pop, no snap.
+            contentHeight: showViewers
+                ? UIScreen.main.bounds.height - (UIScreen.main.bounds.height - morphContentH) * storyZoomFrac
+                : .greatestFiniteMagnitude))
         .scaleEffect(x: 1 - (1 - storyZoomOpen.scale) * storyZoomFrac,
                      y: 1 - (1 - storyZoomOpen.scale) * storyZoomFrac, anchor: .top)
         .offset(y: storyZoomOpen.offsetY * storyZoomFrac)
