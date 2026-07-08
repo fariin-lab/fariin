@@ -121,12 +121,23 @@ struct StoryImage: View {
     // bakedBars = the fit-case backdrop is a PRE-BAKED blur image instead of the live material.
     // Only the morph card (which crossfades) uses it — materials break at fractional opacity.
     var bakedBars = false
+    // fillCrop = always center-crop the story to FILL the frame (no blur bars, no letterbox),
+    // cropping whatever doesn't fit. The SHORTER viewer cards use it so a card that's less tall
+    // than the story just shows a tighter centre crop instead of growing side bars.
+    var fillCrop = false
     @State private var image: UIImage?
     @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
     var body: some View {
         Group {
             if let image {
-                if fitBlur {
+                if fillCrop {
+                    // Center-crop fill (no bars). Wrapped in Color.clear.overlay(...).clipped() so a
+                    // scaledToFill can never report an oversized layout (the panorama-blowup bug).
+                    Color.clear
+                        .overlay(Image(uiImage: image).resizable().scaledToFill())
+                        .clipped()
+                        .transition(.opacity)
+                } else if fitBlur {
                     // Match the story viewer's ImageLoader EXACTLY, both rules:
                     //  • an image at least as TALL as the screen (9:16 photos, text statuses) fills
                     //    edge-to-edge with NO blur bars — don't add bars the story never had;
@@ -1252,15 +1263,15 @@ struct StoryViewer: View {
         // made the cards touch the top and the side cards overflow the screen edge). The narrower
         // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        let slotH = (avail - countArea) * 0.94
-        // STORY-ASPECT card (blur fix): a fixed 0.62 card is a DIFFERENT shape than the story, so
-        // StoryImage(fitBlur:) has to RE-FIT the story into it and adds dark blur bars a full-bleed
-        // (no-blur) story never had — and the bars grow in from the edges as the frame morphs to
-        // 0.62. Making the card the story's OWN aspect (scr.width / contentH) means the morph
-        // frame keeps ONE constant aspect from full-screen to slot, so the story scales as a single
-        // flattened unit: full-bleed stays blur-free, a story with blur keeps its exact same blur.
+        // slotHRef = the aspect-true reference height; it DEFINES the width so W stays exactly as
+        // before. slotH = a modestly SHORTER card (user: "each one is too long — only touch H, and
+        // don't cut too much"). Because slotW is tied to the taller reference, the card keeps its
+        // width and just loses a little height; the story is CENTER-CROPPED to fill it (the cards
+        // render in fill mode below), so there are no side blur bars.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let slotW = slotH * (scr.width / max(contentH, 1))
+        let slotHRef = (avail - countArea) * 0.94
+        let slotW = slotHRef * (scr.width / max(contentH, 1))
+        let slotH = slotHRef * 0.88   // modest 12% shorter — "don't cut too much"
         let miniH = slotW * (scr.height / scr.width)
         let cropY: CGFloat = 0
         let blockTop = topInset + (avail - countArea - slotH) / 2
@@ -1285,12 +1296,11 @@ struct StoryViewer: View {
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
             if morphVis > 0.001, let url = morphURL {
-                // The morph card: whole image + its blur (fitBlur), FRAME-lerped full-screen → slot.
-                // bakedBars: the blur is a STATIC baked image (scaled as one piece), NOT a live
-                // UIVisualEffectView — a live material re-blurs weaker/lighter as the card shrinks
-                // (user: "the blur becomes too light/weak after it opens"). Baked = never changes.
+                // The morph card FRAME-lerps full-screen → slot. fillCrop: the story fills the frame
+                // and centre-crops as the card shrinks below the story's aspect — so the shorter card
+                // stays a clean crop (no side bars) and the morph end matches the carousel exactly.
                 let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                StoryImage(url: url, fitBlur: true, bakedBars: true)
+                StoryImage(url: url, fillCrop: true)
                     .frame(width: lerp(scr.width, slotW, sizeP), height: lerp(startH, slotH, sizeP))
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
@@ -1975,12 +1985,9 @@ struct MyStoriesCarousel: View {
         // IMAGE + BLUR (build 213, user: keep both): the card is a live StoryImage(fitBlur:) — the
         // whole image over its own blur — exactly what the morph card shows, so the morph→carousel
         // hand-off at full-open is seamless (same view, same size).
-        // LIVE material (bakedBars:false), NOT the baked imitation: the baked bake reads WEAKER/
-        // lighter than the real systemThickMaterialDark the full-screen story uses (user: "blur is
-        // going to be weak"). The carousel card sits at rest (no opacity crossfade), so the live
-        // UIVisualEffectView never drops out here — using it makes the card's bars IDENTICAL to the
-        // story's own bars. (Only the morph card, which crossfades, still needs the baked copy.)
-        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false)
+        // fillCrop: the resting card centre-crops the story to fill the (shorter) slot — no side
+        // bars, matching the morph endpoint exactly so the hand-off is pixel-identical.
+        return StoryImage(url: s.previewUrl, fillCrop: true)
             .frame(width: slotW, height: slotH)
             .clipped()
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)

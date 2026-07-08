@@ -1482,6 +1482,12 @@ struct ThreadView: View {
             .scaleEffect(recordingHeld ? 1.25 : 1, anchor: .center)
             .offset(recordingHeld ? clampedDrag : .zero)
             .overlay(alignment: .top) { if recordingHeld { lockHint } }
+            // Big, solid tap target (user: "only works when I press the icon — make it the whole
+            // button"). Without an explicit contentShape the gesture only hit-tests the mic glyph's
+            // pixels; the 8pt margin + Rectangle make the entire ~56pt footprint start recording, and
+            // since recordGesture is minimumDistance:0 it fires the instant you touch anywhere on it.
+            .padding(8)
+            .contentShape(Rectangle())
             .highPriorityGesture(recordGesture)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: recordingHeld)
     }
