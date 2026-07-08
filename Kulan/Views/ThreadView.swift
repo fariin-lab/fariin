@@ -1428,9 +1428,16 @@ struct ThreadView: View {
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
-            // Liquid-glass field (iMessage on iOS 26 look), soft edges, no hard border.
-            // Non-interactive while recording so the field's glass doesn't lens/blur-track the drag.
-            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: !recordingHeld)
+            // While RECORDING: a bounded solid material bar, NOT Liquid Glass. Standalone Liquid Glass
+            // (the composer bypasses its GlassEffectContainer during recording) renders a large soft
+            // outer blur halo that spilled up over the messages (user: "remove the recording blur").
+            // A plain material has no halo. Normal state keeps the interactive iMessage glass field.
+            .background {
+                if recordingHeld {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.regularMaterial)
+                }
+            }
+            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true, enabled: !recordingHeld)
 
             // Mic (hold-to-record) OR Send — a standalone button OUTSIDE the field, like "+".
             rightButton
@@ -1577,7 +1584,11 @@ struct ThreadView: View {
     }
 
     private var recordGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
+        // .global coordinate space is REQUIRED: the mic offsets itself by clampedDrag as you slide,
+        // so in the default .local space the translation is measured against the MOVING mic and never
+        // reaches the lock/cancel thresholds while holding (it only "worked" on release). In global
+        // space the translation is the true finger movement, so slide-up-to-lock fires mid-hold.
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { v in
                 // Once LOCKED, the finger no longer controls anything — the locked bar takes over.
                 // Without this, any finger movement after crossing the lock point re-entered the
