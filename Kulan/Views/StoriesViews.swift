@@ -900,8 +900,14 @@ struct StoryViewer: View {
                 // the opening spring caused hitching.
                 let mediaH = morphContentH
                 for (i, s) in (StoriesRepository.shared.mine?.stories ?? myStories).enumerated() {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
-                        StorySnapshotFactory.warm(urlString: s.previewUrl, contentHeight: mediaH)
+                    if s.isVideo && s.id == currentStoryId {
+                        // Video: photograph the CURRENT playing frame (the active PlayerView answers)
+                        // so the morph card matches where the video is, not its first-frame poster.
+                        NotificationCenter.default.post(name: .init("captureStoryFrame"), object: s.previewUrl)
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
+                            StorySnapshotFactory.warm(urlString: s.previewUrl, contentHeight: mediaH)
+                        }
                     }
                 }
             } else {
