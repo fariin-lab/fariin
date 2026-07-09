@@ -266,8 +266,11 @@ struct ThreadView: View {
         .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
         // Native nav bar with its REAL background (the iOS 26 liquid-glass blur, no custom border).
+        // Force it VISIBLE so the blur always shows (default .automatic was transparent at the scroll
+        // top, which read as "no blur"). The titleView renders on TOP of this, so it's never covered.
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .toolbarBackground(.visible, for: .navigationBar)
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
                 GroupInfoView(cid: cid)

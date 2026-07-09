@@ -35,6 +35,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         let host = UIHostingController(rootView: AnyView(EmptyView()))
         private let container = TitleContainerView()
         private weak var target: UIViewController?
+        private var observation: NSKeyValueObservation?
 
         init(onTap: @escaping () -> Void) {
             self.onTap = onTap
@@ -61,13 +62,27 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             // target that one, not whatever intermediate host controller owns the marker.
             guard let owner = marker.owningViewController else { return }
             let vc = owner.navigationController?.topViewController ?? owner
-            target = vc
-            if vc.navigationItem.titleView !== container {
-                vc.navigationItem.titleView = container
+            if target !== vc {
+                observation?.invalidate(); observation = nil
+                target = vc
+            }
+            assertTitleView()
+            // SwiftUI re-manages the navigationItem on its own update cycles and clears titleView
+            // (the "avatar+name sometimes gone" flicker). Observe it and immediately put ours back.
+            if observation == nil, let item = target?.navigationItem {
+                observation = item.observe(\.titleView, options: [.new]) { [weak self] _, _ in
+                    self?.assertTitleView()
+                }
             }
         }
 
+        private func assertTitleView() {
+            guard let item = target?.navigationItem, item.titleView !== container else { return }
+            item.titleView = container
+        }
+
         func remove() {
+            observation?.invalidate(); observation = nil
             if target?.navigationItem.titleView === container { target?.navigationItem.titleView = nil }
         }
     }
