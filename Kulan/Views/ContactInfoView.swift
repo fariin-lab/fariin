@@ -170,14 +170,14 @@ struct ContactInfoView: View {
         VStack(spacing: 0) {
             infoRow("Clear My Messages", "trash", tint: .primary) { showClear = true }
             rowDivider
-            infoRow("Report \(name)", "flag", tint: .red, chevron: false) { showReport = true }
+            infoRow("Report \(name)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
             rowDivider
             if blocked {
-                infoRow("Unblock \(name)", "hand.raised.slash", chevron: false) {
+                infoRow("Unblock \(name)", "checkmark.circle", chevron: false) {
                     Task { await ChatService.setBlocked(cid, false); blocked = false }
                 }
             } else {
-                infoRow("Block \(name)", "hand.raised", tint: .red, chevron: false) { showBlock = true }
+                infoRow("Block \(name)", "nosign", tint: .red, chevron: false) { showBlock = true }
             }
         }
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
