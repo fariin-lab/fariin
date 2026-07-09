@@ -12,19 +12,13 @@ struct GifPickerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
-                    ForEach(gifs) { g in
-                        AnimatedGifView(url: g.url)
-                            .frame(height: 110)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            // Tap lives on a pure-SwiftUI overlay: a gesture attached to the
-                            // UIKit-backed gif view itself can silently never fire (hit-testing
-                            // falls into the UIImageView, which doesn't accept touches).
-                            .overlay {
-                                Color.clear.contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                    .onTapGesture { onPick(g); dismiss() }
-                            }
+                // Masonry (WhatsApp-style): 2 columns, each GIF at its OWN natural aspect ratio,
+                // added to whichever column is currently shorter — no fixed card that stretches them.
+                HStack(alignment: .top, spacing: 4) {
+                    ForEach(0..<2, id: \.self) { col in
+                        LazyVStack(spacing: 4) {
+                            ForEach(masonryColumns[col]) { g in gifCell(g) }
+                        }
                     }
                 }
                 .padding(6)
@@ -53,5 +47,34 @@ struct GifPickerView: View {
             }
             .task { if gifs.isEmpty { gifs = await GiphyService.shared.search("") } }
         }
+    }
+
+    // Split the results into 2 balanced columns: each GIF goes to the currently-shorter column
+    // (heights measured in "rows per unit width" = height/width), so the waterfall stays even.
+    private var masonryColumns: [[GiphyService.Gif]] {
+        var cols: [[GiphyService.Gif]] = [[], []]
+        var heights: [CGFloat] = [0, 0]
+        for g in gifs {
+            let unitH = (g.width > 0 && g.height > 0) ? CGFloat(g.height / g.width) : 1
+            let i = heights[0] <= heights[1] ? 0 : 1
+            cols[i].append(g)
+            heights[i] += unitH
+        }
+        return cols
+    }
+
+    // One GIF cell sized to its natural aspect (fills the column width, height follows the ratio).
+    private func gifCell(_ g: GiphyService.Gif) -> some View {
+        let ratio = (g.width > 0 && g.height > 0) ? CGFloat(g.width / g.height) : 1
+        return Color.clear
+            .aspectRatio(ratio, contentMode: .fit)   // aspect box that fills the column width
+            .overlay { AnimatedGifView(url: g.url) }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // Tap lives on a pure-SwiftUI overlay ABOVE the gif: a gesture on the UIKit-backed
+            // view itself can silently never fire (touches fall into the UIImageView).
+            .overlay {
+                Color.clear.contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .onTapGesture { onPick(g); dismiss() }
+            }
     }
 }
