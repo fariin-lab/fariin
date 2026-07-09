@@ -70,27 +70,26 @@ struct ContactInfoView: View {
         if !isSelf { groupsInCommonCard }
     }
 
-    // Nav bar trailing (iOS 26 auto-wraps these in Liquid Glass): the "…" menu + Edit (rename).
+    // Nav bar trailing: just Edit (rename). The "…" More menu is a quick-action tile (below).
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
         if !isSelf {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
-                    Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
-                    Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
-                    Divider()
-                    Button(role: .destructive) { showReport = true } label: { Label("Report \(shownName)", systemImage: "exclamationmark.triangle") }
-                    if blocked {
-                        Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: { Label("Unblock \(shownName)", systemImage: "checkmark.circle") }
-                    } else {
-                        Button(role: .destructive) { showBlock = true } label: { Label("Block \(shownName)", systemImage: "nosign") }
-                    }
-                } label: { Image(systemName: "ellipsis") }
-                .tint(.primary)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { renameText = shownName; showRename = true }.tint(.primary)
             }
+        }
+    }
+
+    // The "More" tile's menu: video · voice · mute · search · MORE.
+    @ViewBuilder private var moreMenuItems: some View {
+        Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+        Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
+        Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
+        Divider()
+        Button(role: .destructive) { showReport = true } label: { Label("Report \(shownName)", systemImage: "exclamationmark.triangle") }
+        if blocked {
+            Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: { Label("Unblock \(shownName)", systemImage: "checkmark.circle") }
+        } else {
+            Button(role: .destructive) { showBlock = true } label: { Label("Block \(shownName)", systemImage: "nosign") }
         }
     }
 
@@ -327,6 +326,10 @@ struct ContactInfoView: View {
             .tint(.primary)
             if source == .chat {
                 actionTile("search", "magnifyingglass") { showSearchSoon = true }
+            }
+            // "More" tile (…): the menu that used to sit in the nav bar.
+            if !isSelf {
+                Menu { moreMenuItems } label: { tileLabel("more", "ellipsis") }.tint(.primary)
             }
         }
     }
