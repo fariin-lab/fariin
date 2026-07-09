@@ -174,9 +174,7 @@ struct ThreadView: View {
                     // scrollTo lands on the OLD bottom and the freshly-inserted row shifts it (the jump).
                     DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
                 } else if isAtBottom {
-                    DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
-                    }
+                    DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
                 } else {
                     newWhileAway += 1
                 }
@@ -187,7 +185,7 @@ struct ThreadView: View {
             .onChange(of: repo.pinnedMessageIds) { _, ids in pinIndex = max(0, ids.count - 1) }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
             .onChange(of: repo.otherTyping) { _, t in
-                if t && isAtBottom { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("BOTTOM", anchor: .bottom) } }
+                if t && isAtBottom { proxy.scrollTo("BOTTOM", anchor: .bottom) }
             }
             // Keyboard opening: if I was already at the bottom, keep the newest messages pinned right
             // above the keyboard (the system doesn't reliably do this, which left the chat looking
@@ -195,7 +193,7 @@ struct ThreadView: View {
             .onChange(of: inputFocused) { _, focused in
                 guard focused, isAtBottom else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                    proxy.scrollTo("BOTTOM", anchor: .bottom)
                 }
             }
             // Floating jump-to-bottom button (our design) — appears when scrolled up,
@@ -686,15 +684,13 @@ struct ThreadView: View {
                     // can't corrupt the saved position.
                     .onAppear { visibleRows.ids.insert(msg.id); persistScrollPosition() }
                     .onDisappear { visibleRows.ids.remove(msg.id) }
-                    // Slide-in ONLY once the open has settled: the initial load arrives in
-                    // chunks (cache -> live), and rows sliding in from the bottom during those
-                    // chunks read as the whole conversation jumping up and down on open.
-                    .transition(settled ? .move(edge: .bottom).combined(with: .opacity) : .identity)
+                    // Native: no custom slide-in. Rows appear like a plain list (iMessage-style),
+                    // no spring/move transition on insert.
+                    .transition(.identity)
                 }
             }
             if repo.otherTyping && !repo.iBlocked && typingPref {
                 TypingBubble(dark: dark).padding(.top, 6).id("TYPING")
-                    .transition(.scale(scale: 0.85, anchor: .bottomLeading).combined(with: .opacity))
             }
             // Bottom sentinel: drives "am I at the bottom?" for the scroll button.
             Color.clear.frame(height: 1).id("BOTTOM")
@@ -703,9 +699,6 @@ struct ThreadView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        // Animate ONLY the typing indicator appearing/disappearing (scoped value — never
-        // touches scroll or pagination). Sent-message spring lives at the send() call site.
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: repo.otherTyping)
     }
 
     // Native toolbar header (real Liquid Glass + native back/swipe), same approach as the
@@ -929,7 +922,7 @@ struct ThreadView: View {
         #if DEBUG
         if DemoMode.active {   // preview: echo locally, no encryption/Firestore
             input = ""; typingSent = false
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { repo.addDemoMessage(text, from: me) }
+            repo.addDemoMessage(text, from: me)
             return
         }
         #endif
@@ -944,11 +937,9 @@ struct ThreadView: View {
         replyingTo = nil
         typingSent = false
         // Show the bubble INSTANTLY (optimistic), then reconcile when the server echoes it.
-        // Spring it in (Signal-style) — the bubble slides up + fades via its row transition.
+        // Native: the bubble just appears (no custom spring), like a plain list insert.
         let clientId = UUID().uuidString
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-            repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply, sendState: .sending))
-        }
+        repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply, sendState: .sending))
         Task {
             await ChatService.setTyping(cid, false)
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions)
@@ -979,10 +970,8 @@ struct ThreadView: View {
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
         let clientId = UUID().uuidString
         await MainActor.run {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                repo.addPending(Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
-                                        authorId: me, clientId: clientId, sendState: .sending))
-            }
+            repo.addPending(Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
+                                    authorId: me, clientId: clientId, sendState: .sending))
         }
         do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
@@ -1269,11 +1258,9 @@ struct ThreadView: View {
         }
         let clientId = UUID().uuidString
         await MainActor.run {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                repo.addPending(Message(localVideoThumb: prepared.thumbnail, duration: prepared.duration,
-                                        width: prepared.width, height: prepared.height,
-                                        authorId: me, clientId: clientId, sendState: .sending))
-            }
+            repo.addPending(Message(localVideoThumb: prepared.thumbnail, duration: prepared.duration,
+                                    width: prepared.width, height: prepared.height,
+                                    authorId: me, clientId: clientId, sendState: .sending))
         }
         do {
             try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
@@ -1701,11 +1688,9 @@ struct ThreadView: View {
                      text: $0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text)))))
         }
         await MainActor.run {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                repo.addPending(Message(localAudioData: data, duration: dur, waveform: wf,
-                                        authorId: me, clientId: clientId, sendState: .sending))
-            }
-            withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
+            repo.addPending(Message(localAudioData: data, duration: dur, waveform: wf,
+                                    authorId: me, clientId: clientId, sendState: .sending))
+            replyingTo = nil
         }
         do { try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
