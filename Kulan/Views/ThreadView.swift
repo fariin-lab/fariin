@@ -140,25 +140,13 @@ struct ThreadView: View {
             // chat visibly jumped. didInitialLoad means the initial page is decrypted and settled, so
             // it fades in stable. Demo chats set didInitialLoad synchronously — hence their smoothness.
             .onChange(of: repo.didInitialLoad) { _, done in
-                if done, !revealed {
-                    DispatchQueue.main.async {
-                        let a = openAnchor
-                        proxy.scrollTo(a.id, anchor: a.edge)   // restore the in-session spot, else the newest — before the fade-in
-                        revealed = true
-                    }
-                    enableSlideInAfterReveal()   // opening batch never animates; new messages slide in after
-                }
+                if done, !revealed { revealAtOpenAnchor(proxy) }
             }
             .task {
                 // Safety net: if didInitialLoad is slow (or the chat is genuinely empty), still reveal
                 // so the composer / empty state shows.
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                if !revealed {
-                    let a = openAnchor
-                    proxy.scrollTo(a.id, anchor: a.edge)
-                    revealed = true
-                    enableSlideInAfterReveal()
-                }
+                if !revealed { revealAtOpenAnchor(proxy) }
             }
             .onAppear {
                 // Cache-seeded chat: didInitialLoad was already true at init (rendered on frame 1), so
@@ -182,9 +170,13 @@ struct ThreadView: View {
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
                 } else if mine {
-                    proxy.scrollTo("BOTTOM", anchor: .bottom)   // spring row-transition shows it; no competing scroll anim
+                    // Defer one runloop so the new bubble is laid out BEFORE we scroll — otherwise
+                    // scrollTo lands on the OLD bottom and the freshly-inserted row shifts it (the jump).
+                    DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
                 } else if isAtBottom {
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                    }
                 } else {
                     newWhileAway += 1
                 }
@@ -1138,6 +1130,23 @@ struct ThreadView: View {
         } else if let topId = repo.items.first(where: { visibleRows.ids.contains($0.id) })?.id {
             ChatScrollStore.shared.save(cid, .message(topId))
         }
+    }
+
+    // Reveal the chat exactly at the open anchor with NO jump. LazyVStack row heights aren't final on
+    // the first scrollTo (offscreen rows are unmeasured), so it lands approximately; a second pass on
+    // the next runloop — after layout — corrects it. We reveal only after both passes, so a cold/first
+    // open lands in its FINAL position instead of scrolling-then-settling visibly (the "jump"). A warm
+    // reopen already has measured rows, so pass 2 is just a harmless no-op there.
+    private func revealAtOpenAnchor(_ proxy: ScrollViewProxy) {
+        let a = openAnchor
+        DispatchQueue.main.async {
+            proxy.scrollTo(a.id, anchor: a.edge)          // pass 1 (approximate on a cold load)
+            DispatchQueue.main.async {
+                proxy.scrollTo(a.id, anchor: a.edge)      // pass 2 after layout → final position
+                revealed = true
+            }
+        }
+        enableSlideInAfterReveal()
     }
 
     // Turn on the message-row slide-in transition a beat AFTER the chat has revealed, so the
