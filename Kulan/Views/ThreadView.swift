@@ -1767,6 +1767,7 @@ struct ThreadView: View {
             }
             .padding(.horizontal, 14).frame(minHeight: 40)
             .liquidGlass(Capsule(), interactive: true)
+            .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
             Button { sendRecording() } label: {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 38))
                     .foregroundStyle(Theme.accent(dark))
