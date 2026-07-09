@@ -898,14 +898,18 @@ struct ThreadView: View {
     // just under the ~44pt nav bar) and cleared past the native back button on the leading side.
     private var slidingHeaderLabel: some View {
         GeometryReader { geo in
-            Button { showContactInfo = true } label: { headerLabel }
-                .buttonStyle(.plain)
-                .fixedSize()
-                .padding(.leading, 52)                 // clear the native back button
-                // Lift from the content top up into the nav-bar band. Nav bar is ~44pt; centre a
-                // 40pt avatar in it -> ~ -42. Uses the inset only as a floor so it never goes off-screen.
-                .offset(y: -min(geo.safeAreaInsets.top, 44) + 2)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            HStack(spacing: 0) {
+                Button { showContactInfo = true } label: { headerLabel }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .padding(.leading, 68)             // 16px gap AFTER the ~52pt back-button zone
+                // The right side must never intercept or cover the trailing call/video toolbar
+                // buttons — an empty, non-hit-testing spacer keeps that area completely free.
+                Spacer(minLength: 0).allowsHitTesting(false)
+            }
+            // Lift from the content top up into the nav-bar band (nav bar ~44pt; inset used as a floor).
+            .offset(y: -min(geo.safeAreaInsets.top, 44) + 2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -1660,9 +1664,9 @@ struct ThreadView: View {
             // background (visual only) so it overflows the bar without changing its height.
             .frame(width: 24, height: 24)
             .background {
-                if recordingHeld {   // big RED mic circle (Telegram) — scale only, no layout impact
-                    Circle().fill(Color.red).scaleEffect(2.3)
-                        .shadow(color: .red.opacity(0.4), radius: 8)
+                if recordingHeld {   // RED mic circle sized to FIT inside the 40px bar (no bulge/overlap)
+                    Circle().fill(Color.red).scaleEffect(1.5)
+                        .shadow(color: .red.opacity(0.35), radius: 3)
                 }
             }
             // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
