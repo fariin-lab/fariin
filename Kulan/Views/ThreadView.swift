@@ -260,6 +260,10 @@ struct ThreadView: View {
     // Split into several layers so each modifier chain stays under the type-checker limit.
     private var threadCovers: some View {
         threadScroll
+        // Native blur backdrop behind the header (the toolbar background is hidden, which removed the
+        // real nav-bar blur; we can't restore it because it would render OVER the in-page avatar+name).
+        // A system-material bar under the header re-creates the iOS blur so messages frost under it.
+        .overlay(alignment: .top) { headerBlurBar }
         // Avatar + name as an IN-PAGE overlay (not a toolbar item) so the interactive swipe-back
         // slides them horizontally WITH the page. The whole pushed view slides during the pop, so
         // this overlay slides for free; the native back + call/video buttons (toolbar) stay static.
@@ -900,6 +904,18 @@ struct ThreadView: View {
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
             .first { $0.isKeyWindow }?.safeAreaInsets.top) ?? 47
+    }
+
+    // Native blur backdrop behind the header (status bar + 44pt nav bar), so messages frost under it
+    // the way the real nav bar does. System material = native iOS blur, not a custom effect. Sits
+    // BELOW the avatar+name overlay and BELOW the native back/call buttons; never intercepts touches.
+    private var headerBlurBar: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .frame(maxWidth: .infinity)
+            .frame(height: statusBarHeight + 44)
+            .ignoresSafeArea(.container, edges: .top)
+            .allowsHitTesting(false)
     }
 
     // In-page placement of the avatar+name inside the nav-bar band. Rendered as an overlay on the page
