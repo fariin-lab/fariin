@@ -2259,7 +2259,9 @@ struct MessageBubble: View, Equatable {
                     Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : reply.text))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
-                Spacer(minLength: 0)
+                // No greedy Spacer here: it made the quote grab the full bubble width,
+                // so a tiny "hhhh" reply still drew a full-width card. Letting the HStack
+                // hug its content means the card grows only as big as it needs to.
             }
             .padding(.horizontal, 8).padding(.vertical, 5)
             // Tint the quote box with the (contrasting) text color so it's always visible —
@@ -2389,7 +2391,11 @@ private struct RecordingHalo: View {
             .fill(color.opacity(0.28))
             .scaleEffect(1.12 + 0.7 * lvl + (pulse ? 0.10 : 0.0))
             .blur(radius: 5)
-            .animation(.spring(response: 0.16, dampingFraction: 0.55), value: lvl)
+            // The level is ALREADY envelope-smoothed in AudioRecorder. The old under-damped spring
+            // (damping 0.55) overshot and rang on every one of the 30 ticks/sec, so the halo never
+            // settled — it visibly vibrated (the "shake", worst while the mic is moving during the
+            // lock swipe). Critically damped + a short response tracks the voice with no ring.
+            .animation(.spring(response: 0.22, dampingFraction: 0.95), value: lvl)
             .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulse)
             .onAppear { pulse = true }
             .allowsHitTesting(false)
