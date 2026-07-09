@@ -260,6 +260,10 @@ struct ThreadView: View {
     // Split into several layers so each modifier chain stays under the type-checker limit.
     private var threadCovers: some View {
         threadScroll
+        // Avatar + name as an IN-PAGE overlay (not a toolbar item) so the interactive swipe-back
+        // slides them horizontally WITH the page. The whole pushed view slides during the pop, so
+        // this overlay slides for free; the native back + call/video buttons (toolbar) stay static.
+        .overlay(alignment: .topLeading) { slidingHeaderLabel }
         .toolbar(.hidden, for: .tabBar)
         // Native nav bar KEPT (real edge-swipe-back that follows your finger + reveals the list), but
         // its BACKGROUND is hidden — no solid bar / border, so the chat scrolls up under a transparent
@@ -714,20 +718,11 @@ struct ThreadView: View {
         // toolbar item in a Liquid-Glass pill — but the avatar/name must NOT have that pill
         // (only the back button + call/video buttons should). `.buttonStyle(.plain)` alone
         // does NOT remove it; `.sharedBackgroundVisibility(.hidden)` does.
-        // .topBarLeading: place the avatar+name LEFT, right after the back button (in the
-        // empty space) — not centered. `.sharedBackgroundVisibility(.hidden)` keeps it
-        // glass-free. (Trade-off: a leading item doesn't slide with the page on swipe-back;
-        // left position was the explicit ask.)
-        if #available(iOS 26.0, *) {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { showContactInfo = true } label: { headerLabel }.buttonStyle(.plain)
-            }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { showContactInfo = true } label: { headerLabel }.buttonStyle(.plain)
-            }
-        }
+        // NOTE: the avatar + name are NOT toolbar items anymore. They're rendered as an in-PAGE
+        // overlay (see `slidingHeaderLabel`) positioned in the nav-bar band, so that during the
+        // interactive swipe-back they slide horizontally WITH the page (a toolbar item stays frozen).
+        // The back button + call/video buttons remain native toolbar items, so they stay static —
+        // exactly the requested behavior.
         // 1:1 call buttons only — group calls need an SFU (not built yet). The cid check keeps
         // them from flashing on a group cold-open before the conversation doc has loaded.
         if !isGroup && cid.contains("_") {
@@ -893,6 +888,24 @@ struct ThreadView: View {
                 }
             }
             .fixedSize()
+        }
+    }
+
+    // In-page placement of the avatar+name inside the nav-bar band. Rendered as an overlay on the
+    // page (not a toolbar item) so the interactive swipe-back slides it with the page. A
+    // GeometryReader reads the real top inset so the label lands at the nav bar's vertical centre
+    // across devices (notch / Dynamic Island); it's offset up from the safe-area top (content sits
+    // just under the ~44pt nav bar) and cleared past the native back button on the leading side.
+    private var slidingHeaderLabel: some View {
+        GeometryReader { geo in
+            Button { showContactInfo = true } label: { headerLabel }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .padding(.leading, 52)                 // clear the native back button
+                // Lift from the content top up into the nav-bar band. Nav bar is ~44pt; centre a
+                // 40pt avatar in it -> ~ -42. Uses the inset only as a floor so it never goes off-screen.
+                .offset(y: -min(geo.safeAreaInsets.top, 44) + 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
