@@ -38,7 +38,6 @@ struct ContactInfoView: View {
     @State private var showVerify = false
     @State private var showDisappear = false
     @State private var disappearSeconds = 0
-    @State private var pendingDisappear: Int?   // chosen timer awaiting the "for both of you" confirm
     @State private var showRename = false
     @State private var showSounds = false
     @State private var renameText = ""
@@ -132,6 +131,12 @@ struct ContactInfoView: View {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
+            .sheet(isPresented: $showDisappear) {
+                DisappearingMessagesView(cid: cid, current: disappearSeconds) { s in
+                    disappearSeconds = s
+                    Task { await ChatService.setDisappear(cid, seconds: s) }
+                }
+            }
             .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
             .sheet(isPresented: $showAddGroup) {
                 NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
@@ -151,26 +156,10 @@ struct ContactInfoView: View {
             } message: {
                 Text("This name is saved only on your device. It won't change \(name)'s account.")
             }
-            .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
-                Button("Off")     { requestDisappear(0) }
-                Button("1 Day")   { requestDisappear(86_400) }
-                Button("1 Week")  { requestDisappear(604_800) }
-                Button("1 Month") { requestDisappear(2_592_000) }
-                Button("1 Year")  { requestDisappear(31_536_000) }
-                Button("Cancel", role: .cancel) {}
-            }
     }
 
     private var withAlerts: some View {
         withDialogs
-            .alert("Turn on disappearing messages?", isPresented: Binding(
-                get: { pendingDisappear != nil }, set: { if !$0 { pendingDisappear = nil } }
-            )) {
-                Button("Cancel", role: .cancel) { pendingDisappear = nil }
-                Button("Turn On") { if let s = pendingDisappear { applyDisappear(s); pendingDisappear = nil } }
-            } message: {
-                Text("New messages in this chat will be deleted for both you and \(name) after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). \(name) will see that you turned this on.")
-            }
             .alert("Clear your messages?", isPresented: $showClear) {
                 Button("Cancel", role: .cancel) {}
                 Button("Clear", role: .destructive) {
@@ -292,15 +281,6 @@ struct ContactInfoView: View {
 
     private var disappearLabel: String {
         disappearSeconds == 0 ? "Off" : ChatService.disappearLabel(disappearSeconds)
-    }
-    // Turning ON asks first (it deletes for both people); turning OFF is always safe → applies directly.
-    private func requestDisappear(_ s: Int) {
-        guard s != disappearSeconds else { return }
-        if s == 0 { applyDisappear(0) } else { pendingDisappear = s }
-    }
-    private func applyDisappear(_ s: Int) {
-        disappearSeconds = s
-        Task { await ChatService.setDisappear(cid, seconds: s) }
     }
     // MARK: - Sections
 
