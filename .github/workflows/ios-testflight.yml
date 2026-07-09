@@ -50,8 +50,18 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Resolve Swift packages (so -showBuildSettings is fast)
-        run: xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan
+      - name: Resolve Swift packages (retry, clearing corrupt binary-framework artifacts)
+        run: |
+          for i in 1 2 3 4; do
+            if xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan; then
+              echo "package resolution succeeded on attempt $i"; break
+            fi
+            echo "::warning::SPM resolve attempt $i failed (likely a partial WebRTC/Firebase download). Clearing artifacts and retrying."
+            rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts
+            rm -rf ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            if [ "$i" = "4" ]; then echo "::error::SPM resolution failed after 4 attempts"; exit 1; fi
+            sleep 10
+          done
 
       - name: Build & upload to TestFlight
         env:
