@@ -735,8 +735,8 @@ struct ThreadView: View {
                 Button { showContactInfo = true } label: {
                     Color.clear.frame(width: 190, height: 40).contentShape(Rectangle())
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
+            .sharedBackgroundVisibility(.hidden)
         } else {
             ToolbarItem(placement: .topBarLeading) {
                 Button { showContactInfo = true } label: {
