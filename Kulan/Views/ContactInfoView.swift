@@ -235,8 +235,8 @@ struct ContactInfoView: View {
             Button { showAddGroup = true } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "plus")
-                        .font(.system(size: 20, weight: .medium)).foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
+                        .font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
+                        .frame(width: 36, height: 36)   // Signal's contact-row avatar size (.thirtySix)
                         .background(Circle().fill(Color(.systemGray3)))
                     Text("Add to a Group").foregroundStyle(.primary)
                     Spacer()
