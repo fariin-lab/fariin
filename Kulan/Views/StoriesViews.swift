@@ -417,11 +417,8 @@ struct StoriesRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.25)))
 
-                ZStack {
-                    AvatarView(name: meName, photoUrl: mePhoto, size: 32)   // my profile avatar in the center
-                    ProgressView().progressViewStyle(.circular).tint(.white).controlSize(.large)   // native spinner hugging the avatar
-                }
-                .padding(8)
+                UploadingAvatarRing(name: meName, photoUrl: mePhoto)   // my avatar + clean spinning ring
+                    .padding(8)
             }
             Text("Uploading…").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).frame(width: cardW)
         }
@@ -1850,6 +1847,28 @@ struct UploadCancelRing: View {
         .frame(width: diameter, height: diameter)
         .padding(6)                       // bigger tap target around the ring
         .contentShape(Rectangle())
+        .onAppear {
+            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
+        }
+    }
+}
+
+// The chat-list uploading card's indicator: my avatar with a clean thin ring spinning
+// around it (same Telegram-style arc as UploadCancelRing). Replaces the native circular
+// ProgressView, whose pinwheel blades rendered as a messy wedge over the avatar.
+struct UploadingAvatarRing: View {
+    let name: String
+    let photoUrl: String?
+    @State private var spin = false
+    var body: some View {
+        ZStack {
+            AvatarView(name: name, photoUrl: photoUrl, size: 32)
+            Circle()
+                .trim(from: 0, to: 0.72)
+                .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 42, height: 42)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+        }
         .onAppear {
             withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
         }
