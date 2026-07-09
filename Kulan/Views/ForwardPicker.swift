@@ -88,12 +88,15 @@ struct ForwardPicker: View {
 
     private func sendAll() async {
         sending = true
-        var failed = false
+        var sent = Set<String>()
         for cid in selected {
-            do { try await ChatService.forwardMessage(message, from: sourceCid, to: cid) }
-            catch { failed = true }
+            do { try await ChatService.forwardMessage(message, from: sourceCid, to: cid); sent.insert(cid) }
+            catch { /* keep it selected so the retry targets only the failures */ }
         }
+        // Drop the chats that succeeded — a retry after a partial failure must NOT re-forward
+        // to the ones that already received it (that produced duplicates).
+        selected.subtract(sent)
         sending = false
-        if failed { forwardError = true } else { dismiss() }   // don't pretend it sent
+        if selected.isEmpty { dismiss() } else { forwardError = true }   // don't pretend it sent
     }
 }

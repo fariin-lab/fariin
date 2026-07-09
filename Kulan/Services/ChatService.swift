@@ -626,6 +626,10 @@ enum ChatService {
     /// Forward an existing message into another conversation. Because every chat is
     /// E2EE with its own key, media is decrypted from the source chat and re-encrypted
     /// for the target by reusing the normal send pipeline (never re-uses source ciphertext).
+    // Thrown when a forward's source media can't be retrieved/decrypted. It MUST throw (not
+    // return) so ForwardPicker reports the failure instead of silently dismissing as "sent".
+    enum ForwardError: Error { case sourceUnavailable }
+
     static func forwardMessage(_ m: Message, from sourceCid: String, to targetCid: String) async throws {
         if m.isImage {
             let bytes: Data
@@ -635,12 +639,13 @@ enum ChatService {
                       let (cipher, _) = try? await URLSession.shared.data(from: url),
                       let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
-            } else { return }
+            } else { throw ForwardError.sourceUnavailable }
             try await sendImage(cid: targetCid, data: bytes)
         } else if m.isAudio {
             guard let s = m.audioUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await URLSession.shared.data(from: url),
-                  let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) else { return }
+                  let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
+            else { throw ForwardError.sourceUnavailable }
             try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform)
         } else if m.isVideo {
             // Prefer this device's copy (the server object may already be delivered+deleted).
@@ -650,21 +655,23 @@ enum ChatService {
                let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
             }
-            guard let bytes else { return }
+            guard let bytes else { throw ForwardError.sourceUnavailable }
             var thumb: Data? = nil
             if let s = m.thumbUrl, let url = URL(string: s), let meta = m.thumbEnc,
                let (cipher, _) = try? await URLSession.shared.data(from: url) {
                 thumb = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             }
-            guard let thumb else { return }
+            guard let thumb else { throw ForwardError.sourceUnavailable }
             try await sendVideo(cid: targetCid, video: bytes, thumbnail: thumb, duration: m.duration ?? 0,
                                 width: m.width ?? 720, height: m.height ?? 720)
         } else if m.isGif {
-            try await sendGif(cid: targetCid, url: m.imageUrl ?? "", width: m.width ?? 200, height: m.height ?? 200)
+            guard let gifUrl = m.imageUrl, !gifUrl.isEmpty else { throw ForwardError.sourceUnavailable }
+            try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200)
         } else if m.isFile {
             guard let s = m.fileUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await URLSession.shared.data(from: url),
-                  let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) else { return }
+                  let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
+            else { throw ForwardError.sourceUnavailable }
             try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File")
         } else {
             try await sendText(cid: targetCid, text: m.text)
