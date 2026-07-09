@@ -81,6 +81,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         let cid = notification.request.content.userInfo["cid"] as? String
         if let cid, cid == AppRouter.shared.activeChatId { return [] }
+        // Play the chat's CHOSEN message sound (real, foreground) and suppress the system push
+        // sound. Background pushes still use the server payload's sound (per-chat sound there is
+        // a follow-up). "None" → silent banner.
+        if let cid {
+            let sound = SoundStore.sound(cid, .message)
+            guard sound.id != "none" else { return [.banner, .badge] }
+            await MainActor.run { SoundPlayer.shared.play(sound) }
+            return [.banner, .badge]
+        }
         return [.banner, .sound, .badge]
     }
 

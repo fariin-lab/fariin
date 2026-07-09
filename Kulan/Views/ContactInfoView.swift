@@ -36,11 +36,11 @@ struct ContactInfoView: View {
     @State private var openChat = false
     @State private var showAllMedia = false
     @State private var showVerify = false
-    @State private var showMuteOptions = false
     @State private var showDisappear = false
     @State private var disappearSeconds = 0
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for both of you" confirm
     @State private var showRename = false
+    @State private var showSounds = false
     @State private var renameText = ""
     @State private var localName: String?       // local custom name (Edit) — device-only, never sent
     @State private var showAddGroup = false
@@ -131,6 +131,7 @@ struct ContactInfoView: View {
             .navigationDestination(isPresented: $showVerify) {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
+            .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
             .sheet(isPresented: $showAddGroup) {
                 NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
@@ -149,15 +150,6 @@ struct ContactInfoView: View {
                 }
             } message: {
                 Text("This name is saved only on your device. It won't change \(name)'s account.")
-            }
-            .confirmationDialog("Sounds & Notifications", isPresented: $showMuteOptions, titleVisibility: .visible) {
-                if muted { Button("Unmute") { muted = false; Task { await ChatService.setMute(cid, until: 0) } } }
-                Button("Mute for 1 hour") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
-                Button("Mute for 8 hours") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
-                Button("Mute for 1 day")   { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(24)) } }
-                Button("Mute for 1 week")  { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
-                Button("Mute Always")      { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
-                Button("Cancel", role: .cancel) {}
             }
             .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
                 Button("Off")     { requestDisappear(0) }
@@ -220,7 +212,7 @@ struct ContactInfoView: View {
         VStack(spacing: 0) {
             infoRow("Disappearing Messages", "timer", value: disappearLabel) { showDisappear = true }
             rowDivider
-            infoRow("Sounds & Notifications", "bell.badge", value: muted ? "Muted" : "On") { showMuteOptions = true }
+            infoRow("Sounds & Notifications", "bell.badge", value: muted ? "Muted" : "On") { showSounds = true }
             rowDivider
             infoRow("Verify Encryption", "lock.fill", tint: .accentColor) { showVerify = true }
         }
