@@ -107,10 +107,11 @@ struct ThreadView: View {
         self.photoUrl = photoUrl
         let r = ThreadRepository(cid: cid)
         _repo = State(initialValue: r)
-        // Cache hit → the conversation is already decrypted and seeded, so reveal on the FIRST frame
-        // (no fade). didInitialLoad won't transition, so the onChange reveal handler won't fire — the
-        // onAppear below does the open-scroll for this path. Cache miss → starts hidden, reveals on load.
-        _revealed = State(initialValue: r.didInitialLoad)
+        // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
+        // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
+        // jumped to the bottom. Starting hidden + settling under the veil (revealAtOpenAnchor, run from
+        // onAppear for the cache path / onChange for the cold path) means it's never seen mid-scroll.
+        _revealed = State(initialValue: false)
     }
 
     private var threadScroll: some View {
@@ -149,12 +150,10 @@ struct ThreadView: View {
                 if !revealed { revealAtOpenAnchor(proxy) }
             }
             .onAppear {
-                // Cache-seeded chat: didInitialLoad was already true at init (rendered on frame 1), so
-                // the reveal onChange never fires — place the open position + arm slide-in here instead.
-                if repo.didInitialLoad {
-                    DispatchQueue.main.async { let a = openAnchor; proxy.scrollTo(a.id, anchor: a.edge) }
-                    enableSlideInAfterReveal()
-                }
+                // Cache-seeded chat: didInitialLoad is already true, so the reveal onChange never fires —
+                // settle-under-veil here too (not a single scrollTo) so the cache path also never shows
+                // the chat mid-scroll during the push transition.
+                if repo.didInitialLoad { revealAtOpenAnchor(proxy) }
             }
             .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
             .onChange(of: repo.items.count) { old, new in
