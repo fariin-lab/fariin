@@ -911,7 +911,7 @@ struct ThreadView: View {
             Button { showContactInfo = true } label: { headerLabel }
                 .buttonStyle(.plain)
                 .fixedSize()
-                .padding(.leading, 84)             // clear gap after the back button
+                .padding(.leading, 76)             // ~16pt back-button->avatar gap (Signal's spacing)
             // Never cover/intercept the trailing call/video buttons — empty non-hit-testing spacer.
             Spacer(minLength: 0).allowsHitTesting(false)
         }
