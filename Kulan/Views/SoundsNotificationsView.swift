@@ -11,7 +11,6 @@ struct SoundsNotificationsView: View {
     @State private var messageSound = NotificationSound.default
     @State private var callSound = NotificationSound.default
     @State private var muted = false
-    @State private var showMute = false
     @State private var picker: SoundStore.Kind?
 
     private var dark: Bool { scheme == .dark }
@@ -25,7 +24,18 @@ struct SoundsNotificationsView: View {
                 Divider().padding(.leading, 56)
                 row("Call Sound", "phone", value: callSound.name) { picker = .call }
                 Divider().padding(.leading, 56)
-                row("Mute", "bell.slash", value: muteLabel) { showMute = true }
+                // Native dropdown Menu (real Apple context menu), not a popover dialog.
+                Menu {
+                    if muted { Button("Unmute") { setMute(0) } }
+                    Button("1 hour")  { setMute(ChatService.muteUntil(1)) }
+                    Button("8 hours") { setMute(ChatService.muteUntil(8)) }
+                    Button("1 day")   { setMute(ChatService.muteUntil(24)) }
+                    Button("1 week")  { setMute(ChatService.muteUntil(168)) }
+                    Button("Always")  { setMute(ChatService.muteUntil(nil)) }
+                } label: {
+                    rowLabel("Mute", "bell.slash", muteLabel)
+                }
+                .tint(.primary)
             }
             .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .padding(16)
@@ -37,30 +47,23 @@ struct SoundsNotificationsView: View {
             SoundPickerView(cid: cid, kind: kind,
                             title: kind == .message ? "Message Sound" : "Call Sound") { reload() }
         }
-        .confirmationDialog("Mute this chat for…", isPresented: $showMute, titleVisibility: .visible) {
-            if muted { Button("Unmute") { setMute(0) } }
-            Button("1 hour")  { setMute(ChatService.muteUntil(1)) }
-            Button("8 hours") { setMute(ChatService.muteUntil(8)) }
-            Button("1 day")   { setMute(ChatService.muteUntil(24)) }
-            Button("1 week")  { setMute(ChatService.muteUntil(168)) }
-            Button("Always")  { setMute(ChatService.muteUntil(nil)) }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 
     private func row(_ title: String, _ icon: String, value: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 26).foregroundStyle(.primary)
-                Text(title).foregroundStyle(.primary)
-                Spacer()
-                Text(value).foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .contentShape(Rectangle())
+        Button(action: action) { rowLabel(title, icon, value) }.buttonStyle(.plain)
+    }
+
+    // The shared row visual — used by the Button rows AND the native Mute Menu.
+    private func rowLabel(_ title: String, _ icon: String, _ value: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 17)).frame(width: 26).foregroundStyle(.primary)
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            Text(value).foregroundStyle(.secondary)
+            Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .contentShape(Rectangle())
     }
 
     private func reload() {

@@ -40,7 +40,6 @@ struct ContactInfoView: View {
     @State private var disappearSeconds = 0
     @State private var showRename = false
     @State private var showSounds = false
-    @State private var renameText = ""
     @State private var localName: String?       // local custom name (Edit) — device-only, never sent
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
@@ -74,7 +73,7 @@ struct ContactInfoView: View {
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
         if !isSelf {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { renameText = shownName; showRename = true }.tint(.primary)
+                Button("Edit") { showRename = true }.tint(.primary)
             }
         }
     }
@@ -130,6 +129,12 @@ struct ContactInfoView: View {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
+            .sheet(isPresented: $showRename) {
+                SetNicknameView(current: localName ?? "") { newName in
+                    ContactNames.set(newName, for: otherUid)
+                    localName = ContactNames.name(for: otherUid)
+                }
+            }
             .sheet(isPresented: $showDisappear) {
                 DisappearingMessagesView(cid: cid, current: disappearSeconds) { s in
                     disappearSeconds = s
@@ -143,22 +148,8 @@ struct ContactInfoView: View {
     }
 
     // Menus, dialogs and the rename alert.
-    private var withDialogs: some View {
-        withSheets
-            .alert("Edit Name", isPresented: $showRename) {
-                TextField("Name", text: $renameText)
-                Button("Cancel", role: .cancel) {}
-                Button("Save") {
-                    ContactNames.set(renameText, for: otherUid)
-                    localName = ContactNames.name(for: otherUid)
-                }
-            } message: {
-                Text("This name is saved only on your device. It won't change \(name)'s account.")
-            }
-    }
-
     private var withAlerts: some View {
-        withDialogs
+        withSheets
             .alert("Clear your messages?", isPresented: $showClear) {
                 Button("Cancel", role: .cancel) {}
                 Button("Clear", role: .destructive) {
