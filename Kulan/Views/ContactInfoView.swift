@@ -35,6 +35,7 @@ struct ContactInfoView: View {
     @State private var showVideoSoon = false
     @State private var openChat = false
     @State private var showAllMedia = false
+    @State private var showVerify = false
     @State private var showMuteOptions = false
     @State private var showDisappear = false
     @State private var disappearSeconds = 0
@@ -56,6 +57,7 @@ struct ContactInfoView: View {
                 quickActions
                 if source == .calls, lastCall != nil { callLogCard }
                 if !about.isEmpty { bioCard }
+                if !isSelf { encryptionCard }
                 if !media.isEmpty { mediaCard }
             }
             .padding(.horizontal, 16)
@@ -136,6 +138,30 @@ struct ContactInfoView: View {
         .navigationDestination(isPresented: $openChat) {
             ThreadView(cid: cid, title: name, photoUrl: photoUrl)
         }
+        .navigationDestination(isPresented: $showVerify) {
+            VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
+        }
+    }
+
+    // Tap to open Kulan's own Verify Encryption screen (safety number + QR).
+    private var encryptionCard: some View {
+        Button { showVerify = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Encryption").foregroundStyle(.primary)
+                    Text("Verify this chat is private").font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     private var disappearLabel: String {

@@ -152,6 +152,15 @@ final class Crypto {
         }
     }
 
+    /// My identity public key (Curve25519), for the safety-number screen. nil until
+    /// ensureReady() has run — callers should `try await ensureReady()` first.
+    var myPublicKeyData: Data? { lock.withLock { myPublicKey.map { Data($0) } } }
+
+    /// Another user's identity public key as Data (fetches + caches). nil if none yet.
+    func publicKeyData(for uid: String) async -> Data? {
+        (await preloadKey(uid)).map { Data($0) }
+    }
+
     /// Fetch + cache another user's public key. Returns nil if they have none yet.
     @discardableResult
     func preloadKey(_ uid: String) async -> Bytes? {
