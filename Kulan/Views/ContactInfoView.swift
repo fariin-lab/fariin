@@ -231,7 +231,20 @@ struct ContactInfoView: View {
         let me = AuthService.shared.uid ?? ""
         let groups = sharedGroups
         return VStack(alignment: .leading, spacing: 0) {
-            infoRow("Add to a Group", "plus.circle.fill", tint: .accentColor, chevron: false) { showAddGroup = true }
+            // Bigger "+" in a grey circle (matches the group-avatar rows below), not a tiny glyph.
+            Button { showAddGroup = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .medium)).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Color(.systemGray3)))
+                    Text("Add to a Group").foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             ForEach(groups) { g in
                 rowDivider
                 Button { openGroup = g } label: {
