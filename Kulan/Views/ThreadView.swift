@@ -931,6 +931,15 @@ struct ThreadView: View {
             .fill(.ultraThinMaterial)
             .frame(maxWidth: .infinity)
             .frame(height: statusBarHeight + 44)
+            // Fade the bottom edge so there's NO hard border/line — mimics the native nav-bar
+            // scroll-edge effect (the blur dissolves into the content instead of ending in a seam).
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.78),
+                    .init(color: .clear, location: 1.0),
+                ], startPoint: .top, endPoint: .bottom)
+            )
             .ignoresSafeArea(.container, edges: .top)
             .allowsHitTesting(false)
     }
