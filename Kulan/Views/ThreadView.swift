@@ -203,8 +203,12 @@ struct ThreadView: View {
                     Button {
                         withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
                     } label: {
-                        Image(systemName: "chevron.down").font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold))
+                            // Explicit per-mode color + a soft counter-shadow so the glyph stays
+                            // readable in dark mode AND over a bright wallpaper (was a washed-out
+                            // .primary that vanished on the light glass).
+                            .foregroundStyle(dark ? .white : .black)
+                            .shadow(color: (dark ? Color.black : Color.white).opacity(0.35), radius: 2)
                             .frame(width: 40, height: 40)
                             .liquidGlass(Circle(), interactive: true)
                             .overlay(alignment: .top) {

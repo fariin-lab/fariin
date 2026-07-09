@@ -12,8 +12,10 @@ struct SkeletonFill: View {
     @State private var phase: CGFloat = -1
 
     var body: some View {
-        let base = scheme == .dark ? Color.white.opacity(0.09) : Color.black.opacity(0.07)
-        let highlight = scheme == .dark ? Color.white.opacity(0.16) : Color.white.opacity(0.65)
+        // Opaque system greys — a REAL skeleton block that's clearly visible on any background
+        // (including over a chat wallpaper), not a near-transparent tint that vanished.
+        let base = scheme == .dark ? Color(.systemGray5) : Color(.systemGray4)
+        let highlight = scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.55)
         base.overlay(
             GeometryReader { geo in
                 LinearGradient(colors: [.clear, highlight, .clear],
