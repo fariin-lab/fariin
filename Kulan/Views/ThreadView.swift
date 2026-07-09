@@ -1604,7 +1604,9 @@ struct ThreadView: View {
     // Live recording row inside the capsule: red dot + timer + "‹ slide to cancel".
     private var recordingHoldRow: some View {
         HStack(spacing: 10) {
-            Circle().fill(.red).frame(width: 9, height: 9)
+            Image(systemName: "mic.fill")
+                .font(.system(size: 18)).foregroundStyle(.red)
+                .symbolEffect(.pulse, options: .repeating)   // gentle live pulse, like Telegram
             RecordTimerText(recorder: recorder)
             Spacer(minLength: 8)
             HStack(spacing: 3) {
@@ -1636,8 +1638,9 @@ struct ThreadView: View {
             .frame(width: recordingHeld ? 18 : 22, height: recordingHeld ? 22 : 24)
             .frame(width: recordingHeld ? 40 : 24, height: recordingHeld ? 40 : 24)   // grows to a puck when held
             .background {
-                if recordingHeld {   // filled puck while holding; turns red once cancel is armed
-                    Circle().fill(recordCancelArmed ? Color.red : Theme.accent(dark)).scaleEffect(1.15)
+                if recordingHeld {   // big RED mic circle (Telegram) — scaled up so it reads large
+                    Circle().fill(Color.red).scaleEffect(1.5)
+                        .shadow(color: .red.opacity(0.4), radius: 8)
                 }
             }
             // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
@@ -1665,12 +1668,18 @@ struct ThreadView: View {
                 .font(.system(size: 11, weight: .bold))
                 .opacity(1 - lockProgress)
         }
-        .foregroundStyle(lockProgress > 0.7 ? Theme.accent(dark) : Color.secondary)
-        .frame(width: 34)
-        .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(Theme.accent(dark).opacity(lockProgress), lineWidth: 1.5))
-        .scaleEffect(0.88 + lockProgress * 0.12)
+        .foregroundStyle(lockProgress > 0.6 ? .white : .primary)
+        .frame(width: 40)
+        .padding(.vertical, 12)
+        // Fills toward red as you slide up (matches the red mic), on a soft glass pill.
+        .background {
+            ZStack {
+                Capsule().fill(.ultraThinMaterial)
+                Capsule().fill(Color.red.opacity(lockProgress * 0.9))
+            }
+        }
+        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+        .scaleEffect(0.9 + lockProgress * 0.12)
     }
 
     private var recordDragGesture: some Gesture {
