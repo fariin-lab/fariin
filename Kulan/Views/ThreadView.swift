@@ -1623,20 +1623,22 @@ struct ThreadView: View {
     }
 
     // Camera lives INSIDE the field (right), only when not typing/recording.
+    // Solid, high-contrast icon (.primary = white in dark / black in light, 100% opacity) in a
+    // Signal-style 40x40 tap target.
     private var inFieldCamera: some View {
         Button { showCamera = true } label: {
             Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 24, height: 24).foregroundStyle(.secondary)
+                .frame(width: 24, height: 24).foregroundStyle(.primary)
+                .frame(width: 40, height: 40)
         }
-        .padding(.trailing, 2).padding(.bottom, 7)
     }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     private var inFieldGif: some View {
         Button { showGifPicker = true } label: {
             Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 24, height: 24).foregroundStyle(.secondary)
+                .frame(width: 24, height: 24).foregroundStyle(.primary)
+                .frame(width: 40, height: 40)
         }
-        .padding(.trailing, 2).padding(.bottom, 7)
     }
 
     // Standalone SEND button OUTSIDE the field (like "+"), only while typing. When not typing the
@@ -1690,13 +1692,13 @@ struct ThreadView: View {
     private var micButton: some View {
         Image("ic_mic")
             .renderingMode(.template).resizable().scaledToFit()
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)                     // solid white (dark) / black (light)
             .frame(width: 22, height: 24)
-            .frame(width: 24, height: 24)
+            .frame(width: 40, height: 40)                  // Signal-style 40x40 tap target
             .opacity(recordingHeld ? 0 : 1)
             .contentShape(Circle())
             .highPriorityGesture(recordDragGesture)
-            .padding(.trailing, 12).padding(.bottom, 7)   // sit inside the pill's right edge
+            .padding(.trailing, 4)                         // Signal: last icon 4pt from the bar edge
     }
 
     // The BIG red mic + lock pill, rendered as an overlay ON TOP of the composer during recording,
