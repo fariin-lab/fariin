@@ -141,6 +141,7 @@ struct ThreadView: View {
                         proxy.scrollTo(a.id, anchor: a.edge)   // restore the in-session spot, else the newest — before the fade-in
                         revealed = true
                     }
+                    enableSlideInAfterReveal()   // opening batch never animates; new messages slide in after
                 }
             }
             .task {
@@ -151,6 +152,7 @@ struct ThreadView: View {
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
                     revealed = true
+                    enableSlideInAfterReveal()
                 }
             }
             .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
@@ -393,8 +395,11 @@ struct ThreadView: View {
             unreadOnOpen = cachedConv?.unread(me) ?? 0
             // Gate animated auto-scroll until the push transition + first chunked load settle,
             // so the conversation opens cleanly at the bottom with no jump (defaultScrollAnchor).
+            // `settled` gates the message-row slide-in transition. It is flipped true AFTER the reveal
+            // (see the didInitialLoad/safety-net handlers), NOT on a fixed timer from here — a timer
+            // that expired before a slow chat finished loading let the WHOLE opening batch slide/fade in
+            // ("the chat animates open"). Tied to the reveal, the opening batch always just appears.
             settled = false
-            Task { try? await Task.sleep(nanoseconds: 600_000_000); await MainActor.run { settled = true } }
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
@@ -1120,6 +1125,13 @@ struct ThreadView: View {
         } else if let topId = repo.items.first(where: { visibleRows.ids.contains($0.id) })?.id {
             ChatScrollStore.shared.save(cid, .message(topId))
         }
+    }
+
+    // Turn on the message-row slide-in transition a beat AFTER the chat has revealed, so the
+    // opening batch appears with zero movement (WhatsApp) and only genuinely-new messages slide in.
+    private func enableSlideInAfterReveal() {
+        guard !settled else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { settled = true }
     }
 
     // Anchor the unread divider above the first unread message and land there on open.
