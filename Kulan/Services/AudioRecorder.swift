@@ -80,11 +80,16 @@ final class AudioRecorder {
 
     func requestAndStart() {
         if let r = recorder {
-            // Re-assert record category — VoiceMessageView playback leaves the session in .playback,
-            // which would make record() silently fail (H1). Cheap, runs on every start.
             let s = AVAudioSession.sharedInstance()
-            try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
-            try? s.setActive(true)
+            // ONLY reconfigure if the session isn't already recording-ready (e.g. voice playback left
+            // it in .playback). `setActive(true)` synchronously negotiates with the audio hardware and
+            // blocks the UI ~100–300ms — that was the hold-to-record lag. When the session is already
+            // .playAndRecord (pre-warmed in prepare(), kept warm across records), skip it and record()
+            // instantly, like Signal. (First record right after playing a voice note still reconfigures.)
+            if s.category != .playAndRecord {
+                try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? s.setActive(true)
+            }
             r.record(); beginMetering()   // already warmed → instant
             return
         }
