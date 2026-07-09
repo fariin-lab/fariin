@@ -430,17 +430,24 @@ struct ContactInfoView: View {
                             SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
                                 .frame(width: 84, height: 84)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .onTapGesture { viewerImage = m }
+                                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .onTapGesture { viewerImage = m }   // tap a THUMBNAIL → just that image
                         }
                     }
                 }
             }
-            Button("See All") { showAllMedia = true }
-                .font(.subheadline.weight(.medium))
-                .tint(.primary)
+            HStack {
+                Text("See All").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
         }
         .padding(14)
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
+        // Tap anywhere on the CARD (See All row / background) → the full media page. The thumbnails'
+        // own tap wins over this for their area, so a photo tap opens just that photo.
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .onTapGesture { showAllMedia = true }
     }
 
     // MARK: - Logic
