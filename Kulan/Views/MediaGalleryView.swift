@@ -158,10 +158,47 @@ struct MediaGalleryView: View {
     private var mediaGrid: some View {
         ScrollView {
             if mediaItems.isEmpty { emptyState("photo.on.rectangle", "No media") }
-            LazyVGrid(columns: cols, spacing: 2) {
-                ForEach(mediaItems) { m in mediaCell(m) }
+            LazyVStack(alignment: .leading, spacing: 22) {
+                ForEach(mediaSections, id: \.title) { section in
+                    Text(section.title)
+                        .font(.title2.weight(.bold))
+                        .padding(.horizontal, 14).padding(.top, 6)
+                    LazyVGrid(columns: cols, spacing: 2) {
+                        ForEach(section.items) { m in mediaCell(m) }
+                    }
+                }
             }
-            .padding(2)
+            .padding(.top, 4).padding(.bottom, 12)
+        }
+    }
+
+    // Group media into month sections ("This Month", "June", "June 2024") for date headers, keeping
+    // the existing (newest-first) order.
+    private var mediaSections: [(title: String, items: [Message])] {
+        let cal = Calendar.current
+        var groups: [(key: DateComponents, items: [Message])] = []
+        for m in mediaItems {
+            let comps = cal.dateComponents([.year, .month], from: m.createdAt)
+            if let last = groups.last, last.key == comps {
+                groups[groups.count - 1].items.append(m)
+            } else {
+                groups.append((comps, [m]))
+            }
+        }
+        let now = cal.dateComponents([.year, .month], from: Date())
+        let monthFmt = DateFormatter(); monthFmt.dateFormat = "LLLL"
+        let monthYearFmt = DateFormatter(); monthYearFmt.dateFormat = "LLLL yyyy"
+        return groups.map { g in
+            let date = cal.date(from: g.key) ?? Date()
+            let title: String
+            if g.key.year == now.year && g.key.month == now.month {
+                title = "This Month"
+            } else if g.key.year == now.year {
+                title = monthFmt.string(from: date)
+            } else {
+                title = monthYearFmt.string(from: date)
+            }
+            return (title, g.items)
         }
     }
 
