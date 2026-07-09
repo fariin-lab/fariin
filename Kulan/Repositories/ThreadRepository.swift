@@ -55,7 +55,20 @@ final class ThreadRepository {
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
     var pinnedMessageIds: [String] = []   // up to 5 pinned messages (Telegram-style)
 
-    init(cid: String) { self.cid = cid }
+    init(cid: String) {
+        self.cid = cid
+        // Seed the last-decrypted messages SYNCHRONOUSLY so the conversation is fully rendered and
+        // frozen on the first frame — before the push transition — like Signal/WhatsApp, instead of
+        // fading in a beat late while the E2EE decrypt runs off the main thread. The live listener
+        // in start() then reconciles silently (same ids → no visible change). First-ever open this
+        // session has no cache → normal async load + reveal.
+        if let cached = ThreadMessageCache.shared.messages(for: cid), !cached.isEmpty {
+            messages = cached
+            for m in cached { byId[m.id] = m }   // reuse them so start()'s snapshot only decrypts new/changed docs
+            didInitialLoad = true
+            refreshItems()
+        }
+    }
 
     /// Display list = confirmed server messages + any optimistic ones not yet echoed.
     /// Stored (not computed) so every read in one render is the same snapshot and we
@@ -309,6 +322,7 @@ final class ThreadRepository {
             }
         }
         messages = msgs.sorted { $0.createdAt < $1.createdAt }
+        ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems()
     }
 

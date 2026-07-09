@@ -105,7 +105,12 @@ struct ThreadView: View {
         self.cid = cid
         self.title = title
         self.photoUrl = photoUrl
-        _repo = State(initialValue: ThreadRepository(cid: cid))
+        let r = ThreadRepository(cid: cid)
+        _repo = State(initialValue: r)
+        // Cache hit → the conversation is already decrypted and seeded, so reveal on the FIRST frame
+        // (no fade). didInitialLoad won't transition, so the onChange reveal handler won't fire — the
+        // onAppear below does the open-scroll for this path. Cache miss → starts hidden, reveals on load.
+        _revealed = State(initialValue: r.didInitialLoad)
     }
 
     private var threadScroll: some View {
@@ -152,6 +157,14 @@ struct ThreadView: View {
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
                     revealed = true
+                    enableSlideInAfterReveal()
+                }
+            }
+            .onAppear {
+                // Cache-seeded chat: didInitialLoad was already true at init (rendered on frame 1), so
+                // the reveal onChange never fires — place the open position + arm slide-in here instead.
+                if repo.didInitialLoad {
+                    DispatchQueue.main.async { let a = openAnchor; proxy.scrollTo(a.id, anchor: a.edge) }
                     enableSlideInAfterReveal()
                 }
             }
