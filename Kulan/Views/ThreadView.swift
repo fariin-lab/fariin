@@ -1513,9 +1513,8 @@ struct ThreadView: View {
         // re-created the entire subtree — destroying the mic's live DragGesture mid-touch (the
         // frozen/stuck recording). Kept constant, the subtree is stable and the gesture survives.
         // (No blur bridge now: the recording mic is a red circle, not a glass element.)
-        HStack(alignment: .bottom, spacing: 8) {   // OUTER: the glass group + the mic (mic is OUTSIDE the glass so it layers on top)
         composerGlassContainer(grouped: true) {
-        HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left, everything else in the field
+        HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left; the field (with the mic INSIDE); Send
             // Always present (collapsed while recording) so removing it never re-diffs the row and
             // disturbs the mic's gesture — same reasoning as the constant glass container above.
             Button { showAttachPanel = true } label: {
@@ -1551,21 +1550,22 @@ struct ThreadView: View {
                 HStack(alignment: .bottom, spacing: 4) {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
-                    // …sticker + camera show only when idle & empty. The MIC is NOT here anymore — it
-                    // lives OUTSIDE this pill (as rightButton) so the recording bar never extends under
-                    // the big red mic (the overlap), and the pill stays a clean 40px.
+                    // …sticker + camera show only when idle & empty…
                     if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
+                    // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
+                    // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
+                    // the DragGesture survives record-start; zIndex keeps the red circle in front of the
+                    // pill glass. The red is sized to FIT the 40px bar, so it never overflows/clips.
+                    if !hasText { micButton.id("record-mic").zIndex(1) }
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
             // Real Liquid Glass on the field in BOTH states — including the recording bar (user spec).
             .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
+
+            // Send button (only while typing) — the mic lives INSIDE the pill now.
+            rightButton
         }
-        }
-        // Mic (hold-to-record) OR Send — OUTSIDE the glass container so the big red recording circle
-        // always renders in FRONT of the pill (it was composited inside the glass and got clipped
-        // behind the bar). zIndex is belt-and-braces on top of being a later sibling.
-        rightButton.zIndex(1)
         }
         .animation(.easeInOut(duration: 0.2), value: hasText)
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: recordingHeld)
@@ -1628,11 +1628,8 @@ struct ThreadView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .transition(.scale.combined(with: .opacity))
-        } else {
-            // Mic OUTSIDE the pill (stable single slot). Not typing -> hold-to-record mic; during a
-            // recording it becomes the big red button sitting beside the 40px bar (no overlap).
-            micButton.id("record-mic")
         }
+        // When not typing, the mic is INSIDE the pill (see the field row) — no button here.
     }
 
     // Live recording row inside the capsule: red dot + timer + "‹ slide to cancel".
@@ -1669,14 +1666,14 @@ struct ThreadView: View {
         Image("ic_mic")
             .renderingMode(.template).resizable().scaledToFit()
             .foregroundStyle(recordingHeld ? .white : .secondary)   // matches sticker/camera when idle
-            .frame(width: recordingHeld ? 22 : 22, height: recordingHeld ? 26 : 24)
-            // Mic is OUTSIDE the pill now, so a bigger footprint here doesn't affect the 40px bar.
-            // Restore the big red button (Telegram size): 44 footprint + a 1.3x red circle (~57px).
-            .frame(width: recordingHeld ? 44 : 24, height: recordingHeld ? 44 : 24)
+            .frame(width: 22, height: recordingHeld ? 24 : 24)
+            // CONSTANT 24 footprint so the bar stays exactly 40px. The mic is INSIDE the pill, so the
+            // red circle is sized to FIT the bar (1.4x -> ~34px) — never overflowing/clipping.
+            .frame(width: 24, height: 24)
             .background {
-                if recordingHeld {   // big RED mic circle beside the bar (not over it)
-                    Circle().fill(Color.red).scaleEffect(1.3)
-                        .shadow(color: .red.opacity(0.4), radius: 6)
+                if recordingHeld {   // RED mic circle contained in the 40px bar
+                    Circle().fill(Color.red).scaleEffect(1.4)
+                        .shadow(color: .red.opacity(0.35), radius: 3)
                 }
             }
             // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
