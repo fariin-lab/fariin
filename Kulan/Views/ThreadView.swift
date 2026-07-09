@@ -1497,23 +1497,28 @@ struct ThreadView: View {
     }
 
     private var inputRow: some View {
-        // Bypass the GlassEffectContainer WHILE RECORDING: as the mic offsets up to lock, the
-        // container morphs a fluid glass "bridge" that tracks the drag (the blur trail the user
-        // wants gone). No grouping during recording = no morph.
-        composerGlassContainer(grouped: !recordingHeld) {
+        // CRITICAL: the glass container's `grouped` flag must NOT depend on recordingHeld. When it
+        // flipped on record-start, SwiftUI swapped GlassEffectContainer <-> plain content, which
+        // re-created the entire subtree — destroying the mic's live DragGesture mid-touch (the
+        // frozen/stuck recording). Kept constant, the subtree is stable and the gesture survives.
+        // (No blur bridge now: the recording mic is a red circle, not a glass element.)
+        composerGlassContainer(grouped: true) {
         HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left, everything else in the field
-            if !recordingHeld {
-                Button { showAttachPanel = true } label: {
-                    Image(systemName: sendingPhoto ? "ellipsis" : "plus")
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
-                        .frame(width: 40, height: 40)
-                        .liquidGlass(Circle(), interactive: true)
-                }
-                .tint(.primary)
-                .transition(.scale.combined(with: .opacity))
+            // Always present (collapsed while recording) so removing it never re-diffs the row and
+            // disturbs the mic's gesture — same reasoning as the constant glass container above.
+            Button { showAttachPanel = true } label: {
+                Image(systemName: sendingPhoto ? "ellipsis" : "plus")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(Circle(), interactive: true)
             }
+            .tint(.primary)
+            .frame(width: recordingHeld ? 0 : 40)
+            .opacity(recordingHeld ? 0 : 1)
+            .allowsHitTesting(!recordingHeld)
+            .clipped()
 
             // The field holds reply preview + text/record row, with the camera kept INSIDE
             // on the right. The mic/send live OUTSIDE as a standalone right sibling (like "+").
