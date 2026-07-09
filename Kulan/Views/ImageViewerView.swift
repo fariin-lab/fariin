@@ -51,60 +51,126 @@ struct ImageViewerView: View {
 
     @State private var uiImage: UIImage?
     @State private var dim: Double = 1
+    @State private var chromeHidden = false     // single-tap toggles header + toolbar (Apple Photos)
     @State private var saved = false
     @State private var saveError = false
+    @State private var confirmDelete = false
+    @State private var shareItems: [Any]?
+
+    // Header title: "You" for my own photo, else the other person's name.
+    private var senderName: String {
+        let me = AuthService.shared.uid ?? ""
+        if message.authorId == me { return "You" }
+        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? ""
+    }
+    private var dateLine: String { message.createdAt.formatted(date: .numeric, time: .shortened) }
+    private var chromeVisible: Bool { !chromeHidden && dim > 0.85 }
 
     var body: some View {
         ZStack {
             Color.black.opacity(dim).ignoresSafeArea()
 
             if let img = uiImage {
-                ZoomImageView(image: img, onDim: { dim = $0 }, onDismiss: { dismiss() })
+                ZoomImageView(image: img,
+                              onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
+                              onDim: { dim = $0 }, onDismiss: { dismiss() })
                     .ignoresSafeArea()
-            } else if let url = message.imageUrl {
-                SecureImageView(imageUrl: url, enc: message.enc, cid: cid, fill: false)
+            } else {
+                ProgressView().tint(.white)
             }
 
             VStack {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.title3.weight(.semibold)).foregroundStyle(.white)
-                            .padding(12).liquidGlass(Circle(), interactive: true)
-                    }
-                    Spacer()
-                    Button { save() } label: {
-                        Image(systemName: saved ? "checkmark" : "square.and.arrow.down")
-                            .font(.title3.weight(.semibold))
-                            .contentTransition(.symbolEffect(.replace))
-                            .symbolEffect(.bounce, value: saved)
-                            .foregroundStyle(.white)
-                            .padding(12).liquidGlass(Circle(), interactive: true)
-                    }
-                    .disabled(saved)
-                }
-                .padding()
+                header
                 Spacer()
+                bottomBar
             }
-            .opacity(dim > 0.85 ? 1 : 0)
+            .opacity(chromeVisible ? 1 : 0)
+            .allowsHitTesting(chromeVisible)
+            .animation(.easeInOut(duration: 0.25), value: chromeVisible)
         }
         .task { await loadImage() }
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
+        .confirmationDialog("Delete this photo?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await ChatService.deleteMessage(cid: cid, messageId: message.id); await MainActor.run { dismiss() } }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
+            if let items = shareItems { ActivityView(items: items) }
+        }
     }
 
+    // Floating Liquid Glass header: back · You/name + date · "…" menu (Go to Chat / Save Image / Delete).
+    private var header: some View {
+        HStack(alignment: .center) {
+            glassButton("chevron.left") { dismiss() }
+            Spacer()
+            VStack(spacing: 1) {
+                Text(senderName).font(.subheadline.weight(.semibold))
+                Text(dateLine).font(.caption2)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .liquidGlass(Capsule(), interactive: false)
+            Spacer()
+            Menu {
+                Button { dismiss() } label: { Label("Go to Chat", systemImage: "bubble.left") }
+                Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
+                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis").font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+            }
+        }
+        .padding(.horizontal, 12).padding(.top, 4)
+    }
+
+    // Floating Liquid Glass bottom toolbar: Share · Reply · Delete.
+    private var bottomBar: some View {
+        HStack(spacing: 26) {
+            glassButton("square.and.arrow.up") { share() }
+            glassButton("arrowshape.turn.up.left") { dismiss() }   // Reply: return to the chat to reply
+            glassButton("trash") { confirmDelete = true }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+        .liquidGlass(Capsule(), interactive: false)
+        .padding(.bottom, 6)
+    }
+
+    private func glassButton(_ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+        }
+    }
+
+    // Load order: optimistic local bytes → cached decrypted → decrypt-on-demand. This is why the
+    // photo was black: the old code ONLY read imageUrl via the cache, so local (demo/optimistic)
+    // images and un-cached ones never appeared.
     private func loadImage() async {
+        if let data = message.localImageData, let ui = UIImage(data: data) { uiImage = ui; return }
         guard let u = message.imageUrl else { return }
         if let m = DiskImageCache.shared.memoryImage(u) { uiImage = m; return }
-        uiImage = await DiskImageCache.shared.image(for: u)
+        if let cached = await DiskImageCache.shared.image(for: u) { uiImage = cached; return }
+        // Not cached yet → download the ciphertext + decrypt (same path SecureImageView uses).
+        if let url = URL(string: u), let meta = message.enc,
+           let (cipher, _) = try? await URLSession.shared.data(from: url),
+           let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
+            uiImage = UIImage(data: dec)
+        }
+    }
+
+    private func share() {
+        guard let image = uiImage else { return }
+        shareItems = [image]
     }
 
     private func save() {
         Task {
-            var ui = uiImage
-            if ui == nil, let u = message.imageUrl { ui = await DiskImageCache.shared.image(for: u) }
-            guard let image = ui else { await MainActor.run { saveError = true }; return }
+            guard let image = uiImage else { await MainActor.run { saveError = true }; return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
             do {
@@ -123,12 +189,14 @@ struct ImageViewerView: View {
 // Host VC that drives Signal's ZoomableMediaView + a drag-down-to-dismiss pan (only at min zoom).
 struct ZoomImageView: UIViewControllerRepresentable {
     let image: UIImage
+    var onSingleTap: () -> Void = {}
     var onDim: (Double) -> Void
     var onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
         vc.image = image
+        vc.onSingleTap = onSingleTap
         vc.onDim = onDim
         vc.onDismiss = onDismiss
         return vc
@@ -138,6 +206,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
 
 final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     var image: UIImage!
+    var onSingleTap: (() -> Void)?
     var onDim: ((Double) -> Void)?
     var onDismiss: (() -> Void)?
 
@@ -156,7 +225,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         imageView.layer.minificationFilter = .trilinear
         imageView.layer.magnificationFilter = .trilinear
 
-        scrollView = ZoomableMediaView(mediaView: imageView)
+        scrollView = ZoomableMediaView(mediaView: imageView, onSingleTap: { [weak self] in self?.onSingleTap?() })
         scrollView.delegate = self
         view.addSubview(scrollView)
         scrollView.frame = view.bounds
