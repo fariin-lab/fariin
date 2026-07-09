@@ -157,7 +157,13 @@ struct ChatWallpaperBackground: View {
             }
         case .photo:
             if let img = store.photo(for: cid) {
-                Image(uiImage: img).resizable().scaledToFill()
+                // Color.clear is the layout-defining view (size-neutral, fills like the .none color
+                // case) and the photo rides as a CLIPPED overlay. A bare scaledToFill Image re-flows
+                // when the container height changes (keyboard open/close), which nudged the composer;
+                // clipping the overlay keeps the fill from ever feeding layout back, so it's rock-stable.
+                Color.clear
+                    .overlay { Image(uiImage: img).resizable().scaledToFill() }
+                    .clipped()
                     .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
             } else {
                 Theme.bg(dark)   // photo missing (never saved / cleared) → fall back gracefully
