@@ -35,7 +35,15 @@ struct GifPickerView: View {
             }
             .navigationTitle("GIF")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } } }
+            .toolbar {
+                // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 5) {
                     Text("POWERED BY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)

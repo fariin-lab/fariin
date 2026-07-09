@@ -596,7 +596,13 @@ struct EditProfileView: View {
             .navigationTitle("Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }.fontWeight(.semibold).disabled(saving)
                 }
