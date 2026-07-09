@@ -236,22 +236,9 @@ struct AccountSettingsView: View {
                 .listRowBackground(Color.clear)
             }
 
-            Section("Your account") {
-                LabeledContent("Username", value: profile.me.map { "@\($0.handle)" } ?? "—")
-                // Tap to copy your account ID (no phone number — Kulan uses anonymous/handle auth).
-                Button {
-                    UIPasteboard.general.string = AuthService.shared.uid ?? ""
-                } label: {
-                    HStack {
-                        Text("Account ID").foregroundStyle(.primary)
-                        Spacer()
-                        Text(String((AuthService.shared.uid ?? "").prefix(12)) + "…").foregroundStyle(.secondary)
-                        Image(systemName: "doc.on.doc").font(.footnote).foregroundStyle(.tertiary)
-                    }
-                }
-                .tint(.primary)
-            }
-
+            // No profile fields here (username/name/bio/photo all live in Edit Profile, reached
+            // from the Settings header). Account is only data + session actions, so it doesn't
+            // duplicate the profile editor.
             Section {
                 Button { Task { await exportData() } } label: {
                     HStack {
