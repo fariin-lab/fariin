@@ -1485,6 +1485,10 @@ struct ThreadView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
+        // Big red mic + lock, ON TOP of the whole composer so it's never clipped/behind the pill.
+        .overlay(alignment: .bottomTrailing) {
+            if recordingHeld { recordingMicOverlay }
+        }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordLocked)
     }
 
@@ -1662,36 +1666,43 @@ struct ThreadView: View {
     private static let lockThreshold: CGFloat = 88
     private var lockProgress: CGFloat { min(1, max(0, -clampedDrag.height / Self.lockThreshold)) }
 
+    // In-pill mic: the small idle icon (matches sticker/camera) AND the drag gesture's hit target.
+    // While recording it's invisible (opacity 0) — the BIG red mic is drawn by `recordingMicOverlay`
+    // on top of the whole composer, so it's never clipped by / behind the pill's glass. The gesture
+    // still lives here (opacity doesn't affect hit-testing), keeping a stable identity (no freeze).
     private var micButton: some View {
         Image("ic_mic")
             .renderingMode(.template).resizable().scaledToFit()
-            .foregroundStyle(recordingHeld ? .white : .secondary)   // matches sticker/camera when idle
-            .frame(width: 22, height: recordingHeld ? 24 : 24)
-            // CONSTANT 24 footprint so the bar stays exactly 40px. The mic is INSIDE the pill, so the
-            // red circle is sized to FIT the bar (1.4x -> ~34px) — never overflowing/clipping.
+            .foregroundStyle(.secondary)
+            .frame(width: 22, height: 24)
             .frame(width: 24, height: 24)
-            .background {
-                if recordingHeld {   // RED mic circle contained in the 40px bar
-                    Circle().fill(Color.red).scaleEffect(1.4)
-                        .shadow(color: .red.opacity(0.35), radius: 3)
-                }
-            }
-            // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
-            // (overlaid after) stays pinned above the original slot while the mic slides up to meet it.
-            .offset(x: recordingHeld ? clampedDrag.width : 0,
-                    y: recordingHeld ? clampedDrag.height : 0)
-            .overlay(alignment: .center) {
-                if recordingHeld && !recordCancelArmed {
-                    lockTarget.offset(y: -82).allowsHitTesting(false)
-                }
-            }
+            .opacity(recordingHeld ? 0 : 1)
             .contentShape(Circle())
-            // highPriority so the mic's hold/slide wins over the field's interactive-glass touch
-            // handling (which otherwise competes for the same touch and can swallow the drag).
             .highPriorityGesture(recordDragGesture)
-            .padding(.trailing, recordingHeld ? 6 : 12).padding(.bottom, 7)   // sit inside the pill's right edge
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordingHeld)
-            .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
+            .padding(.trailing, 12).padding(.bottom, 7)   // sit inside the pill's right edge
+    }
+
+    // The BIG red mic + lock pill, rendered as an overlay ON TOP of the composer during recording,
+    // aligned over the in-pill mic. Non-interactive (the gesture is on micButton); follows the drag.
+    private var recordingMicOverlay: some View {
+        ZStack(alignment: .center) {
+            // Lock pill floats above, FIXED — the mic slides up to it.
+            if !recordCancelArmed {
+                lockTarget.offset(y: -86)
+            }
+            // Big red mic (the "before" size), follows the finger 1:1.
+            ZStack {
+                Circle().fill(Color.red)
+                    .frame(width: 56, height: 56)
+                    .shadow(color: .red.opacity(0.4), radius: 6)
+                Image("ic_mic").renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 24, height: 28).foregroundStyle(.white)
+            }
+            .offset(x: clampedDrag.width, y: clampedDrag.height)
+        }
+        .padding(.trailing, 12).padding(.bottom, 0)   // centre over the in-pill mic
+        .allowsHitTesting(false)
+        .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
     }
 
     // Lock target floating above the mic — fills toward accent as you slide up, then locks.
