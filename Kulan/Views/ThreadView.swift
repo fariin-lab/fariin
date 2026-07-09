@@ -1125,20 +1125,24 @@ struct ThreadView: View {
     // reopen already has measured rows, so pass 2 is just a harmless no-op there.
     private func revealAtOpenAnchor(_ proxy: ScrollViewProxy) {
         let a = openAnchor
-        DispatchQueue.main.async {
-            proxy.scrollTo(a.id, anchor: a.edge)              // pass 1 (approximate on a cold load)
-            // Pass 2 after a short beat: on a COLD open the LazyVStack is still instantiating rows and
-            // async images are still sizing, so one runloop isn't enough — the position was landing
-            // approximately, then reflowing (the jump). Wait ~2 frames so heights settle, re-pin, then
-            // a final same-runloop pin, and only THEN drop the veil — so the settle happens unseen.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) {
-                proxy.scrollTo(a.id, anchor: a.edge)          // pass 2 after layout + image sizing
-                DispatchQueue.main.async {
-                    proxy.scrollTo(a.id, anchor: a.edge)      // pass 3 final → exact position
-                    revealed = true
-                }
+        // Signal keeps the list bottom-anchored with pre-measured cells, so it shows already at rest.
+        // We can't pre-measure a LazyVStack, so instead we hold the reveal veil and RE-PIN to the anchor
+        // repeatedly (~every 25ms for ~0.28s) while still hidden — that gives the LazyVStack time to
+        // instantiate all rows to the bottom and any async voice/media heights time to settle. Only
+        // when the layout has stopped moving do we drop the veil, so it appears already-at-rest with
+        // zero visible jump. (A warm reopen has measured rows, so the pins are instant no-ops.)
+        var passes = 0
+        func tick() {
+            proxy.scrollTo(a.id, anchor: a.edge)
+            passes += 1
+            if passes < 11 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { tick() }
+            } else {
+                proxy.scrollTo(a.id, anchor: a.edge)   // final exact pin
+                revealed = true
             }
         }
+        DispatchQueue.main.async { tick() }
         enableSlideInAfterReveal()
     }
 
@@ -1146,10 +1150,16 @@ struct ThreadView: View {
     // second (next runloop, after the new row is measured) corrects it — so a freshly-arrived bubble
     // can never leave a visible jump. Used for both my sends and received-while-at-bottom.
     private func pinBottomStable(_ proxy: ScrollViewProxy) {
-        DispatchQueue.main.async {
+        // Re-pin to the newest message over a few frames — a freshly-inserted bubble (especially a
+        // voice/media widget whose height finalizes late) shifts the bottom a runloop or two after
+        // insert, so a single pin left a visible jump. Pinning ~5x across ~0.1s absorbs that.
+        var passes = 0
+        func tick() {
             proxy.scrollTo("BOTTOM", anchor: .bottom)
-            DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+            passes += 1
+            if passes < 5 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { tick() } }
         }
+        DispatchQueue.main.async { tick() }
     }
 
     // Turn on the message-row slide-in transition a beat AFTER the chat has revealed, so the
