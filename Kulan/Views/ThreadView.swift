@@ -134,26 +134,34 @@ struct ThreadView: View {
             // chat visibly jumped. didInitialLoad means the initial page is decrypted and settled, so
             // it fades in stable. Demo chats set didInitialLoad synchronously — hence their smoothness.
             .onChange(of: repo.didInitialLoad) { _, done in
-                if done, !revealed { DispatchQueue.main.async { revealed = true } }
+                if done, !revealed {
+                    DispatchQueue.main.async {
+                        proxy.scrollTo("BOTTOM", anchor: .bottom)   // land on the TRUE newest before the fade-in (WhatsApp)
+                        revealed = true
+                    }
+                }
             }
             .task {
                 // Safety net: if didInitialLoad is slow (or the chat is genuinely empty), still reveal
                 // so the composer / empty state shows.
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                revealed = true
+                if !revealed {
+                    proxy.scrollTo("BOTTOM", anchor: .bottom)
+                    revealed = true
+                }
             }
             .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
             .onChange(of: repo.items.count) { old, new in
                 guard new > old else { return }
                 let mine = repo.items.last?.authorId == me
-                // While we still need to land on the unread divider, let anchorUnread
-                // position the list (don't fight it by jumping to the bottom).
-                if !didAnchorUnread && unreadOnOpen > 0 {
-                    // no-op: anchorUnread handles initial positioning
-                } else if !settled {
-                    // INITIAL LOAD: messages arrive in chunks (cache → live). .defaultScrollAnchor(.bottom)
-                    // already keeps us pinned to the bottom WITHOUT animation — so do NOT fire an animated
-                    // scrollTo here, which is what caused the erratic jump/snap on open.
+                if !settled {
+                    // INITIAL LOAD (WhatsApp-clean): always pin to the TRUE newest as cache→live chunks
+                    // land. NON-animated + still under the reveal veil, so it's invisible — no wiggle.
+                    // Applies EVEN with unread messages: we open on the newest like WhatsApp; the unread
+                    // divider is only a marker you scroll up to, it never steals the open position. (The
+                    // old unread no-op here relied on defaultScrollAnchor, which drifted off the bottom
+                    // as chunks/heights landed — that was the "opens in the middle" bug.)
+                    proxy.scrollTo("BOTTOM", anchor: .bottom)
                 } else if mine {
                     proxy.scrollTo("BOTTOM", anchor: .bottom)   // spring row-transition shows it; no competing scroll anim
                 } else if isAtBottom {
