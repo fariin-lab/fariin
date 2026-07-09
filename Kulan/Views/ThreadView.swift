@@ -1513,8 +1513,13 @@ struct ThreadView: View {
                     Divider().padding(.horizontal, 12)
                 }
                 HStack(alignment: .bottom, spacing: 4) {
-                    if recordingHeld { recordingHoldRow } else { messageField }
-                    if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
+                    if recordingHeld {
+                        recordingHoldRow
+                        micButton            // stays at the right edge to hold/slide/lock
+                    } else {
+                        messageField
+                        if !hasText { inFieldGif; inFieldCamera; micButton }   // sticker · camera · mic, all IN the pill
+                    }
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
@@ -1572,7 +1577,7 @@ struct ThreadView: View {
             Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: 24, height: 24).foregroundStyle(.secondary)
         }
-        .padding(.trailing, 12).padding(.bottom, 7)
+        .padding(.trailing, 2).padding(.bottom, 7)
     }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     private var inFieldGif: some View {
@@ -1583,7 +1588,8 @@ struct ThreadView: View {
         .padding(.trailing, 2).padding(.bottom, 7)
     }
 
-    // Standalone right button OUTSIDE the field (like "+"): Send when typing, else hold-to-record mic.
+    // Standalone SEND button OUTSIDE the field (like "+"), only while typing. When not typing the
+    // mic lives INSIDE the pill (next to sticker/camera), so there's no outside button then.
     @ViewBuilder private var rightButton: some View {
         if hasText {
             Button { if editingMessage != nil { saveEdit() } else { send() } } label: {
@@ -1592,8 +1598,6 @@ struct ThreadView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .transition(.scale.combined(with: .opacity))
-        } else {
-            micButton
         }
     }
 
@@ -1628,15 +1632,14 @@ struct ThreadView: View {
     private var micButton: some View {
         Image("ic_mic")
             .renderingMode(.template).resizable().scaledToFit()
-            .foregroundStyle(recordingHeld ? .white : .primary)
-            .frame(width: 18, height: 22)
-            .frame(width: 40, height: 40)
+            .foregroundStyle(recordingHeld ? .white : .secondary)   // matches sticker/camera when idle
+            .frame(width: recordingHeld ? 18 : 22, height: recordingHeld ? 22 : 24)
+            .frame(width: recordingHeld ? 40 : 24, height: recordingHeld ? 40 : 24)   // grows to a puck when held
             .background {
                 if recordingHeld {   // filled puck while holding; turns red once cancel is armed
                     Circle().fill(recordCancelArmed ? Color.red : Theme.accent(dark)).scaleEffect(1.15)
                 }
             }
-            .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
             // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
             // (overlaid after) stays pinned above the original slot while the mic slides up to meet it.
             .offset(x: recordingHeld ? clampedDrag.width : 0,
@@ -1648,6 +1651,7 @@ struct ThreadView: View {
             }
             .contentShape(Circle())
             .gesture(recordDragGesture)
+            .padding(.trailing, recordingHeld ? 6 : 12).padding(.bottom, 7)   // sit inside the pill's right edge
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordingHeld)
             .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
     }
