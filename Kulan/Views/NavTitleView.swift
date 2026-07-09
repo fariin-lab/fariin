@@ -23,7 +23,8 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
     func updateUIView(_ marker: UIView, context: Context) {
         context.coordinator.onTap = onTap
         context.coordinator.host.rootView = AnyView(content())
-        DispatchQueue.main.async { context.coordinator.install(from: marker) }
+        context.coordinator.install(from: marker)          // synchronous — install as early as possible
+        DispatchQueue.main.async { context.coordinator.install(from: marker) }   // retry once laid out
     }
 
     static func dismantleUIView(_ marker: UIView, coordinator: Coordinator) {
@@ -60,8 +61,11 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         func install(from marker: UIView) {
             // The nav bar reads the navigation controller's TOP view controller's navigationItem —
             // target that one, not whatever intermediate host controller owns the marker.
-            guard let owner = marker.owningViewController else { return }
-            let vc = owner.navigationController?.topViewController ?? owner
+            // Target the OWNING (pushed) view controller — NOT navigationController.topViewController,
+            // which during a push is still the PREVIOUS screen, so the title only landed after the
+            // transition finished (it "came in late"). The owning VC's navigationItem is the one the
+            // bar shows for this screen, so setting it here makes the title slide in WITH the page.
+            guard let vc = marker.owningViewController else { return }
             if target !== vc {
                 observation?.invalidate(); observation = nil
                 target = vc
