@@ -7,7 +7,11 @@ import FirebaseStorage
 /// Write-side operations (port of the RN Db writes). All E2EE goes through Crypto.
 enum ChatService {
     static var db: Firestore { Firestore.firestore() }
-    static var uid: String { Auth.auth().currentUser?.uid ?? "" }
+    // Falls back to AuthService.shared.uid so this is NEVER empty when signed in (incl. the
+    // Firebase-free demo, where currentUser is nil but AuthService holds "demo-me"). An empty uid
+    // built dotted field paths like "unreadCount." — an INVALID Firestore path that raises an ObjC
+    // NSException (which `try?` can't catch) → crash on chat open.
+    static var uid: String { Auth.auth().currentUser?.uid ?? AuthService.shared.uid ?? "" }
 
     static func convId(_ a: String, _ b: String) -> String {
         [a, b].sorted().joined(separator: "_")
