@@ -81,7 +81,7 @@ struct ContactInfoView: View {
 
     // Bold grouped-list section title above a card (Signal/Apple style).
     private func sectionHeader(_ title: String) -> some View {
-        Text(title).font(.title3.weight(.bold))
+        Text(title).font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
     }
     private var groupsHeaderText: String {
