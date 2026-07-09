@@ -128,16 +128,29 @@ struct MediaGalleryView: View {
 
     private var selectionToolbar: some View {
         HStack {
-            Button { shareSelected() } label: { Image(systemName: "square.and.arrow.up").font(.system(size: 20)) }
-                .disabled(selection.isEmpty)
+            // Share — 48px real Liquid Glass circle.
+            Button { shareSelected() } label: {
+                Image(systemName: "square.and.arrow.up").font(.system(size: 20)).foregroundStyle(.primary)
+                    .frame(width: 48, height: 48)
+                    .liquidGlass(Circle(), interactive: true)
+            }
+            .disabled(selection.isEmpty)
             Spacer()
-            Text("\(selection.count) Selected").font(.subheadline.weight(.medium))
+            // Count — a glass pill (Apple's floating-toolbar style), not a plain label on a bar.
+            Text("\(selection.count) Selected")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                .padding(.horizontal, 18).frame(height: 48)
+                .liquidGlass(Capsule(), interactive: true)
             Spacer()
-            Button { confirmDelete = true } label: { Image(systemName: "trash").font(.system(size: 20)) }
-                .tint(.red).disabled(selection.isEmpty)
+            // Delete — 48px real Liquid Glass circle, red glyph.
+            Button { confirmDelete = true } label: {
+                Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(.red)
+                    .frame(width: 48, height: 48)
+                    .liquidGlass(Circle(), interactive: true)
+            }
+            .disabled(selection.isEmpty)
         }
-        .padding(.horizontal, 24).padding(.vertical, 12)
-        .background(.bar)
+        .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
     // MARK: - Media grid
