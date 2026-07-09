@@ -58,154 +58,160 @@ struct ContactInfoView: View {
         return cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
     }
 
-    var body: some View {
+    // Split into layers so the type-checker doesn't time out on one giant modifier chain.
+    var body: some View { withAlerts }
+
+    @ViewBuilder private var sections: some View {
+        hero
+        quickActions
+        if source == .calls, lastCall != nil { callLogCard }
+        if !about.isEmpty { bioCard }
+        if !isSelf { settingsCard }
+        if !media.isEmpty { mediaCard }
+        if !isSelf { groupsInCommonCard }
+    }
+
+    // Nav bar trailing (iOS 26 auto-wraps these in Liquid Glass): the "…" menu + Edit (rename).
+    @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
+        if !isSelf {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+                    Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
+                    Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
+                    Divider()
+                    Button(role: .destructive) { showReport = true } label: { Label("Report \(shownName)", systemImage: "exclamationmark.triangle") }
+                    if blocked {
+                        Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: { Label("Unblock \(shownName)", systemImage: "checkmark.circle") }
+                    } else {
+                        Button(role: .destructive) { showBlock = true } label: { Label("Block \(shownName)", systemImage: "nosign") }
+                    }
+                } label: { Image(systemName: "ellipsis") }
+                .tint(.primary)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Edit") { renameText = shownName; showRename = true }.tint(.primary)
+            }
+        }
+    }
+
+    private var coreScroll: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                hero
-                quickActions
-                if source == .calls, lastCall != nil { callLogCard }
-                if !about.isEmpty { bioCard }
-                if !isSelf { settingsCard }
-                if !media.isEmpty { mediaCard }
-                if !isSelf { groupsInCommonCard }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            VStack(spacing: 16) { sections }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
         }
-        .navigationTitle("")   // name + @handle already show in the hero below
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)   // show nav bar (back + title) below the notch
-        .toolbar(.hidden, for: .tabBar)           // hide the Chats/Calls/Settings bar — match
-                                                  // the chat-opened profile (was still showing
-                                                  // when opened from the Calls tab)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(false)
-        // Nav bar trailing (iOS 26 auto-wraps these in Liquid Glass): the "…" menu + Edit (rename).
-        .toolbar {
-            if !isSelf {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
-                        Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
-                        Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
-                        Divider()
-                        Button(role: .destructive) { showReport = true } label: { Label("Report \(shownName)", systemImage: "exclamationmark.triangle") }
-                        if blocked {
-                            Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: { Label("Unblock \(shownName)", systemImage: "checkmark.circle") }
-                        } else {
-                            Button(role: .destructive) { showBlock = true } label: { Label("Block \(shownName)", systemImage: "nosign") }
-                        }
-                    } label: { Image(systemName: "ellipsis") }
-                    .tint(.primary)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Edit") { renameText = shownName; showRename = true }.tint(.primary)
-                }
-            }
-        }
+        .toolbar { navTrailing }
         .task {
             await load()
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
             localName = ContactNames.name(for: otherUid)
         }
-        // Edit → local rename (device-only; the other person's account is never touched).
-        .alert("Edit Name", isPresented: $showRename) {
-            TextField("Name", text: $renameText)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") {
-                ContactNames.set(renameText, for: otherUid)
-                localName = ContactNames.name(for: otherUid)
+    }
+
+    // Sheets, full-screen covers and pushes.
+    private var withSheets: some View {
+        coreScroll
+            .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
+            .navigationDestination(isPresented: $showAllMedia) {
+                MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
-        } message: {
-            Text("This name is saved only on your device. It won't change \(name)'s account.")
-        }
-        // Sounds & Notifications row → mute options.
-        .confirmationDialog("Sounds & Notifications", isPresented: $showMuteOptions, titleVisibility: .visible) {
-            if muted { Button("Unmute") { muted = false; Task { await ChatService.setMute(cid, until: 0) } } }
-            Button("Mute for 1 hour") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
-            Button("Mute for 8 hours") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
-            Button("Mute for 1 day")   { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(24)) } }
-            Button("Mute for 1 week")  { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
-            Button("Mute Always")      { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
-            Button("Cancel", role: .cancel) {}
-        }
-        // Add to a Group → new group, pre-including this contact.
-        .sheet(isPresented: $showAddGroup) {
-            NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
-        }
-        .navigationDestination(item: $openGroup) { g in
-            let me = AuthService.shared.uid ?? ""
-            ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
-        }
-        .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
-        // Full-screen PUSH gallery (Telegram-style tabs), not a sheet.
-        .navigationDestination(isPresented: $showAllMedia) {
-            MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
-        }
-        .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
-        // Options for the "Disappearing Messages" row (was a dead button — no dialog was attached).
-        .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
-            Button("Off")     { requestDisappear(0) }
-            Button("1 Day")   { requestDisappear(86_400) }
-            Button("1 Week")  { requestDisappear(604_800) }
-            Button("1 Month") { requestDisappear(2_592_000) }
-            Button("1 Year")  { requestDisappear(31_536_000) }
-            Button("Cancel", role: .cancel) {}
-        }
-        // Turning it ON destroys history for BOTH people — never on a single accidental tap.
-        .alert("Turn on disappearing messages?", isPresented: Binding(
-            get: { pendingDisappear != nil },
-            set: { if !$0 { pendingDisappear = nil } }
-        )) {
-            Button("Cancel", role: .cancel) { pendingDisappear = nil }
-            Button("Turn On") { if let s = pendingDisappear { applyDisappear(s); pendingDisappear = nil } }
-        } message: {
-            Text("New messages in this chat will be deleted for both you and \(name) after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). \(name) will see that you turned this on.")
-        }
-        .alert("Clear your messages?", isPresented: $showClear) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
-                Task { await ChatService.clearMyMessages(cid); media = await ChatService.sharedMedia(cid) }
+            .navigationDestination(item: $openGroup) { g in
+                let me = AuthService.shared.uid ?? ""
+                ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
             }
-        } message: {
-            Text("This deletes the messages you sent in this chat. It can't be undone.")
-        }
-        .alert("Block \(name)?", isPresented: $showBlock) {
-            Button("Cancel", role: .cancel) {}
-            Button("Block", role: .destructive) {
-                Task { await ChatService.setBlocked(cid, true); blocked = true }
+            .navigationDestination(isPresented: $openChat) {
+                ThreadView(cid: cid, title: name, photoUrl: photoUrl)
             }
-        } message: {
-            Text("You won't be able to send messages in this chat until you unblock. \(name) won't be told they were blocked.")
-        }
-        .alert("Report \(name)?", isPresented: $showReport) {
-            Button("Cancel", role: .cancel) {}
-            Button("Report", role: .destructive) {
-                Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
+            .navigationDestination(isPresented: $showVerify) {
+                VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
-            Button("Report and Block", role: .destructive) {
-                Task {
-                    await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                    await ChatService.setBlocked(cid, true); blocked = true
+            .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
+            .sheet(isPresented: $showAddGroup) {
+                NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
+            }
+    }
+
+    // Menus, dialogs and the rename alert.
+    private var withDialogs: some View {
+        withSheets
+            .alert("Edit Name", isPresented: $showRename) {
+                TextField("Name", text: $renameText)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") {
+                    ContactNames.set(renameText, for: otherUid)
+                    localName = ContactNames.name(for: otherUid)
                 }
+            } message: {
+                Text("This name is saved only on your device. It won't change \(name)'s account.")
             }
-        } message: {
-            Text("Our team will review this account within 24 hours. \(name) won't be told.")
-        }
-        .alert("Voice calls", isPresented: $showCallSoon) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("Voice calling is coming soon.") }
-        .alert("Search", isPresented: $showSearchSoon) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("In-chat search is coming soon.") }
-        .alert("Video calls", isPresented: $showVideoSoon) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("Video calling is coming soon.") }
-        .navigationDestination(isPresented: $openChat) {
-            ThreadView(cid: cid, title: name, photoUrl: photoUrl)
-        }
-        .navigationDestination(isPresented: $showVerify) {
-            VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
-        }
+            .confirmationDialog("Sounds & Notifications", isPresented: $showMuteOptions, titleVisibility: .visible) {
+                if muted { Button("Unmute") { muted = false; Task { await ChatService.setMute(cid, until: 0) } } }
+                Button("Mute for 1 hour") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
+                Button("Mute for 8 hours") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
+                Button("Mute for 1 day")   { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(24)) } }
+                Button("Mute for 1 week")  { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
+                Button("Mute Always")      { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
+                Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
+                Button("Off")     { requestDisappear(0) }
+                Button("1 Day")   { requestDisappear(86_400) }
+                Button("1 Week")  { requestDisappear(604_800) }
+                Button("1 Month") { requestDisappear(2_592_000) }
+                Button("1 Year")  { requestDisappear(31_536_000) }
+                Button("Cancel", role: .cancel) {}
+            }
+    }
+
+    private var withAlerts: some View {
+        withDialogs
+            .alert("Turn on disappearing messages?", isPresented: Binding(
+                get: { pendingDisappear != nil }, set: { if !$0 { pendingDisappear = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { pendingDisappear = nil }
+                Button("Turn On") { if let s = pendingDisappear { applyDisappear(s); pendingDisappear = nil } }
+            } message: {
+                Text("New messages in this chat will be deleted for both you and \(name) after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). \(name) will see that you turned this on.")
+            }
+            .alert("Clear your messages?", isPresented: $showClear) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear", role: .destructive) {
+                    Task { await ChatService.clearMyMessages(cid); media = await ChatService.sharedMedia(cid) }
+                }
+            } message: {
+                Text("This deletes the messages you sent in this chat. It can't be undone.")
+            }
+            .alert("Block \(name)?", isPresented: $showBlock) {
+                Button("Cancel", role: .cancel) {}
+                Button("Block", role: .destructive) {
+                    Task { await ChatService.setBlocked(cid, true); blocked = true }
+                }
+            } message: {
+                Text("You won't be able to send messages in this chat until you unblock. \(name) won't be told they were blocked.")
+            }
+            .alert("Report \(name)?", isPresented: $showReport) {
+                Button("Cancel", role: .cancel) {}
+                Button("Report", role: .destructive) {
+                    Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
+                }
+                Button("Report and Block", role: .destructive) {
+                    Task {
+                        await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
+                        await ChatService.setBlocked(cid, true); blocked = true
+                    }
+                }
+            } message: {
+                Text("Our team will review this account within 24 hours. \(name) won't be told.")
+            }
+            .alert("Voice calls", isPresented: $showCallSoon) { Button("OK", role: .cancel) {} } message: { Text("Voice calling is coming soon.") }
+            .alert("Search", isPresented: $showSearchSoon) { Button("OK", role: .cancel) {} } message: { Text("In-chat search is coming soon.") }
+            .alert("Video calls", isPresented: $showVideoSoon) { Button("OK", role: .cancel) {} } message: { Text("Video calling is coming soon.") }
     }
 
     // Profile settings rows (Telegram order): Disappearing Messages, Sounds & Notifications,

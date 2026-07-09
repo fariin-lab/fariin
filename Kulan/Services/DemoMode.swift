@@ -20,8 +20,12 @@ enum DemoMode {
     @MainActor
     static func activate() {
         active = true
-        let me = AuthService.shared.uid ?? Auth.auth().currentUser?.uid ?? "demo-me"
+        // Firebase-free demo: Auth.auth().currentUser is nil in the Appetize sim, so we FORCE a
+        // fixed uid and set it as the app's current user. Every screen resolves `me` from
+        // AuthService.shared.uid, so this makes names ("Kasim" not "You") and isMe render correctly.
+        let me = "demo-me"
         meUid = me
+        AuthService.shared.uid = me
         let now = Date()
 
         // Own stories (visually distinct so the "sheet opens centred on the swiped story" is verifiable).

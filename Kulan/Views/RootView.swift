@@ -215,9 +215,7 @@ struct OnboardingView: View {
         // Preview demo login (Appetize): username "apple" loads a fully-local demo account (stories +
         // chats) with no Firebase, so the app can be tried where Storage uploads don't work. Debug-only.
         if handle.lowercased() == "apple" {
-            // Make sure we're signed in FIRST, so DemoMode captures the same uid the app renders
-            // with. Otherwise the demo data used a mismatched id and every chat row showed "You".
-            if AuthService.shared.uid == nil { await AuthService.shared.bootstrap() }
+            // Firebase-free demo: DemoMode.activate() sets AuthService.shared.uid itself.
             await MainActor.run { DemoMode.activate(); onDone() }
             return
         }
