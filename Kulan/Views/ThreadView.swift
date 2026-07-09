@@ -1507,6 +1507,7 @@ struct ThreadView: View {
         // re-created the entire subtree — destroying the mic's live DragGesture mid-touch (the
         // frozen/stuck recording). Kept constant, the subtree is stable and the gesture survives.
         // (No blur bridge now: the recording mic is a red circle, not a glass element.)
+        HStack(alignment: .bottom, spacing: 8) {   // OUTER: the glass group + the mic (mic is OUTSIDE the glass so it layers on top)
         composerGlassContainer(grouped: true) {
         HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left, everything else in the field
             // Always present (collapsed while recording) so removing it never re-diffs the row and
@@ -1553,10 +1554,12 @@ struct ThreadView: View {
             }
             // Real Liquid Glass on the field in BOTH states — including the recording bar (user spec).
             .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
-
-            // Mic (hold-to-record) OR Send — a standalone button OUTSIDE the field, like "+".
-            rightButton
         }
+        }
+        // Mic (hold-to-record) OR Send — OUTSIDE the glass container so the big red recording circle
+        // always renders in FRONT of the pill (it was composited inside the glass and got clipped
+        // behind the bar). zIndex is belt-and-braces on top of being a later sibling.
+        rightButton.zIndex(1)
         }
         .animation(.easeInOut(duration: 0.2), value: hasText)
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: recordingHeld)
