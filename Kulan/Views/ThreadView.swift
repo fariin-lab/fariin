@@ -1539,10 +1539,9 @@ struct ThreadView: View {
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
             // Real Liquid Glass on the field in BOTH states — including the recording bar (user spec).
-            // NON-interactive: keeps the exact frosted-glass look, but drops iOS 26's interactive
-            // touch/press layer — that layer disambiguates tap-vs-hold before delivering the touch,
-            // which delayed hold-to-record. The mic gesture now fires the instant your finger lands.
-            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: false)
+            // Interactive Liquid Glass restored (the field looked flat without it). Hold-to-record
+            // speed is kept up by the snappy record-start animation + the pre-warmed audio session.
+            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
 
             // Send button (only while typing) — the mic lives INSIDE the pill now.
             rightButton
