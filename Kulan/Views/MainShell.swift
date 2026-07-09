@@ -273,7 +273,7 @@ struct CallsView: View {
                             Text("Missed").tag(1)
                         }
                         .pickerStyle(.segmented)
-                        .frame(width: 190)
+                        .frame(width: 150)   // compact All/Missed pill (Signal-style), not full-width
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showNew = true } label: { Image(systemName: "phone.badge.plus") }
@@ -565,9 +565,12 @@ struct ChatsView: View {
             Button { showArchived = true } label: { Label("Archive", systemImage: "archivebox") }
             Button { showCompose = true } label: { Label("Add Story", systemImage: "plus.circle") }
         } label: {
-            Image(systemName: chatFilter != 0 ? "line.3.horizontal.decrease.circle.fill"
-                                              : "line.3.horizontal.decrease.circle")
+            // Plain three-lines filter glyph (no inner circle) — Apple moved off the
+            // `.circle` variant; the glass button already supplies the round shape, so
+            // the old symbol drew a circle-inside-a-circle. Active filter = accent tint.
+            Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 18))
+                .foregroundStyle(chatFilter != 0 ? Color.accentColor : .primary)
         }
         .tint(.primary)
     }
