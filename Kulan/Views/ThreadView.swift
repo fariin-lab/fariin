@@ -1637,10 +1637,13 @@ struct ThreadView: View {
             .renderingMode(.template).resizable().scaledToFit()
             .foregroundStyle(recordingHeld ? .white : .secondary)   // matches sticker/camera when idle
             .frame(width: recordingHeld ? 18 : 22, height: recordingHeld ? 22 : 24)
-            .frame(width: recordingHeld ? 40 : 24, height: recordingHeld ? 40 : 24)   // grows to a puck when held
+            // CONSTANT 24 footprint so the recording bar stays exactly 40px (was 40 -> the mic +
+            // padding pushed the bar taller). The big red circle is drawn purely as a scaled
+            // background (visual only) so it overflows the bar without changing its height.
+            .frame(width: 24, height: 24)
             .background {
-                if recordingHeld {   // big RED mic circle (Telegram) — scaled up so it reads large
-                    Circle().fill(Color.red).scaleEffect(1.5)
+                if recordingHeld {   // big RED mic circle (Telegram) — scale only, no layout impact
+                    Circle().fill(Color.red).scaleEffect(2.3)
                         .shadow(color: .red.opacity(0.4), radius: 8)
                 }
             }
@@ -1664,18 +1667,18 @@ struct ThreadView: View {
 
     // Lock target floating above the mic — fills toward accent as you slide up, then locks.
     private var lockTarget: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 7) {
             Image(systemName: lockProgress > 0.7 ? "lock.fill" : "lock.open.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
             Image(systemName: "chevron.up")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 13, weight: .bold))
                 .opacity(1 - lockProgress)
         }
         .foregroundStyle(.white)                 // white icons (spec)
-        .frame(width: 40)                        // 40px pill (spec)
-        .padding(.vertical, 12)
+        .frame(width: 48)                        // bigger 48px pill (spec: looked small)
+        .padding(.vertical, 14)
         .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass (spec)
-        .scaleEffect(0.9 + lockProgress * 0.12)
+        .scaleEffect(0.92 + lockProgress * 0.12)
     }
 
     private var recordDragGesture: some Gesture {
