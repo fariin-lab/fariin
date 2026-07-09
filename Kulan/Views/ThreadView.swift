@@ -1516,7 +1516,9 @@ struct ThreadView: View {
                     .foregroundStyle(.primary)
                     .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
                     .frame(width: 40, height: 40)
-                    .liquidGlass(Circle(), interactive: true)
+                    // Glass OFF while recording — the native glassEffect ignores .opacity, so the "+"
+                    // pill kept showing; disabling the glass (+ zero frame/opacity) truly hides it.
+                    .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
             }
             .tint(.primary)
             .frame(width: recordingHeld ? 0 : 40)
@@ -1541,15 +1543,10 @@ struct ThreadView: View {
                 HStack(alignment: .bottom, spacing: 4) {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
-                    // …sticker + camera show only when idle & empty…
+                    // …sticker + camera show only when idle & empty. The MIC is NOT here anymore — it
+                    // lives OUTSIDE this pill (as rightButton) so the recording bar never extends under
+                    // the big red mic (the overlap), and the pill stays a clean 40px.
                     if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
-                    // …and the MIC lives in ONE stable slot, gated only by !hasText (which does NOT
-                    // change during a recording). This is critical: previously the mic was inside BOTH
-                    // the recordingHeld branch AND the else branch, so the moment recording started
-                    // (recordingHeld=true) SwiftUI re-parented it and TORE DOWN the live DragGesture —
-                    // the finger stopped tracking, slide-to-lock/cancel died, and release never fired
-                    // (stuck, not sent). One fixed slot + a stable .id keeps the gesture alive end-to-end.
-                    if !hasText { micButton.id("record-mic") }
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
@@ -1621,6 +1618,10 @@ struct ThreadView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .transition(.scale.combined(with: .opacity))
+        } else {
+            // Mic OUTSIDE the pill (stable single slot). Not typing -> hold-to-record mic; during a
+            // recording it becomes the big red button sitting beside the 40px bar (no overlap).
+            micButton.id("record-mic")
         }
     }
 
@@ -1658,15 +1659,14 @@ struct ThreadView: View {
         Image("ic_mic")
             .renderingMode(.template).resizable().scaledToFit()
             .foregroundStyle(recordingHeld ? .white : .secondary)   // matches sticker/camera when idle
-            .frame(width: recordingHeld ? 18 : 22, height: recordingHeld ? 22 : 24)
-            // CONSTANT 24 footprint so the recording bar stays exactly 40px (was 40 -> the mic +
-            // padding pushed the bar taller). The big red circle is drawn purely as a scaled
-            // background (visual only) so it overflows the bar without changing its height.
-            .frame(width: 24, height: 24)
+            .frame(width: recordingHeld ? 22 : 22, height: recordingHeld ? 26 : 24)
+            // Mic is OUTSIDE the pill now, so a bigger footprint here doesn't affect the 40px bar.
+            // Restore the big red button (Telegram size): 44 footprint + a 1.3x red circle (~57px).
+            .frame(width: recordingHeld ? 44 : 24, height: recordingHeld ? 44 : 24)
             .background {
-                if recordingHeld {   // RED mic circle sized to FIT inside the 40px bar (no bulge/overlap)
-                    Circle().fill(Color.red).scaleEffect(1.5)
-                        .shadow(color: .red.opacity(0.35), radius: 3)
+                if recordingHeld {   // big RED mic circle beside the bar (not over it)
+                    Circle().fill(Color.red).scaleEffect(1.3)
+                        .shadow(color: .red.opacity(0.4), radius: 6)
                 }
             }
             // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
