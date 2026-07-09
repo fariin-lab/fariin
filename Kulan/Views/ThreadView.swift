@@ -1515,23 +1515,23 @@ struct ThreadView: View {
         // (No blur bridge now: the recording mic is a red circle, not a glass element.)
         composerGlassContainer(grouped: true) {
         HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left; the field (with the mic INSIDE); Send
-            // Always present (collapsed while recording) so removing it never re-diffs the row and
-            // disturbs the mic's gesture — same reasoning as the constant glass container above.
-            Button { showAttachPanel = true } label: {
-                Image(systemName: sendingPhoto ? "ellipsis" : "plus")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(.primary)
-                    .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
-                    .frame(width: 40, height: 40)
-                    // Glass OFF while recording — the native glassEffect ignores .opacity, so the "+"
-                    // pill kept showing; disabling the glass (+ zero frame/opacity) truly hides it.
-                    .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
+            // Hidden ENTIRELY while recording (Signal-style: the attach button is removed from the
+            // toolbar during a voice memo). Collapsing via opacity/frame did NOT work — iOS 26's
+            // native glassEffect ignores .opacity, so the "+" kept showing. Fully removing it is the
+            // reliable fix; the mic is a separate stable slot (its own .id), so this sibling change
+            // can't disturb the recording gesture.
+            if !recordingHeld {
+                Button { showAttachPanel = true } label: {
+                    Image(systemName: sendingPhoto ? "ellipsis" : "plus")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(.primary)
+                        .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
+                        .frame(width: 40, height: 40)
+                        .liquidGlass(Circle(), interactive: true)
+                }
+                .tint(.primary)
+                .transition(.scale.combined(with: .opacity))   // smooth fade/scale out when recording starts
             }
-            .tint(.primary)
-            .frame(width: recordingHeld ? 0 : 40)
-            .opacity(recordingHeld ? 0 : 1)
-            .allowsHitTesting(!recordingHeld)
-            .clipped()
 
             // The field holds reply preview + text/record row, with the camera kept INSIDE
             // on the right. The mic/send live OUTSIDE as a standalone right sibling (like "+").
