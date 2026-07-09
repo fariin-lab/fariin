@@ -2,13 +2,11 @@ import SwiftUI
 import UIKit
 
 // Bridges a SwiftUI view into the navigation bar as the native `UINavigationItem.titleView` — the
-// exact approach Signal uses. Because a titleView is a subview of the UINavigationBar, it renders ON
-// TOP of the bar's native blur (so the blur never covers it), left-aligns after the back button, and
-// slides with the native swipe-back transition — all for free, no custom overlay/blur.
+// exact approach Signal uses. A titleView is a subview of the UINavigationBar, so it renders ON TOP
+// of the bar's native blur (never covered), left-aligns after the back button, slides with the
+// native swipe-back, and its tap is a native gesture — no custom overlay/blur.
 //
-// Usage: `.background(NavTitleView(onTap: { ... }) { avatarNameView })` anywhere in the pushed view.
-// It's a zero-size marker in the SwiftUI layout; on appear it finds the owning view controller and
-// installs the title view, re-asserting it if SwiftUI later clears it.
+// Usage: `.background(NavTitleView(onTap: { ... }) { avatarNameView })` in the pushed view.
 struct NavTitleView<Content: View>: UIViewRepresentable {
     var onTap: () -> Void
     @ViewBuilder var content: () -> Content
@@ -28,10 +26,15 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         DispatchQueue.main.async { context.coordinator.install(from: marker) }
     }
 
+    static func dismantleUIView(_ marker: UIView, coordinator: Coordinator) {
+        coordinator.remove()   // clear our title view so nothing dangles when the chat is popped
+    }
+
     final class Coordinator: NSObject {
         var onTap: () -> Void
         let host = UIHostingController(rootView: AnyView(EmptyView()))
-        private let container = FullWidthTitleView()
+        private let container = TitleContainerView()
+        private weak var target: UIViewController?
 
         init(onTap: @escaping () -> Void) {
             self.onTap = onTap
@@ -40,13 +43,13 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             host.sizingOptions = [.intrinsicContentSize]
             host.view.translatesAutoresizingMaskIntoConstraints = false
             container.backgroundColor = .clear
-            container.isUserInteractionEnabled = true
             container.addSubview(host.view)
             NSLayoutConstraint.activate([
-                // Left-align the avatar+name in the full-width title area (like Signal's titleView).
+                // Left-align the avatar+name; top/bottom pinned so the container gets a real height.
                 host.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 host.view.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
-                host.view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                host.view.topAnchor.constraint(equalTo: container.topAnchor),
+                host.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
             container.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
         }
@@ -54,30 +57,32 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         @objc private func tapped() { onTap() }
 
         func install(from marker: UIView) {
-            guard let vc = marker.owningViewController else { return }
-            if host.parent == nil {
-                vc.addChild(host)
-                host.didMove(toParent: vc)
-            }
-            // Re-assert if SwiftUI cleared/replaced the title view on one of its updates.
+            // The nav bar reads the navigation controller's TOP view controller's navigationItem —
+            // target that one, not whatever intermediate host controller owns the marker.
+            guard let owner = marker.owningViewController else { return }
+            let vc = owner.navigationController?.topViewController ?? owner
+            target = vc
             if vc.navigationItem.titleView !== container {
                 vc.navigationItem.titleView = container
             }
         }
+
+        func remove() {
+            if target?.navigationItem.titleView === container { target?.navigationItem.titleView = nil }
+        }
     }
 }
 
-// Signal's trick: a huge intrinsic width so the navigation bar hands the title view the whole title
-// area (between the back button and the trailing items), letting its content left-align.
-final class FullWidthTitleView: UIView {
+// Full-width title container (Signal's trick): a large finite intrinsic width so the nav bar hands
+// the title view the whole title area, letting its content left-align. A finite value (not
+// .greatestFiniteMagnitude) avoids Auto Layout blowing up.
+final class TitleContainerView: UIView {
     override var intrinsicContentSize: CGSize {
-        CGSize(width: .greatestFiniteMagnitude, height: UIView.noIntrinsicMetric)
+        CGSize(width: 10_000, height: UIView.noIntrinsicMetric)
     }
 }
 
 extension UIView {
-    // Walk the responder chain to the UIViewController that owns this view (the pushed hosting
-    // controller), whose navigationItem is the one the nav bar renders.
     var owningViewController: UIViewController? {
         var responder: UIResponder? = self
         while let current = responder {
