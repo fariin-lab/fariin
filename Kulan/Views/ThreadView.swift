@@ -1607,44 +1607,25 @@ struct ThreadView: View {
         .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording — no vertical distortion
     }
 
-    // The hold-to-record mic: grows + tints while held, follows the finger, shows a lock
-    // hint above. Drag up to lock, drag left to cancel, release to send.
+    // Hold-to-record mic (Telegram-clean): a plain mic that follows the finger for slide-to-cancel
+    // (left) / lock (up). NO breathing halo and NO grow/pulse — the recording pill carries the
+    // affordance (red dot + timer + "slide to cancel"), like Telegram.
     private var micButton: some View {
         Image("ic_mic")
             .renderingMode(.template).resizable().scaledToFit()
-            .foregroundStyle(recordingHeld ? Theme.onAccent(dark) : .primary)
+            .foregroundStyle(recordingHeld ? .white : .primary)
             .frame(width: 18, height: 22)   // custom mic glyph size
             .frame(width: 40, height: 40)   // standalone target, same size as "+"
-            // Held: solid colored (red when armed-to-cancel) circle. Idle: liquid glass like "+".
-            // Glass goes OFF while held (isEnabled keeps the view mounted so the drag survives):
-            // scaled + dragged glass melts into the composer capsule's glass inside the
-            // GlassEffectContainer — the amorphous white blob behind the mic (user screenshot).
+            // Held: solid tinted circle (red when armed-to-cancel). Idle: liquid glass like "+".
             .background(Circle().fill(recordingHeld ? (recordCancelArmed ? Color.red : Theme.accent(dark)) : Color.clear))
-            // Recording EFFECT: a soft halo behind the mic that breathes + swells with your live voice
-            // level. It lives in its OWN view (RecordingHalo) so the 30 Hz metering re-render stays
-            // ISOLATED there — reading recorder.levels inline here re-rendered the whole mic button
-            // every tick and made the drag stutter/freeze. Colour = app accent (monochrome, on-brand);
-            // only turns red when you're armed to cancel.
-            .background {
-                if recordingHeld {
-                    RecordingHalo(recorder: recorder,
-                                  color: recordCancelArmed ? Color.red : Theme.accent(dark))
-                }
-            }
             .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
-            // scaleEffect overflows the footprint, so the bar height never stretches.
-            // 1.25 of 40 = the 50px the user asked for; 1.5 grew to 60 and sat visibly
-            // misaligned against the 40px recording bar (user screenshot).
-            .scaleEffect(recordingHeld ? 1.25 : 1, anchor: .center)
-            .offset(recordingHeld ? clampedDrag : .zero)
+            .offset(recordingHeld ? clampedDrag : .zero)   // follow the finger (cancel/lock)
             .overlay(alignment: .top) { if recordingHeld { lockHint } }
-            // contentShape makes the WHOLE 40pt circle a tap target (not just the glyph pixels) so
-            // recording starts wherever you touch. NO extra padding — the composer HStack is
-            // .bottom-aligned, so padding would lift the mic off the "+"/field baseline. 40pt matches
-            // the "+" exactly. recordGesture is minimumDistance:0 → fires on touch-down.
+            // contentShape makes the WHOLE 40pt circle a tap target so recording starts wherever you
+            // touch. recordGesture is minimumDistance:0 → fires on touch-down.
             .contentShape(Circle())
             .highPriorityGesture(recordGesture)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: recordingHeld)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordingHeld)
     }
 
     // Floating lock pill above the mic; fills in as the finger approaches the lock point.
@@ -2454,27 +2435,6 @@ private struct MessageActionDialogs: ViewModifier {
 // the whole message list on every tick: the cause of voice-recording stutter/frame drops).
 // Audio-reactive recording halo, isolated so its 30 Hz metering re-render never touches the mic
 // button (which owns the drag-to-lock offset). Breathes continuously and swells with the live level.
-private struct RecordingHalo: View {
-    var recorder: AudioRecorder
-    var color: Color
-    @State private var pulse = false
-    var body: some View {
-        let lvl = CGFloat(recorder.levels.last ?? 0)
-        Circle()
-            .fill(color.opacity(0.28))
-            .scaleEffect(1.12 + 0.7 * lvl + (pulse ? 0.10 : 0.0))
-            .blur(radius: 5)
-            // The level is ALREADY envelope-smoothed in AudioRecorder. The old under-damped spring
-            // (damping 0.55) overshot and rang on every one of the 30 ticks/sec, so the halo never
-            // settled — it visibly vibrated (the "shake", worst while the mic is moving during the
-            // lock swipe). Critically damped + a short response tracks the voice with no ring.
-            .animation(.spring(response: 0.22, dampingFraction: 0.95), value: lvl)
-            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulse)
-            .onAppear { pulse = true }
-            .allowsHitTesting(false)
-    }
-}
-
 private struct RecordTimerText: View {
     var recorder: AudioRecorder
     var body: some View {
