@@ -201,7 +201,7 @@ struct OnboardingView: View {
                         .multilineTextAlignment(.center)
                         .tint(.primary)
                     #if DEBUG
-                    Text("Preview: type username **apple** to load a demo account.")
+                    Text("Preview: type **apple** in either field, then Continue, to load a demo account.")
                         .font(.caption2).foregroundStyle(.blue).multilineTextAlignment(.center)
                     #endif
                 }
@@ -212,9 +212,11 @@ struct OnboardingView: View {
 
     private func save() async {
         #if DEBUG
-        // Preview demo login (Appetize): username "apple" loads a fully-local demo account (stories +
-        // chats) with no Firebase, so the app can be tried where Storage uploads don't work. Debug-only.
-        if handle.lowercased() == "apple" {
+        // Preview demo login (Appetize): "apple" loads a fully-local demo account (stories + chats)
+        // with no Firebase, so the app can be tried where Storage uploads don't work. Debug-only.
+        // Accept it in EITHER field (name or username), trimmed — so a wrong-field tap still works.
+        let nameTrim = name.trimmingCharacters(in: .whitespaces).lowercased()
+        if handle.lowercased() == "apple" || nameTrim == "apple" {
             // Firebase-free demo: DemoMode.activate() sets AuthService.shared.uid itself.
             await MainActor.run { DemoMode.activate(); onDone() }
             return
