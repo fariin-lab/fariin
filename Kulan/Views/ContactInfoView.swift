@@ -57,8 +57,9 @@ struct ContactInfoView: View {
                 quickActions
                 if source == .calls, lastCall != nil { callLogCard }
                 if !about.isEmpty { bioCard }
-                if !isSelf { encryptionCard }
+                if !isSelf { optionsCard }
                 if !media.isEmpty { mediaCard }
+                if !isSelf { dangerCard }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
@@ -143,26 +144,67 @@ struct ContactInfoView: View {
         }
     }
 
-    // Tap to open Kulan's own Verify Encryption screen (safety number + QR).
-    private var encryptionCard: some View {
-        Button { showVerify = true } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 30)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Encryption").foregroundStyle(.primary)
-                    Text("Verify this chat is private").font(.footnote).foregroundStyle(.secondary)
+    // Settings-style rows, surfaced on the profile itself (Signal/WhatsApp-style) instead
+    // of being buried in a "..." menu — the profile was reading empty with everything hidden.
+    private var optionsCard: some View {
+        VStack(spacing: 0) {
+            infoRow("Disappearing Messages", "timer", value: disappearLabel) { showDisappear = true }
+            rowDivider
+            infoRow("Chat Wallpaper", "paintpalette") {
+                let target = cid
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    NotificationCenter.default.post(name: .openChatWallpaper, object: target)
                 }
-                Spacer()
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
             }
-            .padding(14)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            rowDivider
+            infoRow("Verify Encryption", "lock.fill", tint: .accentColor) { showVerify = true }
+            rowDivider
+            infoRow("Share Contact", "square.and.arrow.up") { showShare = true }
+        }
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    // Destructive actions kept in their own red card at the bottom (also formerly menu-only).
+    private var dangerCard: some View {
+        VStack(spacing: 0) {
+            infoRow("Clear My Messages", "trash", tint: .primary) { showClear = true }
+            rowDivider
+            infoRow("Report \(name)", "flag", tint: .red, chevron: false) { showReport = true }
+            rowDivider
+            if blocked {
+                infoRow("Unblock \(name)", "hand.raised.slash", chevron: false) {
+                    Task { await ChatService.setBlocked(cid, false); blocked = false }
+                }
+            } else {
+                infoRow("Block \(name)", "hand.raised", tint: .red, chevron: false) { showBlock = true }
+            }
+        }
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
+    private func infoRow(_ title: String, _ icon: String, value: String? = nil,
+                         tint: Color = .primary, chevron: Bool = true,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+                    .foregroundStyle(tint)
+                Text(title).foregroundStyle(tint)
+                Spacer()
+                if let value { Text(value).foregroundStyle(.secondary) }
+                if chevron {
+                    Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
+
+    private var rowDivider: some View { Divider().padding(.leading, 56) }
 
     private var disappearLabel: String {
         disappearSeconds == 0 ? "Off" : ChatService.disappearLabel(disappearSeconds)
@@ -176,21 +218,6 @@ struct ContactInfoView: View {
         disappearSeconds = s
         Task { await ChatService.setDisappear(cid, seconds: s) }
     }
-    private var disappearRow: some View {
-        Button { showDisappear = true } label: {
-            HStack {
-                Label("Disappearing Messages", systemImage: "timer")
-                Spacer()
-                Text(disappearLabel).foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-            }
-            .padding(14)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
-    }
-
     // MARK: - Sections
 
     private var hero: some View {
@@ -237,60 +264,9 @@ struct ContactInfoView: View {
             if source == .chat {
                 actionTile("search", "magnifyingglass") { showSearchSoon = true }
             }
-            moreMenu
         }
     }
 
-    private var moreMenu: some View {
-        Menu {
-            // Auto-delete (disappearing messages) — native submenu, Off up to 1 year.
-            // Goes through requestDisappear: enabling always confirms first (this menu was
-            // exactly the accidental-tap path that silently wiped a chat's history).
-            Menu {
-                Button("Off") { requestDisappear(0) }
-                Button("1 Day") { requestDisappear(86_400) }
-                Button("1 Week") { requestDisappear(604_800) }
-                Button("1 Month") { requestDisappear(2_592_000) }
-                Button("1 Year") { requestDisappear(31_536_000) }
-            } label: { Label("Disappearing Messages", systemImage: "timer") }
-
-            Button { showShare = true } label: {
-                Label("Share Contact", systemImage: "square.and.arrow.up")
-            }
-
-            // Change Wallpaper: pop back to the chat, then ask it to open the wallpaper picker
-            // (the small delay lets the pop finish so the sheet presents cleanly on the chat).
-            Button {
-                let target = cid
-                dismiss()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    NotificationCenter.default.post(name: .openChatWallpaper, object: target)
-                }
-            } label: {
-                Label("Change Wallpaper", image: "ic_wallpaper")
-            }
-
-            Divider()
-
-            // Clear is a normal (non-red) action; only Block is destructive/red.
-            Button { showClear = true } label: {
-                Label("Clear my messages", systemImage: "trash")
-            }
-            Button(role: .destructive) { showReport = true } label: {
-                Label("Report \(name)", systemImage: "flag")
-            }
-            if blocked {
-                Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: {
-                    Label("Unblock", systemImage: "hand.raised.slash")
-                }
-            } else {
-                Button(role: .destructive) { showBlock = true } label: {
-                    Label("Block \(name)", systemImage: "hand.raised")
-                }
-            }
-        } label: { tileLabel("more", "ellipsis") }
-            .tint(.primary)
-    }
 
     // Shareable contact link (opens/starts a chat with this user in Kulan).
     private var shareText: String {
@@ -377,11 +353,6 @@ struct ContactInfoView: View {
 
     // MARK: - Logic
 
-    private func toggleMute() {
-        muted.toggle()
-        let v = muted
-        Task { await ChatService.setMuted(cid, v) }
-    }
 
     private func load() async {
         if let p = await ProfileStore.shared.fetch(otherUid) { handle = p.handle; about = p.about }
