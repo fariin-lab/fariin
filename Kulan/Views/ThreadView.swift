@@ -892,32 +892,33 @@ struct ThreadView: View {
         }
     }
 
-    // In-page placement of the avatar+name inside the nav-bar band. Rendered as an overlay on the
-    // page (not a toolbar item) so the interactive swipe-back slides it with the page. A
-    // GeometryReader reads the real top inset so the label lands at the nav bar's vertical centre
-    // across devices (notch / Dynamic Island); it's offset up from the safe-area top (content sits
-    // just under the ~44pt nav bar) and cleared past the native back button on the leading side.
+    // The window's top safe-area inset = the STATUS-BAR height (notch/Dynamic Island), read straight
+    // from UIKit so it's always correct (the in-view GeometryReader kept returning ~0, which dropped
+    // the header into the status bar). The 44pt nav bar sits right below the status bar.
+    private var statusBarHeight: CGFloat {
+        (UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }?.safeAreaInsets.top) ?? 47
+    }
+
+    // In-page placement of the avatar+name inside the nav-bar band. Rendered as an overlay on the page
+    // (not a toolbar item) so the interactive swipe-back slides it with the page. Pushed down by the
+    // status-bar height into the 44pt nav bar band, so the avatar centres on the SAME row as the back
+    // button + call buttons (like Signal's centered titleView).
     private var slidingHeaderLabel: some View {
-        GeometryReader { geo in
-            HStack(spacing: 0) {
-                Button { showContactInfo = true } label: { headerLabel }
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .padding(.leading, 84)             // clear gap after the back button
-                // The right side must never intercept or cover the trailing call/video toolbar
-                // buttons — an empty, non-hit-testing spacer keeps that area completely free.
-                Spacer(minLength: 0).allowsHitTesting(false)
-            }
-            // The nav bar sits JUST BELOW the status bar. With the transparent toolbar, the safe-area
-            // top = the status-bar height, and the 44pt nav bar occupies the band starting right there.
-            // So place a 44pt band at y = safeAreaInsets.top (NOT minus 44 — that lifted it up into the
-            // status bar). The avatar centres in the band and lines up with the back button + call
-            // buttons on ONE row, like Signal's centered titleView.
-            .frame(height: 44)
-            .offset(y: geo.safeAreaInsets.top)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        HStack(spacing: 0) {
+            Button { showContactInfo = true } label: { headerLabel }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .padding(.leading, 84)             // clear gap after the back button
+            // Never cover/intercept the trailing call/video buttons — empty non-hit-testing spacer.
+            Spacer(minLength: 0).allowsHitTesting(false)
         }
-        .ignoresSafeArea(.container, edges: .top)
+        .frame(height: 44)                          // the nav-bar band
+        .padding(.top, statusBarHeight)             // push below the status bar onto the nav-bar row
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .ignoresSafeArea(.container, edges: .top)   // so .padding(.top) starts at the SCREEN top
     }
 
     // MARK: - @mentions (groups)
