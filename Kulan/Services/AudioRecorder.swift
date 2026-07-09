@@ -10,6 +10,9 @@ final class AudioRecorder {
     private var recorder: AVAudioRecorder?
     private var fileURL: URL?
     private var timer: Timer?
+    private var interruptionObserver: NSObjectProtocol?
+    // Fired when a phone call / Siri / alarm interrupts recording — the view resets its hold UI.
+    var onInterrupt: (() -> Void)?
     var isRecording = false
     var elapsed: TimeInterval = 0
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }   // live (not the 0.05s-throttled `elapsed`)
@@ -34,6 +37,26 @@ final class AudioRecorder {
         AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
         AVEncoderBitRateKey: 40_000,
     ]
+
+    init() {
+        // Observe audio-session interruptions (phone call, Siri, alarm, another app grabbing the mic).
+        // On .began the system has already stopped the input, so discard the partial note cleanly and
+        // let the view drop its recording UI — no stuck timer, no half file.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began,
+                  self.isRecording else { return }
+            self.cancel()
+            self.onInterrupt?()
+        }
+    }
+
+    deinit {
+        if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
+    }
 
     // Pre-warm: activate the session + build & prepareToRecord a recorder AHEAD of time, so the
     // first hold-to-record fires `record()` with ~no latency. Call on chat open + after each send.

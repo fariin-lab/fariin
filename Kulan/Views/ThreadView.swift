@@ -391,6 +391,7 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
             recorder.prepare()                           // pre-warm so hold-to-record is instant
+            recorder.onInterrupt = { resetRecordingState() }   // call/Siri/alarm mid-record → drop the UI cleanly
             // Restore an unsent draft (local-only). Never clobber text already being typed.
             if input.isEmpty { input = Drafts.shared.text(cid) }
             // Unread count from the cached conversation — only used to place the unread-divider
@@ -1594,29 +1595,92 @@ struct ThreadView: View {
         .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording — no vertical distortion
     }
 
-    // TAP to record (reliable — replaces the buggy custom hold/slide/lock gesture). One tap starts
-    // recording straight into the clean bar (trash · timer + waveform · send). No hold, no slide, no
-    // lock, no halo/animation.
+    // Hold-to-record (Signal/WhatsApp-style, our own code on the AudioRecorder engine):
+    //   • press & hold the mic  → recording starts instantly (session is pre-warmed)
+    //   • slide LEFT past the threshold, release → cancel (discard)
+    //   • slide UP into the lock target → hands-free lock (finger can lift; bar takes over)
+    //   • release without cancel/lock → send
+    // Rubber-banded drag + haptics at each threshold. A quick tap (too short) flashes the hint.
+    private static let cancelThreshold: CGFloat = 80
+    private static let lockThreshold: CGFloat = 88
+    private var lockProgress: CGFloat { min(1, max(0, -clampedDrag.height / Self.lockThreshold)) }
+
     private var micButton: some View {
-        Button { startTapRecording() } label: {
-            Image("ic_mic")
-                .renderingMode(.template).resizable().scaledToFit()
-                .foregroundStyle(.primary)
-                .frame(width: 18, height: 22)
-                .frame(width: 40, height: 40)
-                .liquidGlass(Circle(), interactive: true)
+        Image("ic_mic")
+            .renderingMode(.template).resizable().scaledToFit()
+            .foregroundStyle(recordingHeld ? .white : .primary)
+            .frame(width: 18, height: 22)
+            .frame(width: 40, height: 40)
+            .background {
+                if recordingHeld {   // filled puck while holding; turns red once cancel is armed
+                    Circle().fill(recordCancelArmed ? Color.red : Theme.accent(dark)).scaleEffect(1.15)
+                }
+            }
+            .liquidGlass(Circle(), interactive: true, enabled: !recordingHeld)
+            // .offset renders the mic shifted WITHOUT moving its layout frame, so the lock target
+            // (overlaid after) stays pinned above the original slot while the mic slides up to meet it.
+            .offset(x: recordingHeld ? clampedDrag.width : 0,
+                    y: recordingHeld ? clampedDrag.height : 0)
+            .overlay(alignment: .center) {
+                if recordingHeld && !recordCancelArmed {
+                    lockTarget.offset(y: -82).allowsHitTesting(false)
+                }
+            }
+            .contentShape(Circle())
+            .gesture(recordDragGesture)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordingHeld)
+            .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
+    }
+
+    // Lock target floating above the mic — fills toward accent as you slide up, then locks.
+    private var lockTarget: some View {
+        VStack(spacing: 5) {
+            Image(systemName: lockProgress > 0.7 ? "lock.fill" : "lock.open.fill")
+                .font(.system(size: 13, weight: .semibold))
+            Image(systemName: "chevron.up")
+                .font(.system(size: 11, weight: .bold))
+                .opacity(1 - lockProgress)
         }
-        .tint(.primary)
+        .foregroundStyle(lockProgress > 0.7 ? Theme.accent(dark) : Color.secondary)
+        .frame(width: 34)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Theme.accent(dark).opacity(lockProgress), lineWidth: 1.5))
+        .scaleEffect(0.88 + lockProgress * 0.12)
     }
 
-    // Tap-to-record: start the recorder and show the recording bar (recordLocked = the bar state).
-    private func startTapRecording() {
-        recorder.requestAndStart()
-        impact(.medium)
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { recordLocked = true }
+    private var recordDragGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                // First change = touch-down (minimumDistance 0): start recording once (multi-touch/
+                // double-start guarded by holdStarted). Instant because the session is pre-warmed.
+                if !holdStarted && !recordLocked {
+                    holdStarted = true
+                    recorder.requestAndStart()
+                    impact(.medium)
+                }
+                guard holdStarted, !recordLocked else { return }
+                recordDrag = v.translation
+                let armed = clampedDrag.width < -Self.cancelThreshold
+                if armed != recordCancelArmed {
+                    recordCancelArmed = armed
+                    impact(.soft)     // tick when crossing the cancel line
+                }
+                if clampedDrag.height < -Self.lockThreshold { lockRecording() }
+            }
+            .onEnded { _ in
+                guard holdStarted, !recordLocked else { return }   // locked = keep going, bar owns it
+                if recordCancelArmed {
+                    cancelRecording()
+                } else if recorder.elapsed < 0.5 {
+                    cancelRecording(); flashHoldHint()   // accidental tap → discard + "hold to record"
+                } else {
+                    sendRecording()
+                }
+            }
     }
 
-    // Recording bar (tap-to-record): delete · timer + waveform · send.
+    // Locked (hands-free) recording bar — shown after you slide up to lock: delete · timer + waveform · send.
     private var lockedRecordingBar: some View {
         HStack(spacing: 12) {
             Button { cancelRecording() } label: {
