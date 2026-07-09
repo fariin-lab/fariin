@@ -7,7 +7,6 @@ struct SetNicknameView: View {
     @State private var text: String
     var onSave: (String) -> Void
 
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
 
@@ -16,26 +15,29 @@ struct SetNicknameView: View {
         self.onSave = onSave
     }
 
-    private var dark: Bool { scheme == .dark }
-    private var fieldBg: Color { dark ? Color(hex: 0x1C1C1E) : .white }
-
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("Nickname", text: $text)
-                    .font(.title3)
-                    .focused($focused)
-                    .submitLabel(.done)
-                    .onSubmit { onSave(text); dismiss() }
-                    .padding(.horizontal, 18).padding(.vertical, 16)
-                    .background(fieldBg, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .padding(.top, 20)
-                Text("This nickname is saved only on your device and visible only to you.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                Spacer()
+            ZStack {
+                // Grouped background so the field (secondarySystemGroupedBackground) always contrasts,
+                // light AND dark (Apple's grouped-list convention). Before, a white field on a white
+                // sheet was invisible.
+                Color(.systemGroupedBackground).ignoresSafeArea()
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Nickname", text: $text)
+                        .font(.title3)
+                        .focused($focused)
+                        .submitLabel(.done)
+                        .onSubmit { onSave(text); dismiss() }
+                        .padding(.horizontal, 18).padding(.vertical, 16)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .padding(.top, 20)
+                    Text("This nickname is saved only on your device and visible only to you.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
             .navigationTitle("Set nickname")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

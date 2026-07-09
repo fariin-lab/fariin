@@ -141,7 +141,7 @@ struct ContactInfoView: View {
                     Task { await ChatService.setDisappear(cid, seconds: s) }
                 }
             }
-            .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
+            .sheet(isPresented: $showShare) { SendContactSheet(contactText: shareText) }
             .sheet(isPresented: $showAddGroup) {
                 NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
             }
