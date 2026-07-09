@@ -5,7 +5,11 @@ import PhotosUI
 // with (or search), then create. Native-styled to match New Message.
 struct NewGroupView: View {
     let onOpen: (ChatTarget) -> Void
-    init(onOpen: @escaping (ChatTarget) -> Void = { _ in }) { self.onOpen = onOpen }
+    // `preselect` pre-includes a contact (e.g. "Add to a Group" from a friend's profile).
+    init(preselect: Person? = nil, onOpen: @escaping (ChatTarget) -> Void = { _ in }) {
+        self.onOpen = onOpen
+        if let p = preselect { _selected = State(initialValue: [p.id: p]) }
+    }
 
     struct Person: Identifiable, Hashable { let id: String; let name: String; let photo: String? }
 

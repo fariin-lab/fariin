@@ -40,8 +40,16 @@ struct ContactInfoView: View {
     @State private var showDisappear = false
     @State private var disappearSeconds = 0
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for both of you" confirm
+    @State private var showRename = false
+    @State private var renameText = ""
+    @State private var localName: String?       // local custom name (Edit) — device-only, never sent
+    @State private var showAddGroup = false
+    @State private var openGroup: Conversation?
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
+
+    // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name.
+    private var shownName: String { localName ?? name }
 
     private var dark: Bool { scheme == .dark }
     private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }
@@ -57,9 +65,9 @@ struct ContactInfoView: View {
                 quickActions
                 if source == .calls, lastCall != nil { callLogCard }
                 if !about.isEmpty { bioCard }
-                if !isSelf { optionsCard }
+                if !isSelf { settingsCard }
                 if !media.isEmpty { mediaCard }
-                if !isSelf { dangerCard }
+                if !isSelf { groupsInCommonCard }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
@@ -71,9 +79,62 @@ struct ContactInfoView: View {
                                                   // the chat-opened profile (was still showing
                                                   // when opened from the Calls tab)
         .navigationBarBackButtonHidden(false)
+        // Nav bar trailing (iOS 26 auto-wraps these in Liquid Glass): the "…" menu + Edit (rename).
+        .toolbar {
+            if !isSelf {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+                        Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
+                        Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
+                        Divider()
+                        Button(role: .destructive) { showReport = true } label: { Label("Report \(shownName)", systemImage: "exclamationmark.triangle") }
+                        if blocked {
+                            Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: { Label("Unblock \(shownName)", systemImage: "checkmark.circle") }
+                        } else {
+                            Button(role: .destructive) { showBlock = true } label: { Label("Block \(shownName)", systemImage: "nosign") }
+                        }
+                    } label: { Image(systemName: "ellipsis") }
+                    .tint(.primary)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { renameText = shownName; showRename = true }.tint(.primary)
+                }
+            }
+        }
         .task {
             await load()
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
+            localName = ContactNames.name(for: otherUid)
+        }
+        // Edit → local rename (device-only; the other person's account is never touched).
+        .alert("Edit Name", isPresented: $showRename) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                ContactNames.set(renameText, for: otherUid)
+                localName = ContactNames.name(for: otherUid)
+            }
+        } message: {
+            Text("This name is saved only on your device. It won't change \(name)'s account.")
+        }
+        // Sounds & Notifications row → mute options.
+        .confirmationDialog("Sounds & Notifications", isPresented: $showMuteOptions, titleVisibility: .visible) {
+            if muted { Button("Unmute") { muted = false; Task { await ChatService.setMute(cid, until: 0) } } }
+            Button("Mute for 1 hour") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
+            Button("Mute for 8 hours") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
+            Button("Mute for 1 day")   { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(24)) } }
+            Button("Mute for 1 week")  { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
+            Button("Mute Always")      { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        // Add to a Group → new group, pre-including this contact.
+        .sheet(isPresented: $showAddGroup) {
+            NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
+        }
+        .navigationDestination(item: $openGroup) { g in
+            let me = AuthService.shared.uid ?? ""
+            ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
         }
         .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
         .sheet(isPresented: $showAllMedia) { SharedMediaGridView(cid: cid, media: media) }
@@ -144,43 +205,65 @@ struct ContactInfoView: View {
         }
     }
 
-    // Settings-style rows, surfaced on the profile itself (Signal/WhatsApp-style) instead
-    // of being buried in a "..." menu — the profile was reading empty with everything hidden.
-    private var optionsCard: some View {
+    // Profile settings rows (Telegram order): Disappearing Messages, Sounds & Notifications,
+    // Verify Encryption. Wallpaper / Share / Clear / Report / Block now live in the "…" menu.
+    private var settingsCard: some View {
         VStack(spacing: 0) {
             infoRow("Disappearing Messages", "timer", value: disappearLabel) { showDisappear = true }
             rowDivider
-            infoRow("Chat Wallpaper", "paintpalette") {
-                let target = cid
-                dismiss()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    NotificationCenter.default.post(name: .openChatWallpaper, object: target)
-                }
-            }
+            infoRow("Sounds & Notifications", "bell.badge", value: muted ? "Muted" : "On") { showMuteOptions = true }
             rowDivider
             infoRow("Verify Encryption", "lock.fill", tint: .accentColor) { showVerify = true }
-            rowDivider
-            infoRow("Share Contact", "square.and.arrow.up") { showShare = true }
         }
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
-    // Destructive actions kept in their own red card at the bottom (also formerly menu-only).
-    private var dangerCard: some View {
-        VStack(spacing: 0) {
-            infoRow("Clear My Messages", "trash", tint: .primary) { showClear = true }
-            rowDivider
-            infoRow("Report \(name)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
-            rowDivider
-            if blocked {
-                infoRow("Unblock \(name)", "checkmark.circle", chevron: false) {
-                    Task { await ChatService.setBlocked(cid, false); blocked = false }
+    // Groups this contact and I both belong to. "N Groups in Common" + Add-to-a-Group + the list;
+    // "No Groups in Common" + Add-to-a-Group only (no list) when there are none.
+    private var sharedGroups: [Conversation] {
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations
+            .filter { $0.isGroup && $0.users.contains(otherUid) && $0.users.contains(me) && !$0.isCleared(me) }
+            .sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }
+    }
+
+    private var groupsInCommonCard: some View {
+        let me = AuthService.shared.uid ?? ""
+        let groups = sharedGroups
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(groups.isEmpty ? "No Groups in Common"
+                                : "\(groups.count) Group\(groups.count == 1 ? "" : "s") in Common")
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
+            infoRow("Add to a Group", "plus.circle.fill", tint: .accentColor, chevron: false) { showAddGroup = true }
+            ForEach(groups) { g in
+                rowDivider
+                Button { openGroup = g } label: {
+                    HStack(spacing: 12) {
+                        AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(g.displayName(me)).foregroundStyle(.primary)
+                            Text(g.memberCountLabel).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .contentShape(Rectangle())
                 }
-            } else {
-                infoRow("Block \(name)", "nosign", tint: .red, chevron: false) { showBlock = true }
+                .buttonStyle(.plain)
             }
         }
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    // "Change Wallpaper" (from the "…" menu): pop back to the chat, then open the wallpaper picker.
+    private func changeWallpaper() {
+        let target = cid
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            NotificationCenter.default.post(name: .openChatWallpaper, object: target)
+        }
     }
 
     // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
@@ -222,8 +305,8 @@ struct ContactInfoView: View {
 
     private var hero: some View {
         VStack(spacing: 6) {
-            AvatarView(name: name, photoUrl: photoUrl, size: 88)
-            Text(name).font(.title.weight(.bold))
+            AvatarView(name: shownName, photoUrl: photoUrl, size: 88)
+            Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
             // height change was the up/down "jump" when opening a profile from Calls (cold
