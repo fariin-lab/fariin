@@ -265,12 +265,12 @@ struct ThreadView: View {
         // button, and slides with the native swipe-back — no custom overlay or blur. Zero-size here.
         .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
-        // Native nav bar with its REAL background (the iOS 26 liquid-glass blur, no custom border).
-        // Force it VISIBLE so the blur always shows (default .automatic was transparent at the scroll
-        // top, which read as "no blur"). The titleView renders on TOP of this, so it's never covered.
+        // Native nav bar blur is applied via the UIKit bridge (NavTitleView.applyBlurAppearance):
+        // BOTH standardAppearance AND scrollEdgeAppearance get the system default-background blur, so
+        // the iOS 26 liquid-glass blur is always on (SwiftUI's .toolbarBackground left the scroll-edge
+        // state transparent -> the "sometimes blur, sometimes not"). The titleView renders on top.
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
-        .toolbarBackground(.visible, for: .navigationBar)
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
                 GroupInfoView(cid: cid)

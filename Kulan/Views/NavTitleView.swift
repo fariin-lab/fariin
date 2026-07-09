@@ -71,6 +71,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
                 target = vc
             }
             assertTitleView()
+            applyBlurAppearance(to: vc)
             // SwiftUI re-manages the navigationItem on its own update cycles and clears titleView
             // (the "avatar+name sometimes gone" flicker). Observe it and immediately put ours back.
             if observation == nil, let item = target?.navigationItem {
@@ -78,6 +79,20 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
                     self?.assertTitleView()
                 }
             }
+        }
+
+        // ALWAYS-ON native blur (the secret): a nav bar has two backgrounds — standardAppearance (once
+        // scrolled) and scrollEdgeAppearance (at the top). The scroll-edge one defaults to TRANSPARENT,
+        // so the blur only showed after scrolling ("sometimes works"). Set BOTH to the system
+        // default-background blur so the native iOS 26 liquid-glass blur is present in every state.
+        // Re-apply only when it's been cleared (SwiftUI resets it), to avoid flicker.
+        private func applyBlurAppearance(to vc: UIViewController) {
+            guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
+            let appearance = UINavigationBarAppearance()
+            appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
+            vc.navigationItem.standardAppearance = appearance
+            vc.navigationItem.scrollEdgeAppearance = appearance
+            vc.navigationItem.compactAppearance = appearance
         }
 
         private func assertTitleView() {
