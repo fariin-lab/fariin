@@ -137,7 +137,10 @@ struct ContactInfoView: View {
             ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
         }
         .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
-        .sheet(isPresented: $showAllMedia) { SharedMediaGridView(cid: cid, media: media) }
+        // Full-screen PUSH gallery (Telegram-style tabs), not a sheet.
+        .navigationDestination(isPresented: $showAllMedia) {
+            MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
+        }
         .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
         // Options for the "Disappearing Messages" row (was a dead button — no dialog was attached).
         .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {

@@ -693,6 +693,20 @@ enum ChatService {
         }
     }
 
+    /// A larger recent window of decrypted messages for the Media Gallery to categorize into
+    /// media / audio / links tabs (newest first). Client-side filtering avoids a composite index.
+    static func galleryContent(_ cid: String, limit: Int = 400) async -> [Message] {
+        do {
+            let snap = try await db.collection("conversations").document(cid).collection("messages")
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit).getDocuments()
+            return snap.documents
+                .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
+        } catch {
+            return []
+        }
+    }
+
     /// Delete all of MY messages in this conversation ("Clear chat" for me).
     static func clearMyMessages(_ cid: String) async {
         do {
