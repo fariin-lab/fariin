@@ -1517,13 +1517,17 @@ struct ThreadView: View {
                     Divider().padding(.horizontal, 12)
                 }
                 HStack(alignment: .bottom, spacing: 4) {
-                    if recordingHeld {
-                        recordingHoldRow
-                        micButton            // stays at the right edge to hold/slide/lock
-                    } else {
-                        messageField
-                        if !hasText { inFieldGif; inFieldCamera; micButton }   // sticker · camera · mic, all IN the pill
-                    }
+                    // Field content swaps between the text field and the recording bar…
+                    if recordingHeld { recordingHoldRow } else { messageField }
+                    // …sticker + camera show only when idle & empty…
+                    if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
+                    // …and the MIC lives in ONE stable slot, gated only by !hasText (which does NOT
+                    // change during a recording). This is critical: previously the mic was inside BOTH
+                    // the recordingHeld branch AND the else branch, so the moment recording started
+                    // (recordingHeld=true) SwiftUI re-parented it and TORE DOWN the live DragGesture —
+                    // the finger stopped tracking, slide-to-lock/cancel died, and release never fired
+                    // (stuck, not sent). One fixed slot + a stable .id keeps the gesture alive end-to-end.
+                    if !hasText { micButton.id("record-mic") }
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
@@ -1650,7 +1654,9 @@ struct ThreadView: View {
                 }
             }
             .contentShape(Circle())
-            .gesture(recordDragGesture)
+            // highPriority so the mic's hold/slide wins over the field's interactive-glass touch
+            // handling (which otherwise competes for the same touch and can swallow the drag).
+            .highPriorityGesture(recordDragGesture)
             .padding(.trailing, recordingHeld ? 6 : 12).padding(.bottom, 7)   // sit inside the pill's right edge
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordingHeld)
             .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
