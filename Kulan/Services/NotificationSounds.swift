@@ -12,8 +12,18 @@ import AVFoundation
 struct NotificationSound: Identifiable, Equatable {
     let id: String            // stable key stored in prefs
     let name: String
-    var systemID: SystemSoundID? = nil   // built-in tone
+    var systemID: SystemSoundID? = nil   // built-in tone (fallback playback)
     var customPath: String? = nil        // imported file (app support dir)
+
+    // The on-device .caf file backing a built-in tone. Playing THIS through an AVAudioPlayer on a
+    // .playback session makes the tone actually audible (even on the mute switch) — the fix for
+    // "it only vibrates". The `id`s below already ARE the system file base-names (aurora, bloom…);
+    // the default "tritone" maps to Note.caf.
+    var cafPath: String? {
+        guard systemID != nil else { return nil }
+        let base = (id == "tritone") ? "Note" : id.prefix(1).uppercased() + id.dropFirst()
+        return "/System/Library/Audio/UISounds/New/\(base).caf"
+    }
 
     static let none = NotificationSound(id: "none", name: "None")
 
@@ -91,14 +101,23 @@ final class SoundPlayer {
     private var registered: [String: SystemSoundID] = [:]
 
     func play(_ sound: NotificationSound) {
-        if let sid = sound.systemID {
-            AudioServicesPlaySystemSound(sid)
-            return
+        guard sound.id != "none" else { return }
+        // Prefer a real audio file (custom import, else the tone's on-device .caf) played through a
+        // .playback session so it's AUDIBLE — the system-alert route (AudioServicesPlaySystemSound)
+        // is muted by the ring/silent switch, which is why it only vibrated. Fall back to the system
+        // sound if the file is missing.
+        let path = sound.customPath ?? sound.cafPath
+        if let path, FileManager.default.fileExists(atPath: path) {
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, options: [.duckOthers])
+                try session.setActive(true)
+                let p = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+                player = p          // retain so it isn't deallocated mid-play
+                p.play()
+                return
+            } catch { /* fall through to the system tone */ }
         }
-        if let path = sound.customPath {
-            // Short custom sounds: AVAudioPlayer gives us full-length playback + retention.
-            player = try? AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
-            player?.play()
-        }
+        if let sid = sound.systemID { AudioServicesPlaySystemSound(sid) }
     }
 }

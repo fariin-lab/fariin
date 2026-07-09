@@ -24,12 +24,12 @@ struct SetNicknameView: View {
                 Color(.systemGroupedBackground).ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("Nickname", text: $text)
-                        .font(.title3)
+                        .font(.body)
                         .focused($focused)
                         .submitLabel(.done)
                         .onSubmit { onSave(text); dismiss() }
-                        .padding(.horizontal, 18).padding(.vertical, 16)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .padding(.horizontal, 16).padding(.vertical, 12)   // native ~44pt row height
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))   // native inset-grouped corner
                         .padding(.top, 20)
                     Text("This nickname is saved only on your device and visible only to you.")
                         .font(.subheadline).foregroundStyle(.secondary)
