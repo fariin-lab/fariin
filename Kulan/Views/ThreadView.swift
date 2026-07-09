@@ -1715,7 +1715,7 @@ struct ThreadView: View {
                 .font(.system(size: 13, weight: .bold))
                 .opacity(1 - lockProgress)
         }
-        .foregroundStyle(.white)                 // white icons (spec)
+        .foregroundStyle(.primary)               // native adaptive: black in light mode, white in dark
         .frame(width: 48)                        // bigger 48px pill (spec: looked small)
         .padding(.vertical, 14)
         .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass (spec)
