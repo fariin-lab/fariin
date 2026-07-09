@@ -169,12 +169,12 @@ struct ThreadView: View {
                     // landed — that was the "opens in the middle" bug.)
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
-                } else if mine {
-                    // Defer one runloop so the new bubble is laid out BEFORE we scroll — otherwise
-                    // scrollTo lands on the OLD bottom and the freshly-inserted row shifts it (the jump).
-                    DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
-                } else if isAtBottom {
-                    DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                } else if mine || isAtBottom {
+                    // My own send always jumps to the bottom; a received message only when I'm already
+                    // there. Double-frame the pin (pinBottomStable) so the freshly-inserted bubble —
+                    // whose height isn't final on the same runloop (text reflow, async image size) —
+                    // can't shift the bottom out from under the scroll (the jump).
+                    pinBottomStable(proxy)
                 } else {
                     newWhileAway += 1
                 }
@@ -1133,13 +1133,30 @@ struct ThreadView: View {
     private func revealAtOpenAnchor(_ proxy: ScrollViewProxy) {
         let a = openAnchor
         DispatchQueue.main.async {
-            proxy.scrollTo(a.id, anchor: a.edge)          // pass 1 (approximate on a cold load)
-            DispatchQueue.main.async {
-                proxy.scrollTo(a.id, anchor: a.edge)      // pass 2 after layout → final position
-                revealed = true
+            proxy.scrollTo(a.id, anchor: a.edge)              // pass 1 (approximate on a cold load)
+            // Pass 2 after a short beat: on a COLD open the LazyVStack is still instantiating rows and
+            // async images are still sizing, so one runloop isn't enough — the position was landing
+            // approximately, then reflowing (the jump). Wait ~2 frames so heights settle, re-pin, then
+            // a final same-runloop pin, and only THEN drop the veil — so the settle happens unseen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.033) {
+                proxy.scrollTo(a.id, anchor: a.edge)          // pass 2 after layout + image sizing
+                DispatchQueue.main.async {
+                    proxy.scrollTo(a.id, anchor: a.edge)      // pass 3 final → exact position
+                    revealed = true
+                }
             }
         }
         enableSlideInAfterReveal()
+    }
+
+    // Pin to the newest message across two frames: the first pin lands on the pre-insert layout, the
+    // second (next runloop, after the new row is measured) corrects it — so a freshly-arrived bubble
+    // can never leave a visible jump. Used for both my sends and received-while-at-bottom.
+    private func pinBottomStable(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            proxy.scrollTo("BOTTOM", anchor: .bottom)
+            DispatchQueue.main.async { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+        }
     }
 
     // Turn on the message-row slide-in transition a beat AFTER the chat has revealed, so the
