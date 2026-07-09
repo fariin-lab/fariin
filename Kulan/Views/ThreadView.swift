@@ -70,6 +70,7 @@ struct ThreadView: View {
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
     @State private var isAtBottom = true
+    @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left (WhatsApp)
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
@@ -136,7 +137,8 @@ struct ThreadView: View {
             .onChange(of: repo.didInitialLoad) { _, done in
                 if done, !revealed {
                     DispatchQueue.main.async {
-                        proxy.scrollTo("BOTTOM", anchor: .bottom)   // land on the TRUE newest before the fade-in (WhatsApp)
+                        let a = openAnchor
+                        proxy.scrollTo(a.id, anchor: a.edge)   // restore the in-session spot, else the newest — before the fade-in
                         revealed = true
                     }
                 }
@@ -146,7 +148,8 @@ struct ThreadView: View {
                 // so the composer / empty state shows.
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 if !revealed {
-                    proxy.scrollTo("BOTTOM", anchor: .bottom)
+                    let a = openAnchor
+                    proxy.scrollTo(a.id, anchor: a.edge)
                     revealed = true
                 }
             }
@@ -155,13 +158,14 @@ struct ThreadView: View {
                 guard new > old else { return }
                 let mine = repo.items.last?.authorId == me
                 if !settled {
-                    // INITIAL LOAD (WhatsApp-clean): always pin to the TRUE newest as cache→live chunks
-                    // land. NON-animated + still under the reveal veil, so it's invisible — no wiggle.
-                    // Applies EVEN with unread messages: we open on the newest like WhatsApp; the unread
+                    // INITIAL LOAD (WhatsApp-clean): pin to the OPEN ANCHOR (the saved in-session spot,
+                    // else the newest) as cache→live chunks land. NON-animated + still under the reveal
+                    // veil, so it's invisible — no wiggle. Applies even with unread messages: the unread
                     // divider is only a marker you scroll up to, it never steals the open position. (The
-                    // old unread no-op here relied on defaultScrollAnchor, which drifted off the bottom
-                    // as chunks/heights landed — that was the "opens in the middle" bug.)
-                    proxy.scrollTo("BOTTOM", anchor: .bottom)
+                    // old code relied on defaultScrollAnchor here, which drifted off the bottom as chunks
+                    // landed — that was the "opens in the middle" bug.)
+                    let a = openAnchor
+                    proxy.scrollTo(a.id, anchor: a.edge)
                 } else if mine {
                     proxy.scrollTo("BOTTOM", anchor: .bottom)   // spring row-transition shows it; no competing scroll anim
                 } else if isAtBottom {
@@ -667,6 +671,11 @@ struct ThreadView: View {
                     .equatable()   // skip re-rendering bubbles whose value-inputs are unchanged (H2/H3/M1)
                     .padding(.top, topGap(at: index))   // tight when grouped, wider on sender change
                     .id(msg.id)
+                    // Track which bubbles are on screen (into a non-invalidating box) and remember the
+                    // spot on APPEAR only — never on disappear, so navigating away (mass row teardown)
+                    // can't corrupt the saved position.
+                    .onAppear { visibleRows.ids.insert(msg.id); persistScrollPosition() }
+                    .onDisappear { visibleRows.ids.remove(msg.id) }
                     // Slide-in ONLY once the open has settled: the initial load arrives in
                     // chunks (cache -> live), and rows sliding in from the bottom during those
                     // chunks read as the whole conversation jumping up and down on open.
@@ -679,7 +688,7 @@ struct ThreadView: View {
             }
             // Bottom sentinel: drives "am I at the bottom?" for the scroll button.
             Color.clear.frame(height: 1).id("BOTTOM")
-                .onAppear { isAtBottom = true; newWhileAway = 0 }
+                .onAppear { isAtBottom = true; newWhileAway = 0; persistScrollPosition() }   // at bottom → remember .bottom
                 .onDisappear { isAtBottom = false }
         }
         .padding(.horizontal, 12)
@@ -1089,6 +1098,28 @@ struct ThreadView: View {
             Rectangle().fill(Color.accentColor.opacity(0.3)).frame(height: 1)
         }
         .padding(.vertical, 8)
+    }
+
+    // Where the chat should land when it opens: the saved in-session spot if that message is still
+    // loaded, otherwise the newest. Cold start / first open this session → no saved anchor → newest.
+    private var openAnchor: (id: String, edge: UnitPoint) {
+        if case .message(let id)? = ChatScrollStore.shared.anchor(for: cid),
+           repo.items.contains(where: { $0.id == id }) {
+            return (id, .top)
+        }
+        return ("BOTTOM", .bottom)
+    }
+
+    // Remember (in RAM) where we're looking so reopening this chat lands here. Only after the open
+    // has SETTLED — during the load we're programmatically pinning, and saving then would feed the
+    // pin back into itself. Called from row/BOTTOM onAppear only (teardown-safe).
+    private func persistScrollPosition() {
+        guard revealed, settled else { return }
+        if isAtBottom {
+            ChatScrollStore.shared.save(cid, .bottom)
+        } else if let topId = repo.items.first(where: { visibleRows.ids.contains($0.id) })?.id {
+            ChatScrollStore.shared.save(cid, .message(topId))
+        }
     }
 
     // Anchor the unread divider above the first unread message and land there on open.
