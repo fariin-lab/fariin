@@ -865,16 +865,19 @@ struct ThreadView: View {
 
     // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
     private var headerLabel: some View {
-        HStack(spacing: 9) {
+        // Measurements matched to Signal-iOS's ConversationHeaderView (iOS 26 variant): 40pt avatar,
+        // 12pt avatar→name spacing, 17pt-semibold title (.headline), a 16×16 title-row icon at 5pt.
+        HStack(spacing: 12) {
             AvatarView(name: title, photoUrl: photoUrl, size: 40)
             VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     // Constant reminder that messages self-delete here (WhatsApp shows one too) —
                     // this timer being invisible is how a whole chat history vanished unnoticed.
                     if repo.disappearSeconds > 0 {
                         Image(systemName: "timer")
-                            .font(.caption2.weight(.semibold))
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 16, height: 16)
                             .foregroundStyle(.secondary)
                     }
                 }
