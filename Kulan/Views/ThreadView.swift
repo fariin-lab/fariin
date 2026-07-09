@@ -903,15 +903,21 @@ struct ThreadView: View {
                 Button { showContactInfo = true } label: { headerLabel }
                     .buttonStyle(.plain)
                     .fixedSize()
-                    .padding(.leading, 84)             // clear gap after the back button (was touching at 68)
+                    .padding(.leading, 84)             // clear gap after the back button
                 // The right side must never intercept or cover the trailing call/video toolbar
                 // buttons — an empty, non-hit-testing spacer keeps that area completely free.
                 Spacer(minLength: 0).allowsHitTesting(false)
             }
-            // Lift from the content top up into the nav-bar band (nav bar ~44pt; inset used as a floor).
-            .offset(y: -min(geo.safeAreaInsets.top, 44) + 2)
+            // A 44pt band (standard nav-bar height) pinned EXACTLY over the nav bar: the band's top
+            // sits at (safe-area-top − 44) = the nav bar's top, so the avatar centres in it and aligns
+            // with the back button + call buttons (like Signal's titleView). .ignoresSafeArea makes
+            // geo.safeAreaInsets.top report the REAL inset (it was collapsing to ~0, so the header
+            // dropped below the bar into the messages).
+            .frame(height: 44)
+            .offset(y: max(0, geo.safeAreaInsets.top - 44))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     // MARK: - @mentions (groups)
