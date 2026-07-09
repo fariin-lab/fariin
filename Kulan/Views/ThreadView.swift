@@ -723,9 +723,10 @@ struct ThreadView: View {
         // interactive swipe-back they slide horizontally WITH the page (a toolbar item stays frozen).
         // The back button + call/video buttons remain native toolbar items, so they stay static —
         // exactly the requested behavior.
-        // 1:1 call buttons only — group calls need an SFU (not built yet). The cid check keeps
-        // them from flashing on a group cold-open before the conversation doc has loaded.
-        if !isGroup && cid.contains("_") {
+        // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
+        // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
+        // underscore; the old cid.contains("_") heuristic hid them in the preview).
+        if !isGroup && !otherUid.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) } label: {
                     callGlyph("ic_call_voice")
@@ -902,7 +903,7 @@ struct ThreadView: View {
                 Button { showContactInfo = true } label: { headerLabel }
                     .buttonStyle(.plain)
                     .fixedSize()
-                    .padding(.leading, 68)             // 16px gap AFTER the ~52pt back-button zone
+                    .padding(.leading, 84)             // clear gap after the back button (was touching at 68)
                 // The right side must never intercept or cover the trailing call/video toolbar
                 // buttons — an empty, non-hit-testing spacer keeps that area completely free.
                 Spacer(minLength: 0).allowsHitTesting(false)
