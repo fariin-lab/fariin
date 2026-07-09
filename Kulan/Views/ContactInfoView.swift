@@ -65,8 +65,28 @@ struct ContactInfoView: View {
         if source == .calls, lastCall != nil { callLogCard }
         if !about.isEmpty { bioCard }
         if !isSelf { settingsCard }
-        if !media.isEmpty { mediaCard }
-        if !isSelf { groupsInCommonCard }
+        if !media.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("All Media")
+                mediaCard
+            }
+        }
+        if !isSelf {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader(groupsHeaderText)
+                groupsInCommonCard
+            }
+        }
+    }
+
+    // Bold grouped-list section title above a card (Signal/Apple style).
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title).font(.title3.weight(.bold))
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
+    }
+    private var groupsHeaderText: String {
+        let n = sharedGroups.count
+        return n == 0 ? "No Groups in Common" : "\(n) Group\(n == 1 ? "" : "s") in Common"
     }
 
     // Nav bar trailing: just Edit (rename). The "…" More menu is a quick-action tile (below).
@@ -211,10 +231,6 @@ struct ContactInfoView: View {
         let me = AuthService.shared.uid ?? ""
         let groups = sharedGroups
         return VStack(alignment: .leading, spacing: 0) {
-            Text(groups.isEmpty ? "No Groups in Common"
-                                : "\(groups.count) Group\(groups.count == 1 ? "" : "s") in Common")
-                .font(.footnote).foregroundStyle(.secondary)
-                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
             infoRow("Add to a Group", "plus.circle.fill", tint: .accentColor, chevron: false) { showAddGroup = true }
             ForEach(groups) { g in
                 rowDivider

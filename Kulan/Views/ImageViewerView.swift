@@ -128,16 +128,14 @@ struct ImageViewerView: View {
         .padding(.horizontal, 12).padding(.top, 4)
     }
 
-    // Floating Liquid Glass bottom toolbar: Share · Reply · Delete.
+    // Bottom toolbar: three SEPARATE Liquid Glass circle buttons (no grouping pill) — Share · Reply · Delete.
     private var bottomBar: some View {
-        HStack(spacing: 26) {
+        HStack(spacing: 22) {
             glassButton("square.and.arrow.up") { share() }
             glassButton("arrowshape.turn.up.left") { dismiss() }   // Reply: return to the chat to reply
             glassButton("trash") { confirmDelete = true }
         }
-        .padding(.horizontal, 20).padding(.vertical, 10)
-        .liquidGlass(Capsule(), interactive: false)
-        .padding(.bottom, 6)
+        .padding(.bottom, 10)
     }
 
     private func glassButton(_ icon: String, _ action: @escaping () -> Void) -> some View {
@@ -260,9 +258,12 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         switch g.state {
         case .changed:
             let ty: CGFloat = max(0, t.y)
-            scrollView.transform = CGAffineTransform(translationX: t.x * CGFloat(0.4), y: ty)
             let progress: Double = min(1.0, Double(ty) / 400.0)
-            onDim?(1.0 - progress * 0.7)
+            // Apple Photos feel: the image SHRINKS toward the finger and follows it in both axes,
+            // while the black backdrop fades to reveal the content behind.
+            let scale = CGFloat(1.0 - progress * 0.35)
+            scrollView.transform = CGAffineTransform(translationX: t.x, y: ty).scaledBy(x: scale, y: scale)
+            onDim?(1.0 - progress * 0.9)
         case .ended, .cancelled:
             if t.y > 120 || g.velocity(in: view).y > 800 {
                 onDismiss?()
