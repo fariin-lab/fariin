@@ -1523,15 +1523,8 @@ struct ThreadView: View {
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
-            // While RECORDING: a SOLID pill (no blur at all). Any material/glass here rendered a blur
-            // (and a blurred ghost that read as a duplicate input bar) — user wants the recording bar
-            // clean. Normal state keeps the interactive iMessage glass field.
-            .background {
-                if recordingHeld {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color(.secondarySystemBackground))
-                }
-            }
-            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true, enabled: !recordingHeld)
+            // Real Liquid Glass on the field in BOTH states — including the recording bar (user spec).
+            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
 
             // Mic (hold-to-record) OR Send — a standalone button OUTSIDE the field, like "+".
             rightButton
@@ -1661,24 +1654,17 @@ struct ThreadView: View {
 
     // Lock target floating above the mic — fills toward accent as you slide up, then locks.
     private var lockTarget: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: 6) {
             Image(systemName: lockProgress > 0.7 ? "lock.fill" : "lock.open.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
             Image(systemName: "chevron.up")
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 12, weight: .bold))
                 .opacity(1 - lockProgress)
         }
-        .foregroundStyle(lockProgress > 0.6 ? .white : .primary)
-        .frame(width: 40)
+        .foregroundStyle(.white)                 // white icons (spec)
+        .frame(width: 40)                        // 40px pill (spec)
         .padding(.vertical, 12)
-        // Fills toward red as you slide up (matches the red mic), on a soft glass pill.
-        .background {
-            ZStack {
-                Capsule().fill(.ultraThinMaterial)
-                Capsule().fill(Color.red.opacity(lockProgress * 0.9))
-            }
-        }
-        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+        .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass (spec)
         .scaleEffect(0.9 + lockProgress * 0.12)
     }
 
