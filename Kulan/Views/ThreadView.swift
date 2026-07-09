@@ -727,6 +727,23 @@ struct ThreadView: View {
         // interactive swipe-back they slide horizontally WITH the page (a toolbar item stays frozen).
         // The back button + call/video buttons remain native toolbar items, so they stay static —
         // exactly the requested behavior.
+        // Transparent tappable item over the avatar+name area so the "open profile" tap is handled by
+        // the NATIVE nav bar (reliable) — the in-page visual overlay sat below the bar, which swallowed
+        // its taps. Glass hidden so it's invisible; the sliding avatar/name still render on top.
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showContactInfo = true } label: {
+                    Color.clear.frame(width: 190, height: 40).contentShape(Rectangle())
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+        } else {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showContactInfo = true } label: {
+                    Color.clear.frame(width: 190, height: 40).contentShape(Rectangle())
+                }
+            }
+        }
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
