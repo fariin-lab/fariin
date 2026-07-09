@@ -908,13 +908,13 @@ struct ThreadView: View {
                 // buttons — an empty, non-hit-testing spacer keeps that area completely free.
                 Spacer(minLength: 0).allowsHitTesting(false)
             }
-            // A 44pt band (standard nav-bar height) pinned EXACTLY over the nav bar: the band's top
-            // sits at (safe-area-top − 44) = the nav bar's top, so the avatar centres in it and aligns
-            // with the back button + call buttons (like Signal's titleView). .ignoresSafeArea makes
-            // geo.safeAreaInsets.top report the REAL inset (it was collapsing to ~0, so the header
-            // dropped below the bar into the messages).
+            // The nav bar sits JUST BELOW the status bar. With the transparent toolbar, the safe-area
+            // top = the status-bar height, and the 44pt nav bar occupies the band starting right there.
+            // So place a 44pt band at y = safeAreaInsets.top (NOT minus 44 — that lifted it up into the
+            // status bar). The avatar centres in the band and lines up with the back button + call
+            // buttons on ONE row, like Signal's centered titleView.
             .frame(height: 44)
-            .offset(y: max(0, geo.safeAreaInsets.top - 44))
+            .offset(y: geo.safeAreaInsets.top)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .ignoresSafeArea(.container, edges: .top)
