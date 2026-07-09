@@ -260,22 +260,14 @@ struct ThreadView: View {
     // Split into several layers so each modifier chain stays under the type-checker limit.
     private var threadCovers: some View {
         threadScroll
-        // Native blur backdrop behind the header (the toolbar background is hidden, which removed the
-        // real nav-bar blur; we can't restore it because it would render OVER the in-page avatar+name).
-        // A system-material bar under the header re-creates the iOS blur so messages frost under it.
-        .overlay(alignment: .top) { headerBlurBar }
-        // Avatar + name as an IN-PAGE overlay (not a toolbar item) so the interactive swipe-back
-        // slides them horizontally WITH the page. The whole pushed view slides during the pop, so
-        // this overlay slides for free; the native back + call/video buttons (toolbar) stay static.
-        .overlay(alignment: .topLeading) { slidingHeaderLabel }
+        // Avatar + name installed as the NATIVE UINavigationItem.titleView (Signal's exact approach):
+        // it renders on top of the nav bar's own blur (never covered), left-aligns after the back
+        // button, and slides with the native swipe-back — no custom overlay or blur. Zero-size here.
+        .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
-        // Native nav bar KEPT (real edge-swipe-back that follows your finger + reveals the list), but
-        // its BACKGROUND is hidden — no solid bar / border, so the chat scrolls up under a transparent
-        // floating header (the Signal "no border, see the background" look). Avatar/name/call buttons
-        // stay as the toolbar's glass pills.
+        // Native nav bar with its REAL background (the iOS 26 liquid-glass blur, no custom border).
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
-        .toolbarBackground(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
                 GroupInfoView(cid: cid)
@@ -718,32 +710,9 @@ struct ThreadView: View {
     // Chats list. Avatar + name (+ presence) centered; voice + video as trailing glass items.
     // The native back button (leading) owns the real edge-swipe-back gesture.
     @ToolbarContentBuilder private var chatToolbar: some ToolbarContent {
-        // Avatar + name (leading), tap opens the contact profile. iOS 26 auto-wraps EVERY
-        // toolbar item in a Liquid-Glass pill — but the avatar/name must NOT have that pill
-        // (only the back button + call/video buttons should). `.buttonStyle(.plain)` alone
-        // does NOT remove it; `.sharedBackgroundVisibility(.hidden)` does.
-        // NOTE: the avatar + name are NOT toolbar items anymore. They're rendered as an in-PAGE
-        // overlay (see `slidingHeaderLabel`) positioned in the nav-bar band, so that during the
-        // interactive swipe-back they slide horizontally WITH the page (a toolbar item stays frozen).
-        // The back button + call/video buttons remain native toolbar items, so they stay static —
-        // exactly the requested behavior.
-        // Transparent tappable item over the avatar+name area so the "open profile" tap is handled by
-        // the NATIVE nav bar (reliable) — the in-page visual overlay sat below the bar, which swallowed
-        // its taps. Glass hidden so it's invisible; the sliding avatar/name still render on top.
-        if #available(iOS 26.0, *) {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { showContactInfo = true } label: {
-                    Color.clear.frame(width: 190, height: 40).contentShape(Rectangle())
-                }
-            }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { showContactInfo = true } label: {
-                    Color.clear.frame(width: 190, height: 40).contentShape(Rectangle())
-                }
-            }
-        }
+        // Avatar + name are installed as the native UINavigationItem.titleView (see NavTitleView) —
+        // NOT a toolbar item — so the tap, the leading placement, the native blur and the swipe-back
+        // slide are all handled there (Signal's approach). Only the call/video buttons live here.
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
@@ -911,56 +880,6 @@ struct ThreadView: View {
             }
             .fixedSize()
         }
-    }
-
-    // The window's top safe-area inset = the STATUS-BAR height (notch/Dynamic Island), read straight
-    // from UIKit so it's always correct (the in-view GeometryReader kept returning ~0, which dropped
-    // the header into the status bar). The 44pt nav bar sits right below the status bar.
-    private var statusBarHeight: CGFloat {
-        (UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }?.safeAreaInsets.top) ?? 47
-    }
-
-    // Native blur backdrop behind the header (status bar + 44pt nav bar), so messages frost under it
-    // the way the real nav bar does. System material = native iOS blur, not a custom effect. Sits
-    // BELOW the avatar+name overlay and BELOW the native back/call buttons; never intercepts touches.
-    private var headerBlurBar: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .frame(maxWidth: .infinity)
-            .frame(height: statusBarHeight + 44)
-            // Fade the bottom edge so there's NO hard border/line — mimics the native nav-bar
-            // scroll-edge effect (the blur dissolves into the content instead of ending in a seam).
-            .mask(
-                LinearGradient(stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black, location: 0.78),
-                    .init(color: .clear, location: 1.0),
-                ], startPoint: .top, endPoint: .bottom)
-            )
-            .ignoresSafeArea(.container, edges: .top)
-            .allowsHitTesting(false)
-    }
-
-    // In-page placement of the avatar+name inside the nav-bar band. Rendered as an overlay on the page
-    // (not a toolbar item) so the interactive swipe-back slides it with the page. Pushed down by the
-    // status-bar height into the 44pt nav bar band, so the avatar centres on the SAME row as the back
-    // button + call buttons (like Signal's centered titleView).
-    private var slidingHeaderLabel: some View {
-        HStack(spacing: 0) {
-            Button { showContactInfo = true } label: { headerLabel }
-                .buttonStyle(.plain)
-                .fixedSize()
-                .padding(.leading, 76)             // ~16pt back-button->avatar gap (Signal's spacing)
-            // Never cover/intercept the trailing call/video buttons — empty non-hit-testing spacer.
-            Spacer(minLength: 0).allowsHitTesting(false)
-        }
-        .frame(height: 44)                          // the nav-bar band
-        .padding(.top, statusBarHeight)             // push below the status bar onto the nav-bar row
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .ignoresSafeArea(.container, edges: .top)   // so .padding(.top) starts at the SCREEN top
     }
 
     // MARK: - @mentions (groups)
