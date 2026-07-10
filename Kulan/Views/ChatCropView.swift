@@ -90,21 +90,22 @@ struct ChatCropView: View {
     // MARK: Frame chrome
 
     private var gridAndBorder: some View {
+        // Drawn with ABSOLUTE crop coordinates (like the dim overlay + brackets) so the border, grid and
+        // corners all move as ONE during a drag. (Frame/position updated a beat off from the Paths, so the
+        // border desynced and looked like a shaking duplicate line.)
         ZStack {
-            Rectangle().stroke(.white.opacity(0.9), lineWidth: 1)
-            ForEach(1...2, id: \.self) { i in
-                Path { p in
-                    let x = crop.width * CGFloat(i) / 3
-                    p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: crop.height))
-                }.stroke(.white.opacity(0.35), lineWidth: 0.5)
-                Path { p in
-                    let y = crop.height * CGFloat(i) / 3
-                    p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: crop.width, y: y))
-                }.stroke(.white.opacity(0.35), lineWidth: 0.5)
+            Path { $0.addRect(crop) }
+                .stroke(.white.opacity(0.9), lineWidth: 1)
+            Path { p in
+                for i in 1...2 {
+                    let x = crop.minX + crop.width * CGFloat(i) / 3
+                    p.move(to: CGPoint(x: x, y: crop.minY)); p.addLine(to: CGPoint(x: x, y: crop.maxY))
+                    let y = crop.minY + crop.height * CGFloat(i) / 3
+                    p.move(to: CGPoint(x: crop.minX, y: y)); p.addLine(to: CGPoint(x: crop.maxX, y: y))
+                }
             }
+            .stroke(.white.opacity(0.35), lineWidth: 0.5)
         }
-        .frame(width: crop.width, height: crop.height)
-        .position(x: crop.midX, y: crop.midY)
         .allowsHitTesting(false)
     }
 
