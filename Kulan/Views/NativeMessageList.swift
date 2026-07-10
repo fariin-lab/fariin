@@ -144,6 +144,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
+        let appendedCount = ids.count - currentIds.count   // captured BEFORE currentIds is reassigned
         let anchor: (id: String, distanceFromTop: CGFloat)? = isPrepend ? captureTopAnchor() : nil
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -157,7 +158,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // Send/receive at the bottom ANIMATES — Signal's exact recipe (ConversationViewController+CVC):
         // an animated performBatchUpdates insert + scrollAction .bottomForNewMessage(isAnimated: true).
         // First load and prepends stay non-animated (Signal wraps those in zero-duration animations).
-        let animate = isAppend && didInitialScroll && wasAtBottom
+        // ONLY a genuine single new message (one appended row) animates — the initial open loads messages
+        // in CHUNKS (cache→live), and animating those multi-row appends was the "jumping" bubbles on open.
+        // Also never animate during the open settle window (pendingBottomScroll).
+        let animate = isAppend && didInitialScroll && wasAtBottom && appendedCount == 1 && !pendingBottomScroll
         if animate {
             // iMessage-style send: the new bubble EMERGES FROM THE COMPOSER (the layout's
             // initialLayoutAttributesForAppearingItem starts it at the screen bottom) and one native
@@ -166,8 +170,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             // contentOffset) share the same spring curve: bubble and scroll move as one.
             sendAnimating = true
             (collectionView.collectionViewLayout as? ComposerEmergeLayout)?.emergeFromComposer = true
-            UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.82,
-                           initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
+            // iMessage-snappy spring: quick rise, gentle settle, no wobble.
+            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.85,
+                           initialSpringVelocity: 0.5, options: [.allowUserInteraction]) {
                 self.dataSource.apply(snapshot, animatingDifferences: true)
                 let target = self.collectionView.collectionViewLayout.collectionViewContentSize.height
                     - self.collectionView.bounds.height + self.collectionView.adjustedContentInset.bottom
@@ -343,10 +348,11 @@ final class ComposerEmergeLayout: UICollectionViewCompositionalLayout {
               let final = layoutAttributesForItem(at: itemIndexPath),
               let cv = collectionView else { return attr }
         let a = final.copy() as! UICollectionViewLayoutAttributes
-        // Start at the composer: the visible bottom edge of the viewport, slightly scaled down.
+        // iMessage: the bubble forms at the input field FULL-SIZE (no shrink) and springs straight up into
+        // place. Start it at the visible bottom edge (just above the composer) with NO scale.
         let viewportBottom = cv.contentOffset.y + cv.bounds.height - cv.adjustedContentInset.bottom
         let dy = max(0, viewportBottom - final.frame.minY)
-        a.transform = CGAffineTransform(translationX: 0, y: dy).scaledBy(x: 0.92, y: 0.92)
+        a.transform = CGAffineTransform(translationX: 0, y: dy)
         a.alpha = 1   // no fade — it slides, like iMessage
         return a
     }
