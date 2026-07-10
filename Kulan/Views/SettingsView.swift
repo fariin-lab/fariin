@@ -379,9 +379,18 @@ struct PrivacySettingsView: View {
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
     @AppStorage("shareLastSeen") private var shareLastSeen = true
+    @AppStorage("experimental.nativeList") private var nativeList = false
 
     var body: some View {
         List {
+            Section {
+                Toggle(isOn: $nativeList) { Label("Native message list", systemImage: "bolt.badge.clock") }.tint(.green)
+            } header: {
+                Text("Experimental")
+            } footer: {
+                Text("Uses a UIKit collection view for the chat (Signal's architecture) so it opens at the exact bottom with no scroll jump. Reopen a chat after changing this.")
+            }
+
             Section {
                 Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)
                 Toggle(isOn: $typingIndicators) { Label("Typing Indicators", systemImage: "ellipsis.bubble") }.tint(.green)
