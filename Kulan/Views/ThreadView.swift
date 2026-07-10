@@ -1052,6 +1052,14 @@ struct ThreadView: View {
                 onPickVideo: { url in
                     showAttachPanel = false
                     Task { await sendVideo(from: url) }   // straight into the send pipeline
+                },
+                onPickMultiple: { imgs in
+                    showAttachPanel = false
+                    // Same routing as the Photos picker: 1 photo → editor, 2+ → the album approval screen.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        if imgs.count == 1 { editImage = EditImageWrap(image: imgs[0]) }
+                        else { multiImages = MultiImagesWrap(images: imgs) }
+                    }
                 })
                 .padding(.top, 10)
             // Fixed bottom row of sources (Camera lives in the grid now). Signal's
@@ -2337,6 +2345,7 @@ struct MessageBubble: View, Equatable {
     private var onMyBubble: Color { .white }
 
     @State private var dragX: CGFloat = 0
+    @State private var scrubbing = false   // true while dragging a voice waveform — suppresses reply-swipe
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
     @State private var notFoundUser = false       // @username tapped but no such user
     @AppStorage("readReceipts") private var readReceiptsPref = true
@@ -2645,9 +2654,12 @@ struct MessageBubble: View, Equatable {
         }
         .simultaneousGesture(
             DragGesture(minimumDistance: 18)
-                .onChanged { v in if v.translation.width < 0 { dragX = max(v.translation.width, -70) } }
+                .onChanged { v in
+                    guard !scrubbing else { return }   // voice waveform scrub owns this drag — don't reply
+                    if v.translation.width < 0 { dragX = max(v.translation.width, -70) }
+                }
                 .onEnded { _ in
-                    if dragX < -50 {
+                    if !scrubbing, dragX < -50 {
                         onReply(message)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
@@ -2661,7 +2673,8 @@ struct MessageBubble: View, Equatable {
         if message.isAudio {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
-                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)
+                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark,
+                                 onScrub: { scrubbing = $0 })   // scrubbing the waveform blocks reply-swipe
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)

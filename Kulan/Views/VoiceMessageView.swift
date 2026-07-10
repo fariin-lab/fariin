@@ -8,6 +8,7 @@ struct VoiceMessageView: View {
     let cid: String
     let isMe: Bool
     let dark: Bool
+    var onScrub: (Bool) -> Void = { _ in }   // forwarded to the bubble so it blocks reply-swipe while scrubbing
 
     @State private var player: AVAudioPlayer?
     @State private var playing = false
@@ -43,7 +44,8 @@ struct VoiceMessageView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
-                             unplayed: tint.opacity(0.3), playing: playing) { pct in seek(pct) }
+                             unplayed: tint.opacity(0.3), playing: playing,
+                             onSeek: { pct in seek(pct) }, onScrub: onScrub)
                     .frame(width: 158, height: 26)
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
@@ -150,6 +152,7 @@ struct WaveformBars: View {
     var unplayed: Color
     var playing: Bool = false
     var onSeek: (Double) -> Void
+    var onScrub: (Bool) -> Void = { _ in }   // true while dragging the waveform → parent blocks reply-swipe
 
     var body: some View {
         GeometryReader { geo in
@@ -187,9 +190,12 @@ struct WaveformBars: View {
             // highPriorityGesture: scrubbing the waveform must WIN over the bubble's swipe-to-reply,
             // so dragging here seeks instead of opening a reply (user: touching this area acted like a
             // reply). Priority also stops the horizontal drag from reaching the reply gesture.
-            .highPriorityGesture(DragGesture(minimumDistance: 0).onChanged { v in
-                onSeek(Double(v.location.x / max(1, geo.size.width)))
-            })
+            .highPriorityGesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    onScrub(true)
+                    onSeek(Double(v.location.x / max(1, geo.size.width)))
+                }
+                .onEnded { _ in onScrub(false) })
         }
     }
 }

@@ -60,7 +60,7 @@ struct MultiImageApprovalView: View {
         }
     }
 
-    // X (close) top-left. (Crop / pen / HD live in the bottom tool row, like the single-image editor.)
+    // X (close) top-left · HD top-right — Apple's standard corner placement.
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
@@ -71,6 +71,14 @@ struct MultiImageApprovalView: View {
             }
             .buttonStyle(.plain)
             Spacer()
+            Button { hd.toggle() } label: {
+                Text("HD").font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -94,16 +102,16 @@ struct MultiImageApprovalView: View {
     // Tool row (crop · pen · HD) + thumbnail rail (both hidden while typing) + caption field + send.
     private var bottomControls: some View {
         VStack(spacing: 12) {
+            // One line: crop · pen · HD on the LEFT, the thumbnail rail on the RIGHT (matches the mockup).
             if !captionFocused {
                 HStack(spacing: 10) {
                     toolButton("crop") { editCrop = true }
                     toolButton("scribble") { editPen = true }
                     toolButton("", active: hd, label: "HD") { hd.toggle() }
-                    Spacer()
+                    rail   // fills the remaining width; thumbnails sit on the right
                 }
                 .padding(.horizontal, 16)
             }
-            if !captionFocused { rail }
             HStack(spacing: 10) {
                 TextField("", text: $caption,
                           prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
@@ -136,6 +144,7 @@ struct MultiImageApprovalView: View {
     }
 
     // Ordered thumbnail rail: current page ring-highlighted, tap to jump, X removes from the batch.
+    // Right-aligned in the remaining width (thumbnails sit at the right edge; scrolls when many).
     private var rail: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -164,7 +173,8 @@ struct MultiImageApprovalView: View {
                     }
                 }
             }
-            .padding(.horizontal, 16).padding(.top, 6)
+            .padding(.top, 6)
+            .frame(maxWidth: .infinity, alignment: .trailing)   // hug the right edge
         }
         .frame(height: 60)
     }

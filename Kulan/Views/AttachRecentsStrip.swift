@@ -12,10 +12,13 @@ struct AttachRecentsStrip: View {
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
+    var onPickMultiple: ([UIImage]) -> Void = { _ in }   // "Select" mode: send several photos at once
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
     @State private var loadingPick = false   // fetching the full-size asset after a tap
+    @State private var selecting = false             // multi-select mode (the "Select" button)
+    @State private var selectedIds: [String] = []    // chosen photo asset ids, in tap order
     @State private var showAlbums = false
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
@@ -32,7 +35,7 @@ struct AttachRecentsStrip: View {
         .task { if status == .authorized || status == .limited { load(); loadAlbums() } }
     }
 
-    // X close (48pt glass) + a "Recents ▾" title that flips open the album list.
+    // X close (48pt glass) + a "Recents ▾" title + a right-side Select / Send (N) / Cancel button.
     private var header: some View {
         ZStack {
             Button { withAnimation(.snappy(duration: 0.25)) { showAlbums.toggle() } } label: {
@@ -51,10 +54,37 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
+                selectButton
             }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+    }
+
+    // Right-side action: "Select" → enters multi-select; then "Send (N)" once photos are chosen, or
+    // "Cancel" if none. Matches Telegram/WhatsApp's recents multi-select.
+    @ViewBuilder private var selectButton: some View {
+        if selecting {
+            if selectedIds.isEmpty {
+                Button { selecting = false } label: {
+                    Text("Cancel").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                        .frame(height: 36).padding(.horizontal, 14)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
+                }
+            } else {
+                Button { sendSelected() } label: {
+                    Text("Send \(selectedIds.count)").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                        .frame(height: 36).padding(.horizontal, 16)
+                        .background(Color(hex: 0x3DA1FD), in: Capsule())
+                }
+            }
+        } else {
+            Button { selecting = true } label: {
+                Text("Select").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                    .frame(height: 36).padding(.horizontal, 14)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+            }
+        }
     }
 
     private var grid: some View {
@@ -64,7 +94,10 @@ struct AttachRecentsStrip: View {
                 switch status {
                 case .authorized, .limited:
                     ForEach(assets, id: \.localIdentifier) { a in
-                        RecentThumb(asset: a) { pick(a) }
+                        RecentThumb(asset: a, selecting: selecting,
+                                    selectionNumber: selectionIndex(a)) {
+                            if selecting { toggle(a) } else { pick(a) }
+                        }
                     }
                 case .notDetermined:
                     accessTile("Allow Photos", icon: "photo.on.rectangle.angled") { request() }
@@ -195,6 +228,40 @@ struct AttachRecentsStrip: View {
         }
     }
 
+    // MARK: Multi-select
+
+    // 1-based position of an asset in the current selection (nil = not selected). Photos only.
+    private func selectionIndex(_ a: PHAsset) -> Int? {
+        guard a.mediaType == .image, let i = selectedIds.firstIndex(of: a.localIdentifier) else { return nil }
+        return i + 1
+    }
+
+    private func toggle(_ a: PHAsset) {
+        guard a.mediaType == .image else { return }   // albums are photos only
+        if let i = selectedIds.firstIndex(of: a.localIdentifier) { selectedIds.remove(at: i) }
+        else { selectedIds.append(a.localIdentifier) }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    // Load every selected photo (in tap order) and hand them to the parent to send as a batch.
+    private func sendSelected() {
+        let ids = selectedIds
+        let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
+        loadingPick = true
+        Task {
+            var imgs: [UIImage] = []
+            for id in ids {
+                if let a = byId[id], let ui = await Self.fullImage(a) { imgs.append(ui) }
+            }
+            await MainActor.run {
+                loadingPick = false
+                selecting = false
+                selectedIds = []
+                if !imgs.isEmpty { onPickMultiple(imgs) }
+            }
+        }
+    }
+
     // Full-quality photo bytes (may pull from iCloud — network allowed).
     private static func fullImage(_ asset: PHAsset) async -> UIImage? {
         await withCheckedContinuation { cont in
@@ -262,6 +329,8 @@ private struct AlbumThumb: View {
 // square (Color.clear.aspectRatio keeps it 1:1 whatever the column width).
 private struct RecentThumb: View {
     let asset: PHAsset
+    var selecting: Bool = false
+    var selectionNumber: Int? = nil
     let onTap: () -> Void
     @State private var image: UIImage?
 
@@ -296,6 +365,27 @@ private struct RecentThumb: View {
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.black.opacity(0.45), in: Capsule())
                         .padding(4)
+                    }
+                }
+                // Multi-select: a numbered blue badge when chosen, an empty ring otherwise; selected
+                // thumbs dim + inset slightly (Photos-style).
+                .overlay {
+                    if selecting {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.black.opacity(selectionNumber != nil ? 0.25 : 0.0))
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if selecting {
+                        ZStack {
+                            Circle().fill(selectionNumber != nil ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.25))
+                                .frame(width: 24, height: 24)
+                            Circle().stroke(.white, lineWidth: 1.5).frame(width: 24, height: 24)
+                            if let n = selectionNumber {
+                                Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                            }
+                        }
+                        .padding(6)
                     }
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
