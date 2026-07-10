@@ -50,10 +50,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        var config = UICollectionLayoutListConfiguration(appearance: .plain)
-        config.showsSeparators = false
-        config.backgroundColor = .clear
-        let layout = UICollectionViewCompositionalLayout.list(using: config)
+        // A PLAIN self-sizing vertical layout — NOT UICollectionLayoutListConfiguration, whose "list"
+        // styling drew separators / inset cell backgrounds (the boxes/borders around bubbles). Here each
+        // cell is full-width, self-sizes to its SwiftUI content, and has no chrome of its own.
+        let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
+                                              heightDimension: .estimated(60))
+        let item = NSCollectionLayoutItem(layoutSize: itemSize)
+        let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
+        let section = NSCollectionLayoutSection(group: group)
+        let layout = UICollectionViewCompositionalLayout(section: section)
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
