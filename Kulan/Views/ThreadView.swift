@@ -409,7 +409,9 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showPinnedSheet) {
             PinnedMessagesSheet(
-                pinned: repo.pinnedMessageIds.compactMap { id in repo.messages.first { $0.id == id } },
+                pinned: repo.pinnedMessageIds.compactMap { id in repo.messages.first { $0.id == id } }
+                    .sorted { $0.createdAt < $1.createdAt },
+                me: me, cid: cid, title: title,
                 nameFor: { personName($0) },
                 canUnpin: !isGroup || (conversation?.isAdmin(me) ?? false),
                 onUnpin: { id in Task { await ChatService.removePinnedMessage(cid, id) } },
@@ -1677,9 +1679,17 @@ struct ThreadView: View {
     private func replyPreviewRow(_ r: Message) -> some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3, height: 34)
-            // Real image thumbnail when replying to a photo (Telegram/WhatsApp-style).
+            // Real media thumbnail when replying to a photo / GIF / video (Telegram/WhatsApp-style).
             if r.isImage, let url = r.imageUrl {
                 SecureImageView(imageUrl: url, enc: r.enc, cid: cid)
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else if r.isGif, let url = r.imageUrl {
+                AnimatedGifView(url: url)
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else if r.isVideo, let url = r.thumbUrl {
+                SecureImageView(imageUrl: url, enc: r.thumbEnc, cid: cid)
                     .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
@@ -1741,7 +1751,16 @@ struct ThreadView: View {
                 Text(replyVoiceDuration(r)).font(.caption2).foregroundStyle(.secondary)
             }
         } else if r.isImage {
-            Text("Photo").font(.caption).foregroundStyle(.secondary)
+            Text(r.viewOnce ? "View-once photo" : "Photo").font(.caption).foregroundStyle(.secondary)
+        } else if r.isGif {
+            Text("GIF").font(.caption).foregroundStyle(.secondary)
+        } else if r.isVideo {
+            Text("Video").font(.caption).foregroundStyle(.secondary)
+        } else if r.isFile {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.fill").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(r.fileName ?? "File").font(.caption).lineLimit(1).foregroundStyle(.secondary)
+            }
         } else {
             Text(r.text).font(.caption).lineLimit(1).foregroundStyle(.secondary)
         }
