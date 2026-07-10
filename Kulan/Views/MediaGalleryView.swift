@@ -58,6 +58,7 @@ struct MediaGalleryView: View {
 
     var body: some View {
         content
+            .overlay { loadingOverlay }   // spinner until the first load finishes (no "No media" flash)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
@@ -83,6 +84,14 @@ struct MediaGalleryView: View {
         case .media: mediaGrid
         case .audio: audioList
         case .links: linksList
+        }
+    }
+
+    // Shown until the first load finishes, so the "No media" empty state never flashes while loading.
+    @ViewBuilder private var loadingOverlay: some View {
+        if !loaded {
+            ProgressView().tint(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -161,7 +170,7 @@ struct MediaGalleryView: View {
 
     private var mediaGrid: some View {
         ScrollView {
-            if mediaItems.isEmpty { emptyState("photo.on.rectangle", "No media") }
+            if loaded && mediaItems.isEmpty { emptyState("photo.on.rectangle", "No media") }
             LazyVStack(alignment: .leading, spacing: 22) {
                 ForEach(mediaSections, id: \.title) { section in
                     Text(section.title)
@@ -254,7 +263,7 @@ struct MediaGalleryView: View {
 
     private var audioList: some View {
         ScrollView {
-            if audioItems.isEmpty { emptyState("mic", "No audio") }
+            if loaded && audioItems.isEmpty { emptyState("mic", "No audio") }
             LazyVStack(spacing: 0) {
                 ForEach(audioItems) { m in
                     audioRow(m)
@@ -290,7 +299,7 @@ struct MediaGalleryView: View {
 
     private var linksList: some View {
         ScrollView {
-            if linkItems.isEmpty { emptyState("link", "No links") }
+            if loaded && linkItems.isEmpty { emptyState("link", "No links") }
             LazyVStack(spacing: 0) {
                 ForEach(linkItems) { m in
                     linkRow(m)

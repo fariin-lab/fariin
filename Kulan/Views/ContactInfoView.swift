@@ -64,7 +64,6 @@ struct ContactInfoView: View {
         hero
         quickActions
         if source == .calls, lastCall != nil { callLogCard }
-        if !about.isEmpty { bioCard }
         if !isSelf { settingsCard }
         if !media.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -128,7 +127,7 @@ struct ContactInfoView: View {
         .task {
             await load()
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
-            localName = ContactNames.name(for: otherUid)
+            localName = ContactNames.shared.name(for: otherUid)
         }
     }
 
@@ -152,8 +151,8 @@ struct ContactInfoView: View {
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .sheet(isPresented: $showRename) {
                 SetNicknameView(current: localName ?? "") { newName in
-                    ContactNames.set(newName, for: otherUid)
-                    localName = ContactNames.name(for: otherUid)
+                    ContactNames.shared.set(newName, for: otherUid)
+                    localName = ContactNames.shared.name(for: otherUid)
                 }
             }
             .sheet(isPresented: $showDisappear) {
@@ -316,6 +315,14 @@ struct ContactInfoView: View {
             Text(handle.isEmpty ? " " : "@\(handle)")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .frame(minHeight: 20)
+            // Bio shown as centered text under the handle (like a group's description under the member
+            // count) — not a labeled "bio" card.
+            if !about.isEmpty {
+                Text(about)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32).padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
@@ -408,15 +415,6 @@ struct ContactInfoView: View {
         }
     }
 
-    private var bioCard: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("bio").font(.footnote).foregroundStyle(.secondary)   // small label (user: like image 2)
-            Text(about).font(.body)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
-    }
 
     private var mediaCard: some View {
         VStack(alignment: .leading, spacing: 10) {

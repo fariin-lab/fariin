@@ -1197,15 +1197,23 @@ struct ThreadView: View {
         catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the file. Try again." } }
     }
 
+    // Live name: prefer the conversation's current displayName (which reads ContactNames observably), so
+    // a nickname change in the profile updates the header INSTANTLY — the `title` passed at open is a
+    // captured snapshot that never refreshed.
+    private var liveTitle: String {
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? title
+    }
+
     // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
     private var headerLabel: some View {
         // Measurements matched to Signal-iOS's ConversationHeaderView (iOS 26 variant): 40pt avatar,
         // 12pt avatar→name spacing, 17pt-semibold title (.headline), a 16×16 title-row icon at 5pt.
         HStack(spacing: 12) {
-            AvatarView(name: title, photoUrl: photoUrl, size: 40)
+            AvatarView(name: liveTitle, photoUrl: photoUrl, size: 40)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    Text(liveTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     // Constant reminder that messages self-delete here (WhatsApp shows one too) —
                     // this timer being invisible is how a whole chat history vanished unnoticed.
                     if repo.disappearSeconds > 0 {
@@ -1270,7 +1278,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text)))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text))))))
         }
         replyingTo = nil
         typingSent = false
@@ -1857,6 +1865,12 @@ struct ThreadView: View {
                     .frame(width: 72, height: 14)
                 Text(replyVoiceDuration(r)).font(.caption2).foregroundStyle(.secondary)
             }
+        } else if r.isAlbum {
+            let n = r.album.isEmpty ? r.localAlbum.count : r.album.count
+            HStack(spacing: 4) {
+                Image(systemName: "photo.on.rectangle").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(r.text.isEmpty ? "\(n) Photos" : r.text).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+            }
         } else if r.isImage {
             Text(r.viewOnce ? "View-once photo" : "Photo").font(.caption).foregroundStyle(.secondary)
         } else if r.isGif {
@@ -2268,7 +2282,7 @@ struct ThreadView: View {
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text)))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text))))))
         }
         await MainActor.run {
             repo.addPending(Message(localAudioData: data, duration: dur, waveform: wf,

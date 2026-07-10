@@ -100,7 +100,7 @@ struct NewContactView: View {
         working = true
         if let u = await ChatService.findByHandle(h), u.id != me {
             let full = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
-            if !full.isEmpty { ContactNames.set(full, for: u.id) }   // save the local display name
+            if !full.isEmpty { ContactNames.shared.set(full, for: u.id) }   // save the local display name
             let cid = ChatService.convId(me, u.id)
             try? await ChatService.openConversation(other: u)
             working = false
