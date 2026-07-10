@@ -2789,56 +2789,65 @@ struct MessageBubble: View, Equatable {
                 onTapImage(message)   // ThreadView marks it viewed when the viewer closes
             }
         } else if message.isImage {
+            // ONE bubble (Signal/Telegram/WhatsApp): the photo on top, the caption flush below, sharing a
+            // single background + a single rounded outline — never two separate bubbles.
+            let hasCaption = !message.text.isEmpty
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
-                Group {
-                    if let data = message.localImageData, let ui = UIImage(data: data) {
-                        Image(uiImage: ui).resizable().scaledToFill()          // optimistic local photo
-                    } else if let url = message.imageUrl {
-                        SecureImageView(imageUrl: url, enc: message.enc, cid: cid)
-                    } else {
-                        Rectangle().fill(Color.gray.opacity(0.18))
-                    }
-                }
-                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
-                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-                // Native zoom hero (same mechanism as the story close): the viewer grows out of this
-                // bubble and the drag-down dismiss shrinks back into it, following the finger.
-                .modifier(HeroSource(ns: imageNS, id: message.id))
-                .overlay {   // clean WhatsApp/Telegram-style upload indicator (ring in a frosted disc)
-                    if message.sendState == .sending {
-                        ZStack {
-                            Color.black.opacity(0.18)
-                            ProgressView().progressViewStyle(.circular).tint(.white)
-                                .padding(15)
-                                .background(.ultraThinMaterial, in: Circle())
-                                .environment(\.colorScheme, .dark)
-                                .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 1))
+                VStack(alignment: .leading, spacing: 0) {
+                    Group {
+                        if let data = message.localImageData, let ui = UIImage(data: data) {
+                            Image(uiImage: ui).resizable().scaledToFill()          // optimistic local photo
+                        } else if let url = message.imageUrl {
+                            SecureImageView(imageUrl: url, enc: message.enc, cid: cid)
+                        } else {
+                            Rectangle().fill(Color.gray.opacity(0.18))
                         }
-                        .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                     }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    metaRow
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(.black.opacity(0.35), in: Capsule())
-                        .foregroundStyle(.white)
-                        .padding(7)
-                }
-                .onTapGesture {
-                    if message.sendState == .failed { onResend(message) }
-                    else if message.localImageData == nil { onTapImage(message) }   // only open uploaded photos
-                }
-                // Caption INSIDE the image bubble (Signal: the caption is the message body).
-                if !message.text.isEmpty {
-                    Text(message.text)
-                        .font(.system(size: 15))
-                        .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
+                    .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                    // Native zoom hero (same mechanism as the story close): the viewer grows out of this
+                    // bubble and the drag-down dismiss shrinks back into it, following the finger.
+                    .modifier(HeroSource(ns: imageNS, id: message.id))
+                    .overlay {   // clean WhatsApp/Telegram-style upload indicator (ring in a frosted disc)
+                        if message.sendState == .sending {
+                            ZStack {
+                                Color.black.opacity(0.18)
+                                ProgressView().progressViewStyle(.circular).tint(.white)
+                                    .padding(15)
+                                    .background(.ultraThinMaterial, in: Circle())
+                                    .environment(\.colorScheme, .dark)
+                                    .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 1))
+                            }
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        // With a caption the time lives in the caption row; on a bare photo it floats on the image.
+                        if !hasCaption {
+                            metaRow
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(.black.opacity(0.35), in: Capsule())
+                                .foregroundStyle(.white)
+                                .padding(7)
+                        }
+                    }
+                    .onTapGesture {
+                        if message.sendState == .failed { onResend(message) }
+                        else if message.localImageData == nil { onTapImage(message) }   // only open uploaded photos
+                    }
+                    // Caption INSIDE the same bubble (Signal: the caption is the message body).
+                    if hasCaption {
+                        HStack(alignment: .bottom, spacing: 6) {
+                            Text(message.text).font(.system(size: 15))
+                                .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
+                            if isLastInCluster { metaRow.padding(.bottom, 1) }
+                        }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(width: imageDisplaySize.width, alignment: .leading)
-                        .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
                 }
+                .frame(width: imageDisplaySize.width)
+                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
