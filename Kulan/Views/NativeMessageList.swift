@@ -57,6 +57,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var contentSizeObs: NSKeyValueObservation?   // re-pin to bottom while self-sizing cells settle
     private var settleWork: DispatchWorkItem?
     private var sendAnimating = false   // an animated send/receive glide is in flight — do NOT snap-pin over it
+    private var didReveal = false       // hidden until the first load is fully settled (Signal's hasAppliedFirstLoad)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -71,6 +72,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let layout = UICollectionViewCompositionalLayout(section: section)
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
+        // Invisible until the first load settles (Signal shows the conversation only once the first
+        // render state has landed) — the bubbles appear fully formed, never mid-measure.
+        collectionView.alpha = 0
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
         // .always so SwiftUI's safe-area insets (nav bar on top, the floating composer on the bottom)
@@ -207,6 +211,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if !didReveal { revealAfterSettle() }   // safety: empty chats settle nothing but must still show
         guard !sendAnimating else { return }   // never snap over an in-flight send glide
         if pendingBottomScroll { settleNow() }                                          // first real layout → full synchronous settle
         else if stickBottomThroughLayout { UIView.performWithoutAnimation { pinBottom() } }
@@ -238,6 +243,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             for _ in 0..<4 {
                 collectionView.layoutIfNeeded()
                 pinBottom()
+            }
+        }
+        revealAfterSettle()
+    }
+
+    // First open: some hosted-SwiftUI cell heights resolve one runloop AFTER the synchronous passes, so
+    // reveal on the NEXT runloop turn — after one more settle — while still invisible. The user only
+    // ever sees the final, fully-formed layout (no pop/bounce during the push transition).
+    private func revealAfterSettle() {
+        guard !didReveal else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.didReveal, self.collectionView.bounds.height > 0 else { return }
+            UIView.performWithoutAnimation {
+                for _ in 0..<2 {
+                    self.collectionView.layoutIfNeeded()
+                    self.pinBottom()
+                }
+                self.didReveal = true
+                self.collectionView.alpha = 1
             }
         }
     }
