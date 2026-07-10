@@ -139,8 +139,8 @@ struct ChatCropView: View {
         HStack {
             Button { dismiss() } label: {
                 Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(.white.opacity(0.15), in: Circle())
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)   // real native Liquid Glass
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -148,8 +148,8 @@ struct ChatCropView: View {
             Button { reset() } label: {
                 Text("Reset").font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(edited ? .white : .white.opacity(0.35))
-                    .frame(height: 40).padding(.horizontal, 14)
-                    .background(.white.opacity(0.15), in: Capsule())
+                    .frame(height: 44).padding(.horizontal, 16)
+                    .liquidGlass(Capsule(), interactive: true)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
