@@ -3,8 +3,11 @@ import SwiftUI
 // Custom bubble-colour editor (our own recreation of Signal's "Custom Color" page): Solid/Gradient
 // segmented control, a live message preview, a Hue slider and a Saturation slider, Set to apply.
 struct CustomColorView: View {
+    let cid: String
     var onSet: (ChatColorSpec) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
 
     @State private var isGradient = false
     @State private var hue1 = 0.62
@@ -56,7 +59,9 @@ struct CustomColorView: View {
         }
     }
 
-    // Live preview: incoming (received) + outgoing (the colour) bubbles on a soft panel.
+    // Live preview: incoming (real received colour) + outgoing (the chosen colour) bubbles on the
+    // ACTUAL chat background. Only the outgoing bubble recolours as the sliders move — the background
+    // and incoming bubbles stay exactly as they are in the real chat.
     private var preview: some View {
         VStack(spacing: 10) {
             Text("Today").font(.caption.weight(.medium))
@@ -70,18 +75,20 @@ struct CustomColorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)
-        .background(spec.swatch.opacity(0.28), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .background { ChatWallpaperBackground(cid: cid) }   // the user's real chat background, unchanged
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .padding(.horizontal, 16)
     }
 
     private func previewBubble(_ text: String, mine: Bool) -> some View {
         Text(text)
             .font(.system(size: 15))
-            .foregroundStyle(mine ? .white : .black)
+            .foregroundStyle(mine ? .white : (dark ? .white : .black))
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .fill(mine ? spec.fill : AnyShapeStyle(Color.white))
+                    .fill(mine ? spec.fill : AnyShapeStyle(Theme.received(dark)))
             }
     }
 

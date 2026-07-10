@@ -82,11 +82,11 @@ struct WallpaperPickerSheet: View {
             chatColorSection
             bottomBar
         }
-        .padding(.vertical, 18)
-        .presentationDetents([.height(480)])
+        .padding(.top, 10).padding(.bottom, 14)
+        .presentationDetents([.height(430)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
-            CustomColorView { spec in colorStore.set(spec, for: cid) }
+            CustomColorView(cid: cid) { spec in colorStore.set(spec, for: cid) }
         }
         // Selecting LIVE-PREVIEWS the pick on the chat behind (user: "must show preview live behind
         // chat when I choose"), but it is NOT saved: closing without Apply reverts to the original, so
