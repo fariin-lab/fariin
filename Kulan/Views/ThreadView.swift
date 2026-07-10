@@ -1825,9 +1825,42 @@ struct ThreadView: View {
             .frame(width: 22, height: 24)
             .frame(width: 40, height: 40)                  // Signal-style 40x40 tap target
             .opacity(recordingHeld ? 0 : 1)
-            .contentShape(Circle())
-            .highPriorityGesture(recordDragGesture)
+            // Instant UIKit hold gesture (minimumPressDuration 0) — fires on touch-down, no SwiftUI
+            // arbitration lag. Overlay stays mounted during recording so it keeps tracking the drag.
+            .overlay {
+                HoldToRecordView(
+                    onBegan: { beginHoldRecording() },
+                    onChanged: { t in updateHoldRecording(t) },
+                    onEnded: { t, cancelled in endHoldRecording(t, cancelled: cancelled) }
+                )
+            }
             .padding(.trailing, 4)                         // Signal: last icon 4pt from the bar edge
+    }
+
+    private func beginHoldRecording() {
+        guard !holdStarted, !recordLocked else { return }
+        holdStarted = true
+        recorder.requestAndStart()
+        impact(.medium)
+    }
+
+    private func updateHoldRecording(_ t: CGSize) {
+        guard holdStarted, !recordLocked else { return }
+        recordDrag = t
+        let armed = clampedDrag.width < -Self.cancelThreshold
+        if armed != recordCancelArmed { recordCancelArmed = armed; impact(.soft) }
+        if clampedDrag.height < -Self.lockThreshold { lockRecording() }
+    }
+
+    private func endHoldRecording(_ t: CGSize, cancelled: Bool) {
+        guard holdStarted, !recordLocked else { return }   // locked = keep going, the bar owns it
+        if cancelled || recordCancelArmed {
+            cancelRecording()
+        } else if recorder.elapsed < 0.5 {
+            cancelRecording(); flashHoldHint()             // accidental tap → discard + "hold to record"
+        } else {
+            sendRecording()
+        }
     }
 
     // The BIG red mic + lock pill, rendered as an overlay ON TOP of the composer during recording,
@@ -1867,37 +1900,6 @@ struct ThreadView: View {
         .padding(.vertical, 14)
         .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass (spec)
         .scaleEffect(0.92 + lockProgress * 0.12)
-    }
-
-    private var recordDragGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                // First change = touch-down (minimumDistance 0): start recording once (multi-touch/
-                // double-start guarded by holdStarted). Instant because the session is pre-warmed.
-                if !holdStarted && !recordLocked {
-                    holdStarted = true
-                    recorder.requestAndStart()
-                    impact(.medium)
-                }
-                guard holdStarted, !recordLocked else { return }
-                recordDrag = v.translation
-                let armed = clampedDrag.width < -Self.cancelThreshold
-                if armed != recordCancelArmed {
-                    recordCancelArmed = armed
-                    impact(.soft)     // tick when crossing the cancel line
-                }
-                if clampedDrag.height < -Self.lockThreshold { lockRecording() }
-            }
-            .onEnded { _ in
-                guard holdStarted, !recordLocked else { return }   // locked = keep going, bar owns it
-                if recordCancelArmed {
-                    cancelRecording()
-                } else if recorder.elapsed < 0.5 {
-                    cancelRecording(); flashHoldHint()   // accidental tap → discard + "hold to record"
-                } else {
-                    sendRecording()
-                }
-            }
     }
 
     // Locked (hands-free) recording bar — shown after you slide up to lock: delete · timer + waveform · send.
