@@ -86,21 +86,16 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // so the blur only showed after scrolling ("sometimes works"). Set BOTH to the system
         // default-background blur so the native iOS 26 liquid-glass blur is present in every state.
         // Re-apply only when it's been cleared (SwiftUI resets it), to avoid flicker.
-        // Match the NATIVE default (exactly like the Chats-list header): TRANSPARENT at the top (no
-        // background band / border), and the system blur only once the content scrolls under it. The
-        // old code forced the blur background in every state, which showed a faint band + edge at the
-        // top that the native list never has.
+        // Be IDENTICAL to the Chats-list header: the list sets no per-item appearance, so the bar uses
+        // the system default (transparent at the top, blur when scrolled, no visible border). Any
+        // per-navigationItem override we set here — even a "transparent" one — diverges from that and
+        // showed the band/border the user kept seeing. So clear every override and inherit the native
+        // default, exactly like the list. We only install the titleView (the native way to put an
+        // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            guard vc.navigationItem.scrollEdgeAppearance == nil else { return }
-            let standard = UINavigationBarAppearance()
-            standard.configureWithDefaultBackground()     // system blur when scrolled
-            standard.shadowColor = .clear                 // no hairline separator
-            let edge = UINavigationBarAppearance()
-            edge.configureWithTransparentBackground()     // top = transparent, like the chat list
-            edge.shadowColor = .clear
-            vc.navigationItem.standardAppearance = standard
-            vc.navigationItem.scrollEdgeAppearance = edge
-            vc.navigationItem.compactAppearance = standard
+            if vc.navigationItem.standardAppearance != nil { vc.navigationItem.standardAppearance = nil }
+            if vc.navigationItem.scrollEdgeAppearance != nil { vc.navigationItem.scrollEdgeAppearance = nil }
+            if vc.navigationItem.compactAppearance != nil { vc.navigationItem.compactAppearance = nil }
         }
 
         private func assertTitleView() {
