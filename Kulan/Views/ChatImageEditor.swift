@@ -54,6 +54,10 @@ struct ChatImageEditor: View {
                 // ZOOMABLE canvas (Signal's AttachmentPrep hosts its media in a ZoomableMediaView):
                 // pinch to zoom in/out, pan while zoomed, double-tap to zoom. Preview-only zoom.
                 // While drawing, the static image shows instead so the pencil owns the touches.
+                // NB: image, drawing canvas AND the persistent overlay all live in the SAME geo.size space
+                // (no .ignoresSafeArea) so a stroke stays exactly where it was drawn after Done. When the
+                // canvas ignored the safe area but the overlay/flatten used geo.size, strokes shifted DOWN
+                // by the top inset on Done — the reported bug.
                 if isDrawing {
                     Image(uiImage: edited)
                         .resizable().scaledToFit()
@@ -64,11 +68,11 @@ struct ChatImageEditor: View {
                                   showsToolPicker: false,
                                   inkType: isHighlighter ? .marker : .pen,
                                   penWidth: penWidth)
-                        .ignoresSafeArea()
+                        .frame(width: geo.size.width, height: geo.size.height)
                 } else {
                     ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
                                   onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                        .ignoresSafeArea()
+                        .frame(width: geo.size.width, height: geo.size.height)
                     // PERSISTENT drawing: after Done the strokes stay visible over the photo (the bug was
                     // the canvas only showing while actively drawing → the drawing "disappeared").
                     if !drawing.bounds.isEmpty {
