@@ -850,12 +850,14 @@ struct DrawingCanvas: UIViewRepresentable {
     let isActive: Bool
     var penColor: UIColor? = nil          // set (with showsToolPicker false) → Signal-style external palette
     var showsToolPicker: Bool = true
+    var inkType: PKInkingTool.InkType = .pen   // pen vs marker/highlighter
+    var penWidth: CGFloat = 6
     func makeUIView(context: Context) -> PKCanvasView {
         let v = PKCanvasView()
         v.drawingPolicy = .anyInput
         v.backgroundColor = .clear
         v.isOpaque = false
-        v.tool = PKInkingTool(.pen, color: penColor ?? .white, width: 6)
+        v.tool = PKInkingTool(inkType, color: penColor ?? .white, width: penWidth)
         v.delegate = context.coordinator
         if showsToolPicker { context.coordinator.toolPicker.addObserver(v) }   // native PencilKit tool palette
         return v
@@ -863,7 +865,7 @@ struct DrawingCanvas: UIViewRepresentable {
     func updateUIView(_ v: PKCanvasView, context: Context) {
         if v.drawing != drawing { v.drawing = drawing }
         v.isUserInteractionEnabled = isActive
-        if let penColor { v.tool = PKInkingTool(.pen, color: penColor, width: 6) }   // Signal palette drives the ink
+        if let penColor { v.tool = PKInkingTool(inkType, color: penColor, width: penWidth) }   // external palette drives the ink
         guard showsToolPicker else { return }
         // Show Apple's PKToolPicker (pens/marker/eraser/colors/undo) while drawing is active.
         let picker = context.coordinator.toolPicker

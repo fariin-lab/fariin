@@ -13,7 +13,9 @@ struct ChatImageEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var viewOnce = false   // Signal-style: recipient can open the photo exactly once
-    @State private var penHue = 0.0       // Signal's palette slider (0 = red end)
+    @State private var penHue = 0.0       // palette slider (0 = white end)
+    @State private var isHighlighter = false
+    @State private var penWidth: CGFloat = 6
     @State private var caption = ""
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
@@ -52,12 +54,22 @@ struct ChatImageEditor: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                     // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
                     DrawingCanvas(drawing: $drawing, isActive: true,
-                                  penColor: UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
-                                  showsToolPicker: false)
+                                  penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                                  showsToolPicker: false,
+                                  inkType: isHighlighter ? .marker : .pen,
+                                  penWidth: penWidth)
                         .ignoresSafeArea()
                 } else {
                     ZoomImageView(image: edited, onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
                         .ignoresSafeArea()
+                    // PERSISTENT drawing: after Done the strokes stay visible over the photo (the bug was
+                    // the canvas only showing while actively drawing → the drawing "disappeared").
+                    if !drawing.bounds.isEmpty {
+                        Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
+                            .resizable()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .allowsHitTesting(false)
+                    }
                 }
 
                 // Chrome INSIDE the native safe area (no manual inset math). The canvas above ignores
@@ -96,26 +108,29 @@ struct ChatImageEditor: View {
         }
     }
 
-    // Signal's brush bottom bar: the rainbow palette slider, then undo · X-cancel · ✓-done.
+    // Brush bottom bar: color palette slider (white → rainbow), then undo · pen/highlighter · width · ✓.
     private var penBar: some View {
-        VStack(spacing: 14) {
+        let currentColor = penHue == 0 ? Color.white : Color(hue: penHue, saturation: 1, brightness: 1)
+        return VStack(spacing: 14) {
             GradientSlider(value: $penHue, track: LinearGradient(
-                colors: stride(from: 0.0, through: 1.0, by: 0.08).map {
-                    Color(hue: $0, saturation: 1, brightness: 1)
-                }, startPoint: .leading, endPoint: .trailing))
+                colors: [.white] + stride(from: 0.02, through: 1.0, by: 0.08).map { Color(hue: $0, saturation: 1, brightness: 1) },
+                startPoint: .leading, endPoint: .trailing))
                 .padding(.horizontal, 20)
-            HStack {
-                Button {
+            HStack(spacing: 12) {
+                penTool("arrow.uturn.backward") {
                     var strokes = drawing.strokes
                     if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
-                } label: {
-                    Image(systemName: "arrow.uturn.backward").font(.system(size: 17, weight: .medium)).foregroundStyle(.white)
-                        .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                }
+                // Pen (solid) vs Highlighter (marker) — the active one shows a colored ring.
+                penTool("pencil.tip", active: !isHighlighter) { isHighlighter = false }
+                penTool("highlighter", active: isHighlighter) { isHighlighter = true }
+                // Stroke width cycles thin → medium → thick.
+                Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
+                    Circle().fill(currentColor).frame(width: min(penWidth + 6, 26), height: min(penWidth + 6, 26))
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true).contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                Spacer()
-                Image(systemName: "pencil").font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
-                    .frame(width: 44, height: 44).background(Color.white, in: Circle())   // active tool (Signal)
                 Spacer()
                 Button { isDrawing = false } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
@@ -125,6 +140,16 @@ struct ChatImageEditor: View {
             }
             .padding(.horizontal, 20)
         }
+    }
+
+    private func penTool(_ icon: String, active: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 17, weight: .medium))
+                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+        }
+        .buttonStyle(.plain)
     }
 
     // Bottom chrome (Signal AttachmentApprovalToolbar): a row of round glass tool buttons, then the
