@@ -153,17 +153,6 @@ struct ThreadView: View {
             pinnedBar(proxy)
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
-            // Signal-style floating date header (top-centered, fades out when idle).
-            .overlay(alignment: .top) { floatingDateHeader }
-            .onChange(of: topVisibleId) { _, _ in
-                floatingDateShown = true
-                floatingDateHideWork?.cancel()
-                let work = DispatchWorkItem {
-                    withAnimation(.easeOut(duration: 0.4)) { floatingDateShown = false }
-                }
-                floatingDateHideWork = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: work)
-            }
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
@@ -862,6 +851,22 @@ struct ThreadView: View {
     // SwiftUI ScrollView. Extracted so threadScroll's builder stays under the type-checker limit.
     @ViewBuilder
     private func listContainer(_ proxy: ScrollViewProxy) -> some View {
+        listBody(proxy)
+            // Signal-style floating date header (top-centered, fades out when idle). Kept HERE (not in the
+            // big scrollStack chain) so the type-checker isn't overloaded.
+            .overlay(alignment: .top) { floatingDateHeader }
+            .onChange(of: topVisibleId) { _, _ in bumpFloatingDate() }
+    }
+
+    private func bumpFloatingDate() {
+        floatingDateShown = true
+        floatingDateHideWork?.cancel()
+        let work = DispatchWorkItem { withAnimation(.easeOut(duration: 0.4)) { floatingDateShown = false } }
+        floatingDateHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: work)
+    }
+
+    @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         if useNativeList {
             nativeList
         } else {

@@ -153,7 +153,9 @@ struct ChatImageEditor: View {
                 }
                 .buttonStyle(.plain)
                 Spacer()
-                Button { isDrawing = false } label: {
+                // Edit-only (opened straight into pen from the multi-image screen): finishing the drawing
+                // returns the photo immediately — no extra editor page in between.
+                Button { if editOnly { returnEdited() } else { isDrawing = false } } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                         .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
                 }
