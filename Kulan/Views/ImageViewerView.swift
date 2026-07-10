@@ -17,8 +17,11 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             guard let touch = touches.first else { return }
             let prev = touch.previousLocation(in: view)
             let loc = touch.location(in: view)
-            let dy = prev.y - loc.y
-            let dx = prev.x - loc.x
+            // Movement deltas: positive dy = finger moving DOWN, positive dx = finger moving RIGHT.
+            // (The old prev-minus-loc form had every direction INVERTED — the .down dismiss pan only
+            // engaged on an UP drag, so drag-down-to-close never began.)
+            let dy = loc.y - prev.y
+            let dx = loc.x - prev.x
             let ok: Bool = {
                 if abs(dy) > abs(dx) {
                     if dir == .up, dy < 0 { return true }

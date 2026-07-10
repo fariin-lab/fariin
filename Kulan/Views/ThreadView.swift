@@ -2542,19 +2542,22 @@ struct MessageBubble: View, Equatable {
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
-                Button { onOpenFile(message) } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "doc.fill").font(.system(size: 26))
-                            .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(message.fileName ?? "Document")
-                                .font(.system(size: 15, weight: .medium)).lineLimit(1)
-                            Text(fileSizeLabel).font(.caption)
-                                .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary)
-                        }
+                // NOT a Button: inside the hosted cell a Button's press gesture claimed the touch, so
+                // long-press (context menu) and swipe-to-reply never fired on file bubbles. A tap
+                // gesture opens the file; everything else bubbles up normally.
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.fill").font(.system(size: 26))
+                        .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(message.fileName ?? "Document")
+                            .font(.system(size: 15, weight: .medium)).lineLimit(1)
+                        Text(fileSizeLabel).font(.caption)
+                            .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary)
                     }
                 }
                 .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+                .contentShape(Rectangle())
+                .onTapGesture { onOpenFile(message) }
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -2566,6 +2569,10 @@ struct MessageBubble: View, Equatable {
                     AnimatedGifView(url: url)
                         .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
                         .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                        // The UIKit-backed gif region isn't an interactive SwiftUI area, so long-press
+                        // (context menu) and swipe-to-reply never engaged over it. A clear, hit-testable
+                        // overlay makes SwiftUI own the region; touches then reach the ancestor gestures.
+                        .overlay(Color.clear.contentShape(Rectangle()))
                 }
             }
         } else if message.isVideo {
