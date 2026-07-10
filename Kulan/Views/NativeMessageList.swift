@@ -69,7 +69,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let item = NSCollectionLayoutItem(layoutSize: itemSize)
         let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
-        let layout = UICollectionViewCompositionalLayout(section: section)
+        let layout = ComposerEmergeLayout(section: section)
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
         // Invisible until the first load settles (Signal shows the conversation only once the first
@@ -159,16 +159,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // First load and prepends stay non-animated (Signal wraps those in zero-duration animations).
         let animate = isAppend && didInitialScroll && wasAtBottom
         if animate {
-            // Mark the glide BEFORE the apply so no layout pass/KVO snap-pins over the animation
-            // (that stomp was why sends appeared instantly with a jump instead of gliding).
+            // iMessage-style send: the new bubble EMERGES FROM THE COMPOSER (the layout's
+            // initialLayoutAttributesForAppearingItem starts it at the screen bottom) and one native
+            // UIKit SPRING drives both the batch-update insert and the scroll — the diffable apply is
+            // synchronous on main, so wrapping it in UIView.animate makes the whole update (insert +
+            // contentOffset) share the same spring curve: bubble and scroll move as one.
             sendAnimating = true
-            dataSource.apply(snapshot, animatingDifferences: true)
-            // Scroll alongside the insert animation (scrollToItem computes the in-flight target).
-            if let last = ids.last, let ip = dataSource.indexPath(for: last) {
-                collectionView.scrollToItem(at: ip, at: .bottom, animated: true)
+            (collectionView.collectionViewLayout as? ComposerEmergeLayout)?.emergeFromComposer = true
+            UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.82,
+                           initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
+                self.dataSource.apply(snapshot, animatingDifferences: true)
+                let target = self.collectionView.collectionViewLayout.collectionViewContentSize.height
+                    - self.collectionView.bounds.height + self.collectionView.adjustedContentInset.bottom
+                let y = max(-self.collectionView.adjustedContentInset.top, target)
+                self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)   // inherits the spring
+            } completion: { [weak self] _ in
+                self?.sendAnimating = false
+                (self?.collectionView.collectionViewLayout as? ComposerEmergeLayout)?.emergeFromComposer = false
             }
-            // Safety: if scrollViewDidEndScrollingAnimation never fires (already at target), release.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.sendAnimating = false }
+            // Safety: release even if the completion is dropped mid-transition.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.sendAnimating = false }
         } else {
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
@@ -306,5 +316,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let nearTop = scrollView.contentOffset.y <= 72
         if nearTop && !inTopZone { coordinator.parent.onReachedTop() }
         inTopZone = nearTop
+    }
+}
+
+// Compositional layout whose APPEARING cells emerge from the composer (Apple's native insert-animation
+// hook, initialLayoutAttributesForAppearingItem): a freshly inserted bottom cell starts translated down
+// at the input-field position with a slight scale, and UIKit's surrounding spring animates it up into
+// place — the iMessage send feel, built entirely from native animation APIs.
+final class ComposerEmergeLayout: UICollectionViewCompositionalLayout {
+    var emergeFromComposer = false
+    private var inserted: Set<IndexPath> = []
+
+    override func prepare(forCollectionViewUpdates updateItems: [UICollectionViewUpdateItem]) {
+        super.prepare(forCollectionViewUpdates: updateItems)
+        inserted = Set(updateItems.compactMap { $0.updateAction == .insert ? $0.indexPathAfterUpdate : nil })
+    }
+
+    override func finalizeCollectionViewUpdates() {
+        super.finalizeCollectionViewUpdates()
+        inserted = []
+    }
+
+    override func initialLayoutAttributesForAppearingItem(at itemIndexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
+        let attr = super.initialLayoutAttributesForAppearingItem(at: itemIndexPath)
+        guard emergeFromComposer, inserted.contains(itemIndexPath),
+              let final = layoutAttributesForItem(at: itemIndexPath),
+              let cv = collectionView else { return attr }
+        let a = final.copy() as! UICollectionViewLayoutAttributes
+        // Start at the composer: the visible bottom edge of the viewport, slightly scaled down.
+        let viewportBottom = cv.contentOffset.y + cv.bounds.height - cv.adjustedContentInset.bottom
+        let dy = max(0, viewportBottom - final.frame.minY)
+        a.transform = CGAffineTransform(translationX: 0, y: dy).scaledBy(x: 0.92, y: 0.92)
+        a.alpha = 1   // no fade — it slides, like iMessage
+        return a
     }
 }
