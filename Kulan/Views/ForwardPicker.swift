@@ -4,8 +4,17 @@ import SwiftUI
 // message is re-sent into each via ChatService.forwardMessage (E2EE re-encrypts media
 // for the target chat). Excludes the source chat. Real send pipeline — no fakes.
 struct ForwardPicker: View {
-    let message: Message
+    let messages: [Message]           // one or many (bulk forward)
     let sourceCid: String
+    var onSent: () -> Void = {}       // called after a fully-successful send (e.g. exit selection mode)
+
+    // Single-message convenience (unchanged call sites).
+    init(message: Message, sourceCid: String, onSent: @escaping () -> Void = {}) {
+        self.messages = [message]; self.sourceCid = sourceCid; self.onSent = onSent
+    }
+    init(messages: [Message], sourceCid: String, onSent: @escaping () -> Void = {}) {
+        self.messages = messages; self.sourceCid = sourceCid; self.onSent = onSent
+    }
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -23,6 +32,8 @@ struct ForwardPicker: View {
     }
 
     private var snippet: String {
+        if messages.count > 1 { return "\(messages.count) messages" }
+        let message = messages[0]
         if message.isImage { return "📷 Photo" }
         if message.isVideo { return "🎥 Video" }
         if message.isAudio { return "🎤 Voice message" }
@@ -88,15 +99,21 @@ struct ForwardPicker: View {
 
     private func sendAll() async {
         sending = true
+        // Oldest first so forwarded messages land in the same order they were sent.
+        let ordered = messages.sorted { $0.createdAt < $1.createdAt }
         var sent = Set<String>()
         for cid in selected {
-            do { try await ChatService.forwardMessage(message, from: sourceCid, to: cid); sent.insert(cid) }
-            catch { /* keep it selected so the retry targets only the failures */ }
+            var allOK = true
+            for m in ordered {
+                do { try await ChatService.forwardMessage(m, from: sourceCid, to: cid) }
+                catch { allOK = false }
+            }
+            if allOK { sent.insert(cid) }   // only clear a target once EVERY message reached it
         }
-        // Drop the chats that succeeded — a retry after a partial failure must NOT re-forward
-        // to the ones that already received it (that produced duplicates).
+        // Drop the chats that fully succeeded — a retry after a partial failure must NOT re-forward
+        // to the ones that already received everything (that produced duplicates).
         selected.subtract(sent)
         sending = false
-        if selected.isEmpty { dismiss() } else { forwardError = true }   // don't pretend it sent
+        if selected.isEmpty { onSent(); dismiss() } else { forwardError = true }   // don't pretend it sent
     }
 }

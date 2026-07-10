@@ -307,6 +307,130 @@ enum MessageSearch {
     }
 }
 
+// MARK: - In-chat search (one conversation's whole history)
+
+// One decrypted message from a single chat, for in-chat search.
+struct InChatMessage: Identifiable {
+    let id: String
+    let text: String
+    let authorId: String
+    let date: Date
+}
+
+extension MessageSearch {
+    // Load (up to `limit`) of ONE chat's messages, decrypting only the text. Group messages are sealed
+    // per-sender, so every author's key is warmed first (same as the global corpus loader).
+    static func loadChat(cid: String, isGroup: Bool, me: String, limit: Int = 1000) async -> [InChatMessage] {
+        let db = Firestore.firestore()
+        guard let snap = try? await db.collection("conversations").document(cid)
+            .collection("messages")
+            .order(by: "createdAt", descending: true)
+            .limit(to: limit)
+            .getDocuments() else { return [] }
+        if isGroup {
+            let authors = Set(snap.documents.compactMap { $0.data()["authorId"] as? String })
+            for a in authors where a != me { _ = await Crypto.shared.preloadKey(a) }
+        } else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+            _ = await Crypto.shared.preloadKey(other)
+        }
+        return snap.documents.compactMap { doc -> InChatMessage? in
+            let data = doc.data()
+            let author = data["authorId"] as? String ?? ""
+            let text = isGroup
+                ? Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid, authorId: author)
+                : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid)
+            guard !text.isEmpty else { return nil }
+            let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            return InChatMessage(id: doc.documentID, text: text, authorId: author, date: date)
+        }
+    }
+}
+
+// Search inside a single conversation. Loads the chat's text history once, filters in memory as you
+// type, and hands the picked message id back so ThreadView can scroll to + flash it.
+struct InChatSearchView: View {
+    let cid: String
+    let isGroup: Bool
+    let me: String
+    var nameFor: (String) -> String = { _ in "" }
+    var onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var corpus: [InChatMessage] = []
+    @State private var loading = false
+    @FocusState private var focused: Bool
+
+    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+
+    private var results: [InChatMessage] {
+        let q = trimmed.lowercased()
+        guard !q.isEmpty else { return [] }
+        return Array(corpus.filter { $0.text.lowercased().contains(q) }
+            .sorted { $0.date > $1.date }.prefix(100))
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(results) { m in
+                Button { onPick(m.id); dismiss() } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            if isGroup {
+                                Text(nameFor(m.authorId)).font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.tint).lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Text(m.date.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption).foregroundStyle(.secondary).fixedSize()
+                        }
+                        Text(highlighted(m.text)).font(.system(size: 15)).lineLimit(2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+            }
+            .listStyle(.plain)
+            .overlay {
+                if trimmed.isEmpty {
+                    ContentUnavailableView("Search this chat", systemImage: "magnifyingglass",
+                                           description: Text("Find any message in this conversation."))
+                } else if loading && results.isEmpty {
+                    ProgressView()
+                } else if !loading && results.isEmpty {
+                    ContentUnavailableView.search(text: trimmed)
+                }
+            }
+            .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Search this chat")
+            .autoFocusSearch($focused)
+        }
+        .task {
+            focused = true
+            loading = true
+            corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
+            loading = false
+        }
+    }
+
+    // Bold the matched span inside the snippet so the hit is obvious.
+    private func highlighted(_ text: String) -> AttributedString {
+        var str = AttributedString(text)
+        let q = trimmed
+        guard !q.isEmpty, let r = text.range(of: q, options: .caseInsensitive),
+              let lo = AttributedString.Index(r.lowerBound, within: str),
+              let hi = AttributedString.Index(r.upperBound, within: str) else { return str }
+        str[lo..<hi].font = .system(size: 15, weight: .bold)
+        return str
+    }
+}
+
 // MARK: - Calls: search anyone you've chatted with, tap to call
 
 struct ContactsSearchView: View {

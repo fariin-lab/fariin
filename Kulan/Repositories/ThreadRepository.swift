@@ -357,6 +357,17 @@ final class ThreadRepository {
             }
     }
 
+    // Page older history until `messageId` is loaded (so in-chat search can scroll to a match that's
+    // far above the current window), or we run out of history. Bounded so a bad id can't loop forever.
+    @MainActor
+    func ensureLoaded(_ messageId: String, maxPages: Int = 40) async {
+        var pages = 0
+        while !items.contains(where: { $0.id == messageId }) && canLoadOlder && pages < maxPages {
+            await withCheckedContinuation { cont in loadOlder { cont.resume() } }
+            pages += 1
+        }
+    }
+
     func stop() {
         listener?.remove(); listener = nil
         convListener?.remove(); convListener = nil
