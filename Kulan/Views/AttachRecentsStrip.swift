@@ -73,7 +73,7 @@ struct AttachRecentsStrip: View {
                       prompt: Text("Add a caption…").foregroundColor(Color(.systemGray)))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 16).frame(height: 46)
-                .background(Color.primary.opacity(0.08), in: Capsule())
+                .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
