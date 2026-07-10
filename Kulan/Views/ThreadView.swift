@@ -45,6 +45,8 @@ struct ThreadView: View {
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var multiImages: MultiImagesWrap? // 2+ picked photos → Signal-style approval screen
     struct MultiImagesWrap: Identifiable { let id = UUID(); let images: [UIImage] }
+    @State private var viewedOnceTick = 0            // bump after consuming a view-once photo → bubbles refresh
+    @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
     @State private var viewerImage: Message?
@@ -314,9 +316,22 @@ struct ThreadView: View {
         .alert("Status no longer available", isPresented: $statusUnavailable) {
             Button("OK", role: .cancel) {}
         } message: { Text("This status has expired.") }
-        .fullScreenCover(item: $viewerImage) { msg in
-            // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
-            ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif }, cid: cid)
+        .fullScreenCover(item: $viewerImage, onDismiss: {
+            // A view-once photo is consumed the moment the viewer closes: bubble flips to "Viewed".
+            if let m = pendingViewOnceConsume {
+                ViewedOnce.mark(m.id)
+                pendingViewOnceConsume = nil
+                viewedOnceTick += 1
+            }
+        }) { msg in
+            if msg.viewOnce {
+                // View-once opens ALONE (no paging into it, not part of the gallery).
+                ImageViewerView(message: msg, cid: cid)
+                    .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
+            } else {
+                // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
+                ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce }, cid: cid)
+            }
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         .fullScreenCover(item: $viewerVideo) { msg in
@@ -327,9 +342,9 @@ struct ThreadView: View {
                 .ignoresSafeArea()
         }
         .fullScreenCover(item: $editImage) { wrap in
-            ChatImageEditor(source: wrap.image) { data, caption, _ in
+            ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
                 Task {
-                    await sendPhoto(data)
+                    await sendPhoto(data, viewOnce: viewOnce)
                     let c = caption.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !c.isEmpty {
                         try? await ChatService.sendText(cid: cid, text: c, group: isGroup ? groupMembers : nil)
@@ -792,7 +807,8 @@ struct ThreadView: View {
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
                 otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
-                chatColor: chatColorSpec
+                chatColor: chatColorSpec,
+                isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id)
             )
             .equatable()
             .padding(.top, topGap(at: index))
@@ -1193,15 +1209,17 @@ struct ThreadView: View {
     }
 
     // Send a photo with an instant optimistic bubble, then reconcile on the echo.
-    private func sendPhoto(_ data: Data) async {
+    private func sendPhoto(_ data: Data, viewOnce: Bool = false) async {
         let preview = ChatService.downscaledJPEG(data)
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
         let clientId = UUID().uuidString
         await MainActor.run {
-            repo.addPending(Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
-                                    authorId: me, clientId: clientId, sendState: .sending))
+            var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
+                                  authorId: me, clientId: clientId, sendState: .sending)
+            pending.viewOnce = viewOnce
+            repo.addPending(pending)
         }
-        do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil) }
+        do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
@@ -2141,6 +2159,22 @@ struct ThreadView: View {
     }
 }
 
+// Device-local record of consumed view-once photos (Signal enforces on-device too: once opened, the
+// bubble flips to "Viewed" and can never be reopened here).
+enum ViewedOnce {
+    private static let key = "viewedOnceMessageIds"
+    static func contains(_ id: String) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(id)
+    }
+    static func mark(_ id: String) {
+        var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
+        guard !ids.contains(id) else { return }
+        ids.append(id)
+        if ids.count > 500 { ids.removeFirst(ids.count - 500) }   // bounded
+        UserDefaults.standard.set(ids, forKey: key)
+    }
+}
+
 // Selection wrapper (Signal-style): in select mode a circular checkmark slides in on the LEADING edge
 // (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
 // selected row gets a soft highlight. Off select mode, the row is untouched.
@@ -2179,6 +2213,7 @@ struct MessageBubble: View, Equatable {
             && l.isHighlighted == r.isHighlighted
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
+            && l.isViewedOnce == r.isViewedOnce
     }
 
     let message: Message
@@ -2227,6 +2262,7 @@ struct MessageBubble: View, Equatable {
     var isLastInCluster: Bool = true
     var otherLastRead: Double = 0
     var chatColor: ChatColorSpec? = nil   // per-chat custom bubble colour for MY messages (local)
+    var isViewedOnce: Bool = false        // view-once photo already consumed on this device
 
     // Fill behind MY bubbles: the custom chat colour if set, else the app accent.
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.accent(dark)) }
@@ -2655,6 +2691,27 @@ struct MessageBubble: View, Equatable {
                     if message.sendState == .failed { onResend(message) }
                     else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
                 }
+            }
+        } else if message.isImage, message.viewOnce {
+            // View-once photo (Signal): never rendered inline — a "① Photo" pill. The recipient taps it
+            // to open the full-screen viewer EXACTLY once; after that it reads "Viewed" and is inert.
+            // The sender's own pill is always inert (senders can't reopen, same as Signal).
+            let viewed = isViewedOnce
+            HStack(spacing: 8) {
+                Image(systemName: viewed ? "circle.slash" : "1.circle")
+                    .font(.system(size: 18, weight: .semibold))
+                Text(viewed ? "Viewed" : "Photo")
+                    .font(.system(size: 15, weight: .medium)).italic(viewed)
+                if isMe && isLastInCluster { metaRow }
+            }
+            .foregroundStyle((isMe ? onMyBubble : (dark ? Color.white : .black)).opacity(viewed ? 0.6 : 1))
+            .padding(.horizontal, 15).padding(.vertical, 11)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+            .onTapGesture {
+                guard !isMe, !viewed, message.sendState == nil else { return }
+                onTapImage(message)   // ThreadView marks it viewed when the viewer closes
             }
         } else if message.isImage {
             VStack(alignment: .leading, spacing: 4) {

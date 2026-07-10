@@ -55,6 +55,7 @@ struct Message: Identifiable, Equatable {
     var replyTo: ReplyRef?
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
+    var viewOnce: Bool = false        // view-once photo (Signal-style): recipient can open it exactly once
     var createdAt: Date
     var sendState: MessageSendState? = nil  // set only on local optimistic messages
     var localImageData: Data? = nil         // optimistic local photo shown before upload
@@ -176,6 +177,7 @@ struct Message: Identifiable, Equatable {
                 if !e.isEmpty, e != "…", e != "🔒" { acc[kv.key] = e }
             } ?? [:]
         self.mentions = data["mentions"] as? [String] ?? []
+        self.viewOnce = data["viewOnce"] as? Bool ?? false
         if let r = data["replyTo"] as? [String: Any] {
             self.replyTo = ReplyRef(
                 id: r["id"] as? String ?? "",

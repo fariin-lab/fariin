@@ -9,9 +9,10 @@ import CoreImage.CIFilterBuiltins
 // Every button is real. Reuses DrawingCanvas (defined in StoryEditorView.swift).
 struct ChatImageEditor: View {
     let source: UIImage
-    var onSend: (_ image: Data, _ caption: String, _ hd: Bool) -> Void
+    var onSend: (_ image: Data, _ caption: String, _ hd: Bool, _ viewOnce: Bool) -> Void
     @Environment(\.dismiss) private var dismiss
 
+    @State private var viewOnce = false   // Signal-style: recipient can open the photo exactly once
     @State private var caption = ""
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
@@ -54,38 +55,41 @@ struct ChatImageEditor: View {
                         .ignoresSafeArea()
                 }
 
-                VStack(spacing: 0) {
-                    // Top bar (Signal AttachmentApprovalTopBar): round glass X, leading.
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .liquidGlass(Circle(), interactive: true)
-                                .contentShape(Circle())
+            }
+            // NATIVE layout (HIG): chrome is placed by the system inside the safe areas — no manual
+            // safeAreaInsets math (it misreports inside a fullScreenCover and floated the X mid-screen).
+            // Adapts automatically to Dynamic Island / notch / home indicator on every device.
+            .safeAreaInset(edge: .top) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .liquidGlass(Circle(), interactive: true)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    if isDrawing {
+                        Button { isDrawing = false } label: {
+                            Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 18).frame(height: 44)
+                                .liquidGlass(Capsule(), interactive: true)
                         }
                         .buttonStyle(.plain)
-                        Spacer()
-                        if isDrawing {
-                            Button { isDrawing = false } label: {
-                                Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                                    .padding(.horizontal, 18).frame(height: 44)
-                                    .liquidGlass(Capsule(), interactive: true)
-                            }
-                            .buttonStyle(.plain)
-                        }
                     }
-                    .padding(.horizontal, 16).padding(.top, geo.safeAreaInsets.top + 6)
-                    Spacer()
-                    bottomBar
-                        .padding(.bottom, geo.safeAreaInsets.bottom + 8)
                 }
+                .padding(.horizontal)          // standard system margins
+                .padding(.vertical, 4)
+            }
+            .safeAreaInset(edge: .bottom) {
+                bottomBar
+                    .padding(.top, 8)          // standard spacing above the home-indicator inset
             }
             .onAppear { canvasSize = geo.size; recomputeEdited() }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
         }
-        .statusBarHidden()
     }
 
     // Bottom chrome (Signal AttachmentApprovalToolbar): a row of round glass tool buttons, then the
@@ -101,12 +105,31 @@ struct ChatImageEditor: View {
                 Spacer()
             }
 
-            // Caption + send (Signal's text toolbar).
+            // Caption + send (Signal's text toolbar). The ① toggle (Signal's viewOnceButton) sits in the
+            // capsule; view-once media can't carry a caption, so the field becomes "View Once Media".
             HStack(spacing: 10) {
-                TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
-                    .foregroundStyle(.white).focused($captionFocused)
-                    .padding(.horizontal, 16).frame(height: 46)
-                    .liquidGlass(Capsule(), interactive: true)
+                HStack(spacing: 8) {
+                    if viewOnce {
+                        Text("View Once Media")
+                            .foregroundStyle(Color(.systemGray3))
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+                            .foregroundStyle(.white).focused($captionFocused)
+                    }
+                    Button {
+                        viewOnce.toggle()
+                        if viewOnce { caption = ""; captionFocused = false }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(viewOnce ? Color(hex: 0x3DA1FD) : .white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16).frame(height: 46)
+                .liquidGlass(Capsule(), interactive: true)
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 46, height: 46)
@@ -139,7 +162,7 @@ struct ChatImageEditor: View {
 
     private func send() {
         let data = flatten()
-        onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd)
+        onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd, viewOnce)
         dismiss()
     }
 

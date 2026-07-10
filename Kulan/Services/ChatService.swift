@@ -381,7 +381,7 @@ enum ChatService {
         return resized.jpegData(compressionQuality: quality) ?? data
     }
 
-    static func sendImage(cid: String, data rawData: Data, clientId: String? = nil, group: [String]? = nil) async throws {
+    static func sendImage(cid: String, data rawData: Data, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false) async throws {
         let data = downscaledJPEG(rawData)
         var members = group
         if members == nil, !cid.contains("_") {
@@ -413,6 +413,7 @@ enum ChatService {
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
         ]
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
+        if viewOnce { imgMsg["viewOnce"] = true }           // Signal-style view-once photo
         if let ui = UIImage(data: data) {                   // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
         }

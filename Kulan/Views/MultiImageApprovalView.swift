@@ -33,63 +33,64 @@ struct MultiImageApprovalView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .liquidGlass(Circle(), interactive: true)
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        Spacer()
-                        // HD toggle for the whole batch.
-                        Button { hd.toggle() } label: {
-                            Text("HD").font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
-                                .frame(width: 44, height: 44)
-                                .liquidGlass(Circle(), interactive: true)
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
+            }
+            // NATIVE layout (HIG): chrome placed by the system inside the safe areas — no manual inset
+            // math. Adapts to Dynamic Island / notch / home indicator on every device automatically.
+            .safeAreaInset(edge: .top) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .liquidGlass(Circle(), interactive: true)
+                            .contentShape(Circle())
                     }
-                    .padding(.horizontal, 16).padding(.top, geo.safeAreaInsets.top + 6)
-
+                    .buttonStyle(.plain)
                     Spacer()
-
-                    VStack(spacing: 12) {
-                        rail
-                        HStack(spacing: 10) {
-                            TextField("", text: $caption,
-                                      prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
-                                .foregroundStyle(.white).focused($captionFocused)
-                                .padding(.horizontal, 16).frame(height: 46)
-                                .liquidGlass(Capsule(), interactive: true)
-                            Button {
-                                onSend(images, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd)
-                                dismiss()
-                            } label: {
-                                ZStack(alignment: .topTrailing) {
-                                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                                        .frame(width: 46, height: 46)
-                                        .background(Color(hex: 0x3DA1FD), in: Circle())
-                                    // Count badge (Signal shows how many are going).
-                                    Text("\(images.count)").font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
-                                        .background(Color.red, in: Capsule())
-                                        .offset(x: 4, y: -4)
-                                }
-                            }
-                            .buttonStyle(StoryPressStyle())
-                        }
-                        .padding(.horizontal, 16)
+                    // HD toggle for the whole batch.
+                    Button { hd.toggle() } label: {
+                        Text("HD").font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
+                            .frame(width: 44, height: 44)
+                            .liquidGlass(Circle(), interactive: true)
+                            .contentShape(Circle())
                     }
-                    .padding(.bottom, geo.safeAreaInsets.bottom + 8)
+                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 12) {
+                    rail
+                    HStack(spacing: 10) {
+                        TextField("", text: $caption,
+                                  prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+                            .foregroundStyle(.white).focused($captionFocused)
+                            .padding(.horizontal, 16).frame(height: 46)
+                            .liquidGlass(Capsule(), interactive: true)
+                        Button {
+                            onSend(images, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd)
+                            dismiss()
+                        } label: {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                                    .frame(width: 46, height: 46)
+                                    .background(Color(hex: 0x3DA1FD), in: Circle())
+                                // Count badge (Signal shows how many are going).
+                                Text("\(images.count)").font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Color.red, in: Capsule())
+                                    .offset(x: 4, y: -4)
+                            }
+                        }
+                        .buttonStyle(StoryPressStyle())
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.top, 8)
             }
         }
-        .statusBarHidden()
     }
 
     // Ordered thumbnail rail: current page ring-highlighted, tap to jump, X removes from the batch.
