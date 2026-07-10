@@ -625,6 +625,10 @@ struct ThreadView: View {
                     SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else if let m = msg, m.isAlbum, let first = m.album.first {
+                    SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
@@ -633,7 +637,10 @@ struct ThreadView: View {
                             Text("\(idx + 1)/\(ids.count)").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
-                    Text(msg.map { $0.isImage ? "Photo" : ($0.isVideo ? "Video" : ($0.isAudio ? "Voice message" : $0.text)) } ?? "Tap to view")
+                    Text(msg.map { m in
+                        m.isAlbum ? (m.text.isEmpty ? "\(m.album.count) Photos" : m.text)
+                        : (m.isImage ? "Photo" : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.text)))
+                    } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)

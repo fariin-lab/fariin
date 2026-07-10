@@ -112,6 +112,17 @@ struct ChatImageEditor: View {
                     else { bottomBar.padding(.bottom, 8) }
                 }
                 .animation(.easeInOut(duration: 0.2), value: captionFocused)
+
+                // Crop presented INLINE with a cross-fade (Signal's in-place crop feel) — the same image
+                // stays put and the crop frame + controls fade in over it, instead of a modal slide-up.
+                if showCrop {
+                    ChatCropView(image: source,
+                                 onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
+                        editedCache = Self.filtered(cropped, filterIndex)   // keep the current filter over the crop
+                    }
+                    .transition(.opacity)
+                    .zIndex(20)
+                }
             }
             // Swipe DOWN anywhere on the canvas closes the keyboard (native feel), in addition to the
             // tap-to-dismiss above. Reads the drag without consuming it, so zoom/pan still work.
@@ -123,13 +134,6 @@ struct ChatImageEditor: View {
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
-        }
-        // Interactive crop (drag the frame, pan/zoom the image, aspect presets, rotate) — replaces the
-        // old aspect-cycle "crop" that just centre-cropped.
-        .fullScreenCover(isPresented: $showCrop) {
-            ChatCropView(image: source) { cropped in
-                editedCache = Self.filtered(cropped, filterIndex)   // keep the current filter over the crop
-            }
         }
     }
 
@@ -187,7 +191,7 @@ struct ChatImageEditor: View {
             // in edit-only mode, so it's dropped there.
             if !captionFocused {
                 HStack(spacing: 10) {
-                    tool("crop", active: false) { showCrop = true }
+                    tool("crop", active: false) { withAnimation(.easeInOut(duration: 0.28)) { showCrop = true } }
                     tool("scribble", active: isDrawing) { isDrawing.toggle() }
                     if !editOnly { tool("", active: hd, label: "HD") { hd.toggle() } }
                     Spacer()

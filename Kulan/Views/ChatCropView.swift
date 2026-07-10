@@ -8,6 +8,7 @@ import SwiftUI
 // Nothing overlaps the photo; the frame never leaves the image; Done crops to the selected region.
 struct ChatCropView: View {
     let image: UIImage
+    var onClose: () -> Void = {}          // used when presented INLINE (fade transition) instead of a cover
     var onDone: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -19,10 +20,13 @@ struct ChatCropView: View {
     @State private var aspect: CGFloat? = nil        // locked w/h, nil = free
     @State private var edited = false                // any change made → show Reset
 
-    init(image: UIImage, onDone: @escaping (UIImage) -> Void) {
-        self.image = image; self.onDone = onDone
+    init(image: UIImage, onClose: @escaping () -> Void = {}, onDone: @escaping (UIImage) -> Void) {
+        self.image = image; self.onClose = onClose; self.onDone = onDone
         _img = State(initialValue: Self.normalized(image))
     }
+
+    // Close for BOTH inline (onClose) and cover (dismiss) presentation.
+    private func close() { onClose(); dismiss() }
 
     private let minSize: CGFloat = 64
     private let hit: CGFloat = 34
@@ -137,7 +141,7 @@ struct ChatCropView: View {
     // Top bar: Cancel (✕) left · Reset right — native circular glass buttons, placed in the safe area.
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { close() } label: {
                 Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 44, height: 44)
                     .liquidGlass(Circle(), interactive: true)   // real native Liquid Glass
@@ -261,9 +265,9 @@ struct ChatCropView: View {
                              width: crop.width * scale, height: crop.height * scale)
         let px = CGRect(x: inImage.minX * img.scale, y: inImage.minY * img.scale,
                         width: inImage.width * img.scale, height: inImage.height * img.scale)
-        guard let cg = img.cgImage?.cropping(to: px) else { dismiss(); return }
+        guard let cg = img.cgImage?.cropping(to: px) else { close(); return }
         onDone(UIImage(cgImage: cg, scale: img.scale, orientation: .up))
-        dismiss()
+        close()
     }
 
     private func rotate() {
