@@ -271,15 +271,10 @@ struct ThreadView: View {
     // Split into several layers so each modifier chain stays under the type-checker limit.
     private var threadCovers: some View {
         threadScroll
-        // Avatar + name installed as the NATIVE UINavigationItem.titleView (Signal's exact approach):
-        // it renders on top of the nav bar's own blur (never covered), left-aligns after the back
-        // button, and slides with the native swipe-back — no custom overlay or blur. Zero-size here.
-        .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
-        // Native nav bar blur is applied via the UIKit bridge (NavTitleView.applyBlurAppearance):
-        // BOTH standardAppearance AND scrollEdgeAppearance get the system default-background blur, so
-        // the iOS 26 liquid-glass blur is always on (SwiftUI's .toolbarBackground left the scroll-edge
-        // state transparent -> the "sometimes blur, sometimes not"). The titleView renders on top.
+        // IDENTICAL to the Chats-list header: no custom titleView, no appearance override. The avatar +
+        // name live in a native `.toolbar` principal item (see chatToolbar), so the nav bar is the plain
+        // system bar with the same background/separator behavior as the list — no border.
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .navigationDestination(isPresented: $showContactInfo) {
@@ -886,9 +881,12 @@ struct ThreadView: View {
                 Button("Cancel") { exitSelection() }.tint(.primary)
             }
         } else {
-        // Avatar + name are installed as the native UINavigationItem.titleView (see NavTitleView) —
-        // NOT a toolbar item — so the tap, the leading placement, the native blur and the swipe-back
-        // slide are all handled there (Signal's approach). Only the call/video buttons live here.
+        // Avatar + name as a NATIVE principal toolbar item — exactly like the Chats-list header (which
+        // also uses a principal item). Tapping opens the profile. This is the plain system nav bar, no
+        // custom titleView, so there's no border/separator difference from the list.
+        ToolbarItem(placement: .principal) {
+            Button { showContactInfo = true } label: { headerLabel }.buttonStyle(.plain)
+        }
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
