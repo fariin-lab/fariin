@@ -1986,12 +1986,11 @@ struct ThreadView: View {
             Button { if editingMessage != nil { saveEdit() } else { send() } } label: {
                 Image(systemName: editingMessage != nil ? "checkmark" : "arrow.up")
                     .font(.system(size: 19, weight: .bold))
-                    // Theme.accent is WHITE in dark mode — a white glyph on it was invisible. Use the
-                    // accent's counter-colour when no custom chat colour is set.
-                    .foregroundStyle(chatColorSpec != nil ? Color.white : Theme.onAccent(dark))
+                    // Matches the bubble: white glyph on the chosen chat colour, or on the default systemBlue.
+                    .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
-                    // Real Liquid Glass, tinted to MATCH the bubble colour (the chosen chat colour).
-                    .liquidGlass(Circle(), interactive: true, tint: chatColorSpec?.swatch ?? Theme.accent(dark))
+                    // Real Liquid Glass, tinted to MATCH the bubble colour (the chosen chat colour / default).
+                    .liquidGlass(Circle(), interactive: true, tint: chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
                     .contentTransition(.symbolEffect(.replace))
             }
             .transition(.scale.combined(with: .opacity))
@@ -2318,12 +2317,12 @@ struct MessageBubble: View, Equatable {
     var isViewedOnce: Bool = false        // view-once photo already consumed on this device
     var imageNS: Namespace.ID? = nil      // hero anchor: photo taps zoom out of / back into the bubble
 
-    // Fill behind MY bubbles: the custom chat colour if set, else the app accent.
-    private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.accent(dark)) }
-    // Text/meta on MY bubbles: custom colours are vivid in BOTH modes, so the text must be WHITE in
-    // both. Theme.onAccent flips to black in dark mode (accent there is white) — correct for the
-    // default accent only. Without this, dark-mode users got black-on-navy unreadable bubbles.
-    private var onMyBubble: Color { chatColor != nil ? .white : Theme.onAccent(dark) }
+    // Fill behind MY bubbles: the custom chat colour if set, else the default systemBlue (adaptive
+    // light/dark — see Theme.defaultBubble).
+    private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
+    // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
+    // modes, so the text/glyphs are always WHITE.
+    private var onMyBubble: Color { .white }
 
     @State private var dragX: CGFloat = 0
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm

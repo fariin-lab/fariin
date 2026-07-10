@@ -195,8 +195,9 @@ struct WallpaperPickerSheet: View {
     private var defaultColorCircle: some View {
         let isDefault = selectedColor == nil
         return Button { chooseColor(nil) } label: {
-            Circle().fill(Theme.accent(dark)).frame(width: 52, height: 52)
-                .overlay(Image(systemName: "message.fill").font(.system(size: 18)).foregroundStyle(Theme.onAccent(dark)))
+            // The default swatch shows the adaptive systemBlue (its light/dark value), white glyph.
+            Circle().fill(Theme.defaultBubble(dark)).frame(width: 52, height: 52)
+                .overlay(Image(systemName: "message.fill").font(.system(size: 18)).foregroundStyle(.white))
                 .overlay(Circle().strokeBorder(isDefault ? Color.primary : .clear, lineWidth: 3))
         }.buttonStyle(.plain)
     }

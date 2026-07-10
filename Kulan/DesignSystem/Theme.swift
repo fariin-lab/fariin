@@ -41,6 +41,10 @@ enum Theme {
     static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xE9E9EB) }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
     static func onAccent(_ dark: Bool) -> Color { dark ? .black : .white }
+    // Default outgoing-bubble colour when no custom Chat Color is picked. Apple systemBlue, which is a
+    // DIFFERENT value in light vs dark mode (brighter in dark so it pops on the dark background). White
+    // text/glyphs read well on both.
+    static func defaultBubble(_ dark: Bool) -> Color { dark ? Color(hex: 0x0A84FF) : Color(hex: 0x007AFF) }
     static let secondary = Color(hex: 0x8E8E93)
 }
 
