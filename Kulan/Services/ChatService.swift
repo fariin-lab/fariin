@@ -447,6 +447,65 @@ enum ChatService {
         try await batch.commit()
     }
 
+    /// Send 2+ photos as ONE album message (grid + one caption), like Signal/Telegram. Each photo is
+    /// E2EE'd + uploaded separately; a single message doc carries the array of {imageUrl, enc, w, h}.
+    static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil) async throws {
+        var members = group
+        if members == nil, !cid.contains("_") {
+            let snap = try? await db.collection("conversations").document(cid).getDocument()
+            members = snap?.data()?["users"] as? [String]
+        }
+        let convRef = db.collection("conversations").document(cid)
+        let msgRef = convRef.collection("messages").document()
+
+        // Upload + seal every photo (natural aspect kept for the grid).
+        var items: [[String: Any]] = []
+        for (i, raw) in images.enumerated() {
+            let data = downscaledJPEG(raw)
+            let cipher: Data, meta: EncMeta
+            if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members) }
+            else {
+                (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
+                let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+                try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            }
+            let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID)-\(i).enc")
+            let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
+            _ = try await ref.putDataAsync(cipher, metadata: sm)
+            let url = try await ref.downloadURL().absoluteString
+            if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url) }   // instant reconcile
+            let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
+            items.append(["imageUrl": url, "enc": meta.asDict, "width": Double(sz.width), "height": Double(sz.height)])
+        }
+
+        // Caption sealed like a text body (Signal: one body for the album).
+        var captionCipher = ""
+        let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            if let members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmed, members: members)) ?? "" }
+            else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmed)) ?? "" }
+        }
+
+        let batch = db.batch()
+        var msg: [String: Any] = [
+            "type": "album", "album": items, "text": captionCipher,
+            "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+        ]
+        if let clientId { msg["clientId"] = clientId }
+        batch.setData(msg, forDocument: msgRef)
+        var convUpdate: [String: Any] = [
+            "lastMessage": "📷 \(images.count) Photos", "lastSender": uid,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ]
+        if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
+        else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
+        }
+        batch.updateData(convUpdate, forDocument: convRef)
+        try await batch.commit()
+    }
+
     /// Encrypt + send a voice note. Same E2EE pipeline as photos: the m4a bytes
     /// are sealed and the ciphertext uploaded; the server never hears the audio.
     static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil) async throws {

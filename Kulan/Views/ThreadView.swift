@@ -359,14 +359,7 @@ struct ThreadView: View {
             // Signal's multi-image approval: pages + rail + one caption; sends in selection order,
             // the caption follows the batch as the message body (our follow-up-text pattern).
             MultiImageApprovalView(images: wrap.images) { imgs, caption, hd in
-                Task {
-                    // Caption rides on the LAST image of the batch (Signal: one body for the album).
-                    for (i, img) in imgs.enumerated() {
-                        if let data = img.jpegData(compressionQuality: hd ? 0.95 : 0.85) {
-                            await sendPhoto(data, caption: i == imgs.count - 1 ? caption : "")
-                        }
-                    }
-                }
+                Task { await sendAlbum(imgs, caption: caption, hd: hd) }   // ONE album message
             }
         }
         .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.medium, .large]) }   // opens half (≈2 rows), pull up for more
@@ -1213,6 +1206,20 @@ struct ThreadView: View {
     }
 
     // Send a photo with an instant optimistic bubble, then reconcile on the echo.
+    // Send 2+ photos as ONE album (grid + one caption). Optimistic album bubble shows immediately.
+    private func sendAlbum(_ images: [UIImage], caption: String, hd: Bool) async {
+        let datas = images.compactMap { $0.jpegData(compressionQuality: hd ? 0.95 : 0.85) }
+        guard !datas.isEmpty else { return }
+        let previews = datas.map { ChatService.downscaledJPEG($0) }
+        let clientId = UUID().uuidString
+        await MainActor.run {
+            repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
+                                    clientId: clientId, sendState: .sending))
+        }
+        do { try await ChatService.sendAlbum(cid: cid, images: datas, caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil) }
+        catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+    }
+
     private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
         let preview = ChatService.downscaledJPEG(data)
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
@@ -2724,6 +2731,39 @@ struct MessageBubble: View, Equatable {
                     else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
                 }
             }
+        } else if message.isAlbum {
+            // Album (2+ photos as ONE message): a grid + one caption, like Signal/Telegram.
+            VStack(alignment: .leading, spacing: 0) {
+                albumGrid
+                if !message.text.isEmpty {
+                    HStack(alignment: .bottom, spacing: 6) {
+                        Text(message.text).font(.system(size: 15))
+                            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+                        if isLastInCluster { metaRow.padding(.bottom, 1) }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                }
+            }
+            .frame(width: albumWidth)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay {
+                if message.sendState == .sending {
+                    ZStack {
+                        Color.black.opacity(0.18)
+                        ProgressView().progressViewStyle(.circular).tint(.white)
+                            .padding(15).background(.ultraThinMaterial, in: Circle())
+                            .environment(\.colorScheme, .dark)
+                    }
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if message.text.isEmpty {
+                    metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
+                }
+            }
         } else if message.isImage, message.viewOnce {
             // View-once photo (Signal): never rendered inline — a "① Photo" pill. The recipient taps it
             // to open the full-screen viewer EXACTLY once; after that it reads "Viewed" and is inert.
@@ -2819,6 +2859,50 @@ struct MessageBubble: View, Equatable {
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         }
+    }
+
+    private var albumWidth: CGFloat { min(maxBubbleWidth, 264) }
+
+    // 2-column grid of the album's photos (up to 4 shown; a "+N" badge on the 4th if more).
+    @ViewBuilder private var albumGrid: some View {
+        let n = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
+        let shown = min(n, 4)
+        let cell = (albumWidth - 2) / 2
+        LazyVGrid(columns: [GridItem(.fixed(cell), spacing: 2), GridItem(.fixed(cell), spacing: 2)], spacing: 2) {
+            ForEach(0..<shown, id: \.self) { i in
+                albumCell(i, cell: cell, extra: (i == shown - 1 && n > 4) ? n - shown : 0)
+            }
+        }
+    }
+
+    private func albumCell(_ i: Int, cell: CGFloat, extra: Int) -> some View {
+        Group {
+            if !message.localAlbum.isEmpty, message.localAlbum.indices.contains(i), let ui = UIImage(data: message.localAlbum[i]) {
+                Image(uiImage: ui).resizable().scaledToFill()
+            } else if message.album.indices.contains(i) {
+                let it = message.album[i]
+                SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.18))
+            }
+        }
+        .frame(width: cell, height: cell).clipped()
+        .overlay {
+            if extra > 0 {
+                ZStack { Color.black.opacity(0.5); Text("+\(extra)").font(.title2.weight(.bold)).foregroundStyle(.white) }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if message.sendState == nil { openAlbumItem(i) } }
+    }
+
+    // Tap an album photo → open it in the full-screen viewer (synthetic single-image message).
+    private func openAlbumItem(_ i: Int) {
+        guard message.album.indices.contains(i) else { return }
+        let it = message.album[i]
+        let data: [String: Any] = ["type": "image", "imageUrl": it.imageUrl, "enc": it.enc.asDict,
+                                   "authorId": message.authorId, "width": it.width, "height": it.height]
+        onTapImage(Message(id: "\(message.id)-\(i)", data: data, cid: cid, crypto: Crypto.shared))
     }
 
     @ViewBuilder private var replyQuote: some View {

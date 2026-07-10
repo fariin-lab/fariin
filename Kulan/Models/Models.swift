@@ -56,6 +56,8 @@ struct Message: Identifiable, Equatable {
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (Signal-style): recipient can open it exactly once
+    var album: [AlbumItem] = []       // 2+ photos sent together = ONE album message (grid + one caption)
+    var localAlbum: [Data] = []       // optimistic album previews shown before upload
     var createdAt: Date
     var sendState: MessageSendState? = nil  // set only on local optimistic messages
     var localImageData: Data? = nil         // optimistic local photo shown before upload
@@ -74,6 +76,7 @@ struct Message: Identifiable, Equatable {
     var isVideo: Bool { type == "video" && (videoUrl?.isEmpty == false || localImageData != nil) }
     var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false) }
     var isGif: Bool { type == "gif" && (imageUrl?.isEmpty == false) }   // public Giphy url (not E2EE)
+    var isAlbum: Bool { type == "album" && (!album.isEmpty || !localAlbum.isEmpty) }
     var isCall: Bool { type == "call" }
     var isSystem: Bool { type == "system" }   // group event ("X added Y"), shown centered
 
@@ -143,6 +146,22 @@ struct Message: Identifiable, Equatable {
         self.sendState = sendState
     }
 
+    /// Local optimistic ALBUM — shows the picked photos as a grid instantly before upload.
+    init(localAlbum: [Data], caption: String, authorId: String, clientId: String, sendState: MessageSendState) {
+        self.id = clientId
+        self.authorId = authorId
+        self.text = caption
+        self.type = "album"
+        self.clientId = clientId
+        self.reactions = [:]
+        self.createdAt = Date()
+        self.sendState = sendState
+        self.localAlbum = localAlbum
+    }
+
+    // One photo inside an album message.
+    struct AlbumItem: Equatable { let imageUrl: String; let enc: EncMeta; let width: Double; let height: Double }
+
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
         self.id = id
         self.authorId = data["authorId"] as? String ?? ""
@@ -178,6 +197,13 @@ struct Message: Identifiable, Equatable {
             } ?? [:]
         self.mentions = data["mentions"] as? [String] ?? []
         self.viewOnce = data["viewOnce"] as? Bool ?? false
+        self.album = (data["album"] as? [[String: Any]])?.compactMap { d in
+            guard let url = d["imageUrl"] as? String,
+                  let enc = (d["enc"] as? [String: Any]).flatMap(EncMeta.init(map:)) else { return nil }
+            return AlbumItem(imageUrl: url, enc: enc,
+                             width: (d["width"] as? NSNumber)?.doubleValue ?? 1,
+                             height: (d["height"] as? NSNumber)?.doubleValue ?? 1)
+        } ?? []
         if let r = data["replyTo"] as? [String: Any] {
             self.replyTo = ReplyRef(
                 id: r["id"] as? String ?? "",
