@@ -325,21 +325,24 @@ struct ThreadView: View {
                 viewedOnceTick += 1
             }
         }) { msg in
-            // NATIVE zoom transition (identical to the story close): grows out of the bubble, and the
-            // drag-down dismiss follows the finger, shrinking back into the bubble. The custom dismiss
-            // pan is suppressed — exactly one close gesture, Apple's (the story-saga lesson).
+            // Open = native zoom hero (grows out of the bubble). CLOSE = only the PHOTO follows the finger
+            // and the black backdrop fades (Apple Photos / Instagram), NOT the whole page as a card. So we
+            // DISABLE the zoom transition's interactive whole-card drag (interactiveDismissDisabled) and turn
+            // the in-viewer image-only pan back on (suppressDismissPan: false); releasing past the threshold
+            // calls dismiss(), and the zoom then shrinks the photo back into the bubble.
             Group {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
-                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
+                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
-                                    cid: cid, suppressDismissPan: true)
+                                    cid: cid, suppressDismissPan: false)
                 }
             }
             .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
+            .interactiveDismissDisabled()
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         .fullScreenCover(item: $viewerVideo) { msg in
