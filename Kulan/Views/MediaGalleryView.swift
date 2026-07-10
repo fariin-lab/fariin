@@ -1,5 +1,11 @@
 import SwiftUI
 
+// "Go to Chat" event: the open ThreadView for `cid` pops back to itself (out of the profile/gallery
+// push) and scrolls to + flashes `messageId`. Signal's behavior — return to the conversation at that
+// message, not open a duplicate chat.
+struct GoToMessage { let cid: String; let messageId: String }
+extension Notification.Name { static let goToMessage = Notification.Name("goToMessage") }
+
 // Full-screen shared-content gallery (Telegram-style), PUSHED (not a sheet). Three tabs — Media,
 // Audio, Links — with a filter menu on Media/Audio, long-press context menus, and a selection mode
 // with a bottom Share / count / Delete toolbar. Links have no filter and no selection.
@@ -21,7 +27,6 @@ struct MediaGalleryView: View {
     @State private var selection = Set<String>()
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
-    @State private var openChat = false
     @State private var shareItems: [Any]?
     @State private var confirmDelete = false
 
@@ -63,9 +68,6 @@ struct MediaGalleryView: View {
             .fullScreenCover(item: $viewerVideo) { VideoPlayerScreen(message: $0, cid: cid) }
             .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
                 if let items = shareItems { ActivityView(items: items) }
-            }
-            .navigationDestination(isPresented: $openChat) {
-                ThreadView(cid: cid, title: title, photoUrl: photoUrl)
             }
             .alert("Delete \(selecting ? "\(selection.count) item\(selection.count == 1 ? "" : "s")" : "item")?",
                    isPresented: $confirmDelete) {
@@ -298,7 +300,7 @@ struct MediaGalleryView: View {
 
     private func linkRow(_ m: Message) -> some View {
         let url = Self.firstURL(in: m.text)
-        return Button { openChat = true } label: {
+        return Button { goToChat(m) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 Text(url?.host ?? "Link").font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
                 Text(m.text).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
@@ -310,7 +312,7 @@ struct MediaGalleryView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button { openChat = true } label: { Label("Go to Chat", systemImage: "bubble.left") }
+            Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
             if let url { Button { UIApplication.shared.open(url) } label: { Label("Open Link", systemImage: "safari") } }
         }
     }
@@ -318,7 +320,7 @@ struct MediaGalleryView: View {
     // MARK: - Item context menu (media + audio)
 
     @ViewBuilder private func itemMenu(_ m: Message) -> some View {
-        Button { openChat = true } label: { Label("Go to Chat", systemImage: "bubble.left") }
+        Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
         Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
         Button(role: .destructive) { selection = [m.id]; confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
@@ -335,6 +337,11 @@ struct MediaGalleryView: View {
         if selection.contains(m.id) { selection.remove(m.id) } else { selection.insert(m.id) }
     }
     private func exitSelection() { selecting = false; selection = [] }
+
+    // Go to Chat: tell the open ThreadView to pop back to itself and scroll to this message.
+    private func goToChat(_ m: Message) {
+        NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
+    }
 
     private func deleteSelected() {
         let ids = selection

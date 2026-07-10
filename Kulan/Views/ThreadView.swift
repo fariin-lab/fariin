@@ -277,6 +277,7 @@ struct ThreadView: View {
         .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back
         .toolbar { chatToolbar }
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
@@ -371,8 +372,8 @@ struct ThreadView: View {
                 ForwardPicker(messages: msgs, sourceCid: cid, onSent: { exitSelection() })
             }
         }
-        .confirmationDialog("Delete \(selectedIds.count) message\(selectedIds.count == 1 ? "" : "s")?",
-                            isPresented: $showBulkDeleteConfirm, titleVisibility: .visible) {
+        .alert("Delete \(selectedIds.count) message\(selectedIds.count == 1 ? "" : "s")?",
+               isPresented: $showBulkDeleteConfirm) {
             Button("Delete", role: .destructive) { bulkDelete() }
             Button("Cancel", role: .cancel) {}
         }
@@ -390,6 +391,15 @@ struct ThreadView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openChatWallpaper)) { note in
             guard (note.object as? String) == cid else { return }
             showWallpaper = true
+        }
+        // "Go to Chat" from the media gallery: pop the profile/gallery push back to this chat, then
+        // scroll to + flash the message.
+        .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { note in
+            guard let p = note.object as? GoToMessage, p.cid == cid else { return }
+            showContactInfo = false   // pops ContactInfoView + MediaGalleryView back to the chat
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                Task { await repo.ensureLoaded(p.messageId); await MainActor.run { flashAndScroll(p.messageId) } }
+            }
         }
         .sheet(item: $tappedMember) { m in
             GroupMemberSheet(cid: cid, member: m,
@@ -1528,7 +1538,8 @@ struct ThreadView: View {
         HStack {
             Button { showBulkDeleteConfirm = true } label: {
                 Image(systemName: "trash").font(.system(size: 18)).foregroundStyle(.red)
-                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
+                    .frame(width: 52, height: 52).liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())   // whole circle is the tap target, not just the icon
             }
             .buttonStyle(.plain).disabled(selectedIds.isEmpty)
             Spacer()
@@ -1537,7 +1548,8 @@ struct ThreadView: View {
             Spacer()
             Button { bulkForwardStart() } label: {
                 Image(systemName: "arrowshape.turn.up.right").font(.system(size: 18)).foregroundStyle(.primary)
-                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
+                    .frame(width: 52, height: 52).liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())   // whole circle is the tap target, not just the icon
             }
             .buttonStyle(.plain).disabled(selectedIds.isEmpty)
         }

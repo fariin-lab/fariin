@@ -14,21 +14,29 @@ struct WallpaperPickerSheet: View {
     private var store: WallpaperStore { .shared }
 
     @State private var selected: ChatWallpaper
+    @State private var selectedColor: ChatColorSpec?   // live-preview bubble colour (not saved until Apply)
     @State private var committed = false          // Apply pressed → keep it; otherwise revert on close
     @State private var photoItem: PhotosPickerItem?
     @State private var showCustomColor = false    // "+" → Custom Color editor
     private var colorStore: ChatColorStore { .shared }
     private let original: ChatWallpaper            // the wallpaper in use when the sheet opened
+    private let originalColor: ChatColorSpec?      // the bubble colour in use when the sheet opened
 
     init(cid: String) {
         self.cid = cid
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
         original = cur
+        let col = ChatColorStore.shared.color(for: cid)
+        _selectedColor = State(initialValue: col)
+        originalColor = col
     }
 
     private var dark: Bool { scheme == .dark }
-    private var hasPendingChange: Bool { selected != original }
+    // A pending change if EITHER the wallpaper or the bubble colour differs from what was in use on open.
+    private var hasPendingChange: Bool {
+        selected != original || selectedColor?.stored != originalColor?.stored
+    }
 
     // Stable id per selection, for the auto-scroll on open.
     private func tileID(_ w: ChatWallpaper) -> String {
@@ -46,7 +54,7 @@ struct WallpaperPickerSheet: View {
         switch selected {
         case .gradient(let id): return ChatWallpapers.gradient(id)?.tint ?? Color(hex: 0x3DA1FD)
         case .photo:            return Color(hex: 0x3DA1FD)
-        case .none:             return Color.secondary
+        case .none:             return selectedColor?.swatch ?? Color.secondary   // colour-only change → tint with it
         }
     }
 
@@ -82,16 +90,20 @@ struct WallpaperPickerSheet: View {
             chatColorSection
             bottomBar
         }
-        .padding(.top, 10).padding(.bottom, 14)
-        .presentationDetents([.height(430)])
+        .padding(.top, 16).padding(.bottom, 10)
+        .presentationDetents([.height(408)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
-            CustomColorView(cid: cid) { spec in colorStore.set(spec, for: cid) }
+            CustomColorView(cid: cid) { spec in chooseColor(spec) }   // live preview, not saved until Apply
         }
-        // Selecting LIVE-PREVIEWS the pick on the chat behind (user: "must show preview live behind
-        // chat when I choose"), but it is NOT saved: closing without Apply reverts to the original, so
-        // a chosen-but-not-applied wallpaper never sticks. Apply is what commits it.
-        .onDisappear { if !committed { store.set(original, for: cid) } }
+        // Selecting a wallpaper OR a colour LIVE-PREVIEWS it on the chat behind, but nothing is SAVED
+        // until Apply. Closing without Apply reverts both to the originals.
+        .onDisappear {
+            if !committed {
+                store.set(original, for: cid)
+                colorStore.set(originalColor, for: cid)
+            }
+        }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -126,27 +138,45 @@ struct WallpaperPickerSheet: View {
         .padding(.trailing, 20)
     }
 
-    // Wallpapers + colours apply the moment you choose them, so the bottom action is simply "add a
-    // photo wallpaper". Padded from the bottom safe area per Apple's spacing.
-    private var bottomBar: some View {
-        PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-            HStack(spacing: 8) {
-                Image(systemName: "photo.on.rectangle.angled")
-                Text("Choose Wallpaper from Photos").fontWeight(.semibold)
+    // Contextual bottom button: a pending wallpaper/colour change → "Apply Wallpaper" (commits both);
+    // otherwise → "Choose Wallpaper from Photos".
+    @ViewBuilder private var bottomBar: some View {
+        Group {
+            if hasPendingChange {
+                Button {
+                    committed = true                      // keep the live-previewed wallpaper + colour
+                    store.set(selected, for: cid)
+                    colorStore.set(selectedColor, for: cid)
+                    dismiss()
+                } label: {
+                    Text("Apply Wallpaper").fontWeight(.semibold).font(.system(size: 17))
+                        .foregroundStyle(selected == .none && selectedColor == nil ? Color.primary : Color.white)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .liquidGlass(Capsule(), interactive: true, tint: applyTint)
+                        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
+                }
+                .transition(.opacity)
+            } else {
+                PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                        Text("Choose Wallpaper from Photos").fontWeight(.semibold)
+                    }
+                    .font(.system(size: 16)).foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .liquidGlass(Capsule(), interactive: true)
+                }
+                .transition(.opacity)
             }
-            .font(.system(size: 16)).foregroundStyle(.primary)
-            .frame(maxWidth: .infinity).frame(height: 50)
-            .liquidGlass(Capsule(), interactive: true)
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 4)
+        .padding(.top, 4)
     }
 
     // Chat Color row: the app-default swatch + presets + a "+" to open the Custom Color editor. Picking
-    // applies IMMEDIATELY and persists (unlike wallpaper, which waits for Apply) — matches Signal.
+    // LIVE-PREVIEWS on the chat behind but is saved only on Apply (same as wallpaper).
     private var chatColorSection: some View {
-        let _ = colorStore.version   // observe so the selected ring updates live
-        return VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Chat Color").font(.subheadline.weight(.semibold)).padding(.horizontal, 20)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
@@ -160,8 +190,8 @@ struct WallpaperPickerSheet: View {
     }
 
     private var defaultColorCircle: some View {
-        let isDefault = colorStore.color(for: cid) == nil
-        return Button { colorStore.set(nil, for: cid) } label: {
+        let isDefault = selectedColor == nil
+        return Button { chooseColor(nil) } label: {
             Circle().fill(Theme.accent(dark)).frame(width: 52, height: 52)
                 .overlay(Image(systemName: "message.fill").font(.system(size: 18)).foregroundStyle(Theme.onAccent(dark)))
                 .overlay(Circle().strokeBorder(isDefault ? Color.primary : .clear, lineWidth: 3))
@@ -169,8 +199,8 @@ struct WallpaperPickerSheet: View {
     }
 
     private func colorCircle(_ p: ChatColorSpec) -> some View {
-        let isSel = colorStore.color(for: cid)?.stored == p.stored
-        return Button { colorStore.set(p, for: cid) } label: {
+        let isSel = selectedColor?.stored == p.stored
+        return Button { chooseColor(p) } label: {
             Circle().fill(p.fill).frame(width: 52, height: 52)
                 .overlay(Circle().strokeBorder(isSel ? Color.primary : .clear, lineWidth: 3))
         }.buttonStyle(.plain)
@@ -260,7 +290,12 @@ struct WallpaperPickerSheet: View {
     // onDisappear revert restores the original if the user closes without applying.
     private func preview(_ w: ChatWallpaper) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = w }
-        store.set(w, for: cid)
-        committed = true   // apply on choose — no separate Apply step (matches Chat Color)
+        store.set(w, for: cid)   // live preview only — Apply commits it, close reverts it
+    }
+
+    // Live-preview a bubble colour (or nil = default). Saved only on Apply.
+    private func chooseColor(_ spec: ChatColorSpec?) {
+        selectedColor = spec
+        colorStore.set(spec, for: cid)
     }
 }

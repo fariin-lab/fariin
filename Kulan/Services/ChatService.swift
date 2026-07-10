@@ -914,13 +914,20 @@ enum ChatService {
 
     /// Human label for a disappearing timer (shared by the info screens + system notice).
     static func disappearLabel(_ seconds: Int) -> String {
-        switch seconds {
-        case 86_400: return "1 day"
-        case 604_800: return "1 week"
-        case 2_592_000: return "1 month"
-        case 31_536_000: return "1 year"
-        default: return "\(seconds)s"
+        guard seconds > 0 else { return "Off" }
+        let units: [(Int, String)] = [(604_800, "week"), (86_400, "day"),
+                                      (3_600, "hour"), (60, "minute"), (1, "second")]
+        // Prefer a unit the value divides into evenly (clean label like "8 hours"); otherwise fall back
+        // to the largest unit that fits. Handles every preset AND any custom value.
+        for (size, name) in units where seconds % size == 0 {
+            let n = seconds / size
+            return "\(n) \(name)\(n == 1 ? "" : "s")"
         }
+        for (size, name) in units where seconds >= size {
+            let n = seconds / size
+            return "\(n) \(name)\(n == 1 ? "" : "s")"
+        }
+        return "\(seconds) seconds"
     }
 
     /// Set the per-chat disappearing-message timer (seconds; 0 = off). Shared by both.
