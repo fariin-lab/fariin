@@ -293,7 +293,11 @@ struct ThreadView: View {
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             showContactInfo = true
-        }) { headerLabel })
+        }) {
+            // Selection mode replaces the title with just the toolbar (Delete All / count / X) — hide the
+            // avatar + name so it reads as a clean selection bar.
+            if !selecting { headerLabel }
+        })
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back

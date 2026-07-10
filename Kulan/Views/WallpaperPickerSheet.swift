@@ -121,6 +121,9 @@ struct WallpaperPickerSheet: View {
         }
     }
 
+    // Something non-default is picked / in use → offer Reset.
+    private var hasCustom: Bool { selected != .none || selectedColor != nil }
+
     private var header: some View {
         ZStack {
             Text("Chat Wallpaper").font(.headline)
@@ -135,10 +138,30 @@ struct WallpaperPickerSheet: View {
                 }
                 .buttonStyle(.plain)
                 Spacer()
+                // Reset back to the default (no wallpaper + default chat color) — only when a custom
+                // wallpaper or chat color is set.
+                if hasCustom {
+                    Button { resetToDefault() } label: {
+                        Text("Reset").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(height: 40).padding(.horizontal, 16)
+                            .liquidGlass(Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(.leading, 16)
-        .padding(.trailing, 20)
+        .padding(.trailing, 16)
+    }
+
+    private func resetToDefault() {
+        committed = true                       // persist the reset (don't let onDisappear revert it)
+        store.set(.none, for: cid)
+        colorStore.set(nil, for: cid)
+        selected = .none; selectedColor = nil
+        original = .none; originalColor = nil
+        dismiss()
     }
 
     // Contextual bottom button: a pending wallpaper/colour change → "Apply Wallpaper" (commits both);
