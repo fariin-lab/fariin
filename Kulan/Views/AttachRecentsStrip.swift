@@ -230,33 +230,40 @@ struct AttachRecentsStrip: View {
 
     // MARK: Multi-select
 
-    // 1-based position of an asset in the current selection (nil = not selected). Photos only.
+    // 1-based position of an asset in the current selection (nil = not selected). Photos AND videos.
     private func selectionIndex(_ a: PHAsset) -> Int? {
-        guard a.mediaType == .image, let i = selectedIds.firstIndex(of: a.localIdentifier) else { return nil }
+        guard let i = selectedIds.firstIndex(of: a.localIdentifier) else { return nil }
         return i + 1
     }
 
     private func toggle(_ a: PHAsset) {
-        guard a.mediaType == .image else { return }   // albums are photos only
         if let i = selectedIds.firstIndex(of: a.localIdentifier) { selectedIds.remove(at: i) }
         else { selectedIds.append(a.localIdentifier) }
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
-    // Load every selected photo (in tap order) and hand them to the parent to send as a batch.
+    // Load every selected item (in tap order): photos go out as an album (or the editor for one), each
+    // selected VIDEO is sent on its own (the album carries images only — Signal/WhatsApp do the same).
     private func sendSelected() {
         let ids = selectedIds
         let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
         loadingPick = true
         Task {
             var imgs: [UIImage] = []
+            var videos: [URL] = []
             for id in ids {
-                if let a = byId[id], let ui = await Self.fullImage(a) { imgs.append(ui) }
+                guard let a = byId[id] else { continue }
+                if a.mediaType == .video {
+                    if let url = await Self.videoURL(a) { videos.append(url) }
+                } else if let ui = await Self.fullImage(a) {
+                    imgs.append(ui)
+                }
             }
             await MainActor.run {
                 loadingPick = false
                 selecting = false
                 selectedIds = []
+                for url in videos { onPickVideo(url) }
                 if !imgs.isEmpty { onPickMultiple(imgs) }
             }
         }

@@ -2332,6 +2332,10 @@ struct SelectableRow: ViewModifier {
     }
 }
 
+// Synchronous flag shared between a voice bubble's waveform-scrub gesture and its reply-swipe gesture
+// (both fire in the same drag event, where @State wouldn't update in time). See `scrubFlag`.
+final class ScrubFlag { var active = false }
+
 struct MessageBubble: View, Equatable {
     // Equatable so SwiftUI skips re-rendering a bubble whose VALUE inputs are unchanged, even when
     // the parent re-evaluates and passes fresh closures (the re-render storm from typing / read
@@ -2403,7 +2407,10 @@ struct MessageBubble: View, Equatable {
     private var onMyBubble: Color { .white }
 
     @State private var dragX: CGFloat = 0
-    @State private var scrubbing = false   // true while dragging a voice waveform — suppresses reply-swipe
+    // Reference flag (NOT @State): the waveform scrub and the reply gesture fire in the SAME drag event,
+    // and a @State bool doesn't propagate synchronously within that event, so the reply read the stale
+    // (false) value and still swiped. A class is mutated + read synchronously, killing the race.
+    @State private var scrubFlag = ScrubFlag()
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
     @State private var notFoundUser = false       // @username tapped but no such user
     @AppStorage("readReceipts") private var readReceiptsPref = true
@@ -2713,11 +2720,11 @@ struct MessageBubble: View, Equatable {
         .simultaneousGesture(
             DragGesture(minimumDistance: 18)
                 .onChanged { v in
-                    guard !scrubbing else { return }   // voice waveform scrub owns this drag — don't reply
+                    guard !scrubFlag.active else { return }   // voice waveform scrub owns this drag — don't reply
                     if v.translation.width < 0 { dragX = max(v.translation.width, -70) }
                 }
                 .onEnded { _ in
-                    if !scrubbing, dragX < -50 {
+                    if !scrubFlag.active, dragX < -50 {
                         onReply(message)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
@@ -2732,7 +2739,7 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark,
-                                 onScrub: { scrubbing = $0 })   // scrubbing the waveform blocks reply-swipe
+                                 onScrub: { scrubFlag.active = $0 })   // scrubbing the waveform blocks reply-swipe
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
