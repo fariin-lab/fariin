@@ -784,6 +784,9 @@ struct ChatsView: View {
                     // Rows start below the stories row; as the list scrolls, the row above is
                     // offset by the same amount, so both move as ONE scroll surface.
                     .contentMargins(.top, storiesRowHeight, for: .scrollContent)
+                    // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
+                    // (its transparent margins otherwise show + tap-through to a row behind the pill).
+                    .contentMargins(.bottom, 28, for: .scrollContent)
                     // Now that the list truly underlaps the nav bar (clip fix), the header draws
                     // its HARD edge line whenever content is beneath it — in BOTH scroll
                     // directions. Soft top edge = blur fade, no drawn line (bottom stays default,

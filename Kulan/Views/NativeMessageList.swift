@@ -59,6 +59,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var settleWork: DispatchWorkItem?
     private var sendAnimating = false   // an animated send/receive glide is in flight — do NOT snap-pin over it
     private var didReveal = false       // hidden until the first load is fully settled (Signal's hasAppliedFirstLoad)
+    private var scheduledEmptyReveal = false   // one-shot fallback reveal for a genuinely-empty/slow chat
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -220,7 +221,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if !didReveal { revealAfterSettle() }   // safety: empty chats settle nothing but must still show
+        if !didReveal {
+            // Reveal immediately once there's content; if the list is still EMPTY (messages are
+            // decrypting on a cold open), wait briefly so it reveals WITH the messages instead of
+            // flashing an empty chat and popping them in late.
+            if !currentIds.isEmpty { revealAfterSettle() } else { scheduleEmptyReveal() }
+        }
         guard !sendAnimating else { return }   // never snap over an in-flight send glide
         if pendingBottomScroll { settleNow() }                                          // first real layout → full synchronous settle
         else if stickBottomThroughLayout { UIView.performWithoutAnimation { pinBottom() } }
@@ -260,6 +266,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // First open: some hosted-SwiftUI cell heights resolve one runloop AFTER the synchronous passes, so
     // reveal on the NEXT runloop turn — after one more settle — while still invisible. The user only
     // ever sees the final, fully-formed layout (no pop/bounce during the push transition).
+    // Empty on first layout (cold decrypt in flight): reveal WITH content if it lands within ~0.6s
+    // (via the content path), else fall back to revealing the empty state so the composer still shows.
+    private func scheduleEmptyReveal() {
+        guard !scheduledEmptyReveal else { return }
+        scheduledEmptyReveal = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, !self.didReveal else { return }
+            self.revealAfterSettle()
+        }
+    }
+
     private func revealAfterSettle() {
         guard !didReveal else { return }
         DispatchQueue.main.async { [weak self] in
