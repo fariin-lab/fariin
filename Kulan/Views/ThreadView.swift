@@ -45,11 +45,15 @@ struct ThreadView: View {
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var multiImages: MultiImagesWrap? // 2+ picked photos → Signal-style approval screen
     struct MultiImagesWrap: Identifiable { let id = UUID(); let images: [UIImage] }
+    // A tapped album opens a swipeable gallery of its photos (synthetic image messages), starting on
+    // the tapped one.
+    struct AlbumViewerWrap: Identifiable { let id = UUID(); let gallery: [Message]; let startId: String }
     @State private var viewedOnceTick = 0            // bump after consuming a view-once photo → bubbles refresh
     @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
     @State private var viewerImage: Message?
+    @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
     @State private var storyToOpen: StoryGroup?      // tapped a status reply → open that status
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
@@ -357,6 +361,12 @@ struct ThreadView: View {
             .interactiveDismissDisabled()
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
+        // Album gallery: swipe between all the album's photos, starting on the tapped one. No zoom hero
+        // (album cells share a bubble, so there's no single source rect); drag-down closes the photo only.
+        .fullScreenCover(item: $albumViewer) { wrap in
+            ImageViewerView(message: wrap.gallery.first { $0.id == wrap.startId } ?? wrap.gallery[0],
+                            in: wrap.gallery, cid: cid, suppressDismissPan: false)
+        }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid)
         }
@@ -781,6 +791,7 @@ struct ThreadView: View {
                 },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                 onTapImage: { viewerImage = $0 },
+                onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
                 onTapVideo: { viewerVideo = $0 },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in
@@ -2277,6 +2288,7 @@ struct MessageBubble: View, Equatable {
     var onReply: (Message) -> Void = { _ in }
     var onDelete: (Message) -> Void = { _ in }
     var onTapImage: (Message) -> Void = { _ in }
+    var onTapAlbum: (_ gallery: [Message], _ startId: String) -> Void = { _, _ in }
     var onTapVideo: (Message) -> Void = { _ in }
     var onReact: (String?) -> Void = { _ in }
     var onPin: (Message) -> Void = { _ in }
@@ -2919,13 +2931,17 @@ struct MessageBubble: View, Equatable {
         .onTapGesture { if message.sendState == nil { openAlbumItem(i) } }
     }
 
-    // Tap an album photo → open it in the full-screen viewer (synthetic single-image message).
+    // Tap an album photo → open the full-screen viewer paged over EVERY photo in the album (Signal:
+    // an album opens as a swipeable gallery, starting on the tapped photo). Each album item becomes a
+    // synthetic image Message so ImageViewerView can page through them.
     private func openAlbumItem(_ i: Int) {
         guard message.album.indices.contains(i) else { return }
-        let it = message.album[i]
-        let data: [String: Any] = ["type": "image", "imageUrl": it.imageUrl, "enc": it.enc.asDict,
-                                   "authorId": message.authorId, "width": it.width, "height": it.height]
-        onTapImage(Message(id: "\(message.id)-\(i)", data: data, cid: cid, crypto: Crypto.shared))
+        let gallery: [Message] = message.album.enumerated().map { idx, it in
+            let data: [String: Any] = ["type": "image", "imageUrl": it.imageUrl, "enc": it.enc.asDict,
+                                       "authorId": message.authorId, "width": it.width, "height": it.height]
+            return Message(id: "\(message.id)-\(idx)", data: data, cid: cid, crypto: Crypto.shared)
+        }
+        onTapAlbum(gallery, "\(message.id)-\(i)")
     }
 
     @ViewBuilder private var replyQuote: some View {
