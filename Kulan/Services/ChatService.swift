@@ -569,11 +569,18 @@ enum ChatService {
     /// thumbnail rides on the message (and the chat-list preview) so bubbles render
     /// instantly without downloading the video.
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
-                          width: Double, height: Double, clientId: String? = nil, group: [String]? = nil) async throws {
+                          width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil) async throws {
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
+        }
+        // Caption travels INSIDE the video message (sealed like a text message), same as images.
+        var captionCipher = ""
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCaption.isEmpty {
+            if let m = members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmedCaption, members: m)) ?? "" }
+            else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmedCaption)) ?? "" }
         }
         let convRef = db.collection("conversations").document(cid)
         let vidCipher: Data, vidMeta: EncMeta, thCipher: Data, thMeta: EncMeta
@@ -602,7 +609,7 @@ enum ChatService {
             "type": "video", "videoUrl": videoUrl, "enc": vidMeta.asDict,
             "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
             "duration": duration, "width": width, "height": height,
-            "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
         ]
         if let clientId { msg["clientId"] = clientId }
         batch.setData(msg, forDocument: msgRef)

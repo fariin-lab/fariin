@@ -42,9 +42,11 @@ struct ThreadView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
+    @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var multiImages: MultiImagesWrap? // 2+ picked photos → Signal-style approval screen
     struct MultiImagesWrap: Identifiable { let id = UUID(); let images: [UIImage] }
+    struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video → approval page (caption)
     // A tapped album opens a swipeable gallery of its photos (synthetic image messages), starting on
     // the tapped one.
     struct AlbumViewerWrap: Identifiable { let id = UUID(); let gallery: [Message]; let startId: String }
@@ -374,6 +376,12 @@ struct ThreadView: View {
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid)
+        }
+        // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
+        .fullScreenCover(item: $videoToApprove) { wrap in
+            VideoApprovalView(url: wrap.url) { caption in
+                Task { await sendVideo(from: wrap.url, caption: caption) }
+            }
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { data in if let ui = UIImage(data: data) { editImage = EditImageWrap(image: ui) } }
@@ -1107,7 +1115,8 @@ struct ThreadView: View {
                 },
                 onPickVideo: { url in
                     showAttachPanel = false
-                    Task { await sendVideo(from: url) }   // straight into the send pipeline
+                    // Open the video approval page (caption) before sending — parity with the image editor.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { videoToApprove = VideoWrap(url: url) }
                 },
                 onSendAlbum: { imgs, caption in
                     showAttachPanel = false
@@ -1635,12 +1644,14 @@ struct ThreadView: View {
             await MainActor.run { editImage = EditImageWrap(image: ui) }
             return
         }
-        // Load all picked photos IN ORDER (selection order = send order, like Signal); videos send now.
+        // Load all picked photos IN ORDER (selection order = send order, like Signal); a single video
+        // opens the approval page (caption); videos mixed with photos still send straight through.
         var photos: [UIImage] = []
         for item in picked {
             if isVideoItem(item) {
                 if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                    await sendVideo(from: movie.url)
+                    if picked.count == 1 { await MainActor.run { videoToApprove = VideoWrap(url: movie.url) } }
+                    else { await sendVideo(from: movie.url) }
                 }
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       let ui = UIImage(data: data) {
@@ -1661,7 +1672,7 @@ struct ThreadView: View {
 
     // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
     // the sender's copy on-device; the recipient's player deletes the server object).
-    private func sendVideo(from url: URL) async {
+    private func sendVideo(from url: URL, caption: String = "") async {
         guard let prepared = await VideoTranscoder.prepare(url) else {
             try? FileManager.default.removeItem(at: url)
             await MainActor.run { sendError = "Couldn't process this video." }
@@ -1681,7 +1692,7 @@ struct ThreadView: View {
         do {
             try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
                                             duration: prepared.duration, width: prepared.width, height: prepared.height,
-                                            clientId: clientId, group: isGroup ? groupMembers : nil)
+                                            caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil)
         } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
