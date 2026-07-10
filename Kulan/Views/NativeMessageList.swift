@@ -16,6 +16,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onReachedTop: () -> Void               // near-top -> page older
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
+    @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -321,6 +322,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let nearTop = scrollView.contentOffset.y <= 72
         if nearTop && !inTopZone { coordinator.parent.onReachedTop() }
         inTopZone = nearTop
+        // Topmost visible row → the floating date header (Signal's sticky date).
+        let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
+        if coordinator.parent.topVisibleId != top { coordinator.parent.topVisibleId = top }
     }
 }
 

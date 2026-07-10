@@ -62,6 +62,7 @@ struct Message: Identifiable, Equatable {
     var sendState: MessageSendState? = nil  // set only on local optimistic messages
     var localImageData: Data? = nil         // optimistic local photo shown before upload
     var localAudioData: Data? = nil         // optimistic local voice note shown before upload
+    var localFile: Bool = false             // optimistic file bubble shown before upload (no fileUrl yet)
     var width: Double? = nil                // image pixel size -> natural aspect ratio bubble
     var height: Double? = nil
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
@@ -74,7 +75,7 @@ struct Message: Identifiable, Equatable {
     var isAudio: Bool { (type == "audio" && (audioUrl?.isEmpty == false)) || localAudioData != nil }
     // Optimistic videos carry their thumbnail in localImageData (hence the isImage carve-out).
     var isVideo: Bool { type == "video" && (videoUrl?.isEmpty == false || localImageData != nil) }
-    var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false) }
+    var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false || localFile) }
     var isGif: Bool { type == "gif" && (imageUrl?.isEmpty == false) }   // public Giphy url (not E2EE)
     var isAlbum: Bool { type == "album" && (!album.isEmpty || !localAlbum.isEmpty) }
     var isCall: Bool { type == "call" }
@@ -131,6 +132,22 @@ struct Message: Identifiable, Equatable {
         self.localAudioData = localAudioData
         self.duration = duration
         self.waveform = waveform
+    }
+
+    /// Local optimistic FILE — shows the document bubble (name + size + spinner) instantly, before the
+    /// encrypt + upload finishes; reconciled by clientId when the server echo lands.
+    init(localFileName: String, fileSize: Int, authorId: String, clientId: String, sendState: MessageSendState) {
+        self.id = clientId
+        self.authorId = authorId
+        self.text = ""
+        self.type = "file"
+        self.clientId = clientId
+        self.reactions = [:]
+        self.createdAt = Date()
+        self.sendState = sendState
+        self.localFile = true
+        self.fileName = localFileName
+        self.fileSize = fileSize
     }
 
     /// Local optimistic message shown instantly before the server confirms it.

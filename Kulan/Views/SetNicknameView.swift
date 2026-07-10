@@ -28,8 +28,8 @@ struct SetNicknameView: View {
                         .focused($focused)
                         .submitLabel(.done)
                         .onSubmit { onSave(text); dismiss() }
-                        .padding(.horizontal, 16).padding(.vertical, 12)   // native ~44pt row height
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))   // native inset-grouped corner
+                        .padding(.horizontal, 16).padding(.vertical, 14)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))   // softer, Apple-rounded field
                         .padding(.top, 20)
                     Text("This nickname is saved only on your device and visible only to you.")
                         .font(.subheadline).foregroundStyle(.secondary)

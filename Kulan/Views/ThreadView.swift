@@ -80,6 +80,9 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
+    @State private var topVisibleId: String?       // topmost visible row → floating date header
+    @State private var floatingDateShown = false   // fades in while scrolling, out when idle
+    @State private var floatingDateHideWork: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -150,6 +153,17 @@ struct ThreadView: View {
             pinnedBar(proxy)
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
+            // Signal-style floating date header (top-centered, fades out when idle).
+            .overlay(alignment: .top) { floatingDateHeader }
+            .onChange(of: topVisibleId) { _, _ in
+                floatingDateShown = true
+                floatingDateHideWork?.cancel()
+                let work = DispatchWorkItem {
+                    withAnimation(.easeOut(duration: 0.4)) { floatingDateShown = false }
+                }
+                floatingDateHideWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: work)
+            }
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
@@ -879,8 +893,31 @@ struct ThreadView: View {
             },
             onReachedTop: { repo.loadOlder() },
             isAtBottom: $isAtBottom,
-            scrollTarget: $nativeScrollTarget
+            scrollTarget: $nativeScrollTarget,
+            topVisibleId: $topVisibleId
         )
+    }
+
+    // Signal-style floating date header: a pill centered at the top of the list that stays visible while
+    // scrolling and updates to the day of the topmost visible message, then fades out when idle.
+    private var floatingDate: String? {
+        guard let id = topVisibleId, let m = repo.items.first(where: { $0.rowId == id }) else { return nil }
+        return dayLabel(m.createdAt)
+    }
+
+    @ViewBuilder private var floatingDateHeader: some View {
+        if let label = floatingDate {
+            Text(label)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.08), lineWidth: 0.5))
+                .padding(.top, 8)
+                .opacity(floatingDateShown ? 1 : 0)
+                .allowsHitTesting(false)
+                .animation(.easeInOut(duration: 0.25), value: floatingDateShown)
+        }
     }
 
     // Native-list jump: flash the message (highlightId) and scroll the collection view to it.
@@ -1130,8 +1167,15 @@ struct ThreadView: View {
             await MainActor.run { sendError = "File too large (max 25 MB)." }; return
         }
         let name = url.lastPathComponent
-        do { try await ChatService.sendFile(cid: cid, data: data, fileName: name, group: isGroup ? groupMembers : nil) }
-        catch { await MainActor.run { sendError = "Couldn't send the file. Try again." } }
+        // Optimistic bubble FIRST (instant feedback) — the encrypt+upload then runs in the background and
+        // the server echo reconciles it by clientId. Was: awaited the whole upload before anything showed.
+        let clientId = UUID().uuidString
+        await MainActor.run {
+            repo.addPending(Message(localFileName: name, fileSize: data.count, authorId: me,
+                                    clientId: clientId, sendState: .sending))
+        }
+        do { try await ChatService.sendFile(cid: cid, data: data, fileName: name, clientId: clientId, group: isGroup ? groupMembers : nil) }
+        catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the file. Try again." } }
     }
 
     // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
@@ -2687,8 +2731,15 @@ struct MessageBubble: View, Equatable {
                 // long-press (context menu) and swipe-to-reply never fired on file bubbles. A tap
                 // gesture opens the file; everything else bubbles up normally.
                 HStack(spacing: 10) {
-                    Image(systemName: "doc.fill").font(.system(size: 26))
-                        .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
+                    // Spinner while the optimistic file is still uploading, else the document icon.
+                    if message.sendState == .sending {
+                        ProgressView().progressViewStyle(.circular)
+                            .tint(isMe ? onMyBubble : Color.accentColor)
+                            .frame(width: 26, height: 26)
+                    } else {
+                        Image(systemName: "doc.fill").font(.system(size: 26))
+                            .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(message.fileName ?? "Document")
                             .font(.system(size: 15, weight: .medium)).lineLimit(1)
@@ -2698,7 +2749,7 @@ struct MessageBubble: View, Equatable {
                 }
                 .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                 .contentShape(Rectangle())
-                .onTapGesture { onOpenFile(message) }
+                .onTapGesture { if message.sendState == nil { onOpenFile(message) } }   // only opened files
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
