@@ -69,8 +69,6 @@ struct ThreadView: View {
     @State private var holdStarted = false          // guards a single start per hold
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
-    @State private var showInChatSearch = false
-    @State private var searchJumpTarget: String?   // messageId chosen in in-chat search → scroll+flash it
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Signal-style UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
@@ -184,14 +182,6 @@ struct ThreadView: View {
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
             .onChange(of: repo.otherTyping) { _, t in
                 if t && isAtBottom { proxy.scrollTo("BOTTOM", anchor: .bottom) }
-            }
-            // In-chat search picked a message: page older until it's loaded, then scroll to + flash it.
-            .onChange(of: searchJumpTarget) { _, id in
-                guard let id else { return }
-                Task {
-                    await repo.ensureLoaded(id)
-                    await MainActor.run { jump(to: id, proxy); searchJumpTarget = nil }
-                }
             }
             // Keyboard opening: if I was already at the bottom, keep the newest messages pinned right
             // above the keyboard (the system doesn't reliably do this, which left the chat looking
@@ -355,12 +345,6 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showGroupAdd) {
             AddMembersSheet(cid: cid, existing: Set(groupMembers))
-        }
-        .sheet(isPresented: $showInChatSearch) {
-            InChatSearchView(cid: cid, isGroup: isGroup, me: me, nameFor: { personName($0) }) { id in
-                showInChatSearch = false
-                searchJumpTarget = id
-            }
         }
         .sheet(item: $infoTarget) { m in
             MessageInfoView(message: m, members: groupMembers.filter { $0 != me },
@@ -782,14 +766,6 @@ struct ThreadView: View {
         // Avatar + name are installed as the native UINavigationItem.titleView (see NavTitleView) —
         // NOT a toolbar item — so the tap, the leading placement, the native blur and the swipe-back
         // slide are all handled there (Signal's approach). Only the call/video buttons live here.
-        // In-chat search (leftmost trailing) — search this conversation's whole history, tap a hit to
-        // jump to it. Available in both 1:1 and group chats.
-        ToolbarItem(placement: .topBarTrailing) {
-            Button { showInChatSearch = true } label: {
-                Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .regular))
-            }
-            .tint(.primary)
-        }
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
