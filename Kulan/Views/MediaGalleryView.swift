@@ -352,8 +352,11 @@ struct MediaGalleryView: View {
     }
     private func exitSelection() { selecting = false; selection = [] }
 
-    // Go to Chat: tell the open ThreadView to pop back to itself and scroll to this message.
+    // Go to Chat: pop THIS gallery ourselves, then tell the open ThreadView to pop the profile too and
+    // scroll to the message. (Setting the parent's binding alone didn't pop while this child was pushed —
+    // nested isPresented destinations don't cascade, so nothing happened.)
     private func goToChat(_ m: Message) {
+        dismiss()
         NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
     }
 
