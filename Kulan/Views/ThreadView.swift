@@ -1979,7 +1979,14 @@ struct ThreadView: View {
             // reliable fix; the mic is a separate stable slot (its own .id), so this sibling change
             // can't disturb the recording gesture.
             if !recordingHeld {
-                Button { showAttachPanel = true } label: {
+                Button {
+                    // Fully resign the composer keyboard BEFORE opening the sheet, so iOS doesn't remember
+                    // it as first responder and briefly RESTORE the keyboard when the sheet closes (the
+                    // flash before the image editor opens).
+                    inputFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    showAttachPanel = true
+                } label: {
                     Image(systemName: sendingPhoto ? "ellipsis" : "plus")
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(.primary)
