@@ -349,11 +349,10 @@ struct ThreadView: View {
                 viewedOnceTick += 1
             }
         }) { msg in
-            // Open = native zoom hero (grows out of the bubble). CLOSE = only the PHOTO follows the finger
-            // and the black backdrop fades (Apple Photos / Instagram), NOT the whole page as a card. So we
-            // DISABLE the zoom transition's interactive whole-card drag (interactiveDismissDisabled) and turn
-            // the in-viewer image-only pan back on (suppressDismissPan: false); releasing past the threshold
-            // calls dismiss(), and the zoom then shrinks the photo back into the bubble.
+            // CLOSE = only the PHOTO follows the finger and the black backdrop fades (Apple Photos /
+            // Instagram), NOT the whole page. The native .zoom transition's own drag moved the WHOLE card
+            // (and .interactiveDismissDisabled did NOT suppress it), so it's removed — the in-viewer
+            // image-only pan (suppressDismissPan: false) owns the drag-down close, like the album viewer.
             Group {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
@@ -365,8 +364,6 @@ struct ThreadView: View {
                                     cid: cid, suppressDismissPan: false)
                 }
             }
-            .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
-            .interactiveDismissDisabled()
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         // Album gallery: swipe between all the album's photos, starting on the tapped one. No zoom hero
