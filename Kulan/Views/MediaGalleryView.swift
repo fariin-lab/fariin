@@ -204,22 +204,32 @@ struct MediaGalleryView: View {
 
     private func mediaCell(_ m: Message) -> some View {
         let selected = selection.contains(m.id)
-        return ZStack {
-            thumbnail(m).frame(maxWidth: .infinity).frame(height: 122).clipped()
-            if m.isVideo {
-                Image(systemName: "play.circle.fill").font(.system(size: 26))
-                    .foregroundStyle(.white.opacity(0.95)).shadow(radius: 3)
+        // A square container (Color.clear) drives the tile size; the thumbnail fills it as an overlay.
+        // This makes the size come from the grid column, NOT the content — so images and GIFs (a
+        // UIViewRepresentable whose intrinsic size otherwise leaks into the row) are identical squares.
+        return Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay { thumbnail(m) }
+            .clipped()
+            .overlay {
+                if m.isVideo {
+                    Image(systemName: "play.circle.fill").font(.system(size: 26))
+                        .foregroundStyle(.white.opacity(0.95)).shadow(radius: 3)
+                }
             }
-            if selecting {
-                Color.black.opacity(selected ? 0.25 : 0.001)
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22)).foregroundStyle(selected ? Color.accentColor : .white)
-                    .padding(6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .overlay {
+                if selecting {
+                    ZStack {
+                        Color.black.opacity(selected ? 0.25 : 0.001)
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22)).foregroundStyle(selected ? Color.accentColor : .white)
+                            .padding(6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    }
+                }
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { tap(m) }
-        .contextMenu { if !selecting { itemMenu(m) } }
+            .contentShape(Rectangle())
+            .onTapGesture { tap(m) }
+            .contextMenu { if !selecting { itemMenu(m) } }
     }
 
     @ViewBuilder private func thumbnail(_ m: Message) -> some View {
