@@ -72,12 +72,12 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
-                // How many photos are selected (right side) — a Liquid Glass count pill.
+                // Selected count — a 48px Liquid Glass (blur) circle showing only the number.
                 if !selectedIds.isEmpty {
-                    Text("\(selectedIds.count) selected")
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(height: 40).padding(.horizontal, 14)
-                        .liquidGlass(Capsule(), interactive: false)
+                    Text("\(selectedIds.count)")
+                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.primary)
+                        .frame(width: 48, height: 48)
+                        .liquidGlass(Circle(), interactive: false)
                 }
             }
         }
