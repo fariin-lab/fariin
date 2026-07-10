@@ -47,8 +47,10 @@ struct ContactInfoView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
-    // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name.
-    private var shownName: String { localName ?? name }
+    // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name. Read
+    // the observable store DIRECTLY (not the async-loaded @State), so the nickname shows immediately —
+    // no 2s flash of the old name on open.
+    private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
     private var dark: Bool { scheme == .dark }
     private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }

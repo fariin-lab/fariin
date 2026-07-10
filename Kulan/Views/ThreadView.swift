@@ -2394,6 +2394,22 @@ struct SelectableRow: ViewModifier {
 // (both fire in the same drag event, where @State wouldn't update in time). See `scrubFlag`.
 final class ScrubFlag { var active = false }
 
+// Signal-style upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
+// frosted-material pinwheel) — one consistent look for photo / album / video uploads.
+struct UploadingRing: View {
+    @State private var spin = false
+    var body: some View {
+        ZStack {
+            Circle().fill(.black.opacity(0.5)).frame(width: 46, height: 46)
+            Circle().trim(from: 0, to: 0.3)
+                .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 26, height: 26)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+        }
+        .onAppear { withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) { spin = true } }
+    }
+}
+
 struct MessageBubble: View, Equatable {
     // Equatable so SwiftUI skips re-rendering a bubble whose VALUE inputs are unchanged, even when
     // the parent re-evaluates and passes fresh closures (the re-render storm from typing / read
@@ -2864,11 +2880,7 @@ struct MessageBubble: View, Equatable {
                     if message.sendState == .sending {
                         ZStack {
                             Color.black.opacity(0.18)
-                            ProgressView().progressViewStyle(.circular).tint(.white)
-                                .padding(15)
-                                .background(.ultraThinMaterial, in: Circle())
-                                .environment(\.colorScheme, .dark)
-                                .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 1))
+                            UploadingRing()
                         }
                         .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                     } else {
@@ -2920,9 +2932,7 @@ struct MessageBubble: View, Equatable {
                 if message.sendState == .sending {
                     ZStack {
                         Color.black.opacity(0.18)
-                        ProgressView().progressViewStyle(.circular).tint(.white)
-                            .padding(15).background(.ultraThinMaterial, in: Circle())
-                            .environment(\.colorScheme, .dark)
+                        UploadingRing()
                     }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 }
@@ -2978,11 +2988,7 @@ struct MessageBubble: View, Equatable {
                         if message.sendState == .sending {
                             ZStack {
                                 Color.black.opacity(0.18)
-                                ProgressView().progressViewStyle(.circular).tint(.white)
-                                    .padding(15)
-                                    .background(.ultraThinMaterial, in: Circle())
-                                    .environment(\.colorScheme, .dark)
-                                    .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 1))
+                                UploadingRing()
                             }
                         }
                     }
