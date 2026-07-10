@@ -71,6 +71,13 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
+    // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
+    @State private var searchActive = false
+    @State private var searchQuery = ""
+    @State private var searchCorpus: [InChatMessage] = []
+    @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
+    @State private var searchIndex = 0
+    @FocusState private var searchFocused: Bool
     // Signal-style UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
     @AppStorage("experimental.nativeList") private var useNativeList = true
@@ -234,7 +241,9 @@ struct ThreadView: View {
             }
             .floatingBottomBar {
                 Group {
-                    if notAMember {
+                    if searchActive {
+                        searchNavBar.transition(.opacity)
+                    } else if notAMember {
                         removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
                     } else if cannotSendAnnouncement {
                         announcementBar.transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -270,7 +279,10 @@ struct ThreadView: View {
             if isGroup {
                 GroupInfoView(cid: cid)
             } else {
-                ContactInfoView(cid: cid, name: title, photoUrl: photoUrl)
+                ContactInfoView(cid: cid, name: title, photoUrl: photoUrl, onSearch: {
+                    showContactInfo = false   // pop back to the chat…
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
+                })
             }
         }
         .alert("Video calls", isPresented: $showVideoSoon) {
@@ -351,6 +363,10 @@ struct ThreadView: View {
                             lastRead: repo.memberLastRead,
                             nameFor: { personName($0) }, photoFor: { conversation?.photos[$0] })
         }
+        // In-chat search: a top bar replaces the nav bar; the ↑/↓ nav bar (searchNavBar) replaces the
+        // composer above the keyboard.
+        .safeAreaInset(edge: .top) { if searchActive { searchBar } }
+        .toolbar(searchActive ? .hidden : .visible, for: .navigationBar)
     }
 
     var body: some View {
@@ -756,6 +772,49 @@ struct ThreadView: View {
         highlightId = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             if highlightId == id { withAnimation { highlightId = nil } }
+        }
+    }
+
+    // MARK: - In-chat search (Signal-style: top bar + step through matches)
+
+    private func activateSearch() {
+        withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
+        searchQuery = ""; searchMatches = []; searchIndex = 0
+        inputFocused = false
+        Task {
+            let corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
+            await MainActor.run { searchCorpus = corpus }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { searchFocused = true }
+    }
+
+    private func closeSearch() {
+        searchFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+        searchQuery = ""; searchMatches = []; highlightId = nil
+    }
+
+    // Recompute matches (oldest→newest) and jump to the newest one, as you type.
+    private func updateSearchMatches() {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { searchMatches = []; highlightId = nil; return }
+        searchMatches = searchCorpus.filter { $0.text.lowercased().contains(q) }.sorted { $0.date < $1.date }
+        searchIndex = max(0, searchMatches.count - 1)   // newest match first (Signal)
+        goToCurrentMatch()
+    }
+
+    private func stepSearch(_ delta: Int) {
+        guard !searchMatches.isEmpty else { return }
+        searchIndex = min(max(0, searchIndex + delta), searchMatches.count - 1)
+        goToCurrentMatch()
+    }
+
+    private func goToCurrentMatch() {
+        guard searchMatches.indices.contains(searchIndex) else { return }
+        let id = searchMatches[searchIndex].id
+        Task {
+            await repo.ensureLoaded(id)
+            await MainActor.run { nativeScrollTarget = id; highlightId = id }
         }
     }
 
@@ -1347,6 +1406,53 @@ struct ThreadView: View {
 
     // When I've blocked this contact, the composer is replaced by an unblock bar —
     // you genuinely can't send while blocked (real enforcement, not cosmetic).
+    // Top search bar (Signal-style): rounded field with inline clear + a circular X to close search.
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(.secondary)
+                TextField("Search", text: $searchQuery)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    .onChange(of: searchQuery) { _, _ in updateSearchMatches() }
+                if !searchQuery.isEmpty {
+                    Button { searchQuery = "" } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 15)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(Color(.systemGray6), in: Capsule())
+            Button { closeSearch() } label: {
+                Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                    .frame(width: 38, height: 38).background(Color(.systemGray5), in: Circle())
+            }
+        }
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
+        .background(.bar)
+    }
+
+    // Bottom bar shown during search (replaces the composer, sits above the keyboard): ↑/↓ through
+    // matches + a count, like Signal.
+    private var searchNavBar: some View {
+        HStack(spacing: 14) {
+            Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 17, weight: .semibold)) }
+                .disabled(searchIndex <= 0 || searchMatches.isEmpty)
+            Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 17, weight: .semibold)) }
+                .disabled(searchIndex >= searchMatches.count - 1 || searchMatches.isEmpty)
+            Spacer()
+            Text(searchMatches.isEmpty
+                 ? (searchQuery.isEmpty ? "" : "No results")
+                 : "\(searchIndex + 1) of \(searchMatches.count)")
+                .font(.subheadline).foregroundStyle(.secondary)
+        }
+        .tint(.primary)
+        .padding(.horizontal, 22).padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
     private var blockedBar: some View {
         VStack(spacing: 6) {
             Text("You blocked \(title)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)

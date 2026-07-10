@@ -18,6 +18,7 @@ struct ContactInfoView: View {
     let photoUrl: String?
     var source: ProfileSource = .chat
     var isSelf: Bool = false   // your OWN profile (opened from your own story) → no call-yourself buttons
+    var onSearch: () -> Void = {}   // "search" tile → pop back to the chat and open in-chat search
 
     @State private var handle = ""
     @State private var about = ""
@@ -345,7 +346,7 @@ struct ContactInfoView: View {
             }
             .tint(.primary)
             if source == .chat {
-                actionTile("search", "magnifyingglass") { showSearchSoon = true }
+                actionTile("search", "magnifyingglass") { onSearch() }
             }
             // "More" tile (…): the menu that used to sit in the nav bar.
             if !isSelf {
