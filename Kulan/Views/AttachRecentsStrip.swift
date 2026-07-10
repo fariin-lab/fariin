@@ -72,14 +72,21 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
+                // How many photos are selected (right side) — a Liquid Glass count pill.
+                if !selectedIds.isEmpty {
+                    Text("\(selectedIds.count) selected")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.primary)
+                        .frame(height: 40).padding(.horizontal, 14)
+                        .liquidGlass(Capsule(), interactive: false)
+                }
             }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
 
-    // Caption + Send bar shown while items are selected (replaces the source row). Send arrow carries a
-    // count badge; sending routes photos → album, videos → individually.
+    // Caption + Send bar shown while items are selected (replaces the source row). The selected COUNT is
+    // shown at the header top-right (not on the send button); the send button is real Liquid Glass.
     private var captionBar: some View {
         HStack(spacing: 10) {
             TextField("", text: $caption,
@@ -88,13 +95,11 @@ struct AttachRecentsStrip: View {
                 .padding(.horizontal, 16).frame(height: 46)
                 .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 46, height: 46).background(Color(hex: 0x3DA1FD), in: Circle())
-                    Text("\(selectedIds.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.red, in: Capsule()).offset(x: 4, y: -4)
-                }
+                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(Color(hex: 0x3DA1FD))
+                    .frame(width: 46, height: 46)
+                    .liquidGlass(Circle(), interactive: true)   // real Liquid Glass send button (no count)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
         }
