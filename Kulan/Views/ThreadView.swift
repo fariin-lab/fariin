@@ -291,6 +291,12 @@ struct ThreadView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back
         .toolbar { chatToolbar }
+        // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
+        // lingers over the chat list.
+        .onDisappear {
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
                 GroupInfoView(cid: cid)
