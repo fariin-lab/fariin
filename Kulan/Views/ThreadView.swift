@@ -2896,21 +2896,65 @@ struct MessageBubble: View, Equatable {
         }
     }
 
-    private var albumWidth: CGFloat { min(maxBubbleWidth, 264) }
+    private var albumWidth: CGFloat { min(maxBubbleWidth, 300) }
 
-    // 2-column grid of the album's photos (up to 4 shown; a "+N" badge on the 4th if more).
+    // Aspect (w/h) of album item i, for choosing the mosaic arrangement. 1 (square) when unknown.
+    private func albumAspect(_ i: Int) -> CGFloat {
+        if message.album.indices.contains(i), message.album[i].height > 0 {
+            return CGFloat(message.album[i].width / message.album[i].height)
+        }
+        return 1
+    }
+
+    // Telegram-style album MOSAIC (not a uniform grid): 2 = side-by-side (or stacked when the shots are
+    // wide), 3 = one large + two stacked, 4 = 2×2, 5+ = 2×2 with a "+N" on the last. Photos crop-to-fill
+    // their cells; the caption rides below in the SAME bubble (handled by the album branch).
     @ViewBuilder private var albumGrid: some View {
         let n = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
-        let shown = min(n, 4)
-        let cell = (albumWidth - 2) / 2
-        LazyVGrid(columns: [GridItem(.fixed(cell), spacing: 2), GridItem(.fixed(cell), spacing: 2)], spacing: 2) {
-            ForEach(0..<shown, id: \.self) { i in
-                albumCell(i, cell: cell, extra: (i == shown - 1 && n > 4) ? n - shown : 0)
+        let W = albumWidth
+        let g: CGFloat = 2
+        let wide = albumAspect(0) > 1.15
+        switch max(n, 2) {
+        case 2:
+            if wide {
+                VStack(spacing: g) { albumTile(0, W, W * 0.56); albumTile(1, W, W * 0.56) }
+            } else {
+                let c = (W - g) / 2
+                HStack(spacing: g) { albumTile(0, c, c * 1.2); albumTile(1, c, c * 1.2) }
+            }
+        case 3:
+            if wide {
+                let bh = (W - g) / 2
+                VStack(spacing: g) {
+                    albumTile(0, W, W * 0.5)
+                    HStack(spacing: g) { albumTile(1, bh, bh); albumTile(2, bh, bh) }
+                }
+            } else {
+                let H = W * 0.8
+                let leftW = (W - g) * 0.62
+                let rightW = W - g - leftW
+                let rc = (H - g) / 2
+                HStack(spacing: g) {
+                    albumTile(0, leftW, H)
+                    VStack(spacing: g) { albumTile(1, rightW, rc); albumTile(2, rightW, rc) }
+                }
+            }
+        case 4:
+            let c = (W - g) / 2
+            VStack(spacing: g) {
+                HStack(spacing: g) { albumTile(0, c, c); albumTile(1, c, c) }
+                HStack(spacing: g) { albumTile(2, c, c); albumTile(3, c, c) }
+            }
+        default:
+            let c = (W - g) / 2
+            VStack(spacing: g) {
+                HStack(spacing: g) { albumTile(0, c, c); albumTile(1, c, c) }
+                HStack(spacing: g) { albumTile(2, c, c); albumTile(3, c, c, extra: n - 4) }
             }
         }
     }
 
-    private func albumCell(_ i: Int, cell: CGFloat, extra: Int) -> some View {
+    private func albumTile(_ i: Int, _ w: CGFloat, _ h: CGFloat, extra: Int = 0) -> some View {
         Group {
             if !message.localAlbum.isEmpty, message.localAlbum.indices.contains(i), let ui = UIImage(data: message.localAlbum[i]) {
                 Image(uiImage: ui).resizable().scaledToFill()
@@ -2921,10 +2965,10 @@ struct MessageBubble: View, Equatable {
                 Rectangle().fill(Color.gray.opacity(0.18))
             }
         }
-        .frame(width: cell, height: cell).clipped()
+        .frame(width: w, height: h).clipped()
         .overlay {
             if extra > 0 {
-                ZStack { Color.black.opacity(0.5); Text("+\(extra)").font(.title2.weight(.bold)).foregroundStyle(.white) }
+                ZStack { Color.black.opacity(0.5); Text("+\(extra)").font(.title.weight(.bold)).foregroundStyle(.white) }
             }
         }
         .contentShape(Rectangle())
