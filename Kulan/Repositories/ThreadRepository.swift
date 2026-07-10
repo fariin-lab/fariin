@@ -47,6 +47,7 @@ final class ThreadRepository {
     var otherOnline = false
     var otherLastActive: Date?
     var otherLastReadMillis: Double = 0
+    var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
     var disappearSeconds = 0
     private var expiryTimer: Timer?
@@ -140,6 +141,11 @@ final class ThreadRepository {
                         let readMap = d?["lastRead"] as? [String: Any] ?? [:]
                         let times = others.map { (readMap[$0] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0 }
                         self.otherLastReadMillis = (times.min() ?? 0) * 1000
+                        // Keep the FULL per-member map too (not just the min) so a message-info screen
+                        // can show exactly who has read a given message ("read by" list).
+                        self.memberLastRead = Dictionary(uniqueKeysWithValues: others.map {
+                            ($0, ((readMap[$0] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000)
+                        })
                     }
                 }
                 // Only rebuild when a field that actually FILTERS the list changes.

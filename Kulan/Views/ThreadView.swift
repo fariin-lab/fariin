@@ -75,6 +75,7 @@ struct ThreadView: View {
     @State private var selectedIds = Set<String>()
     @State private var bulkForward: [Message]?     // non-nil → present ForwardPicker for these messages
     @State private var showBulkDeleteConfirm = false
+    @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var isAtBottom = true
     @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left (WhatsApp)
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
@@ -382,6 +383,11 @@ struct ThreadView: View {
             Button("Delete", role: .destructive) { bulkDelete() }
             Button("Cancel", role: .cancel) {}
         }
+        .sheet(item: $infoTarget) { m in
+            MessageInfoView(message: m, members: groupMembers.filter { $0 != me },
+                            lastRead: repo.memberLastRead,
+                            nameFor: { personName($0) }, photoFor: { conversation?.photos[$0] })
+        }
     }
 
     var body: some View {
@@ -688,6 +694,7 @@ struct ThreadView: View {
                         },
                         onForward: { forwardTarget = $0 },
                         onSelect: { m in withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
+                        onInfo: { infoTarget = $0 },
                         onEdit: { m in
                             withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                             input = m.text
@@ -1973,6 +1980,8 @@ struct MessageBubble: View, Equatable {
     var onReact: (String?) -> Void = { _ in }
     var onPin: (Message) -> Void = { _ in }
     var onForward: (Message) -> Void = { _ in }
+    var onSelect: (Message) -> Void = { _ in }
+    var onInfo: (Message) -> Void = { _ in }
     var onEdit: (Message) -> Void = { _ in }
     var onReport: (Message) -> Void = { _ in }
     var onReactMore: (Message) -> Void = { _ in }
@@ -1995,7 +2004,6 @@ struct MessageBubble: View, Equatable {
         return String(format: "%d:%02d", d / 60, d % 60)
     }
     var onLongPress: (Message) -> Void = { _ in }
-    var onSelect: (Message) -> Void = { _ in }
     var onResend: (Message) -> Void = { _ in }
     var onJumpTo: (String) -> Void = { _ in }
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
@@ -2025,6 +2033,13 @@ struct MessageBubble: View, Equatable {
     // render per bubble was the main scroll-jank source.
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let mentionRegex = try? NSRegularExpression(pattern: "@([A-Za-z0-9_]{3,24})")
+
+    // First https link in the text (for the Open-Graph preview card). Only web links, not kulan:// ones.
+    private var firstLinkURL: URL? {
+        guard message.text.contains("http"), let d = Self.linkDetector else { return nil }
+        let r = NSRange(message.text.startIndex..., in: message.text)
+        return d.matches(in: message.text, range: r).compactMap(\.url).first { $0.scheme == "https" }
+    }
 
     private var bodyText: Text {
         let full = message.text
@@ -2256,6 +2271,10 @@ struct MessageBubble: View, Equatable {
                             Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
                         }
                         Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
+                        // "Info" (group, my own messages) → who has read this message.
+                        if isGroup && isMe && message.sendState == nil {
+                            Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
+                        }
                         Divider()
                         if isMe {
                             Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
@@ -2448,6 +2467,11 @@ struct MessageBubble: View, Equatable {
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
+                // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
+                if let link = firstLinkURL {
+                    LinkPreviewCard(url: link, isMe: isMe, dark: dark)
+                        .onTapGesture { _ = routeTappedURL(link) }
+                }
                 // Text + time laid out in a real HStack so the time can never
                 // overlap the words. Short msgs => same line; long msgs => the
                 // text wraps and the time stays at the bottom-right corner.
