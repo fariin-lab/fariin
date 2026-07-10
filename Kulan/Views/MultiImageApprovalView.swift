@@ -59,7 +59,7 @@ struct MultiImageApprovalView: View {
                 .padding(.top, 4)
                 Spacer(minLength: 0)
                 VStack(spacing: 12) {
-                    rail
+                    if !captionFocused { rail }   // hide the thumbnail rail while typing, like Signal
                     HStack(spacing: 10) {
                         TextField("", text: $caption,
                                   prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
@@ -87,6 +87,7 @@ struct MultiImageApprovalView: View {
                     .padding(.horizontal, 16)
                 }
                 .padding(.bottom, 8)
+                .animation(.easeInOut(duration: 0.2), value: captionFocused)
                 }   // chrome VStack
             }
         }

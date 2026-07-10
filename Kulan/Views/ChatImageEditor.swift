@@ -16,6 +16,7 @@ struct ChatImageEditor: View {
     @State private var penHue = 0.0       // palette slider (0 = white end)
     @State private var isHighlighter = false
     @State private var penWidth: CGFloat = 6
+    @State private var showCrop = false
     @State private var caption = ""
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
@@ -100,11 +101,19 @@ struct ChatImageEditor: View {
                     if isDrawing { penBar.padding(.bottom, 8) }
                     else { bottomBar.padding(.bottom, 8) }
                 }
+                .animation(.easeInOut(duration: 0.2), value: captionFocused)
             }
             .onAppear { canvasSize = geo.size; recomputeEdited() }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
+        }
+        // Interactive crop (drag the frame, pan/zoom the image, aspect presets, rotate) — replaces the
+        // old aspect-cycle "crop" that just centre-cropped.
+        .fullScreenCover(isPresented: $showCrop) {
+            ChatCropView(image: source) { cropped in
+                editedCache = Self.filtered(cropped, filterIndex)   // keep the current filter over the crop
+            }
         }
     }
 
@@ -156,13 +165,15 @@ struct ChatImageEditor: View {
     // caption capsule + round send. Minimal — no dead icons, everything works.
     private var bottomBar: some View {
         VStack(spacing: 12) {
-            // Tool row: crop · draw · filters · HD (Signal's mediaToolbar spacing = 10).
-            HStack(spacing: 10) {
-                tool("crop", active: aspectIndex != 0) { aspectIndex = (aspectIndex + 1) % Self.aspects.count }
-                tool("scribble", active: isDrawing) { isDrawing.toggle() }
-                tool("slider.horizontal.3", active: filterIndex != 0) { filterIndex = (filterIndex + 1) % Self.filters.count }
-                tool("", active: hd, label: "HD") { hd.toggle() }
-                Spacer()
+            // Tool row: crop · draw · filters · HD — HIDDEN while typing a caption (keyboard up).
+            if !captionFocused {
+                HStack(spacing: 10) {
+                    tool("crop", active: false) { showCrop = true }
+                    tool("scribble", active: isDrawing) { isDrawing.toggle() }
+                    tool("", active: hd, label: "HD") { hd.toggle() }
+                    Spacer()
+                }
+                .transition(.opacity)
             }
 
             // Caption + send (Signal's text toolbar). The ① toggle (Signal's viewOnceButton) sits in the
