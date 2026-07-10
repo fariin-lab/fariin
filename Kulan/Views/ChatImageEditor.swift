@@ -13,6 +13,7 @@ struct ChatImageEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var viewOnce = false   // Signal-style: recipient can open the photo exactly once
+    @State private var penHue = 0.0       // Signal's palette slider (0 = red end)
     @State private var caption = ""
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
@@ -49,7 +50,11 @@ struct ChatImageEditor: View {
                     Image(uiImage: edited)
                         .resizable().scaledToFit()
                         .frame(width: geo.size.width, height: geo.size.height)
-                    DrawingCanvas(drawing: $drawing, isActive: true).ignoresSafeArea()
+                    // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
+                    DrawingCanvas(drawing: $drawing, isActive: true,
+                                  penColor: UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                                  showsToolPicker: false)
+                        .ignoresSafeArea()
                 } else {
                     ZoomImageView(image: edited, onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
                         .ignoresSafeArea()
@@ -80,14 +85,45 @@ struct ChatImageEditor: View {
                     .padding(.horizontal)
                     .padding(.top, 4)
                     Spacer(minLength: 0)
-                    bottomBar
-                        .padding(.bottom, 8)
+                    if isDrawing { penBar.padding(.bottom, 8) }
+                    else { bottomBar.padding(.bottom, 8) }
                 }
             }
             .onAppear { canvasSize = geo.size; recomputeEdited() }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
+        }
+    }
+
+    // Signal's brush bottom bar: the rainbow palette slider, then undo · X-cancel · ✓-done.
+    private var penBar: some View {
+        VStack(spacing: 14) {
+            GradientSlider(value: $penHue, track: LinearGradient(
+                colors: stride(from: 0.0, through: 1.0, by: 0.08).map {
+                    Color(hue: $0, saturation: 1, brightness: 1)
+                }, startPoint: .leading, endPoint: .trailing))
+                .padding(.horizontal, 20)
+            HStack {
+                Button {
+                    var strokes = drawing.strokes
+                    if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 17, weight: .medium)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Image(systemName: "pencil").font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
+                    .frame(width: 44, height: 44).background(Color.white, in: Circle())   // active tool (Signal)
+                Spacer()
+                Button { isDrawing = false } label: {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
         }
     }
 
