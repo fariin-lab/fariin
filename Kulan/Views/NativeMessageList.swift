@@ -132,6 +132,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // on-screen row and restore its position after the insert, so nothing lurches.
         let isPrepend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.suffix(currentIds.count)) == currentIds
+        // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
+        let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
+            && Array(ids.prefix(currentIds.count)) == currentIds
         let anchor: (id: String, distanceFromTop: CGFloat)? = isPrepend ? captureTopAnchor() : nil
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -142,14 +145,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         currentIds = ids
 
         let shouldStick = isFirst || !didInitialScroll || (wasAtBottom && !isPrepend)
-        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+        // Send/receive at the bottom ANIMATES (Signal: the batch update slides the new bubble in and
+        // the list glides down). First load and prepends stay non-animated (no flicker, no lurch).
+        let animate = isAppend && didInitialScroll && wasAtBottom
+        dataSource.apply(snapshot, animatingDifferences: animate) { [weak self] in
             guard let self else { return }
             if let anchor {
                 self.restore(anchor)          // load-older: keep the reader's place
             } else if shouldStick {
-                self.beginBottomSettle()      // first load / my send / at-bottom receive: land + stay at bottom
+                if animate { self.animatedScrollToBottom() }   // glide to the new message
+                else { self.beginBottomSettle() }              // open: land + stay at bottom, no motion
             }
         }
+    }
+
+    // Send/receive glide: scroll to the true bottom WITH animation (the insert animates alongside).
+    private func animatedScrollToBottom() {
+        collectionView.layoutIfNeeded()
+        let target = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+        let y = max(-collectionView.adjustedContentInset.top, target)
+        collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
     }
 
     // MARK: - Scroll continuity (Signal's anti-jump idea, our implementation)

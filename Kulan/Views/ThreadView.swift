@@ -334,7 +334,7 @@ struct ThreadView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.fraction(0.7), .large]) }
+        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.medium, .large]) }   // opens half (≈2 rows), pull up for more
         .sheet(isPresented: $showPollSoon) { pollSoonSheet.presentationDetents([.fraction(0.6)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
@@ -972,8 +972,9 @@ struct ThreadView: View {
                     Task { await sendVideo(from: url) }   // straight into the send pipeline
                 })
                 .padding(.top, 10)
-            // Fixed bottom row of sources (Camera lives in the grid now).
-            HStack(spacing: 22) {
+            // Fixed bottom row of sources (Camera lives in the grid now). Signal's
+            // AttachmentFormatPickerView spec: 12pt stack spacing between items.
+            HStack(spacing: 12) {
                 attachTile("photo.on.rectangle", "Photos") { showLibrary = true }
                 attachTile("doc", "Files") { showFileImporter = true }
                 attachTile("sparkles", "GIF") { showGifPicker = true }
@@ -995,8 +996,8 @@ struct ThreadView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    // Kulan's own tile look — the app's round monochrome buttons (composer +, mic,
-    // call-back), not the colored-square grid every other messenger uses.
+    // Signal's exact attachment-button spec (AttachmentFormatPickerView): a 76×50pt CAPSULE button
+    // with the icon inside, and a footnote-medium label 8pt BELOW the capsule.
     private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
             showAttachPanel = false
@@ -1004,10 +1005,10 @@ struct ThreadView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
             VStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 22, weight: .medium)).foregroundStyle(.primary)
-                    .frame(width: 58, height: 58)
-                    .liquidGlass(Circle(), interactive: true)   // real Liquid Glass (user request)
-                Text(label).font(.caption).foregroundStyle(.secondary)
+                Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(.primary)
+                    .frame(width: 76, height: 50)
+                    .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass capsule (Signal shape)
+                Text(label).font(.footnote.weight(.medium)).foregroundStyle(.primary)
             }
         }
         .buttonStyle(.plain)
@@ -1871,7 +1872,9 @@ struct ThreadView: View {
             Button { if editingMessage != nil { saveEdit() } else { send() } } label: {
                 Image(systemName: editingMessage != nil ? "checkmark" : "arrow.up")
                     .font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(.white)
+                    // Theme.accent is WHITE in dark mode — a white glyph on it was invisible. Use the
+                    // accent's counter-colour when no custom chat colour is set.
+                    .foregroundStyle(chatColorSpec != nil ? Color.white : Theme.onAccent(dark))
                     .frame(width: 40, height: 40)
                     // Real Liquid Glass, tinted to MATCH the bubble colour (the chosen chat colour).
                     .liquidGlass(Circle(), interactive: true, tint: chatColorSpec?.swatch ?? Theme.accent(dark))
@@ -2099,8 +2102,9 @@ struct SelectableRow: ViewModifier {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22))
                     .symbolRenderingMode(selected ? .palette : .monochrome)
+                    // Fixed brand blue (accentColor is WHITE in dark mode → white-on-white check).
                     .foregroundStyle(selected ? Color.white : Color.secondary.opacity(0.55),
-                                     selected ? Color.accentColor : Color.clear)
+                                     selected ? Color(hex: 0x3DA1FD) : Color.clear)
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 content.allowsHitTesting(false)
             }
