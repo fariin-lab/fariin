@@ -163,25 +163,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // in CHUNKS (cache→live), and animating those multi-row appends was the "jumping" bubbles on open.
         // Also never animate during the open settle window (pendingBottomScroll).
         let animate = isAppend && didInitialScroll && wasAtBottom && appendedCount == 1 && !pendingBottomScroll
-        if animate {
-            // iMessage-style send: the new bubble EMERGES FROM THE COMPOSER (the layout's
-            // initialLayoutAttributesForAppearingItem starts it at the screen bottom) and one native
-            // UIKit SPRING drives both the batch-update insert and the scroll — the diffable apply is
-            // synchronous on main, so wrapping it in UIView.animate makes the whole update (insert +
-            // contentOffset) share the same spring curve: bubble and scroll move as one.
+        if animate, let newId = ids.last {
+            // iMessage-style send: insert INSTANTLY (no diffable animation — its internal batch animation
+            // didn't reliably inherit our spring, so the bubble looked static), pin to the bottom, then
+            // explicitly SPRING the new bubble up from below the composer with a subtle scale + fade. This
+            // is the reliable, clearly-visible version of the emerge.
             sendAnimating = true
-            (collectionView.collectionViewLayout as? ComposerEmergeLayout)?.emergeFromComposer = true
-            // iMessage-snappy spring: quick rise, gentle settle, no wobble.
-            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.85,
-                           initialSpringVelocity: 0.5, options: [.allowUserInteraction]) {
-                self.dataSource.apply(snapshot, animatingDifferences: true)
-                let target = self.collectionView.collectionViewLayout.collectionViewContentSize.height
-                    - self.collectionView.bounds.height + self.collectionView.adjustedContentInset.bottom
-                let y = max(-self.collectionView.adjustedContentInset.top, target)
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)   // inherits the spring
-            } completion: { [weak self] _ in
-                self?.sendAnimating = false
-                (self?.collectionView.collectionViewLayout as? ComposerEmergeLayout)?.emergeFromComposer = false
+            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+                guard let self else { return }
+                UIView.performWithoutAnimation {
+                    self.collectionView.layoutIfNeeded()
+                    self.pinBottom()
+                    self.collectionView.layoutIfNeeded()
+                }
+                guard let ip = self.dataSource.indexPath(for: newId),
+                      let cell = self.collectionView.cellForItem(at: ip) else { self.sendAnimating = false; return }
+                let rise = cell.bounds.height + 34
+                cell.transform = CGAffineTransform(translationX: 0, y: rise).scaledBy(x: 0.94, y: 0.94)
+                cell.alpha = 0.6
+                UIView.animate(withDuration: 0.42, delay: 0, usingSpringWithDamping: 0.82,
+                               initialSpringVelocity: 0.6, options: [.allowUserInteraction, .curveEaseOut]) {
+                    cell.transform = .identity
+                    cell.alpha = 1
+                } completion: { [weak self] _ in self?.sendAnimating = false }
             }
             // Safety: release even if the completion is dropped mid-transition.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.sendAnimating = false }
