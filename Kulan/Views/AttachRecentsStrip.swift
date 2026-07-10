@@ -53,8 +53,20 @@ struct AttachRecentsStrip: View {
                 .foregroundStyle(.primary)
             }
             HStack {
-                Button { onClose() } label: {
-                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
+                // Inside a specific album (folder) the X becomes a BACK arrow → returns to Recents;
+                // at the top it's the close X.
+                Button {
+                    if selectedAlbum != nil || showAlbums {
+                        selectedAlbum = nil
+                        albumTitle = "Recents"
+                        withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
+                        load()
+                    } else {
+                        onClose()
+                    }
+                } label: {
+                    Image(systemName: (selectedAlbum != nil || showAlbums) ? "chevron.left" : "xmark")
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 48, height: 48)
                         .liquidGlass(Circle(), interactive: true)

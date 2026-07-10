@@ -249,7 +249,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             self?.clampOffsetIfBeyondContent()
         }
         settleWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+        // Longer window: the contentSize observer keeps re-pinning the bottom while self-sizing cells
+        // (and any late-measuring hosted cells) settle, so a late height change can't visibly shift the
+        // just-revealed content.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: w)
     }
 
     private func settleNow() {
@@ -279,15 +282,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     private func revealAfterSettle() {
         guard !didReveal else { return }
+        // TWO runloops of invisible settling before we reveal: hosted-SwiftUI cells resolve their real
+        // heights ASYNC (estimate → measure), and a single pass sometimes revealed mid-measure → the
+        // bubbles "shook" as the last cells snapped to size. A second runloop lets every visible cell
+        // reach its final height first, so the reveal shows a fully-stable layout.
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.didReveal, self.collectionView.bounds.height > 0 else { return }
             UIView.performWithoutAnimation {
-                for _ in 0..<2 {
-                    self.collectionView.layoutIfNeeded()
-                    self.pinBottom()
+                for _ in 0..<3 { self.collectionView.layoutIfNeeded(); self.pinBottom() }
+            }
+            DispatchQueue.main.async {
+                guard !self.didReveal, self.collectionView.bounds.height > 0 else { return }
+                UIView.performWithoutAnimation {
+                    for _ in 0..<2 { self.collectionView.layoutIfNeeded(); self.pinBottom() }
+                    self.didReveal = true
+                    self.collectionView.alpha = 1
                 }
-                self.didReveal = true
-                self.collectionView.alpha = 1
             }
         }
     }
