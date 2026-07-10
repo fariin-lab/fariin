@@ -1860,8 +1860,12 @@ struct ThreadView: View {
     @ViewBuilder private var rightButton: some View {
         if hasText {
             Button { if editingMessage != nil { saveEdit() } else { send() } } label: {
-                Image(systemName: editingMessage != nil ? "checkmark.circle.fill" : "arrow.up.circle.fill")
-                    .font(.system(size: 38)).foregroundStyle(Theme.accent(dark))
+                Image(systemName: editingMessage != nil ? "checkmark" : "arrow.up")
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    // Real Liquid Glass, tinted to MATCH the bubble colour (the chosen chat colour).
+                    .liquidGlass(Circle(), interactive: true, tint: chatColorSpec?.swatch ?? Theme.accent(dark))
                     .contentTransition(.symbolEffect(.replace))
             }
             .transition(.scale.combined(with: .opacity))
