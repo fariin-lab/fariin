@@ -638,6 +638,10 @@ struct ThreadView: View {
                     SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else if let m = msg, m.isGif, let url = m.imageUrl {
+                    AnimatedGifView(url: url)
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
@@ -648,7 +652,7 @@ struct ThreadView: View {
                     }
                     Text(msg.map { m in
                         m.isAlbum ? (m.text.isEmpty ? "\(m.album.count) Photos" : m.text)
-                        : (m.isImage ? "Photo" : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.text)))
+                        : (m.isGif ? "GIF" : (m.isImage ? "Photo" : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.text))))
                     } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
