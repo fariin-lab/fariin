@@ -588,8 +588,12 @@ struct ThreadView: View {
                     }
                     Button { showPinnedSheet = true } label: { Label("See All", systemImage: "list.bullet") }
                 } label: {
-                    Image(systemName: "pin.slash.fill").font(.system(size: 16)).foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32).contentShape(Rectangle())
+                    // Upright pin in a bordered circle (reference: image-2 style).
+                    Image(systemName: "pin").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 34, height: 34)
+                        .overlay(Circle().strokeBorder(.primary.opacity(0.35), lineWidth: 1.5))
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -2199,6 +2203,10 @@ struct MessageBubble: View, Equatable {
 
     // Fill behind MY bubbles: the custom chat colour if set, else the app accent.
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.accent(dark)) }
+    // Text/meta on MY bubbles: custom colours are vivid in BOTH modes, so the text must be WHITE in
+    // both. Theme.onAccent flips to black in dark mode (accent there is white) — correct for the
+    // default accent only. Without this, dark-mode users got black-on-navy unreadable bubbles.
+    private var onMyBubble: Color { chatColor != nil ? .white : Theme.onAccent(dark) }
 
     @State private var dragX: CGFloat = 0
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
@@ -2331,7 +2339,7 @@ struct MessageBubble: View, Equatable {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: isRead)
-        .foregroundStyle(isMe ? Theme.onAccent(dark).opacity(0.7) : Color.secondary)
+        .foregroundStyle(isMe ? onMyBubble.opacity(0.7) : Color.secondary)
     }
 
     // Bubbles cap at 72% of screen width and wrap; the right (sent) / left (received)
@@ -2537,16 +2545,16 @@ struct MessageBubble: View, Equatable {
                 Button { onOpenFile(message) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "doc.fill").font(.system(size: 26))
-                            .foregroundStyle(isMe ? Theme.onAccent(dark) : Color.accentColor)
+                            .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(message.fileName ?? "Document")
                                 .font(.system(size: 15, weight: .medium)).lineLimit(1)
                             Text(fileSizeLabel).font(.caption)
-                                .foregroundStyle(isMe ? Theme.onAccent(dark).opacity(0.8) : .secondary)
+                                .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary)
                         }
                     }
                 }
-                .foregroundStyle(isMe ? Theme.onAccent(dark) : (dark ? .white : .black))
+                .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -2666,7 +2674,7 @@ struct MessageBubble: View, Equatable {
                 // text wraps and the time stays at the bottom-right corner.
                 HStack(alignment: .bottom, spacing: 6) {
                     bodyText
-                        .foregroundColor(isMe ? Theme.onAccent(dark) : (dark ? .white : .black))
+                        .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
                     if isLastInCluster { metaRow.padding(.bottom, 1) }   // time once per cluster
                 }
             }
@@ -2679,7 +2687,7 @@ struct MessageBubble: View, Equatable {
 
     @ViewBuilder private var replyQuote: some View {
         if let reply = message.replyTo {
-            let fg = isMe ? Theme.onAccent(dark) : (dark ? Color.white : .black)
+            let fg = isMe ? onMyBubble : (dark ? Color.white : .black)
             HStack(spacing: 7) {
                 // Left accent line signalling a quoted reply.
                 RoundedRectangle(cornerRadius: 1.5)

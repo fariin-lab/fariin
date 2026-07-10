@@ -19,17 +19,20 @@ struct WallpaperPickerSheet: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showCustomColor = false    // "+" → Custom Color editor
     private var colorStore: ChatColorStore { .shared }
-    private let original: ChatWallpaper            // the wallpaper in use when the sheet opened
-    private let originalColor: ChatColorSpec?      // the bubble colour in use when the sheet opened
+    // The wallpaper/colour in use when the sheet OPENED — must be @State: the live preview writes to the
+    // observed store, which re-creates this struct, and a plain `let` re-captured the PREVIEWED value as
+    // "original" (hasPendingChange went false → no Apply button, closes acted like auto-apply).
+    @State private var original: ChatWallpaper
+    @State private var originalColor: ChatColorSpec?
 
     init(cid: String) {
         self.cid = cid
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
-        original = cur
+        _original = State(initialValue: cur)
         let col = ChatColorStore.shared.color(for: cid)
         _selectedColor = State(initialValue: col)
-        originalColor = col
+        _originalColor = State(initialValue: col)
     }
 
     private var dark: Bool { scheme == .dark }

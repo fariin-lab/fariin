@@ -56,6 +56,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var stickBottomThroughLayout = false   // keep the bottom pinned across keyboard/composer resizes
     private var contentSizeObs: NSKeyValueObservation?   // re-pin to bottom while self-sizing cells settle
     private var settleWork: DispatchWorkItem?
+    private var sendAnimating = false   // an animated send/receive glide is in flight — do NOT snap-pin over it
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -90,8 +91,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // anchored by re-pinning whenever contentSize changes during the open / at-bottom window; the
         // size corrections then land on off-screen content above, invisibly.
         contentSizeObs = collectionView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
-            guard let self else { return }
-            if self.pendingBottomScroll || self.stickBottomThroughLayout { self.pinBottom() }
+            guard let self, !self.sendAnimating else { return }   // never stomp an in-flight send glide
+            if self.pendingBottomScroll || self.stickBottomThroughLayout {
+                // Corrections must be INSTANT — UICollectionView animates self-sizing invalidations by
+                // default, which rendered the settle as visible bubble motion (the "jump animation").
+                UIView.performWithoutAnimation { self.pinBottom() }
+            }
         }
     }
 
@@ -145,26 +150,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         currentIds = ids
 
         let shouldStick = isFirst || !didInitialScroll || (wasAtBottom && !isPrepend)
-        // Send/receive at the bottom ANIMATES (Signal: the batch update slides the new bubble in and
-        // the list glides down). First load and prepends stay non-animated (no flicker, no lurch).
+        // Send/receive at the bottom ANIMATES — Signal's exact recipe (ConversationViewController+CVC):
+        // an animated performBatchUpdates insert + scrollAction .bottomForNewMessage(isAnimated: true).
+        // First load and prepends stay non-animated (Signal wraps those in zero-duration animations).
         let animate = isAppend && didInitialScroll && wasAtBottom
-        dataSource.apply(snapshot, animatingDifferences: animate) { [weak self] in
-            guard let self else { return }
-            if let anchor {
-                self.restore(anchor)          // load-older: keep the reader's place
-            } else if shouldStick {
-                if animate { self.animatedScrollToBottom() }   // glide to the new message
-                else { self.beginBottomSettle() }              // open: land + stay at bottom, no motion
+        if animate {
+            // Mark the glide BEFORE the apply so no layout pass/KVO snap-pins over the animation
+            // (that stomp was why sends appeared instantly with a jump instead of gliding).
+            sendAnimating = true
+            dataSource.apply(snapshot, animatingDifferences: true)
+            // Scroll alongside the insert animation (scrollToItem computes the in-flight target).
+            if let last = ids.last, let ip = dataSource.indexPath(for: last) {
+                collectionView.scrollToItem(at: ip, at: .bottom, animated: true)
+            }
+            // Safety: if scrollViewDidEndScrollingAnimation never fires (already at target), release.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.sendAnimating = false }
+        } else {
+            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+                guard let self else { return }
+                if let anchor {
+                    self.restore(anchor)          // load-older: keep the reader's place
+                } else if shouldStick {
+                    self.beginBottomSettle()      // open: land + stay at bottom, no motion
+                }
             }
         }
     }
 
-    // Send/receive glide: scroll to the true bottom WITH animation (the insert animates alongside).
-    private func animatedScrollToBottom() {
-        collectionView.layoutIfNeeded()
-        let target = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
-        let y = max(-collectionView.adjustedContentInset.top, target)
-        collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        sendAnimating = false
     }
 
     // MARK: - Scroll continuity (Signal's anti-jump idea, our implementation)
@@ -188,30 +202,44 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
-        stickBottomThroughLayout = didInitialScroll && !pendingBottomScroll && computeAtBottom()
+        stickBottomThroughLayout = didInitialScroll && !pendingBottomScroll && !sendAnimating && computeAtBottom()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if pendingBottomScroll || stickBottomThroughLayout { pinBottom() }
+        guard !sendAnimating else { return }   // never snap over an in-flight send glide
+        if pendingBottomScroll { settleNow() }                                          // first real layout → full synchronous settle
+        else if stickBottomThroughLayout { UIView.performWithoutAnimation { pinBottom() } }
         else { clampOffsetIfBeyondContent() }
     }
 
-    // Open / at-bottom send-receive: pin to the bottom NOW and keep re-pinning (via the contentSize
-    // observer + layout passes) while the self-sizing cells settle, then release so normal scrolling
-    // resumes. This keeps the visible bottom messages fixed instead of jumping as cells measure.
+    // Open / at-bottom send-receive: settle the self-sizing cells SYNCHRONOUSLY, before the frame is
+    // drawn. Each layoutIfNeeded pass resolves estimated→measured heights for the cells now on screen;
+    // pinning the bottom then exposes the next batch, so a few passes converge — all inside one
+    // CATransaction and without implicit animations, so the user NEVER sees intermediate positions.
+    // (Async re-pins across frames were the visible "jump animation": UIKit animates self-sizing
+    // corrections by default.)
     private func beginBottomSettle() {
         didInitialScroll = true
         pendingBottomScroll = true
-        view.layoutIfNeeded()
-        pinBottom()
+        settleNow()
         settleWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
             self?.pendingBottomScroll = false
             self?.clampOffsetIfBeyondContent()
         }
         settleWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: w)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+    }
+
+    private func settleNow() {
+        guard collectionView.bounds.height > 0 else { return }   // pre-layout: viewDidLayoutSubviews will settle
+        UIView.performWithoutAnimation {
+            for _ in 0..<4 {
+                collectionView.layoutIfNeeded()
+                pinBottom()
+            }
+        }
     }
 
     private func pinBottom() {
