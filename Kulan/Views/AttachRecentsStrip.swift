@@ -12,13 +12,14 @@ struct AttachRecentsStrip: View {
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
-    var onPickMultiple: ([UIImage]) -> Void = { _ in }   // "Select" mode: send several photos at once
+    var onSendAlbum: ([UIImage], String) -> Void = { _, _ in }   // multi-select → send with a caption
+    @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
     @State private var loadingPick = false   // fetching the full-size asset after a tap
-    @State private var selecting = false             // multi-select mode (the "Select" button)
-    @State private var selectedIds: [String] = []    // chosen photo asset ids, in tap order
+    @State private var selectedIds: [String] = []    // chosen asset ids, in tap order (checkbox taps)
+    @State private var caption = ""                  // caption for the selected batch
     @State private var showAlbums = false
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
@@ -30,12 +31,16 @@ struct AttachRecentsStrip: View {
         VStack(spacing: 0) {
             header
             if showAlbums { albumsList } else { grid }
+            // ≥1 selected → a caption + Send bar (the parent hides the source row in its place).
+            if !selectedIds.isEmpty { captionBar }
         }
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
         .task { if status == .authorized || status == .limited { load(); loadAlbums() } }
+        .onChange(of: selectedIds.isEmpty) { _, empty in hasSelection = !empty }
     }
 
-    // X close (48pt glass) + a "Recents ▾" title + a right-side Select / Send (N) / Cancel button.
+    // X close (48pt glass) + a "Recents ▾" title. (Selection is per-thumbnail via the checkbox — no
+    // separate Select button; tapping the photo itself opens it.)
     private var header: some View {
         ZStack {
             Button { withAnimation(.snappy(duration: 0.25)) { showAlbums.toggle() } } label: {
@@ -54,37 +59,33 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
-                selectButton
             }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
 
-    // Right-side action: "Select" → enters multi-select; then "Send (N)" once photos are chosen, or
-    // "Cancel" if none. Matches Telegram/WhatsApp's recents multi-select.
-    @ViewBuilder private var selectButton: some View {
-        if selecting {
-            if selectedIds.isEmpty {
-                Button { selecting = false } label: {
-                    Text("Cancel").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(height: 36).padding(.horizontal, 14)
-                        .background(Color.primary.opacity(0.08), in: Capsule())
-                }
-            } else {
-                Button { sendSelected() } label: {
-                    Text("Send \(selectedIds.count)").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-                        .frame(height: 36).padding(.horizontal, 16)
-                        .background(Color(hex: 0x3DA1FD), in: Capsule())
+    // Caption + Send bar shown while items are selected (replaces the source row). Send arrow carries a
+    // count badge; sending routes photos → album, videos → individually.
+    private var captionBar: some View {
+        HStack(spacing: 10) {
+            TextField("", text: $caption,
+                      prompt: Text("Add a caption…").foregroundColor(Color(.systemGray)))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 16).frame(height: 46)
+                .background(Color.primary.opacity(0.08), in: Capsule())
+            Button { sendSelected() } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 46, height: 46).background(Color(hex: 0x3DA1FD), in: Circle())
+                    Text("\(selectedIds.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.red, in: Capsule()).offset(x: 4, y: -4)
                 }
             }
-        } else {
-            Button { selecting = true } label: {
-                Text("Select").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-                    .frame(height: 36).padding(.horizontal, 14)
-                    .background(Color.primary.opacity(0.08), in: Capsule())
-            }
+            .buttonStyle(.plain)
         }
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
     }
 
     private var grid: some View {
@@ -94,10 +95,9 @@ struct AttachRecentsStrip: View {
                 switch status {
                 case .authorized, .limited:
                     ForEach(assets, id: \.localIdentifier) { a in
-                        RecentThumb(asset: a, selecting: selecting,
-                                    selectionNumber: selectionIndex(a)) {
-                            if selecting { toggle(a) } else { pick(a) }
-                        }
+                        // Tap the PHOTO → open it. Tap the CHECKBOX → (de)select. Separate, never conflict.
+                        RecentThumb(asset: a, selectionNumber: selectionIndex(a),
+                                    onOpen: { pick(a) }, onToggle: { toggle(a) })
                     }
                 case .notDetermined:
                     accessTile("Allow Photos", icon: "photo.on.rectangle.angled") { request() }
@@ -259,12 +259,14 @@ struct AttachRecentsStrip: View {
                     imgs.append(ui)
                 }
             }
+            let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
             await MainActor.run {
                 loadingPick = false
-                selecting = false
                 selectedIds = []
+                caption = ""
+                hasSelection = false
                 for url in videos { onPickVideo(url) }
-                if !imgs.isEmpty { onPickMultiple(imgs) }
+                if !imgs.isEmpty { onSendAlbum(imgs, cap) }
             }
         }
     }
@@ -336,69 +338,65 @@ private struct AlbumThumb: View {
 // square (Color.clear.aspectRatio keeps it 1:1 whatever the column width).
 private struct RecentThumb: View {
     let asset: PHAsset
-    var selecting: Bool = false
     var selectionNumber: Int? = nil
-    let onTap: () -> Void
+    let onOpen: () -> Void      // tap the PHOTO → open it
+    let onToggle: () -> Void    // tap the CHECKBOX → (de)select
     @State private var image: UIImage?
 
     private var durationLabel: String {
         let d = Int(asset.duration.rounded())
         return String(format: "%d:%02d", d / 60, d % 60)
     }
+    private var selected: Bool { selectionNumber != nil }
 
     var body: some View {
-        Button(action: onTap) {
-            Color.clear
-                .aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    if let image {
-                        Image(uiImage: image).resizable().scaledToFill()
-                    } else {
-                        Rectangle().fill(Color.secondary.opacity(0.12))
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Rectangle().fill(Color.secondary.opacity(0.12))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay {   // hairline so light thumbs don't dissolve into the sheet
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(selected ? Color(hex: 0x3DA1FD) : Color.primary.opacity(0.06),
+                            lineWidth: selected ? 3 : 1)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if asset.mediaType == .video {
+                    HStack(spacing: 3) {
+                        Image(systemName: "video.fill").font(.system(size: 9))
+                        Text(durationLabel).font(.system(size: 11, weight: .semibold))
                     }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(.black.opacity(0.45), in: Capsule())
+                    .padding(4)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .overlay {   // hairline so light thumbs don't dissolve into the sheet
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if asset.mediaType == .video {
-                        HStack(spacing: 3) {
-                            Image(systemName: "video.fill").font(.system(size: 9))
-                            Text(durationLabel).font(.system(size: 11, weight: .semibold))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            // Tapping the PHOTO opens it (separate from the checkbox below).
+            .onTapGesture { onOpen() }
+            // Always-visible selection checkbox (top-trailing): tap to (de)select — its own hit area.
+            .overlay(alignment: .topTrailing) {
+                Button(action: onToggle) {
+                    ZStack {
+                        Circle().fill(selected ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.35))
+                            .frame(width: 26, height: 26)
+                        Circle().stroke(.white, lineWidth: 1.5).frame(width: 26, height: 26)
+                        if let n = selectionNumber {
+                            Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        .padding(4)
                     }
+                    .frame(width: 40, height: 40)          // bigger hit target than the visible circle
+                    .contentShape(Circle())
                 }
-                // Multi-select: a numbered blue badge when chosen, an empty ring otherwise; selected
-                // thumbs dim + inset slightly (Photos-style).
-                .overlay {
-                    if selecting {
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .fill(Color.black.opacity(selectionNumber != nil ? 0.25 : 0.0))
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if selecting {
-                        ZStack {
-                            Circle().fill(selectionNumber != nil ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.25))
-                                .frame(width: 24, height: 24)
-                            Circle().stroke(.white, lineWidth: 1.5).frame(width: 24, height: 24)
-                            if let n = selectionNumber {
-                                Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
-                            }
-                        }
-                        .padding(6)
-                    }
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .task(id: asset.localIdentifier) {
+                .buttonStyle(.plain)
+            }
+            .task(id: asset.localIdentifier) {
             let o = PHImageRequestOptions()
             o.deliveryMode = .opportunistic   // fast blurry first, sharp after
             o.resizeMode = .fast

@@ -60,6 +60,7 @@ struct ThreadView: View {
     @State private var sendError: String?
     @State private var showCamera = false
     @State private var showAttachPanel = false
+    @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
     @State private var showPollSoon = false   // Poll tile → "coming soon" sheet
     @State private var showFileImporter = false
     @State private var showGifPicker = false
@@ -394,7 +395,7 @@ struct ThreadView: View {
                 Task { await sendAlbum(imgs, caption: caption, hd: hd) }   // ONE album message
             }
         }
-        .sheet(isPresented: $showAttachPanel) { attachPanel.presentationDetents([.medium, .large]) }   // opens half (≈2 rows), pull up for more
+        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false }) { attachPanel.presentationDetents([.medium, .large]) }   // opens half (≈2 rows), pull up for more
         .sheet(isPresented: $showPollSoon) { pollSoonSheet.presentationDetents([.fraction(0.6)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
@@ -1104,24 +1105,31 @@ struct ThreadView: View {
                     showAttachPanel = false
                     Task { await sendVideo(from: url) }   // straight into the send pipeline
                 },
-                onPickMultiple: { imgs in
+                onSendAlbum: { imgs, caption in
                     showAttachPanel = false
-                    // Same routing as the Photos picker: 1 photo → editor, 2+ → the album approval screen.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        if imgs.count == 1 { editImage = EditImageWrap(image: imgs[0]) }
-                        else { multiImages = MultiImagesWrap(images: imgs) }
+                    // Selected via checkboxes + captioned inline: 1 photo → send as one (caption inside);
+                    // 2+ → send as one album with the caption.
+                    Task {
+                        if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
+                            await sendPhoto(d, caption: caption)
+                        } else if imgs.count >= 2 {
+                            await sendAlbum(imgs, caption: caption, hd: false)
+                        }
                     }
-                })
+                },
+                hasSelection: $recentsHasSelection)
                 .padding(.top, 10)
-            // Fixed bottom row of sources (Camera lives in the grid now). Signal's
-            // AttachmentFormatPickerView spec: 12pt stack spacing between items.
-            HStack(spacing: 12) {
-                attachTile("photo.on.rectangle", "Photos") { showLibrary = true }
-                attachTile("doc", "Files") { showFileImporter = true }
-                attachTile("sparkles", "GIF") { showGifPicker = true }
-                attachTile("chart.bar.xaxis", "Poll") { showPollSoon = true }
+            // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
+            // bar in the recents strip takes its place).
+            if !recentsHasSelection {
+                HStack(spacing: 12) {
+                    attachTile("photo.on.rectangle", "Photos") { showLibrary = true }
+                    attachTile("doc", "Files") { showFileImporter = true }
+                    attachTile("sparkles", "GIF") { showGifPicker = true }
+                    attachTile("chart.bar.xaxis", "Poll") { showPollSoon = true }
+                }
+                .padding(.vertical, 12)
             }
-            .padding(.vertical, 12)
         }
     }
 
