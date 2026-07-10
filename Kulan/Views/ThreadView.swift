@@ -2190,7 +2190,7 @@ struct ThreadView: View {
 
     // Locked (hands-free) recording bar — shown after you slide up to lock: delete · timer + waveform · send.
     private var lockedRecordingBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Button { cancelRecording() } label: {
                 Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
                     .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
@@ -2200,7 +2200,7 @@ struct ThreadView: View {
                 RecordTimerText(recorder: recorder)
                 RecordWaveform(recorder: recorder, color: Theme.accent(dark))
             }
-            .padding(.horizontal, 14).frame(minHeight: 40)
+            .padding(.leading, 14).padding(.trailing, 18).frame(minHeight: 40)
             .liquidGlass(Capsule(), interactive: true)
             .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
             Button { sendRecording() } label: {
@@ -3222,6 +3222,14 @@ private struct RecordWaveform: View {
     var body: some View {
         LiveWaveform(levels: recorder.levels, color: color)
             .frame(maxWidth: .infinity, maxHeight: 22)
+            // Soft fade at the trailing edge so the bars never slam up against the send button.
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.88),
+                    .init(color: .clear, location: 1.0),
+                ], startPoint: .leading, endPoint: .trailing)
+            )
     }
 }
 
