@@ -875,10 +875,17 @@ struct ThreadView: View {
     // Chats list. Avatar + name (+ presence) centered; voice + video as trailing glass items.
     // The native back button (leading) owns the real edge-swipe-back gesture.
     @ToolbarContentBuilder private var chatToolbar: some ToolbarContent {
-        // While selecting, the trailing shows Cancel (call buttons hide).
+        // Selection mode (reference design): "Delete All" (leading) · name (centre) · X (trailing).
+        // Native toolbar buttons render as real Liquid Glass on iOS 26.
         if selecting {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Delete All") { showBulkDeleteConfirm = true }.tint(.red).disabled(selectedIds.isEmpty)
+            }
+            ToolbarItem(placement: .principal) {
+                Text(title).font(.headline)
+            }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Cancel") { exitSelection() }.tint(.primary)
+                Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
         // Avatar + name as a NATIVE principal toolbar item — exactly like the Chats-list header (which
@@ -1518,32 +1525,26 @@ struct ThreadView: View {
         .padding(.horizontal, 16).padding(.bottom, 6)
     }
 
-    // Bottom action bar during selection: Forward (leading) + count + Delete (trailing), native icons.
+    // Bottom action bar during selection (reference design): Delete (glass circle, leading), "N Selected"
+    // (glass pill, centre), Forward (glass circle, trailing) — all real Liquid Glass, icons only.
     private var selectionActionBar: some View {
         HStack {
+            Button { showBulkDeleteConfirm = true } label: {
+                Image(systemName: "trash").font(.system(size: 18)).foregroundStyle(.red)
+                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
+            }
+            .buttonStyle(.plain).disabled(selectedIds.isEmpty)
+            Spacer()
+            Text("\(selectedIds.count) Selected").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                .padding(.horizontal, 22).frame(height: 44).liquidGlass(Capsule(), interactive: false)
+            Spacer()
             Button { bulkForwardStart() } label: {
-                VStack(spacing: 3) {
-                    Image(systemName: "arrowshape.turn.up.right").font(.system(size: 20))
-                    Text("Forward").font(.caption2)
-                }
+                Image(systemName: "arrowshape.turn.up.right").font(.system(size: 18)).foregroundStyle(.primary)
+                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
             }
-            .tint(.primary)
-            .disabled(selectedIds.isEmpty)
-            Spacer()
-            Text("\(selectedIds.count) selected").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-            Spacer()
-            Button(role: .destructive) { showBulkDeleteConfirm = true } label: {
-                VStack(spacing: 3) {
-                    Image(systemName: "trash").font(.system(size: 20))
-                    Text("Delete").font(.caption2)
-                }
-            }
-            .tint(.red)
-            .disabled(selectedIds.isEmpty)
+            .buttonStyle(.plain).disabled(selectedIds.isEmpty)
         }
-        .padding(.horizontal, 30).padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
+        .padding(.horizontal, 20).padding(.bottom, 4)
     }
 
     private var blockedBar: some View {
@@ -2095,8 +2096,7 @@ struct SelectableRow: ViewModifier {
             }
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)
-            .background(selected ? Color.primary.opacity(0.06) : Color.clear)
+            .onTapGesture(perform: onToggle)   // checkbox only — no row highlight
         } else {
             content
         }
