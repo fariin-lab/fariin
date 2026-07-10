@@ -90,10 +90,6 @@ struct ThreadView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("typingIndicators") private var typingPref = true
     @AppStorage("shareLastSeen") private var lastSeenPref = true
-    // EXPERIMENTAL: swap the SwiftUI message list for the UIKit collection-view list (Signal's
-    // architecture) — opens at the exact bottom, no scroll jump. Off by default; toggle in Settings ▸
-    // Chats to A/B compare. When it's proven solid on-device this becomes the only path.
-    @AppStorage("experimental.nativeList") private var useNativeList = false
 
     private var me: String { AuthService.shared.uid ?? "" }
 
@@ -122,12 +118,23 @@ struct ThreadView: View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
             pinnedBar(proxy)
-            listContainer(proxy)
+            ScrollView {
+                messageList(proxy)
+                    .contentShape(Rectangle())   // whole content tappable so the dismiss tap always lands
+                    .simultaneousGesture(
+                        // tap the chat to close the keyboard; force-resign so it always drops.
+                        // simultaneous = bubble taps still open the viewer (not consumed).
+                        TapGesture().onEnded {
+                            inputFocused = false
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                            to: nil, from: nil, for: nil)
+                        }
+                    )
+            }
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
-            // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
-            .opacity((useNativeList || revealed) ? 1 : 0)
+            .opacity(revealed ? 1 : 0)
             // Reveal only once the FULL first page is loaded + laid out (didInitialLoad) — NOT on the
             // first single message. Revealing on the first message showed the chat while cache→live
             // chunks were still landing, so the pinned-bottom layout re-flowed DURING the push and the
@@ -604,46 +611,6 @@ struct ThreadView: View {
         .padding(.horizontal, 36).padding(.top, 14).padding(.bottom, 6)
     }
 
-    // EXPERIMENTAL UIKit-backed list (Signal's architecture). Reuses the SAME rowView, so every bubble
-    // feature is identical — only the scroll container differs. Opens at the exact bottom with no jump;
-    // no reveal veil needed. jumpTo is a no-op for now (native jump-to-message is a follow-up stage).
-    // The scrolling list itself — either the UIKit native list (flag on) or the SwiftUI ScrollView.
-    // Extracted so `threadScroll`'s builder stays under the type-checker's complexity limit.
-    @ViewBuilder
-    private func listContainer(_ proxy: ScrollViewProxy) -> some View {
-        if useNativeList {
-            nativeList   // UIKit collection view — opens at the exact bottom, no jump
-        } else {
-            ScrollView {
-                messageList(proxy)
-                    .contentShape(Rectangle())   // whole content tappable so the dismiss tap always lands
-                    .simultaneousGesture(
-                        // tap the chat to close the keyboard; force-resign so it always drops.
-                        // simultaneous = bubble taps still open the viewer (not consumed).
-                        TapGesture().onEnded {
-                            inputFocused = false
-                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                            to: nil, from: nil, for: nil)
-                        }
-                    )
-            }
-        }
-    }
-
-    private var nativeList: some View {
-        NativeMessageList(
-            rowIds: repo.items.map { $0.rowId },
-            row: { id in
-                guard let idx = repo.items.firstIndex(where: { $0.rowId == id }) else { return AnyView(EmptyView()) }
-                return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { _ in }).padding(.horizontal, 12))
-            },
-            onReachedTop: { repo.loadOlder() },
-            isAtBottom: $isAtBottom
-        )
-        // Read receipts + jump-button count come from the shared onChange(of: repo.items.count) handler
-        // on the container, so nothing extra is needed here.
-    }
-
     private func messageList(_ proxy: ScrollViewProxy) -> some View {
         LazyVStack(spacing: 0) {
             // Scroll-to-top spinner: pages in older history, then restores the anchor.
@@ -658,7 +625,76 @@ struct ThreadView: View {
             // "You created this group" intro card at the very top (when no older history).
             if isGroup && !repo.canLoadOlder { groupIntroCard }
             ForEach(Array(repo.items.enumerated()), id: \.element.rowId) { index, msg in
-                rowView(at: index, msg, jumpTo: { id in jump(to: id, proxy) })
+                if shouldShowDate(at: index) {
+                    Text(dayLabel(msg.createdAt))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                if msg.id == firstUnreadId { unreadDivider }
+                if msg.isSystem {
+                    systemRow(msg).id(msg.id)
+                } else if msg.isCall {
+                    callRow(msg).padding(.top, 8).id(msg.id)
+                } else {
+                    MessageBubble(
+                        message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
+                        nameFor: { personName($0) },
+                        avatarFor: { conversation?.photos[$0] },
+                        onReply: { m in withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m } },
+                        onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
+                        onTapImage: { viewerImage = $0 },
+                        onTapVideo: { viewerVideo = $0 },
+                        onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
+                        onPin: { m in
+                            if repo.pinnedMessageIds.contains(m.id) {
+                                Task { await ChatService.removePinnedMessage(cid, m.id) }
+                            } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
+                                Task { await ChatService.addPinnedMessage(cid, m.id) }
+                            }   // already at the pin max → ignore
+                        },
+                        onForward: { forwardTarget = $0 },
+                        onEdit: { m in
+                            withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
+                            input = m.text
+                            inputFocused = true
+                        },
+                        onReport: { reportTarget = $0 },
+                        onReactMore: { morePickerTarget = $0 },
+                        isGroup: isGroup,
+                        onTapReactions: { reactorsTarget = msg },
+                        onTapSender: { uid in
+                            tappedMember = GroupInfoView.MemberAction(
+                                id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
+                        },
+                        onOpenFile: { m in openFile(m) },
+                        onSaveImage: { m in Task { await saveImageToPhotos(m) } },
+                        canPin: !isGroup || (conversation?.isAdmin(me) ?? false),
+                        isPinned: repo.pinnedMessageIds.contains(msg.id),
+                        onResend: { m in resend(m) },
+                        onJumpTo: { id in jump(to: id, proxy) },
+                        onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
+                        replyStoryNS: replyStoryNS,
+                        isHighlighted: msg.id == highlightId,
+                        isFirstInCluster: isFirstInCluster(at: index),
+                        isLastInCluster: isLastInCluster(at: index),
+                        // Read-tick only matters on MY messages; incoming bubbles get a constant 0 so a
+                        // read-receipt update never re-renders them (H2). Combined with .equatable() below.
+                        otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0
+                    )
+                    .equatable()   // skip re-rendering bubbles whose value-inputs are unchanged (H2/H3/M1)
+                    .padding(.top, topGap(at: index))   // tight when grouped, wider on sender change
+                    .id(msg.id)
+                    // Track which bubbles are on screen (into a non-invalidating box) and remember the
+                    // spot on APPEAR only — never on disappear, so navigating away (mass row teardown)
+                    // can't corrupt the saved position.
+                    .onAppear { visibleRows.ids.insert(msg.id); persistScrollPosition() }
+                    .onDisappear { visibleRows.ids.remove(msg.id) }
+                    // Native: no custom slide-in. Rows appear like a plain list (iMessage-style),
+                    // no spring/move transition on insert.
+                    .transition(.identity)
+                }
             }
             if repo.otherTyping && !repo.iBlocked && typingPref {
                 TypingBubble(dark: dark).padding(.top, 6).id("TYPING")
@@ -670,83 +706,6 @@ struct ThreadView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-    }
-
-    // ONE row builder used by BOTH the SwiftUI LazyVStack and the UIKit list cells — so switching the
-    // container never changes how a message looks. `jumpTo` is routed by the caller (SwiftUI path uses
-    // the ScrollViewProxy; the UIKit path scrolls its collection view), keeping this proxy-free.
-    @ViewBuilder
-    private func rowView(at index: Int, _ msg: Message, jumpTo: @escaping (String) -> Void) -> some View {
-        if shouldShowDate(at: index) {
-            Text(dayLabel(msg.createdAt))
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-        }
-        if msg.id == firstUnreadId { unreadDivider }
-        if msg.isSystem {
-            systemRow(msg).id(msg.id)
-        } else if msg.isCall {
-            callRow(msg).padding(.top, 8).id(msg.id)
-        } else {
-            MessageBubble(
-                message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
-                nameFor: { personName($0) },
-                avatarFor: { conversation?.photos[$0] },
-                onReply: { m in withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m } },
-                onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
-                onTapImage: { viewerImage = $0 },
-                onTapVideo: { viewerVideo = $0 },
-                onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
-                onPin: { m in
-                    if repo.pinnedMessageIds.contains(m.id) {
-                        Task { await ChatService.removePinnedMessage(cid, m.id) }
-                    } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
-                        Task { await ChatService.addPinnedMessage(cid, m.id) }
-                    }   // already at the pin max → ignore
-                },
-                onForward: { forwardTarget = $0 },
-                onEdit: { m in
-                    withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
-                    input = m.text
-                    inputFocused = true
-                },
-                onReport: { reportTarget = $0 },
-                onReactMore: { morePickerTarget = $0 },
-                isGroup: isGroup,
-                onTapReactions: { reactorsTarget = msg },
-                onTapSender: { uid in
-                    tappedMember = GroupInfoView.MemberAction(
-                        id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
-                },
-                onOpenFile: { m in openFile(m) },
-                onSaveImage: { m in Task { await saveImageToPhotos(m) } },
-                canPin: !isGroup || (conversation?.isAdmin(me) ?? false),
-                isPinned: repo.pinnedMessageIds.contains(msg.id),
-                onResend: { m in resend(m) },
-                onJumpTo: { id in jumpTo(id) },
-                onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
-                replyStoryNS: replyStoryNS,
-                isHighlighted: msg.id == highlightId,
-                isFirstInCluster: isFirstInCluster(at: index),
-                isLastInCluster: isLastInCluster(at: index),
-                // Read-tick only matters on MY messages; incoming bubbles get a constant 0 so a
-                // read-receipt update never re-renders them (H2). Combined with .equatable() below.
-                otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0
-            )
-            .equatable()   // skip re-rendering bubbles whose value-inputs are unchanged (H2/H3/M1)
-            .padding(.top, topGap(at: index))   // tight when grouped, wider on sender change
-            .id(msg.id)
-            // Track which bubbles are on screen (into a non-invalidating box) and remember the
-            // spot on APPEAR only — never on disappear, so navigating away (mass row teardown)
-            // can't corrupt the saved position.
-            .onAppear { visibleRows.ids.insert(msg.id); persistScrollPosition() }
-            .onDisappear { visibleRows.ids.remove(msg.id) }
-            // Native: no custom slide-in. Rows appear like a plain list (iMessage-style),
-            // no spring/move transition on insert.
-            .transition(.identity)
-        }
     }
 
     // Native toolbar header (real Liquid Glass + native back/swipe), same approach as the
