@@ -43,19 +43,36 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
 }
 
 // Full-screen photo viewer. Zoom/pan is Signal's exact ZoomableMediaView (UIScrollView), cloned 1:1.
-// Drag down at rest dismisses.
+// Drag down at rest dismisses; when opened with a gallery, swipe horizontally to page between photos
+// (Photos/Signal). Chrome follows the current page.
 struct ImageViewerView: View {
-    let message: Message
+    let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
+    @State private var current: String  // id of the page being shown
     @Environment(\.dismiss) private var dismiss
 
-    @State private var uiImage: UIImage?
+    // Single-image entry (existing call sites): a one-page gallery.
+    init(message: Message, cid: String) {
+        self.gallery = [message]; self.cid = cid
+        _current = State(initialValue: message.id)
+    }
+    // Gallery entry: swipe between all the images, starting at `message`.
+    init(message: Message, in gallery: [Message], cid: String) {
+        self.gallery = gallery.isEmpty ? [message] : gallery
+        self.cid = cid
+        _current = State(initialValue: message.id)
+    }
+
     @State private var dim: Double = 1
     @State private var chromeHidden = false     // single-tap toggles header + toolbar (Apple Photos)
     @State private var saved = false
     @State private var saveError = false
     @State private var confirmDelete = false
     @State private var shareItems: [Any]?
+    @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
+
+    private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
+    private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
 
     // Header title: "You" for my own photo, else the other person's name.
     private var senderName: String {
@@ -70,14 +87,24 @@ struct ImageViewerView: View {
         ZStack {
             Color.black.opacity(dim).ignoresSafeArea()
 
-            if let img = uiImage {
-                ZoomImageView(image: img,
-                              onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
-                              onDim: { dim = $0 }, onDismiss: { dismiss() })
-                    .ignoresSafeArea()
-            } else {
-                ProgressView().tint(.white)
+            // Horizontal paging between photos; each page zooms/dismisses independently.
+            TabView(selection: $current) {
+                ForEach(gallery) { m in
+                    Group {
+                        if let img = loaded[m.id] {
+                            ZoomImageView(image: img,
+                                          onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
+                                          onDim: { dim = $0 }, onDismiss: { dismiss() })
+                        } else {
+                            ProgressView().tint(.white)
+                                .task { await load(m) }
+                        }
+                    }
+                    .tag(m.id)
+                }
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
 
             VStack {
                 header
@@ -88,11 +115,10 @@ struct ImageViewerView: View {
             .allowsHitTesting(chromeVisible)
             .animation(.easeInOut(duration: 0.25), value: chromeVisible)
         }
-        .task { await loadImage() }
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
-        .confirmationDialog("Delete this photo?", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .alert("Delete this photo?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 Task { await ChatService.deleteMessage(cid: cid, messageId: message.id); await MainActor.run { dismiss() } }
             }
@@ -128,34 +154,33 @@ struct ImageViewerView: View {
         .padding(.horizontal, 12).padding(.top, 4)
     }
 
-    // Bottom toolbar — native Apple Photos style: plain SF Symbols spread edge-to-edge (Share leading,
-    // Delete trailing), 44pt tap targets, no custom circle chrome. A soft scrim keeps them legible over
-    // a bright photo.
+    // Bottom toolbar: 48px real Liquid Glass circle buttons — Share · Reply · (Delete, own photos only).
     private var bottomBar: some View {
         HStack {
             barButton("square.and.arrow.up") { share() }
             Spacer()
             barButton("arrowshape.turn.up.left") { dismiss() }   // Reply: return to the chat to reply
             Spacer()
-            barButton("trash", role: .destructive) { confirmDelete = true }
+            if isMine {
+                barButton("trash", tint: .red) { confirmDelete = true }
+            } else {
+                barButton("square.and.arrow.down") { save() }   // received photo → Save instead of Delete
+            }
         }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity)
-        .background(
-            LinearGradient(colors: [.clear, .black.opacity(0.28)], startPoint: .top, endPoint: .bottom)
-                .allowsHitTesting(false)
-        )
+        .padding(.horizontal, 20)
+        .padding(.bottom, 6)
     }
 
-    private func barButton(_ icon: String, role: ButtonRole? = nil, _ action: @escaping () -> Void) -> some View {
-        Button(role: role, action: action) {
+    private func barButton(_ icon: String, tint: Color = .white, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 22))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.3), radius: 3)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 48, height: 48)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
     }
 
     private func glassButton(_ icon: String, _ action: @escaping () -> Void) -> some View {
@@ -165,30 +190,28 @@ struct ImageViewerView: View {
         }
     }
 
-    // Load order: optimistic local bytes → cached decrypted → decrypt-on-demand. This is why the
-    // photo was black: the old code ONLY read imageUrl via the cache, so local (demo/optimistic)
-    // images and un-cached ones never appeared.
-    private func loadImage() async {
-        if let data = message.localImageData, let ui = UIImage(data: data) { uiImage = ui; return }
-        guard let u = message.imageUrl else { return }
-        if let m = DiskImageCache.shared.memoryImage(u) { uiImage = m; return }
-        if let cached = await DiskImageCache.shared.image(for: u) { uiImage = cached; return }
+    // Load order: optimistic local bytes → cached decrypted → decrypt-on-demand (per page).
+    private func load(_ m: Message) async {
+        if let data = m.localImageData, let ui = UIImage(data: data) { loaded[m.id] = ui; return }
+        guard let u = m.imageUrl else { return }
+        if let mem = DiskImageCache.shared.memoryImage(u) { loaded[m.id] = mem; return }
+        if let cached = await DiskImageCache.shared.image(for: u) { loaded[m.id] = cached; return }
         // Not cached yet → download the ciphertext + decrypt (same path SecureImageView uses).
-        if let url = URL(string: u), let meta = message.enc,
+        if let url = URL(string: u), let meta = m.enc,
            let (cipher, _) = try? await URLSession.shared.data(from: url),
            let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
-            uiImage = UIImage(data: dec)
+            loaded[m.id] = UIImage(data: dec)
         }
     }
 
     private func share() {
-        guard let image = uiImage else { return }
+        guard let image = loaded[current] else { return }
         shareItems = [image]
     }
 
     private func save() {
         Task {
-            guard let image = uiImage else { await MainActor.run { saveError = true }; return }
+            guard let image = loaded[current] else { await MainActor.run { saveError = true }; return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
             do {
@@ -252,8 +275,16 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         let dismissPan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
         dismissPan.delegate = self
         scrollView.addGestureRecognizer(dismissPan)
-        scrollView.panGestureRecognizer.require(toFail: dismissPan)
+        // NO require(toFail:) — DirectionalPan never explicitly FAILS on a non-downward move (it just
+        // stays .possible), so the scroll pan waiting for its failure deadlocked and the drag-to-close
+        // (and scrolling) died. Instead both run SIMULTANEOUSLY (delegate below); handleDismiss ignores
+        // anything that isn't an at-rest downward drag.
     }
+
+    // Coexist with the zoom scroll pan and the horizontal page-swipe: recognize together, act only
+    // when the drag is downward at minimum zoom.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

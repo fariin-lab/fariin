@@ -51,9 +51,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var reg: UICollectionView.CellRegistration<UICollectionViewCell, String>!
     private var currentIds: [String] = []
     private var didInitialScroll = false
-    private var pendingBottomScroll = false   // deferred to viewDidLayoutSubviews so the first frame (0 bounds) still lands at bottom
+    private var pendingBottomScroll = false   // open/at-bottom settle window: keep re-pinning to the bottom
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
     private var stickBottomThroughLayout = false   // keep the bottom pinned across keyboard/composer resizes
+    private var contentSizeObs: NSKeyValueObservation?   // re-pin to bottom while self-sizing cells settle
+    private var settleWork: DispatchWorkItem?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -83,7 +85,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
         buildDataSource()   // collectionView now exists — safe to wire the diffable data source
+        // ROOT CAUSE of the open-jump: cells self-size (estimated height → measured), so contentSize
+        // changes AFTER the initial scroll-to-bottom and the visible messages shift. Keep the bottom
+        // anchored by re-pinning whenever contentSize changes during the open / at-bottom window; the
+        // size corrections then land on off-screen content above, invisibly.
+        contentSizeObs = collectionView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
+            guard let self else { return }
+            if self.pendingBottomScroll || self.stickBottomThroughLayout { self.pinBottom() }
+        }
     }
+
+    deinit { contentSizeObs?.invalidate(); settleWork?.cancel() }
 
     private func buildDataSource() {
         reg = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
@@ -99,13 +111,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     func apply(rowIds ids: [String]) {
         guard ids != currentIds else {
-            // Same rows, but SwiftUI state changed (reaction/edit/read tick): cheaply refresh only the
-            // on-screen cells. Off-screen cells rebuild from the latest `row` closure when they scroll in.
+            // Same rows, but SwiftUI state changed (reaction/edit/read tick): refresh only the on-screen
+            // cells. THROTTLED: reconfiguring on every parent re-render (each keystroke, typing dots)
+            // churned layout and left STALE, OVERLAPPING cell frames — the invisible overlapped cells
+            // then swallowed long-press/swipe on the rows beneath (couldn't reply/react on GIFs/calls).
             let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
             guard !visible.isEmpty else { return }
             var snapshot = dataSource.snapshot()
             snapshot.reconfigureItems(visible)
-            dataSource.apply(snapshot, animatingDifferences: false)
+            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+                // Re-measure + re-place after the reconfigure so no cell keeps a stale frame.
+                self?.collectionView.collectionViewLayout.invalidateLayout()
+            }
             return
         }
 
@@ -130,8 +147,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             if let anchor {
                 self.restore(anchor)          // load-older: keep the reader's place
             } else if shouldStick {
-                self.pendingBottomScroll = true
-                self.maybeScrollToBottom()    // first load / my send / at-bottom receive: land at bottom
+                self.beginBottomSettle()      // first load / my send / at-bottom receive: land + stay at bottom
             }
         }
     }
@@ -162,22 +178,45 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if pendingBottomScroll { maybeScrollToBottom(); return }
-        if stickBottomThroughLayout { scrollToBottom() }   // keyboard opened while at bottom -> stay pinned
+        if pendingBottomScroll || stickBottomThroughLayout { pinBottom() }
+        else { clampOffsetIfBeyondContent() }
     }
 
-    private func maybeScrollToBottom() {
-        guard pendingBottomScroll, collectionView.bounds.height > 0 else { return }
-        scrollToBottom()
-        pendingBottomScroll = false
+    // Open / at-bottom send-receive: pin to the bottom NOW and keep re-pinning (via the contentSize
+    // observer + layout passes) while the self-sizing cells settle, then release so normal scrolling
+    // resumes. This keeps the visible bottom messages fixed instead of jumping as cells measure.
+    private func beginBottomSettle() {
         didInitialScroll = true
+        pendingBottomScroll = true
+        view.layoutIfNeeded()
+        pinBottom()
+        settleWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            self?.pendingBottomScroll = false
+            self?.clampOffsetIfBeyondContent()
+        }
+        settleWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: w)
     }
 
-    private func scrollToBottom() {
-        collectionView.layoutIfNeeded()   // force real sizes of the near-bottom cells before offsetting
+    private func pinBottom() {
+        guard collectionView.bounds.height > 0 else { return }
         let target = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
-        let minY = -collectionView.adjustedContentInset.top
-        collectionView.setContentOffset(CGPoint(x: 0, y: max(minY, target)), animated: false)
+        let y = max(-collectionView.adjustedContentInset.top, target)
+        if abs(collectionView.contentOffset.y - y) > 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+        }
+    }
+
+    // Never leave the view scrolled PAST the content (the "sometimes empty chat" bug): when the content
+    // shrinks (estimated → measured heights), clamp the offset back onto the real content.
+    private func clampOffsetIfBeyondContent() {
+        guard collectionView.bounds.height > 0 else { return }
+        let maxY = max(-collectionView.adjustedContentInset.top,
+                       collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom)
+        if collectionView.contentOffset.y > maxY + 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: maxY), animated: false)
+        }
     }
 
     // MARK: - Jump to a message (reply / search)

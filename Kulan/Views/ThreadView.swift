@@ -312,7 +312,8 @@ struct ThreadView: View {
             Button("OK", role: .cancel) {}
         } message: { Text("This status has expired.") }
         .fullScreenCover(item: $viewerImage) { msg in
-            ImageViewerView(message: msg, cid: cid)
+            // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
+            ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif }, cid: cid)
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         .fullScreenCover(item: $viewerVideo) { msg in

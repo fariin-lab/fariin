@@ -64,7 +64,9 @@ struct MediaGalleryView: View {
             .toolbar { toolbar }
             .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
             .task { if !loaded { all = await ChatService.galleryContent(cid); loaded = true } }
-            .fullScreenCover(item: $viewerImage) { ImageViewerView(message: $0, cid: cid) }
+            .fullScreenCover(item: $viewerImage) {
+                ImageViewerView(message: $0, in: mediaItems.filter { $0.isImage && !$0.isGif }, cid: cid)
+            }
             .fullScreenCover(item: $viewerVideo) { VideoPlayerScreen(message: $0, cid: cid) }
             .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
                 if let items = shareItems { ActivityView(items: items) }
@@ -323,7 +325,10 @@ struct MediaGalleryView: View {
         Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
         Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
-        Button(role: .destructive) { selection = [m.id]; confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+        // Delete-for-everyone is only for MY OWN media — received media can't be deleted from the server.
+        if m.authorId == AuthService.shared.uid {
+            Button(role: .destructive) { selection = [m.id]; confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+        }
     }
 
     // MARK: - Actions
