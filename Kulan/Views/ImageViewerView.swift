@@ -233,6 +233,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
     var onSingleTap: () -> Void = {}
     var onDim: (Double) -> Void
     var onDismiss: () -> Void
+    var allowsDismissPan: Bool = true   // false in the media editor: zoom only, no drag-to-close
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
@@ -240,9 +241,15 @@ struct ZoomImageView: UIViewControllerRepresentable {
         vc.onSingleTap = onSingleTap
         vc.onDim = onDim
         vc.onDismiss = onDismiss
+        vc.allowsDismissPan = allowsDismissPan
         return vc
     }
-    func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {}
+    func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {
+        if uiViewController.image !== image {
+            uiViewController.image = image
+            uiViewController.reloadImage()
+        }
+    }
 }
 
 final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
@@ -250,9 +257,18 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     var onSingleTap: (() -> Void)?
     var onDim: ((Double) -> Void)?
     var onDismiss: (() -> Void)?
+    var allowsDismissPan = true
 
     private var scrollView: ZoomableMediaView!
     private var imageView: UIImageView!
+
+    // Editor swaps the image (filter/crop applied) — refresh in place, keeping the zoom view.
+    func reloadImage() {
+        guard let imageView else { return }
+        imageView.image = image
+        imageView.sizeToFit()
+        scrollView?.updateZoomScaleForLayout()
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -272,13 +288,15 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         scrollView.frame = view.bounds
         scrollView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-        let dismissPan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
-        dismissPan.delegate = self
-        scrollView.addGestureRecognizer(dismissPan)
-        // NO require(toFail:) — DirectionalPan never explicitly FAILS on a non-downward move (it just
-        // stays .possible), so the scroll pan waiting for its failure deadlocked and the drag-to-close
-        // (and scrolling) died. Instead both run SIMULTANEOUSLY (delegate below); handleDismiss ignores
-        // anything that isn't an at-rest downward drag.
+        if allowsDismissPan {
+            let dismissPan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
+            dismissPan.delegate = self
+            scrollView.addGestureRecognizer(dismissPan)
+            // NO require(toFail:) — DirectionalPan never explicitly FAILS on a non-downward move (it just
+            // stays .possible), so the scroll pan waiting for its failure deadlocked and the drag-to-close
+            // (and scrolling) died. Instead both run SIMULTANEOUSLY (delegate below); handleDismiss ignores
+            // anything that isn't an at-rest downward drag.
+        }
     }
 
     // Coexist with the zoom scroll pan and the horizontal page-swipe: recognize together, act only
