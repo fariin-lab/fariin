@@ -3159,11 +3159,13 @@ struct MessageBubble: View, Equatable {
                     Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : reply.text))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
-                // No greedy Spacer here: it made the quote grab the full bubble width,
-                // so a tiny "hhhh" reply still drew a full-width card. Letting the HStack
-                // hug its content means the card grows only as big as it needs to.
             }
             .padding(.horizontal, 8).padding(.vertical, 5)
+            // Fill the bubble's content width so the quote card MATCHES a wider message body below it
+            // (was hugging → a "half" card with an empty gap). maxWidth's IDEAL stays content-sized, so a
+            // standalone reply doesn't balloon the bubble to full width — it only expands to fill a wider
+            // sibling.
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Tint the quote box with the (contrasting) text color so it's always visible —
             // the old white tint vanished on the white "mine" bubble in dark mode.
             .background(fg.opacity(0.12))
