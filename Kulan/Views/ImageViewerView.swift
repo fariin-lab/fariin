@@ -128,14 +128,34 @@ struct ImageViewerView: View {
         .padding(.horizontal, 12).padding(.top, 4)
     }
 
-    // Bottom toolbar: three SEPARATE Liquid Glass circle buttons (no grouping pill) — Share · Reply · Delete.
+    // Bottom toolbar — native Apple Photos style: plain SF Symbols spread edge-to-edge (Share leading,
+    // Delete trailing), 44pt tap targets, no custom circle chrome. A soft scrim keeps them legible over
+    // a bright photo.
     private var bottomBar: some View {
-        HStack(spacing: 22) {
-            glassButton("square.and.arrow.up") { share() }
-            glassButton("arrowshape.turn.up.left") { dismiss() }   // Reply: return to the chat to reply
-            glassButton("trash") { confirmDelete = true }
+        HStack {
+            barButton("square.and.arrow.up") { share() }
+            Spacer()
+            barButton("arrowshape.turn.up.left") { dismiss() }   // Reply: return to the chat to reply
+            Spacer()
+            barButton("trash", role: .destructive) { confirmDelete = true }
         }
-        .padding(.bottom, 10)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(colors: [.clear, .black.opacity(0.28)], startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
+        )
+    }
+
+    private func barButton(_ icon: String, role: ButtonRole? = nil, _ action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 22))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.3), radius: 3)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
     }
 
     private func glassButton(_ icon: String, _ action: @escaping () -> Void) -> some View {
