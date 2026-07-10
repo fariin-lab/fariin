@@ -43,6 +43,8 @@ struct ThreadView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
+    @State private var multiImages: MultiImagesWrap? // 2+ picked photos → Signal-style approval screen
+    struct MultiImagesWrap: Identifiable { let id = UUID(); let images: [UIImage] }
     @State private var sendingPhoto = false
     @State private var typingSent = false
     @State private var viewerImage: Message?
@@ -331,6 +333,22 @@ struct ThreadView: View {
                     let c = caption.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !c.isEmpty {
                         try? await ChatService.sendText(cid: cid, text: c, group: isGroup ? groupMembers : nil)
+                    }
+                }
+            }
+        }
+        .fullScreenCover(item: $multiImages) { wrap in
+            // Signal's multi-image approval: pages + rail + one caption; sends in selection order,
+            // the caption follows the batch as the message body (our follow-up-text pattern).
+            MultiImageApprovalView(images: wrap.images) { imgs, caption, hd in
+                Task {
+                    for img in imgs {
+                        if let data = img.jpegData(compressionQuality: hd ? 0.95 : 0.85) {
+                            await sendPhoto(data)
+                        }
+                    }
+                    if !caption.isEmpty {
+                        try? await ChatService.sendText(cid: cid, text: caption, group: isGroup ? groupMembers : nil)
                     }
                 }
             }
@@ -1454,27 +1472,36 @@ struct ThreadView: View {
         }
     }
 
-    // Multi-select: send each chosen photo/video in order (native PhotosUI multi-pick).
+    // Multi-select (Signal's AttachmentApproval flow): one photo → the full editor; 2+ photos → the
+    // approval screen (swipeable zoomable pages, ordered thumb rail, ONE caption, send in order).
+    // Videos go straight into the send pipeline (separate transcode path), same as before.
     private func sendPickedMulti(_ items: [PhotosPickerItem]) async {
         guard !items.isEmpty else { return }
         let picked = items
         await MainActor.run { photoItems = [] }
-        // A single PHOTO opens the editor (crop/draw/adjust/caption); videos and
-        // multi-picks send directly.
         if picked.count == 1, !isVideoItem(picked[0]),
            let data = try? await picked[0].loadTransferable(type: Data.self),
            let ui = UIImage(data: data) {
             await MainActor.run { editImage = EditImageWrap(image: ui) }
             return
         }
+        // Load all picked photos IN ORDER (selection order = send order, like Signal); videos send now.
+        var photos: [UIImage] = []
         for item in picked {
             if isVideoItem(item) {
                 if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
                     await sendVideo(from: movie.url)
                 }
-            } else if let data = try? await item.loadTransferable(type: Data.self) {
-                await sendPhoto(data)
+            } else if let data = try? await item.loadTransferable(type: Data.self),
+                      let ui = UIImage(data: data) {
+                photos.append(ui)
             }
+        }
+        guard !photos.isEmpty else { return }
+        if photos.count == 1 {
+            await MainActor.run { editImage = EditImageWrap(image: photos[0]) }
+        } else {
+            await MainActor.run { multiImages = MultiImagesWrap(images: photos) }
         }
     }
 
