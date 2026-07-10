@@ -153,7 +153,7 @@ struct ThreadView: View {
                 // Cache-seeded chat: didInitialLoad is already true, so the reveal onChange never fires —
                 // settle-under-veil here too (not a single scrollTo) so the cache path also never shows
                 // the chat mid-scroll during the push transition.
-                if repo.didInitialLoad { revealAtOpenAnchor(proxy) }
+                if repo.didInitialLoad { revealAtOpenAnchor(proxy, settlePasses: 3) }   // measured -> reveal fast (no blink)
             }
             .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
             .onChange(of: repo.items.count) { old, new in
@@ -1122,23 +1122,21 @@ struct ThreadView: View {
     // the next runloop — after layout — corrects it. We reveal only after both passes, so a cold/first
     // open lands in its FINAL position instead of scrolling-then-settling visibly (the "jump"). A warm
     // reopen already has measured rows, so pass 2 is just a harmless no-op there.
-    private func revealAtOpenAnchor(_ proxy: ScrollViewProxy) {
+    private func revealAtOpenAnchor(_ proxy: ScrollViewProxy, settlePasses: Int = 11) {
         let a = openAnchor
-        // Signal keeps the list bottom-anchored with pre-measured cells, so it shows already at rest.
-        // We can't pre-measure a LazyVStack, so instead we hold the reveal veil and RE-PIN to the anchor
-        // repeatedly (~every 25ms for ~0.28s) while still hidden — that gives the LazyVStack time to
-        // instantiate all rows to the bottom and any async voice/media heights time to settle. Only
-        // when the layout has stopped moving do we drop the veil, so it appears already-at-rest with
-        // zero visible jump. (A warm reopen has measured rows, so the pins are instant no-ops.)
+        // Re-pin to the anchor while hidden so the LazyVStack finishes building rows / async heights
+        // settle, then reveal already-at-rest (no jump). WARM opens (measured rows) settle in 1 pass,
+        // so they pass a small settlePasses -> revealed in ~60ms instead of ~280ms (kills the "blink"
+        // on cached chats). COLD opens keep the full ~280ms so unmeasured rows don't jump.
         var passes = 0
         func tick() {
             proxy.scrollTo(a.id, anchor: a.edge)
             passes += 1
-            if passes < 11 {
+            if passes < settlePasses {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { tick() }
             } else {
                 proxy.scrollTo(a.id, anchor: a.edge)   // final exact pin
-                revealed = true
+                withAnimation(.easeOut(duration: 0.12)) { revealed = true }   // soft fade, not a pop
             }
         }
         DispatchQueue.main.async { tick() }
