@@ -84,8 +84,7 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
-    @State private var floatingDateShown = false   // fades in while scrolling, out when idle
-    @State private var floatingDateHideWork: DispatchWorkItem?
+    @State private var floatingDateShown = false   // shows on first scroll, then stays (Signal-style)
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -881,11 +880,9 @@ struct ThreadView: View {
     }
 
     private func bumpFloatingDate() {
-        floatingDateShown = true
-        floatingDateHideWork?.cancel()
-        let work = DispatchWorkItem { withAnimation(.easeOut(duration: 0.4)) { floatingDateShown = false } }
-        floatingDateHideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: work)
+        // Signal: the floating date STAYS pinned at the top while you scroll — it never fades out, only
+        // its date text changes. So once shown it stays visible.
+        if !floatingDateShown { withAnimation(.easeInOut(duration: 0.2)) { floatingDateShown = true } }
     }
 
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
@@ -933,17 +930,15 @@ struct ThreadView: View {
     }
 
     @ViewBuilder private var floatingDateHeader: some View {
-        if let label = floatingDate {
+        if floatingDateShown, let label = floatingDate {
             Text(label)
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.08), lineWidth: 0.5))
+                .padding(.horizontal, 14).frame(height: 30)
+                .liquidGlass(Capsule(), interactive: false)   // real native Liquid Glass, stays pinned
                 .padding(.top, 8)
-                .opacity(floatingDateShown ? 1 : 0)
                 .allowsHitTesting(false)
-                .animation(.easeInOut(duration: 0.25), value: floatingDateShown)
+                .transition(.opacity)
         }
     }
 
