@@ -26,15 +26,14 @@ struct ChatCropView: View {
 
     private let minSize: CGFloat = 64
     private let hit: CGFloat = 34
-    private let topReserve: CGFloat = 104
-    private let bottomReserve: CGFloat = 210
     private var originalRatio: CGFloat { img.size.width / max(1, img.size.height) }
 
     var body: some View {
+        // The crop CANVAS lives between native safe-area bars: the top bar (X / Reset) sits just below the
+        // status bar and the controls just above the home indicator — placed by .safeAreaInset, not by
+        // hard-coded top padding (which mis-positioned the buttons into the notch in a fullScreenCover).
         GeometryReader { geo in
             ZStack {
-                Color.black.ignoresSafeArea()
-
                 Image(uiImage: img).resizable().scaledToFit()
                     .frame(width: imageFrame.width, height: imageFrame.height)
                     .position(x: imageFrame.midX, y: imageFrame.midY)
@@ -51,25 +50,24 @@ struct ChatCropView: View {
                     .contentShape(Rectangle())
                     .gesture(moveGesture)
                 cornerHandles
-
-                controls(geo)
             }
             .onAppear { layout(geo.size) }
             .onChange(of: geo.size) { _, s in layout(s) }
         }
-        .statusBarHidden()
+        .background(Color.black.ignoresSafeArea())
+        .safeAreaInset(edge: .top, spacing: 0) { topBar }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
     }
 
-    // MARK: Layout — fit the photo into the band between the top bar and the controls (no overlap).
+    // MARK: Layout — fit the photo into the canvas area (already inset by the safe-area bars).
 
     private func layout(_ size: CGSize) {
         container = size
-        let bandY = topReserve
-        let bandH = max(80, size.height - topReserve - bottomReserve)
         let availW = size.width - 32
-        let s = min(availW / img.size.width, bandH / img.size.height)
+        let availH = size.height - 24
+        let s = min(availW / img.size.width, availH / img.size.height)
         let w = img.size.width * s, h = img.size.height * s
-        imageFrame = CGRect(x: (size.width - w) / 2, y: bandY + (bandH - h) / 2, width: w, height: h)
+        imageFrame = CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
         setAspect(aspect, animated: false)
     }
 
@@ -135,54 +133,60 @@ struct ChatCropView: View {
 
     // MARK: Controls
 
-    private func controls(_ geo: GeometryProxy) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark").font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                }
-                Spacer()
-                if edited {
-                    Button { reset() } label: {
-                        Text("Reset").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                            .frame(height: 44).padding(.horizontal, 8)
-                    }
-                }
+    // Top bar: Cancel (✕) left · Reset right — native circular glass buttons, placed in the safe area.
+    private var topBar: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(.white.opacity(0.15), in: Circle())
+                    .contentShape(Circle())
             }
-            .padding(.horizontal, 12)
-            .padding(.top, geo.safeAreaInsets.top > 0 ? geo.safeAreaInsets.top : 44)
-
+            .buttonStyle(.plain)
             Spacer()
-
-            VStack(spacing: 18) {
-                // Tool row: rotate 90° · flip horizontal.
-                HStack(spacing: 40) {
-                    toolButton("rotate.left", "Rotate") { rotate() }
-                    toolButton("arrow.left.and.right", "Flip") { flipH() }
-                }
-                // Aspect-ratio presets (scrollable, minimalist chips).
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        aspectChip("Original", originalRatio)
-                        aspectChip("Free", nil)
-                        aspectChip("1:1", 1)
-                        aspectChip("4:5", 4.0/5.0)
-                        aspectChip("3:4", 3.0/4.0)
-                        aspectChip("16:9", 16.0/9.0)
-                        aspectChip("9:16", 9.0/16.0)
-                    }
-                    .padding(.horizontal, 20)
-                }
-                Button { apply() } label: {
-                    Text("Done").font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .background(Color.white, in: Capsule())
-                }
-                .padding(.horizontal, 40)
+            Button { reset() } label: {
+                Text("Reset").font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(edited ? .white : .white.opacity(0.35))
+                    .frame(height: 40).padding(.horizontal, 14)
+                    .background(.white.opacity(0.15), in: Capsule())
+                    .contentShape(Capsule())
             }
-            .padding(.bottom, geo.safeAreaInsets.bottom > 0 ? geo.safeAreaInsets.bottom : 16)
+            .buttonStyle(.plain)
+            .disabled(!edited)
         }
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+    }
+
+    // Bottom controls: rotate/flip tool row · aspect presets · Done — placed in the bottom safe area.
+    private var bottomControls: some View {
+        VStack(spacing: 18) {
+            HStack(spacing: 40) {
+                toolButton("rotate.left", "Rotate") { rotate() }
+                toolButton("arrow.left.and.right", "Flip") { flipH() }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    aspectChip("Original", originalRatio)
+                    aspectChip("Free", nil)
+                    aspectChip("1:1", 1)
+                    aspectChip("4:5", 4.0/5.0)
+                    aspectChip("3:4", 3.0/4.0)
+                    aspectChip("16:9", 16.0/9.0)
+                    aspectChip("9:16", 9.0/16.0)
+                }
+                .padding(.horizontal, 20)
+            }
+            Button { apply() } label: {
+                Text("Done").font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .background(Color.white, in: Capsule())
+            }
+            .padding(.horizontal, 40)
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 8)
     }
 
     private func toolButton(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {

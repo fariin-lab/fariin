@@ -9,7 +9,12 @@ import CoreImage.CIFilterBuiltins
 // Every button is real. Reuses DrawingCanvas (defined in StoryEditorView.swift).
 struct ChatImageEditor: View {
     let source: UIImage
-    var onSend: (_ image: Data, _ caption: String, _ hd: Bool, _ viewOnce: Bool) -> Void
+    var onSend: (_ image: Data, _ caption: String, _ hd: Bool, _ viewOnce: Bool) -> Void = { _, _, _, _ in }
+    // Edit-only mode (used by the multi-image approval screen to edit ONE photo): no caption / view-once /
+    // send — just crop + pen, and a Done button that returns the edited image via onReturn.
+    var editOnly: Bool = false
+    var startDrawing: Bool = false
+    var onReturn: ((UIImage) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var viewOnce = false   // Signal-style: recipient can open the photo exactly once
@@ -110,7 +115,7 @@ struct ChatImageEditor: View {
                 DragGesture(minimumDistance: 18)
                     .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
             )
-            .onAppear { canvasSize = geo.size; recomputeEdited() }
+            .onAppear { canvasSize = geo.size; recomputeEdited(); if startDrawing { isDrawing = true } }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
@@ -172,16 +177,27 @@ struct ChatImageEditor: View {
     // caption capsule + round send. Minimal — no dead icons, everything works.
     private var bottomBar: some View {
         VStack(spacing: 12) {
-            // Tool row: crop · draw · filters · HD — HIDDEN while typing a caption (keyboard up).
+            // Tool row: crop · draw · HD — HIDDEN while typing a caption (keyboard up). HD is album-level
+            // in edit-only mode, so it's dropped there.
             if !captionFocused {
                 HStack(spacing: 10) {
                     tool("crop", active: false) { showCrop = true }
                     tool("scribble", active: isDrawing) { isDrawing.toggle() }
-                    tool("", active: hd, label: "HD") { hd.toggle() }
+                    if !editOnly { tool("", active: hd, label: "HD") { hd.toggle() } }
                     Spacer()
                 }
                 .transition(.opacity)
             }
+
+            // Edit-only: a single Done button returns the edited photo (no caption/send).
+            if editOnly {
+                Button { returnEdited() } label: {
+                    Text("Done").font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
+                        .frame(maxWidth: .infinity).frame(height: 48)
+                        .background(Color.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
 
             // Caption + send (Signal's text toolbar). The ① toggle (Signal's viewOnceButton) sits in the
             // capsule; view-once media can't carry a caption, so the field becomes "View Once Media".
@@ -215,6 +231,7 @@ struct ChatImageEditor: View {
                 }
                 .buttonStyle(StoryPressStyle())
             }
+            }   // end else (non-edit-only caption+send)
         }
         .padding(.horizontal, 16)
     }
@@ -241,6 +258,12 @@ struct ChatImageEditor: View {
     private func send() {
         let data = flatten()
         onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd, viewOnce)
+        dismiss()
+    }
+
+    // Edit-only: hand the flattened (cropped + drawn) image back to the multi-image screen.
+    @MainActor private func returnEdited() {
+        onReturn?(UIImage(data: flatten()) ?? edited)
         dismiss()
     }
 

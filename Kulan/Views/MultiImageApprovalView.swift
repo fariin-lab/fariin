@@ -15,6 +15,8 @@ struct MultiImageApprovalView: View {
     @State private var page = 0
     @State private var caption = ""
     @State private var hd = false
+    @State private var editCrop = false   // crop the current page
+    @State private var editPen = false    // draw on the current page
     @FocusState private var captionFocused: Bool
 
     var body: some View {
@@ -43,9 +45,22 @@ struct MultiImageApprovalView: View {
         // indicator (and rise above the keyboard) — via safe-area insets, no hard-coded offsets.
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
+        // Per-photo editing (same tools as the single-image editor): crop + pen. Edits replace the
+        // current page in place.
+        .fullScreenCover(isPresented: $editCrop) {
+            if images.indices.contains(page) {
+                ChatCropView(image: images[page]) { cropped in images[page] = cropped }
+            }
+        }
+        .fullScreenCover(isPresented: $editPen) {
+            if images.indices.contains(page) {
+                ChatImageEditor(source: images[page], editOnly: true, startDrawing: true,
+                                onReturn: { edited in images[page] = edited })
+            }
+        }
     }
 
-    // X (close) top-left · HD toggle top-right — Apple's standard corner placement.
+    // X (close) top-left. (Crop / pen / HD live in the bottom tool row, like the single-image editor.)
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
@@ -56,22 +71,38 @@ struct MultiImageApprovalView: View {
             }
             .buttonStyle(.plain)
             Spacer()
-            Button { hd.toggle() } label: {
-                Text("HD").font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
-                    .frame(width: 44, height: 44)
-                    .liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
 
-    // Thumbnail rail (hidden while typing) + caption field + count send button.
+    // Round glass tool button (matches the single-image editor's tool row).
+    private func toolButton(_ icon: String, active: Bool = false, label: String? = nil, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Group {
+                if let label { Text(label).font(.system(size: 13, weight: .bold)) }
+                else { Image(systemName: icon).font(.system(size: 17, weight: .medium)) }
+            }
+            .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+            .frame(width: 44, height: 44)
+            .liquidGlass(Circle(), interactive: true)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // Tool row (crop · pen · HD) + thumbnail rail (both hidden while typing) + caption field + send.
     private var bottomControls: some View {
         VStack(spacing: 12) {
+            if !captionFocused {
+                HStack(spacing: 10) {
+                    toolButton("crop") { editCrop = true }
+                    toolButton("scribble") { editPen = true }
+                    toolButton("", active: hd, label: "HD") { hd.toggle() }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+            }
             if !captionFocused { rail }
             HStack(spacing: 10) {
                 TextField("", text: $caption,
