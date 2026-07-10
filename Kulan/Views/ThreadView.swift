@@ -126,7 +126,10 @@ struct ThreadView: View {
     }
 
     private var threadScroll: some View {
-        ScrollViewReader { proxy in
+        ScrollViewReader { proxy in scrollStack(proxy) }
+    }
+
+    @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
             VStack(spacing: 0) {
             pinnedBar(proxy)
             listContainer(proxy)
@@ -263,7 +266,6 @@ struct ThreadView: View {
             // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
             // plain app background, so chats without a wallpaper look exactly as before.
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
-        }
     }
 
     // Split into several layers so each modifier chain stays under the type-checker limit.
