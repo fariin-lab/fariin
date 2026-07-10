@@ -913,6 +913,15 @@ enum ChatService {
     }
 
     /// Human label for a disappearing timer (shared by the info screens + system notice).
+    // Compact form for tight rows: 30s · 5m · 8h · 1d · 4w.
+    static func disappearShortLabel(_ seconds: Int) -> String {
+        guard seconds > 0 else { return "Off" }
+        let units: [(Int, String)] = [(604_800, "w"), (86_400, "d"), (3_600, "h"), (60, "m"), (1, "s")]
+        for (size, suffix) in units where seconds % size == 0 { return "\(seconds / size)\(suffix)" }
+        for (size, suffix) in units where seconds >= size { return "\(seconds / size)\(suffix)" }
+        return "\(seconds)s"
+    }
+
     static func disappearLabel(_ seconds: Int) -> String {
         guard seconds > 0 else { return "Off" }
         let units: [(Int, String)] = [(604_800, "week"), (86_400, "day"),

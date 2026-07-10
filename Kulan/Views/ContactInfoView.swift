@@ -299,8 +299,9 @@ struct ContactInfoView: View {
 
     private var rowDivider: some View { Divider().padding(.leading, 56) }
 
+    // Compact in the row (8h / 10m / 1w); the picker inside shows the full text.
     private var disappearLabel: String {
-        disappearSeconds == 0 ? "Off" : ChatService.disappearLabel(disappearSeconds)
+        disappearSeconds == 0 ? "Off" : ChatService.disappearShortLabel(disappearSeconds)
     }
     // MARK: - Sections
 

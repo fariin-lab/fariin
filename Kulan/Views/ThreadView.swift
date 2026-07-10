@@ -64,6 +64,7 @@ struct ThreadView: View {
     @State private var recordLocked = false        // recording continues after finger lifts
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
+    @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
@@ -373,6 +374,19 @@ struct ThreadView: View {
                 ForwardPicker(messages: msgs, sourceCid: cid, onSent: { exitSelection() })
             }
         }
+        .sheet(isPresented: $showPinnedSheet) {
+            PinnedMessagesSheet(
+                pinned: repo.pinnedMessageIds.compactMap { id in repo.messages.first { $0.id == id } },
+                nameFor: { personName($0) },
+                canUnpin: !isGroup || (conversation?.isAdmin(me) ?? false),
+                onUnpin: { id in Task { await ChatService.removePinnedMessage(cid, id) } },
+                onTap: { id in
+                    showPinnedSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        Task { await repo.ensureLoaded(id); await MainActor.run { flashAndScroll(id) } }
+                    }
+                })
+        }
         .alert("Delete \(selectedIds.count) message\(selectedIds.count == 1 ? "" : "s")?",
                isPresented: $showBulkDeleteConfirm) {
             Button("Delete", role: .destructive) { bulkDelete() }
@@ -564,16 +578,20 @@ struct ThreadView: View {
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if !isGroup || (conversation?.isAdmin(me) ?? false) {
-                    Button {
-                        Task { await ChatService.removePinnedMessage(cid, pid) }
-                        if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
-                    } label: {
-                        Image(systemName: "pin.slash.fill").font(.system(size: 16)).foregroundStyle(.secondary)
-                            .frame(width: 32, height: 32).contentShape(Rectangle())
+                // Pin icon → context menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
+                Menu {
+                    if !isGroup || (conversation?.isAdmin(me) ?? false) {
+                        Button {
+                            Task { await ChatService.removePinnedMessage(cid, pid) }
+                            if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
+                        } label: { Label("Unpin", systemImage: "pin.slash") }
                     }
-                    .buttonStyle(.plain)
+                    Button { showPinnedSheet = true } label: { Label("See All", systemImage: "list.bullet") }
+                } label: {
+                    Image(systemName: "pin.slash.fill").font(.system(size: 16)).foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32).contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
             .padding(.leading, 14).padding(.trailing, 8)
             .frame(height: 48)
@@ -709,7 +727,10 @@ struct ThreadView: View {
                 message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
                 nameFor: { personName($0) },
                 avatarFor: { conversation?.photos[$0] },
-                onReply: { m in withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m } },
+                onReply: { m in
+                    withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
+                    inputFocused = true   // replying = you're about to type → open the keyboard
+                },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                 onTapImage: { viewerImage = $0 },
                 onTapVideo: { viewerVideo = $0 },
@@ -2476,6 +2497,9 @@ struct MessageBubble: View, Equatable {
         )
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
         // Telegram-style swipe-to-reply: drag the bubble left past a threshold.
+        .offset(x: dragX)
+        // Reply arrow AFTER the offset, so it stays FIXED in the space the bubble vacates as it slides
+        // left (attached before, it slid WITH the bubble and overlapped it).
         .overlay(alignment: .trailing) {
             Image(systemName: "arrowshape.turn.up.left.fill")
                 .font(.system(size: 15))
@@ -2483,7 +2507,6 @@ struct MessageBubble: View, Equatable {
                 .opacity(Double(min(abs(min(dragX, 0)) / 50, 1)))
                 .padding(.trailing, 6)
         }
-        .offset(x: dragX)
         .simultaneousGesture(
             DragGesture(minimumDistance: 18)
                 .onChanged { v in if v.translation.width < 0 { dragX = max(v.translation.width, -70) } }
