@@ -122,25 +122,7 @@ struct ThreadView: View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
             pinnedBar(proxy)
-            Group {
-                if useNativeList {
-                    nativeList   // UIKit collection view — opens at the exact bottom, no jump
-                } else {
-                    ScrollView {
-                        messageList(proxy)
-                            .contentShape(Rectangle())   // whole content tappable so the dismiss tap always lands
-                            .simultaneousGesture(
-                                // tap the chat to close the keyboard; force-resign so it always drops.
-                                // simultaneous = bubble taps still open the viewer (not consumed).
-                                TapGesture().onEnded {
-                                    inputFocused = false
-                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                                    to: nil, from: nil, for: nil)
-                                }
-                            )
-                    }
-                }
-            }
+            listContainer(proxy)
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
@@ -625,6 +607,29 @@ struct ThreadView: View {
     // EXPERIMENTAL UIKit-backed list (Signal's architecture). Reuses the SAME rowView, so every bubble
     // feature is identical — only the scroll container differs. Opens at the exact bottom with no jump;
     // no reveal veil needed. jumpTo is a no-op for now (native jump-to-message is a follow-up stage).
+    // The scrolling list itself — either the UIKit native list (flag on) or the SwiftUI ScrollView.
+    // Extracted so `threadScroll`'s builder stays under the type-checker's complexity limit.
+    @ViewBuilder
+    private func listContainer(_ proxy: ScrollViewProxy) -> some View {
+        if useNativeList {
+            nativeList   // UIKit collection view — opens at the exact bottom, no jump
+        } else {
+            ScrollView {
+                messageList(proxy)
+                    .contentShape(Rectangle())   // whole content tappable so the dismiss tap always lands
+                    .simultaneousGesture(
+                        // tap the chat to close the keyboard; force-resign so it always drops.
+                        // simultaneous = bubble taps still open the viewer (not consumed).
+                        TapGesture().onEnded {
+                            inputFocused = false
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                            to: nil, from: nil, for: nil)
+                        }
+                    )
+            }
+        }
+    }
+
     private var nativeList: some View {
         NativeMessageList(
             rowIds: repo.items.map { $0.rowId },
