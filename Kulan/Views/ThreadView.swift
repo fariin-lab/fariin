@@ -1431,34 +1431,36 @@ struct ThreadView: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(Color(.systemGray6), in: Capsule())
+            .liquidGlass(Capsule(), interactive: false)
             Button { closeSearch() } label: {
                 Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-                    .frame(width: 38, height: 38).background(Color(.systemGray5), in: Circle())
+                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
-        .background(.bar)
     }
 
     // Bottom bar shown during search (replaces the composer, sits above the keyboard): ↑/↓ through
     // matches + a count, like Signal.
     private var searchNavBar: some View {
-        HStack(spacing: 14) {
-            Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 17, weight: .semibold)) }
-                .disabled(searchIndex <= 0 || searchMatches.isEmpty)
-            Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 17, weight: .semibold)) }
-                .disabled(searchIndex >= searchMatches.count - 1 || searchMatches.isEmpty)
+        HStack(spacing: 12) {
+            HStack(spacing: 22) {
+                Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 17, weight: .semibold)) }
+                    .disabled(searchIndex <= 0 || searchMatches.isEmpty)
+                Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 17, weight: .semibold)) }
+                    .disabled(searchIndex >= searchMatches.count - 1 || searchMatches.isEmpty)
+            }
+            .tint(.primary)
+            .padding(.horizontal, 20).padding(.vertical, 11)
+            .liquidGlass(Capsule(), interactive: true)
             Spacer()
-            Text(searchMatches.isEmpty
-                 ? (searchQuery.isEmpty ? "" : "No results")
-                 : "\(searchIndex + 1) of \(searchMatches.count)")
-                .font(.subheadline).foregroundStyle(.secondary)
+            if !searchMatches.isEmpty || !searchQuery.isEmpty {
+                Text(searchMatches.isEmpty ? "No results" : "\(searchIndex + 1) of \(searchMatches.count)")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
         }
-        .tint(.primary)
-        .padding(.horizontal, 22).padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
+        .padding(.horizontal, 16).padding(.bottom, 6)
     }
 
     private var blockedBar: some View {
