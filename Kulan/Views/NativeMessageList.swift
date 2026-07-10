@@ -21,12 +21,13 @@ struct NativeMessageList: UIViewControllerRepresentable {
         let vc = MessageListController()
         vc.coordinator = context.coordinator
         context.coordinator.controller = vc
-        vc.buildDataSource()
+        vc.loadViewIfNeeded()   // force viewDidLoad now so collectionView + dataSource exist before apply
         return vc
     }
 
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
+        vc.loadViewIfNeeded()
         vc.apply(rowIds: rowIds)
     }
 
@@ -69,9 +70,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
+        buildDataSource()   // collectionView now exists — safe to wire the diffable data source
     }
 
-    func buildDataSource() {
+    private func buildDataSource() {
         reg = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
             guard let self else { return }
             cell.contentConfiguration = UIHostingConfiguration { self.coordinator.parent.row(id) }
