@@ -366,7 +366,7 @@ struct ThreadView: View {
         // In-chat search: a top bar replaces the nav bar; the ↑/↓ nav bar (searchNavBar) replaces the
         // composer above the keyboard.
         .safeAreaInset(edge: .top) { if searchActive { searchBar } }
-        .toolbar(searchActive ? .hidden : .visible, for: .navigationBar)
+        .toolbar(searchActive ? .hidden : .automatic, for: .navigationBar)
     }
 
     var body: some View {

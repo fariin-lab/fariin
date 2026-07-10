@@ -90,6 +90,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
             let appearance = UINavigationBarAppearance()
             appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
+            appearance.shadowColor = .clear               // no hairline separator border under the header
             vc.navigationItem.standardAppearance = appearance
             vc.navigationItem.scrollEdgeAppearance = appearance
             vc.navigationItem.compactAppearance = appearance
