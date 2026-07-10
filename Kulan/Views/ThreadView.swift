@@ -2262,8 +2262,12 @@ struct ThreadView: View {
             .liquidGlass(Capsule(), interactive: true)
             .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
             Button { sendRecording() } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 38))
-                    .foregroundStyle(Theme.accent(dark))
+                // Real Liquid Glass send (was a solid white filled circle); blue arrow glyph.
+                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(Color(hex: 0x3DA1FD))
+                    .frame(width: 46, height: 46)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
         }
     }
