@@ -126,35 +126,20 @@ struct WallpaperPickerSheet: View {
         .padding(.trailing, 20)
     }
 
-    // Contextual bottom button: settled → "Choose Wallpaper from Photos"; pending change → "Apply".
-    @ViewBuilder private var bottomBar: some View {
-        if hasPendingChange {
-            Button {
-                committed = true                // keep the live-previewed wallpaper (don't revert)
-                store.set(selected, for: cid)
-                dismiss()
-            } label: {
-                Text("Apply Wallpaper").fontWeight(.semibold).font(.system(size: 17))
-                    .foregroundStyle(selected == .none ? Color.primary : Color.white)
-                    .frame(maxWidth: .infinity).frame(height: 52)
-                    .liquidGlass(Capsule(), interactive: true, tint: applyTint)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
+    // Wallpapers + colours apply the moment you choose them, so the bottom action is simply "add a
+    // photo wallpaper". Padded from the bottom safe area per Apple's spacing.
+    private var bottomBar: some View {
+        PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+            HStack(spacing: 8) {
+                Image(systemName: "photo.on.rectangle.angled")
+                Text("Choose Wallpaper from Photos").fontWeight(.semibold)
             }
-            .padding(.horizontal, 20)
-            .transition(.opacity)
-        } else {
-            PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-                HStack(spacing: 8) {
-                    Image(systemName: "photo.on.rectangle.angled")
-                    Text("Choose Wallpaper from Photos").fontWeight(.semibold)
-                }
-                .font(.system(size: 16)).foregroundStyle(.primary)
-                .frame(maxWidth: .infinity).frame(height: 52)
-                .liquidGlass(Capsule(), interactive: true)
-            }
-            .padding(.horizontal, 20)
-            .transition(.opacity)
+            .font(.system(size: 16)).foregroundStyle(.primary)
+            .frame(maxWidth: .infinity).frame(height: 50)
+            .liquidGlass(Capsule(), interactive: true)
         }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 4)
     }
 
     // Chat Color row: the app-default swatch + presets + a "+" to open the Custom Color editor. Picking
@@ -276,5 +261,6 @@ struct WallpaperPickerSheet: View {
     private func preview(_ w: ChatWallpaper) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = w }
         store.set(w, for: cid)
+        committed = true   // apply on choose — no separate Apply step (matches Chat Color)
     }
 }

@@ -71,6 +71,11 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
+    // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
+    @State private var selecting = false
+    @State private var selectedIds = Set<String>()
+    @State private var bulkForward: [Message]?
+    @State private var showBulkDeleteConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
     @State private var searchActive = false
     @State private var searchQuery = ""
@@ -241,7 +246,9 @@ struct ThreadView: View {
             }
             .floatingBottomBar {
                 Group {
-                    if searchActive {
+                    if selecting {
+                        selectionActionBar.transition(.opacity)
+                    } else if searchActive {
                         searchNavBar.transition(.opacity)
                     } else if notAMember {
                         removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -362,6 +369,16 @@ struct ThreadView: View {
             MessageInfoView(message: m, members: groupMembers.filter { $0 != me },
                             lastRead: repo.memberLastRead,
                             nameFor: { personName($0) }, photoFor: { conversation?.photos[$0] })
+        }
+        .sheet(isPresented: Binding(get: { bulkForward != nil }, set: { if !$0 { bulkForward = nil } })) {
+            if let msgs = bulkForward {
+                ForwardPicker(messages: msgs, sourceCid: cid, onSent: { exitSelection() })
+            }
+        }
+        .confirmationDialog("Delete \(selectedIds.count) message\(selectedIds.count == 1 ? "" : "s")?",
+                            isPresented: $showBulkDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { bulkDelete() }
+            Button("Cancel", role: .cancel) {}
         }
         // In-chat search: a top bar replaces the nav bar; the ↑/↓ nav bar (searchNavBar) replaces the
         // composer above the keyboard.
@@ -698,6 +715,7 @@ struct ThreadView: View {
                     }   // already at the pin max → ignore
                 },
                 onForward: { forwardTarget = $0 },
+                onSelect: { m in withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
                 onInfo: { infoTarget = $0 },
                 onEdit: { m in
                     withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
@@ -732,6 +750,8 @@ struct ThreadView: View {
             .onAppear { visibleRows.ids.insert(msg.id); persistScrollPosition() }
             .onDisappear { visibleRows.ids.remove(msg.id) }
             .transition(.identity)
+            .modifier(SelectableRow(selecting: selecting, selected: selectedIds.contains(msg.id),
+                                    onToggle: { toggleSelect(msg.id) }))
         }
     }
 
@@ -783,6 +803,36 @@ struct ThreadView: View {
         }
     }
 
+    // MARK: - Message selection
+
+    private func toggleSelect(_ id: String) {
+        if selectedIds.contains(id) { selectedIds.remove(id) } else { selectedIds.insert(id) }
+    }
+
+    private func exitSelection() {
+        withAnimation(.easeInOut(duration: 0.2)) { selecting = false; selectedIds = [] }
+    }
+
+    // My own messages → delete-for-everyone; others → hide-for-me (same rules as the single delete).
+    private func bulkDelete() {
+        let ids = selectedIds
+        Task {
+            for id in ids {
+                guard let m = repo.items.first(where: { $0.id == id }) else { continue }
+                if m.authorId == me { await ChatService.deleteMessage(cid: cid, messageId: id) }
+                else { await MainActor.run { repo.hideForMe(id) } }
+            }
+        }
+        exitSelection()
+    }
+
+    private func bulkForwardStart() {
+        let msgs = repo.items.filter { selectedIds.contains($0.id) && !$0.isCall && !$0.isSystem }
+            .sorted { $0.createdAt < $1.createdAt }
+        guard !msgs.isEmpty else { return }
+        bulkForward = msgs
+    }
+
     // MARK: - In-chat search (Signal-style: top bar + step through matches)
 
     private func activateSearch() {
@@ -830,6 +880,12 @@ struct ThreadView: View {
     // Chats list. Avatar + name (+ presence) centered; voice + video as trailing glass items.
     // The native back button (leading) owns the real edge-swipe-back gesture.
     @ToolbarContentBuilder private var chatToolbar: some ToolbarContent {
+        // While selecting, the trailing shows Cancel (call buttons hide).
+        if selecting {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Cancel") { exitSelection() }.tint(.primary)
+            }
+        } else {
         // Avatar + name are installed as the native UINavigationItem.titleView (see NavTitleView) —
         // NOT a toolbar item — so the tap, the leading placement, the native blur and the swipe-back
         // slide are all handled there (Signal's approach). Only the call/video buttons live here.
@@ -857,6 +913,7 @@ struct ThreadView: View {
                 Button { startGroupCall(video: true) } label: { callGlyph("ic_call_video") }.tint(.primary)
             }
         }
+        }   // end !selecting
     }
 
     // Custom call/video toolbar glyphs (template-tinted, sized to the toolbar).
@@ -1463,6 +1520,34 @@ struct ThreadView: View {
         .padding(.horizontal, 16).padding(.bottom, 6)
     }
 
+    // Bottom action bar during selection: Forward (leading) + count + Delete (trailing), native icons.
+    private var selectionActionBar: some View {
+        HStack {
+            Button { bulkForwardStart() } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "arrowshape.turn.up.right").font(.system(size: 20))
+                    Text("Forward").font(.caption2)
+                }
+            }
+            .tint(.primary)
+            .disabled(selectedIds.isEmpty)
+            Spacer()
+            Text("\(selectedIds.count) selected").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer()
+            Button(role: .destructive) { showBulkDeleteConfirm = true } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "trash").font(.system(size: 20))
+                    Text("Delete").font(.caption2)
+                }
+            }
+            .tint(.red)
+            .disabled(selectedIds.isEmpty)
+        }
+        .padding(.horizontal, 30).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
     private var blockedBar: some View {
         VStack(spacing: 6) {
             Text("You blocked \(title)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
@@ -1988,6 +2073,34 @@ struct ThreadView: View {
     }
 }
 
+// Selection wrapper (Signal-style): in select mode a circular checkmark slides in on the LEADING edge
+// (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
+// selected row gets a soft highlight. Off select mode, the row is untouched.
+struct SelectableRow: ViewModifier {
+    let selecting: Bool
+    let selected: Bool
+    let onToggle: () -> Void
+    func body(content: Content) -> some View {
+        if selecting {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .symbolRenderingMode(selected ? .palette : .monochrome)
+                    .foregroundStyle(selected ? Color.white : Color.secondary.opacity(0.55),
+                                     selected ? Color.accentColor : Color.clear)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                content.allowsHitTesting(false)
+            }
+            .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onToggle)
+            .background(selected ? Color.primary.opacity(0.06) : Color.clear)
+        } else {
+            content
+        }
+    }
+}
+
 struct MessageBubble: View, Equatable {
     // Equatable so SwiftUI skips re-rendering a bubble whose VALUE inputs are unchanged, even when
     // the parent re-evaluates and passes fresh closures (the re-render storm from typing / read
@@ -2013,6 +2126,7 @@ struct MessageBubble: View, Equatable {
     var onReact: (String?) -> Void = { _ in }
     var onPin: (Message) -> Void = { _ in }
     var onForward: (Message) -> Void = { _ in }
+    var onSelect: (Message) -> Void = { _ in }
     var onInfo: (Message) -> Void = { _ in }
     var onEdit: (Message) -> Void = { _ in }
     var onReport: (Message) -> Void = { _ in }
@@ -2310,6 +2424,7 @@ struct MessageBubble: View, Equatable {
                         if isGroup && isMe && message.sendState == nil {
                             Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
                         }
+                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                         Divider()
                         if isMe {
                             Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
