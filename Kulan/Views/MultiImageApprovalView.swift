@@ -122,17 +122,9 @@ struct MultiImageApprovalView: View {
                     onSend(images, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd)
                     dismiss()
                 } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                            .frame(width: 46, height: 46)
-                            .background(Color(hex: 0x3DA1FD), in: Circle())
-                        // Count badge (Signal shows how many are going).
-                        Text("\(images.count)").font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Color.red, in: Capsule())
-                            .offset(x: 4, y: -4)
-                    }
+                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 46, height: 46)
+                        .background(Color(hex: 0x3DA1FD), in: Circle())
                 }
                 .buttonStyle(StoryPressStyle())
             }
@@ -174,8 +166,8 @@ struct MultiImageApprovalView: View {
                 }
             }
             .padding(.top, 6)
-            .frame(maxWidth: .infinity, alignment: .trailing)   // hug the right edge
         }
+        .defaultScrollAnchor(.trailing)   // thumbnails sit at the RIGHT edge (scroll left for more)
         .frame(height: 60)
     }
 
