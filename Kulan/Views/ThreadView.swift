@@ -1819,6 +1819,10 @@ struct ThreadView: View {
             }
         }
         .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
+        // Consume taps so they don't fall THROUGH the (partly transparent) reply bar to the photo bubble
+        // behind it (the X button keeps its own tap).
+        .contentShape(Rectangle())
+        .onTapGesture { }
     }
 
     // Inline edit preview (Telegram-style): pencil + "Edit Message" + snippet + cancel (X).
@@ -1836,6 +1840,8 @@ struct ThreadView: View {
             }
         }
         .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onTapGesture { }
     }
 
     private func cancelEdit() {
