@@ -271,10 +271,11 @@ struct ThreadView: View {
     // Split into several layers so each modifier chain stays under the type-checker limit.
     private var threadCovers: some View {
         threadScroll
+        // Avatar + name installed as the native UINavigationItem.titleView (left-aligned after the back
+        // button, slides with the native swipe-back). NavTitleView clears the bar appearance overrides,
+        // so there's no border — same native bar as the Chats list.
+        .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
-        // IDENTICAL to the Chats-list header: no custom titleView, no appearance override. The avatar +
-        // name live in a native `.toolbar` principal item (see chatToolbar), so the nav bar is the plain
-        // system bar with the same background/separator behavior as the list — no border.
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
         .navigationDestination(isPresented: $showContactInfo) {
@@ -888,12 +889,8 @@ struct ThreadView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
-        // Avatar + name as a NATIVE principal toolbar item — exactly like the Chats-list header (which
-        // also uses a principal item). Tapping opens the profile. This is the plain system nav bar, no
-        // custom titleView, so there's no border/separator difference from the list.
-        ToolbarItem(placement: .principal) {
-            Button { showContactInfo = true } label: { headerLabel }.buttonStyle(.plain)
-        }
+        // Avatar + name are the native UINavigationItem.titleView (see NavTitleView), left-aligned after
+        // the back button — only the call/video buttons live here.
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
