@@ -659,6 +659,13 @@ struct ThreadView: View {
     // ONE row builder used by BOTH the SwiftUI list and the UIKit list, so a message looks identical in
     // either. `jumpTo` is routed by the caller (SwiftUI path -> ScrollViewProxy; UIKit path -> the
     // collection view), keeping this proxy-free.
+    // The per-chat custom bubble colour (local). Reading `.version` registers observation so bubbles
+    // re-render live when the colour is changed in the wallpaper sheet.
+    private var chatColorSpec: ChatColorSpec? {
+        _ = ChatColorStore.shared.version
+        return ChatColorStore.shared.color(for: cid)
+    }
+
     @ViewBuilder
     private func rowView(at index: Int, _ msg: Message, jumpTo: @escaping (String) -> Void) -> some View {
         if shouldShowDate(at: index) {
@@ -716,7 +723,8 @@ struct ThreadView: View {
                 isHighlighted: msg.id == highlightId,
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
-                otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0
+                otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
+                chatColor: chatColorSpec
             )
             .equatable()
             .padding(.top, topGap(at: index))
@@ -1985,7 +1993,7 @@ struct MessageBubble: View, Equatable {
             && l.isGroup == r.isGroup && l.canPin == r.canPin && l.isPinned == r.isPinned
             && l.isHighlighted == r.isHighlighted
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
-            && l.otherLastRead == r.otherLastRead
+            && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
     }
 
     let message: Message
@@ -2032,6 +2040,10 @@ struct MessageBubble: View, Equatable {
     var isFirstInCluster: Bool = true
     var isLastInCluster: Bool = true
     var otherLastRead: Double = 0
+    var chatColor: ChatColorSpec? = nil   // per-chat custom bubble colour for MY messages (local)
+
+    // Fill behind MY bubbles: the custom chat colour if set, else the app accent.
+    private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.accent(dark)) }
 
     @State private var dragX: CGFloat = 0
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
@@ -2359,7 +2371,7 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
-            .background(isMe ? Theme.accent(dark) : Theme.received(dark))
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
@@ -2379,7 +2391,7 @@ struct MessageBubble: View, Equatable {
                 .foregroundStyle(isMe ? Theme.onAccent(dark) : (dark ? .white : .black))
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
-            .background(isMe ? Theme.accent(dark) : Theme.received(dark))
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isGif {
             VStack(alignment: .leading, spacing: 4) {
@@ -2502,7 +2514,7 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
-            .background(isMe ? Theme.accent(dark) : Theme.received(dark))
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         }
     }

@@ -16,6 +16,8 @@ struct WallpaperPickerSheet: View {
     @State private var selected: ChatWallpaper
     @State private var committed = false          // Apply pressed → keep it; otherwise revert on close
     @State private var photoItem: PhotosPickerItem?
+    @State private var showCustomColor = false    // "+" → Custom Color editor
+    private var colorStore: ChatColorStore { .shared }
     private let original: ChatWallpaper            // the wallpaper in use when the sheet opened
 
     init(cid: String) {
@@ -77,11 +79,15 @@ struct WallpaperPickerSheet: View {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(tileID(w), anchor: .center) }
                 }
             }
+            chatColorSection
             bottomBar
         }
         .padding(.vertical, 18)
-        .presentationDetents([.height(300)])
+        .presentationDetents([.height(480)])
         .presentationDragIndicator(.visible)
+        .sheet(isPresented: $showCustomColor) {
+            CustomColorView { spec in colorStore.set(spec, for: cid) }
+        }
         // Selecting LIVE-PREVIEWS the pick on the chat behind (user: "must show preview live behind
         // chat when I choose"), but it is NOT saved: closing without Apply reverts to the original, so
         // a chosen-but-not-applied wallpaper never sticks. Apply is what commits it.
@@ -149,6 +155,47 @@ struct WallpaperPickerSheet: View {
             .padding(.horizontal, 20)
             .transition(.opacity)
         }
+    }
+
+    // Chat Color row: the app-default swatch + presets + a "+" to open the Custom Color editor. Picking
+    // applies IMMEDIATELY and persists (unlike wallpaper, which waits for Apply) — matches Signal.
+    private var chatColorSection: some View {
+        let _ = colorStore.version   // observe so the selected ring updates live
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Chat Color").font(.subheadline.weight(.semibold)).padding(.horizontal, 20)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    defaultColorCircle
+                    ForEach(ChatColors.presets) { colorCircle($0) }
+                    addColorButton
+                }
+                .padding(.horizontal, 20).padding(.vertical, 2)
+            }
+        }
+    }
+
+    private var defaultColorCircle: some View {
+        let isDefault = colorStore.color(for: cid) == nil
+        return Button { colorStore.set(nil, for: cid) } label: {
+            Circle().fill(Theme.accent(dark)).frame(width: 52, height: 52)
+                .overlay(Image(systemName: "message.fill").font(.system(size: 18)).foregroundStyle(Theme.onAccent(dark)))
+                .overlay(Circle().strokeBorder(isDefault ? Color.primary : .clear, lineWidth: 3))
+        }.buttonStyle(.plain)
+    }
+
+    private func colorCircle(_ p: ChatColorSpec) -> some View {
+        let isSel = colorStore.color(for: cid)?.stored == p.stored
+        return Button { colorStore.set(p, for: cid) } label: {
+            Circle().fill(p.fill).frame(width: 52, height: 52)
+                .overlay(Circle().strokeBorder(isSel ? Color.primary : .clear, lineWidth: 3))
+        }.buttonStyle(.plain)
+    }
+
+    private var addColorButton: some View {
+        Button { showCustomColor = true } label: {
+            Image(systemName: "plus").font(.system(size: 20, weight: .medium)).foregroundStyle(.secondary)
+                .frame(width: 52, height: 52).background(Color(.systemGray5), in: Circle())
+        }.buttonStyle(.plain)
     }
 
     // "None" swatch — clears back to the default app background.
