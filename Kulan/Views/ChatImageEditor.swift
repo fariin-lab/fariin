@@ -55,35 +55,34 @@ struct ChatImageEditor: View {
                         .ignoresSafeArea()
                 }
 
-            }
-            // NATIVE layout (HIG): chrome is placed by the system inside the safe areas — no manual
-            // safeAreaInsets math (it misreports inside a fullScreenCover and floated the X mid-screen).
-            // Adapts automatically to Dynamic Island / notch / home indicator on every device.
-            .safeAreaInset(edge: .top) {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .liquidGlass(Circle(), interactive: true)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    if isDrawing {
-                        Button { isDrawing = false } label: {
-                            Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                                .padding(.horizontal, 18).frame(height: 44)
-                                .liquidGlass(Capsule(), interactive: true)
+                // Chrome INSIDE the native safe area (no manual inset math). The canvas above ignores
+                // the keyboard entirely, so opening the caption keyboard lifts ONLY this bottom bar —
+                // the photo and top X stay exactly where they are (Signal/Photos behaviour).
+                VStack(spacing: 0) {
+                    HStack {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .liquidGlass(Circle(), interactive: true)
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        Spacer()
+                        if isDrawing {
+                            Button { isDrawing = false } label: {
+                                Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                                    .padding(.horizontal, 18).frame(height: 44)
+                                    .liquidGlass(Capsule(), interactive: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                    Spacer(minLength: 0)
+                    bottomBar
+                        .padding(.bottom, 8)
                 }
-                .padding(.horizontal)          // standard system margins
-                .padding(.vertical, 4)
-            }
-            .safeAreaInset(edge: .bottom) {
-                bottomBar
-                    .padding(.top, 8)          // standard spacing above the home-indicator inset
             }
             .onAppear { canvasSize = geo.size; recomputeEdited() }
             .onChange(of: geo.size) { _, s in canvasSize = s }

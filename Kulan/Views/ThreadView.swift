@@ -96,6 +96,7 @@ struct ThreadView: View {
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
+    @Namespace private var imageViewerNS                      // native zoom hero for photo bubbles → viewer
     @State private var replyStoryAnchorId = ""                // the tapped quote's anchor (per-message unique)
     @State private var newWhileAway = 0
     @State private var unreadOnOpen = 0
@@ -324,14 +325,21 @@ struct ThreadView: View {
                 viewedOnceTick += 1
             }
         }) { msg in
-            if msg.viewOnce {
-                // View-once opens ALONE (no paging into it, not part of the gallery).
-                ImageViewerView(message: msg, cid: cid)
-                    .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
-            } else {
-                // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
-                ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce }, cid: cid)
+            // NATIVE zoom transition (identical to the story close): grows out of the bubble, and the
+            // drag-down dismiss follows the finger, shrinking back into the bubble. The custom dismiss
+            // pan is suppressed — exactly one close gesture, Apple's (the story-saga lesson).
+            Group {
+                if msg.viewOnce {
+                    // View-once opens ALONE (no paging into it, not part of the gallery).
+                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
+                        .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
+                } else {
+                    // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
+                    ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
+                                    cid: cid, suppressDismissPan: true)
+                }
             }
+            .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         .fullScreenCover(item: $viewerVideo) { msg in
@@ -343,13 +351,8 @@ struct ThreadView: View {
         }
         .fullScreenCover(item: $editImage) { wrap in
             ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
-                Task {
-                    await sendPhoto(data, viewOnce: viewOnce)
-                    let c = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !c.isEmpty {
-                        try? await ChatService.sendText(cid: cid, text: c, group: isGroup ? groupMembers : nil)
-                    }
-                }
+                // Caption travels INSIDE the image message (one bubble, Signal-style).
+                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
             }
         }
         .fullScreenCover(item: $multiImages) { wrap in
@@ -357,13 +360,11 @@ struct ThreadView: View {
             // the caption follows the batch as the message body (our follow-up-text pattern).
             MultiImageApprovalView(images: wrap.images) { imgs, caption, hd in
                 Task {
-                    for img in imgs {
+                    // Caption rides on the LAST image of the batch (Signal: one body for the album).
+                    for (i, img) in imgs.enumerated() {
                         if let data = img.jpegData(compressionQuality: hd ? 0.95 : 0.85) {
-                            await sendPhoto(data)
+                            await sendPhoto(data, caption: i == imgs.count - 1 ? caption : "")
                         }
-                    }
-                    if !caption.isEmpty {
-                        try? await ChatService.sendText(cid: cid, text: caption, group: isGroup ? groupMembers : nil)
                     }
                 }
             }
@@ -810,7 +811,8 @@ struct ThreadView: View {
                 isLastInCluster: isLastInCluster(at: index),
                 otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
                 chatColor: chatColorSpec,
-                isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id)
+                isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id),
+                imageNS: imageViewerNS
             )
             .equatable()
             .padding(.top, topGap(at: index))
@@ -1211,7 +1213,7 @@ struct ThreadView: View {
     }
 
     // Send a photo with an instant optimistic bubble, then reconcile on the echo.
-    private func sendPhoto(_ data: Data, viewOnce: Bool = false) async {
+    private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
         let preview = ChatService.downscaledJPEG(data)
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
         let clientId = UUID().uuidString
@@ -1219,9 +1221,10 @@ struct ThreadView: View {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
                                   authorId: me, clientId: clientId, sendState: .sending)
             pending.viewOnce = viewOnce
+            pending.text = caption   // caption rides inside the image bubble (Signal)
             repo.addPending(pending)
         }
-        do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce) }
+        do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
@@ -2178,6 +2181,15 @@ struct ThreadView: View {
     }
 }
 
+// Conditional hero anchor: marks a bubble photo as the zoom-transition source when a namespace is set.
+struct HeroSource: ViewModifier {
+    var ns: Namespace.ID?
+    var id: String
+    func body(content: Content) -> some View {
+        if let ns { content.matchedTransitionSource(id: id, in: ns) } else { content }
+    }
+}
+
 // Device-local record of consumed view-once photos (Signal enforces on-device too: once opened, the
 // bubble flips to "Viewed" and can never be reopened here).
 enum ViewedOnce {
@@ -2282,6 +2294,7 @@ struct MessageBubble: View, Equatable {
     var otherLastRead: Double = 0
     var chatColor: ChatColorSpec? = nil   // per-chat custom bubble colour for MY messages (local)
     var isViewedOnce: Bool = false        // view-once photo already consumed on this device
+    var imageNS: Namespace.ID? = nil      // hero anchor: photo taps zoom out of / back into the bubble
 
     // Fill behind MY bubbles: the custom chat colour if set, else the app accent.
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.accent(dark)) }
@@ -2746,6 +2759,9 @@ struct MessageBubble: View, Equatable {
                 }
                 .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                // Native zoom hero (same mechanism as the story close): the viewer grows out of this
+                // bubble and the drag-down dismiss shrinks back into it, following the finger.
+                .modifier(HeroSource(ns: imageNS, id: message.id))
                 .overlay {   // clean WhatsApp/Telegram-style upload indicator (ring in a frosted disc)
                     if message.sendState == .sending {
                         ZStack {
@@ -2769,6 +2785,16 @@ struct MessageBubble: View, Equatable {
                 .onTapGesture {
                     if message.sendState == .failed { onResend(message) }
                     else if message.localImageData == nil { onTapImage(message) }   // only open uploaded photos
+                }
+                // Caption INSIDE the image bubble (Signal: the caption is the message body).
+                if !message.text.isEmpty {
+                    Text(message.text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .frame(width: imageDisplaySize.width, alignment: .leading)
+                        .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
         } else {

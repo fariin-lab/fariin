@@ -33,10 +33,9 @@ struct MultiImageApprovalView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .ignoresSafeArea()
 
-            }
-            // NATIVE layout (HIG): chrome placed by the system inside the safe areas — no manual inset
-            // math. Adapts to Dynamic Island / notch / home indicator on every device automatically.
-            .safeAreaInset(edge: .top) {
+                // Chrome inside the native safe area; the canvas ignores the keyboard, so typing a
+                // caption lifts only this chrome (photo + X stay put), like Signal/Photos.
+                VStack(spacing: 0) {
                 HStack {
                     Button { dismiss() } label: {
                         Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
@@ -57,9 +56,8 @@ struct MultiImageApprovalView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 4)
-            }
-            .safeAreaInset(edge: .bottom) {
+                .padding(.top, 4)
+                Spacer(minLength: 0)
                 VStack(spacing: 12) {
                     rail
                     HStack(spacing: 10) {
@@ -88,7 +86,8 @@ struct MultiImageApprovalView: View {
                     }
                     .padding(.horizontal, 16)
                 }
-                .padding(.top, 8)
+                .padding(.bottom, 8)
+                }   // chrome VStack
             }
         }
     }

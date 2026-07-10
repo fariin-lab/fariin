@@ -381,7 +381,7 @@ enum ChatService {
         return resized.jpegData(compressionQuality: quality) ?? data
     }
 
-    static func sendImage(cid: String, data rawData: Data, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false) async throws {
+    static func sendImage(cid: String, data rawData: Data, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "") async throws {
         let data = downscaledJPEG(rawData)
         var members = group
         if members == nil, !cid.contains("_") {
@@ -407,9 +407,21 @@ enum ChatService {
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
         if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url) }
 
+        // Caption travels INSIDE the image message (Signal: the caption is the message body) — sealed
+        // exactly like a text message.
+        var captionCipher = ""
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCaption.isEmpty {
+            if let members {
+                captionCipher = (try? await Crypto.shared.encryptForGroup(trimmedCaption, members: members)) ?? ""
+            } else {
+                captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmedCaption)) ?? ""
+            }
+        }
+
         let batch = db.batch()
         var imgMsg: [String: Any] = [
-            "type": "image", "imageUrl": url, "enc": meta.asDict, "text": "",
+            "type": "image", "imageUrl": url, "enc": meta.asDict, "text": captionCipher,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
         ]
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble

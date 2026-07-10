@@ -51,18 +51,21 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
 struct ImageViewerView: View {
     let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
+    let suppressDismissPan: Bool        // true when a native zoom transition owns the drag-down close
     @State private var current: String  // id of the page being shown
     @Environment(\.dismiss) private var dismiss
 
     // Single-image entry (existing call sites): a one-page gallery.
-    init(message: Message, cid: String) {
+    init(message: Message, cid: String, suppressDismissPan: Bool = false) {
         self.gallery = [message]; self.cid = cid
+        self.suppressDismissPan = suppressDismissPan
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
-    init(message: Message, in gallery: [Message], cid: String) {
+    init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
+        self.suppressDismissPan = suppressDismissPan
         _current = State(initialValue: message.id)
     }
 
@@ -97,7 +100,8 @@ struct ImageViewerView: View {
                         if let img = loaded[m.id] {
                             ZoomImageView(image: img,
                                           onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
-                                          onDim: { dim = $0 }, onDismiss: { dismiss() })
+                                          onDim: { dim = $0 }, onDismiss: { dismiss() },
+                                          allowsDismissPan: !suppressDismissPan)
                         } else {
                             ProgressView().tint(.white)
                                 .task { await load(m) }
