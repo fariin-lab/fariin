@@ -12,7 +12,6 @@ struct DisappearingMessagesView: View {
     @State private var showCustom = false
 
     private var dark: Bool { scheme == .dark }
-    private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }
 
     // Preset durations (seconds), matching the mockup.
     private let presets: [(String, Int)] = [
@@ -27,31 +26,30 @@ struct DisappearingMessagesView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                Text("When enabled, new messages sent and received in this chat will disappear after they have been seen.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
-
-                VStack(spacing: 0) {
-                    ForEach(Array(presets.enumerated()), id: \.offset) { i, opt in
+            // Native inset-grouped List (not a custom card): standard rows, dividers, checkmark + chevron.
+            List {
+                Section {
+                    ForEach(Array(presets.enumerated()), id: \.offset) { _, opt in
                         optionRow(opt.0, opt.1)
-                        Divider().padding(.leading, 20)
                     }
                     Button { showCustom = true } label: {
                         HStack {
+                            if isCustomSelected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
                             Text(customLabel).foregroundStyle(.primary)
                             Spacer()
-                            if isCustomSelected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-                            Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 20).padding(.vertical, 15).contentShape(Rectangle())
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                } header: {
+                    Text("When enabled, new messages sent and received in this chat will disappear after they have been seen.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .textCase(nil)   // keep normal case (not the uppercased section-header style)
+                        .padding(.bottom, 6)
                 }
-                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding(.horizontal, 16)
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Disappearing Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -78,7 +76,7 @@ struct DisappearingMessagesView: View {
                 Text(label).foregroundStyle(.primary)
                 Spacer()
             }
-            .padding(.horizontal, 20).padding(.vertical, 15).contentShape(Rectangle())
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
