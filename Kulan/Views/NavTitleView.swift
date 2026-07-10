@@ -86,14 +86,21 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // so the blur only showed after scrolling ("sometimes works"). Set BOTH to the system
         // default-background blur so the native iOS 26 liquid-glass blur is present in every state.
         // Re-apply only when it's been cleared (SwiftUI resets it), to avoid flicker.
+        // Match the NATIVE default (exactly like the Chats-list header): TRANSPARENT at the top (no
+        // background band / border), and the system blur only once the content scrolls under it. The
+        // old code forced the blur background in every state, which showed a faint band + edge at the
+        // top that the native list never has.
         private func applyBlurAppearance(to vc: UIViewController) {
-            guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
-            let appearance = UINavigationBarAppearance()
-            appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
-            appearance.shadowColor = .clear               // no hairline separator border under the header
-            vc.navigationItem.standardAppearance = appearance
-            vc.navigationItem.scrollEdgeAppearance = appearance
-            vc.navigationItem.compactAppearance = appearance
+            guard vc.navigationItem.scrollEdgeAppearance == nil else { return }
+            let standard = UINavigationBarAppearance()
+            standard.configureWithDefaultBackground()     // system blur when scrolled
+            standard.shadowColor = .clear                 // no hairline separator
+            let edge = UINavigationBarAppearance()
+            edge.configureWithTransparentBackground()     // top = transparent, like the chat list
+            edge.shadowColor = .clear
+            vc.navigationItem.standardAppearance = standard
+            vc.navigationItem.scrollEdgeAppearance = edge
+            vc.navigationItem.compactAppearance = standard
         }
 
         private func assertTitleView() {
