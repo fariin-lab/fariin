@@ -67,6 +67,7 @@ struct ThreadView: View {
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
+    @State private var pdfDoc: PDFDocWrap?           // received PDF → custom PDFKit reader (Liquid Glass)
     @State private var showLibrary = false
     @State private var showVideoSoon = false
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
@@ -414,6 +415,7 @@ struct ThreadView: View {
             handlePickedFile(result)
         }
         .sheet(item: $filePreview) { FilePreview(url: $0.url).ignoresSafeArea() }
+        .fullScreenCover(item: $pdfDoc) { PDFViewerSheet(url: $0.url, title: $0.title) }
     }
 
     private var threadContent: some View {
@@ -1187,9 +1189,15 @@ struct ThreadView: View {
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
                 await MainActor.run { sendError = "Couldn't open the file." }; return
             }
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(message.fileName ?? "file")
+            let name = message.fileName ?? "file"
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(name)
             try? data.write(to: tmp)
-            await MainActor.run { filePreview = PreviewFile(url: tmp) }
+            // PDFs open in the custom PDFKit reader (Liquid Glass); everything else uses QuickLook.
+            let isPDF = name.lowercased().hasSuffix(".pdf") || data.prefix(4).elementsEqual([0x25, 0x50, 0x44, 0x46])   // "%PDF"
+            await MainActor.run {
+                if isPDF { pdfDoc = PDFDocWrap(url: tmp, title: name) }
+                else { filePreview = PreviewFile(url: tmp) }
+            }
         }
     }
 
@@ -3312,6 +3320,7 @@ private struct RecordWaveform: View {
 
 // Identifiable wrapper so a decrypted file can drive a .sheet(item:).
 struct PreviewFile: Identifiable { let id = UUID(); let url: URL }
+struct PDFDocWrap: Identifiable { let id = UUID(); let url: URL; let title: String }
 
 // Native document preview (QuickLook) for a received file.
 struct FilePreview: UIViewControllerRepresentable {
