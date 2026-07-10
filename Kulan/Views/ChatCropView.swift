@@ -8,7 +8,8 @@ import SwiftUI
 // Nothing overlaps the photo; the frame never leaves the image; Done crops to the selected region.
 struct ChatCropView: View {
     let image: UIImage
-    var onClose: () -> Void = {}          // used when presented INLINE (fade transition) instead of a cover
+    var inline: Bool = false              // true = presented INLINE (fade) → close via onClose, NOT dismiss
+    var onClose: () -> Void = {}          // inline close (dismiss() would drop the whole editor to the chat)
     var onDone: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -20,13 +21,13 @@ struct ChatCropView: View {
     @State private var aspect: CGFloat? = nil        // locked w/h, nil = free
     @State private var edited = false                // any change made → show Reset
 
-    init(image: UIImage, onClose: @escaping () -> Void = {}, onDone: @escaping (UIImage) -> Void) {
-        self.image = image; self.onClose = onClose; self.onDone = onDone
+    init(image: UIImage, inline: Bool = false, onClose: @escaping () -> Void = {}, onDone: @escaping (UIImage) -> Void) {
+        self.image = image; self.inline = inline; self.onClose = onClose; self.onDone = onDone
         _img = State(initialValue: Self.normalized(image))
     }
 
-    // Close for BOTH inline (onClose) and cover (dismiss) presentation.
-    private func close() { onClose(); dismiss() }
+    // Inline: close via onClose only (dismiss() would pop the whole editor to the chat). Cover: dismiss().
+    private func close() { if inline { onClose() } else { dismiss() } }
 
     private let minSize: CGFloat = 64
     private let hit: CGFloat = 34

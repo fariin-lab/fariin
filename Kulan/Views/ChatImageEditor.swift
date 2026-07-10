@@ -116,7 +116,7 @@ struct ChatImageEditor: View {
                 // Crop presented INLINE with a cross-fade (Signal's in-place crop feel) — the same image
                 // stays put and the crop frame + controls fade in over it, instead of a modal slide-up.
                 if showCrop {
-                    ChatCropView(image: source,
+                    ChatCropView(image: source, inline: true,
                                  onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
                         editedCache = Self.filtered(cropped, filterIndex)   // keep the current filter over the crop
                     }
