@@ -280,7 +280,13 @@ struct ThreadView: View {
         // Avatar + name installed as the native UINavigationItem.titleView (left-aligned after the back
         // button, slides with the native swipe-back). NavTitleView clears the bar appearance overrides,
         // so there's no border — same native bar as the Chats list.
-        .background(NavTitleView(onTap: { showContactInfo = true }) { headerLabel })
+        .background(NavTitleView(onTap: {
+            // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
+            // and is still there when you swipe back (the reported bug).
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            showContactInfo = true
+        }) { headerLabel })
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back

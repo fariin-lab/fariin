@@ -61,7 +61,8 @@ struct ChatImageEditor: View {
                                   penWidth: penWidth)
                         .ignoresSafeArea()
                 } else {
-                    ZoomImageView(image: edited, onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                    ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
+                                  onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
                         .ignoresSafeArea()
                     // PERSISTENT drawing: after Done the strokes stay visible over the photo (the bug was
                     // the canvas only showing while actively drawing → the drawing "disappeared").
@@ -103,6 +104,12 @@ struct ChatImageEditor: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: captionFocused)
             }
+            // Swipe DOWN anywhere on the canvas closes the keyboard (native feel), in addition to the
+            // tap-to-dismiss above. Reads the drag without consuming it, so zoom/pan still work.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 18)
+                    .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
+            )
             .onAppear { canvasSize = geo.size; recomputeEdited() }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }

@@ -18,79 +18,90 @@ struct MultiImageApprovalView: View {
     @FocusState private var captionFocused: Bool
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-                // Swipeable zoomable pages (Signal pages its attachments; each zooms independently).
-                TabView(selection: $page) {
-                    ForEach(Array(images.enumerated()), id: \.offset) { i, img in
-                        ZoomImageView(image: img, onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                            .ignoresSafeArea()
-                            .tag(i)
-                    }
+            // Swipeable zoomable pages (Signal pages its attachments; each zooms independently).
+            // Single-tap the photo closes the caption keyboard (native feel).
+            TabView(selection: $page) {
+                ForEach(Array(images.enumerated()), id: \.offset) { i, img in
+                    ZoomImageView(image: img, onSingleTap: { captionFocused = false },
+                                  onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                        .ignoresSafeArea()
+                        .tag(i)
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .ignoresSafeArea()
-
-                // Chrome inside the native safe area; the canvas ignores the keyboard, so typing a
-                // caption lifts only this chrome (photo + X stay put), like Signal/Photos.
-                VStack(spacing: 0) {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .liquidGlass(Circle(), interactive: true)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    // HD toggle for the whole batch.
-                    Button { hd.toggle() } label: {
-                        Text("HD").font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
-                            .frame(width: 44, height: 44)
-                            .liquidGlass(Circle(), interactive: true)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal)
-                .padding(.top, 4)
-                Spacer(minLength: 0)
-                VStack(spacing: 12) {
-                    if !captionFocused { rail }   // hide the thumbnail rail while typing, like Signal
-                    HStack(spacing: 10) {
-                        TextField("", text: $caption,
-                                  prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
-                            .foregroundStyle(.white).focused($captionFocused)
-                            .padding(.horizontal, 16).frame(height: 46)
-                            .liquidGlass(Capsule(), interactive: true)
-                        Button {
-                            onSend(images, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd)
-                            dismiss()
-                        } label: {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                                    .frame(width: 46, height: 46)
-                                    .background(Color(hex: 0x3DA1FD), in: Circle())
-                                // Count badge (Signal shows how many are going).
-                                Text("\(images.count)").font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Color.red, in: Capsule())
-                                    .offset(x: 4, y: -4)
-                            }
-                        }
-                        .buttonStyle(StoryPressStyle())
-                    }
-                    .padding(.horizontal, 16)
-                }
-                .padding(.bottom, 8)
-                .animation(.easeInOut(duration: 0.2), value: captionFocused)
-                }   // chrome VStack
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
         }
+        // Swipe DOWN on the photo closes the keyboard too (reads the drag without consuming zoom/pan).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
+        )
+        // Native placement: the top bar sits just below the status bar, the controls just above the home
+        // indicator (and rise above the keyboard) — via safe-area insets, no hard-coded offsets.
+        .safeAreaInset(edge: .top, spacing: 0) { topBar }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
+    }
+
+    // X (close) top-left · HD toggle top-right — Apple's standard corner placement.
+    private var topBar: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Button { hd.toggle() } label: {
+                Text("HD").font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    // Thumbnail rail (hidden while typing) + caption field + count send button.
+    private var bottomControls: some View {
+        VStack(spacing: 12) {
+            if !captionFocused { rail }
+            HStack(spacing: 10) {
+                TextField("", text: $caption,
+                          prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+                    .foregroundStyle(.white).focused($captionFocused)
+                    .padding(.horizontal, 16).frame(height: 46)
+                    .liquidGlass(Capsule(), interactive: true)
+                Button {
+                    onSend(images, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd)
+                    dismiss()
+                } label: {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 46, height: 46)
+                            .background(Color(hex: 0x3DA1FD), in: Circle())
+                        // Count badge (Signal shows how many are going).
+                        Text("\(images.count)").font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.red, in: Capsule())
+                            .offset(x: 4, y: -4)
+                    }
+                }
+                .buttonStyle(StoryPressStyle())
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.2), value: captionFocused)
     }
 
     // Ordered thumbnail rail: current page ring-highlighted, tap to jump, X removes from the batch.
