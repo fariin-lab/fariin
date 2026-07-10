@@ -13,6 +13,7 @@ struct AttachRecentsStrip: View {
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
     var onSendAlbum: ([UIImage], String) -> Void = { _, _ in }   // multi-select → send with a caption
+    var onOpenAlbum: ([UIImage]) -> Void = { _ in }              // tapping a photo WHILE selecting → open the approval/paging page
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -95,9 +96,12 @@ struct AttachRecentsStrip: View {
                 switch status {
                 case .authorized, .limited:
                     ForEach(assets, id: \.localIdentifier) { a in
-                        // Tap the PHOTO → open it. Tap the CHECKBOX → (de)select. Separate, never conflict.
+                        // Tap the PHOTO → single editor when nothing is selected; if a selection is active,
+                        // open the multi-image approval (paging) of the selected set instead. Tap the
+                        // CHECKBOX → (de)select. Separate, never conflict.
                         RecentThumb(asset: a, selectionNumber: selectionIndex(a),
-                                    onOpen: { pick(a) }, onToggle: { toggle(a) })
+                                    onOpen: { selectedIds.isEmpty ? pick(a) : openSelected() },
+                                    onToggle: { toggle(a) })
                     }
                 case .notDetermined:
                     accessTile("Allow Photos", icon: "photo.on.rectangle.angled") { request() }
@@ -240,6 +244,26 @@ struct AttachRecentsStrip: View {
         if let i = selectedIds.firstIndex(of: a.localIdentifier) { selectedIds.remove(at: i) }
         else { selectedIds.append(a.localIdentifier) }
         UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    // Tapping a photo while a selection is active → load the selected PHOTOS (in order) and open the
+    // multi-image approval page (paging + per-image edit + one caption).
+    private func openSelected() {
+        let ids = selectedIds
+        let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
+        loadingPick = true
+        Task {
+            var imgs: [UIImage] = []
+            for id in ids {
+                if let a = byId[id], a.mediaType == .image, let ui = await Self.fullImage(a) { imgs.append(ui) }
+            }
+            await MainActor.run {
+                loadingPick = false
+                if imgs.isEmpty { return }
+                selectedIds = []; caption = ""; hasSelection = false
+                onOpenAlbum(imgs)
+            }
+        }
     }
 
     // Load every selected item (in tap order): photos go out as an album (or the editor for one), each

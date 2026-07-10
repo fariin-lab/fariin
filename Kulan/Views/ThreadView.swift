@@ -1114,6 +1114,14 @@ struct ThreadView: View {
                         }
                     }
                 },
+                onOpenAlbum: { imgs in
+                    // Tapping a photo while selecting → open the multi-image approval page (paging).
+                    showAttachPanel = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        if imgs.count == 1 { editImage = EditImageWrap(image: imgs[0]) }
+                        else { multiImages = MultiImagesWrap(images: imgs) }
+                    }
+                },
                 hasSelection: $recentsHasSelection)
                 .padding(.top, 10)
             // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
