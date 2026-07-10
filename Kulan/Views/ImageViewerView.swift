@@ -150,7 +150,6 @@ struct ImageViewerView: View {
             .liquidGlass(Capsule(), interactive: false)
             Spacer()
             Menu {
-                Button { dismiss() } label: { Label("Go to Chat", systemImage: "bubble.left") }
                 Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
             } label: {
