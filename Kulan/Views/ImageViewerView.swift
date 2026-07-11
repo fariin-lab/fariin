@@ -112,6 +112,10 @@ struct ImageViewerView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
+            // Signal's gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
+            // so swiping to the next photo is instant instead of showing a spinner.
+            .onChange(of: current) { _, _ in prefetchNeighbors() }
+            .task { prefetchNeighbors() }
 
             VStack {
                 header
@@ -193,6 +197,17 @@ struct ImageViewerView: View {
         Button(action: action) {
             Image(systemName: icon).font(.title3.weight(.semibold)).foregroundStyle(.white)
                 .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+        }
+    }
+
+    // Pre-load the pages either side of the current one (idempotent — load() no-ops on cache hits).
+    private func prefetchNeighbors() {
+        guard let idx = gallery.firstIndex(where: { $0.id == current }) else { return }
+        for off in [-1, 1] {
+            let i = idx + off
+            guard gallery.indices.contains(i) else { continue }
+            let m = gallery[i]
+            if loaded[m.id] == nil { Task { await load(m) } }
         }
     }
 

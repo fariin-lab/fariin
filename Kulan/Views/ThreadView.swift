@@ -480,6 +480,17 @@ struct ThreadView: View {
         }
         // "Go to Chat" from the media gallery: pop the profile/gallery push back to this chat, then
         // scroll to + flash the message.
+        // Voice-note auto-advance (Signal): when a note finishes naturally, chain into the NEXT voice
+        // message below it (scroll it into view + play), voicemail-style. Stops at the last one.
+        .onReceive(NotificationCenter.default.publisher(for: .voiceNoteFinished)) { note in
+            guard let id = note.object as? String,
+                  let idx = repo.items.firstIndex(where: { $0.id == id }) else { return }
+            guard let next = repo.items.dropFirst(idx + 1).first(where: { $0.isAudio }) else { return }
+            nativeScrollTarget = next.rowId
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NotificationCenter.default.post(name: .voiceNotePlay, object: next.id)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { note in
             guard let p = note.object as? GoToMessage, p.cid == cid else { return }
             // Collapse the whole profile→gallery branch with animations DISABLED. SwiftUI's nested

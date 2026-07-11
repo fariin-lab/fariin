@@ -1,5 +1,13 @@
 import SwiftUI
 import AVFoundation
+import UIKit
+
+// Voice-note chain events (Signal's auto-advance): when a note finishes naturally, the chat looks up
+// the NEXT voice message and asks its bubble to play — voicemail-style hands-free listening.
+extension Notification.Name {
+    static let voiceNoteFinished = Notification.Name("voiceNoteFinished")   // object = finished message id
+    static let voiceNotePlay = Notification.Name("voiceNotePlay")           // object = message id to start
+}
 
 // Playback bubble for a voice note: downloads the encrypted bytes, decrypts them
 // (Crypto.decryptBytes), and plays via AVAudioPlayer. Play/pause + progress.
@@ -67,6 +75,20 @@ struct VoiceMessageView: View {
             }
         }
         .onDisappear { stop() }
+        // Auto-advance (Signal): the chat posts .voiceNotePlay with the NEXT note's id when the previous
+        // one finishes — if it's this bubble and it isn't already playing, start it.
+        .onReceive(NotificationCenter.default.publisher(for: .voiceNotePlay)) { note in
+            guard let id = note.object as? String, id == message.id, !playing else { return }
+            toggle()
+        }
+        // Raise-to-ear (Signal/WhatsApp): while a voice note plays, lifting the phone to your ear routes
+        // playback to the earpiece; lowering it returns to the speaker. Monitoring is on ONLY during playback.
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.proximityStateDidChangeNotification)) { _ in
+            guard playing else { return }
+            let toEar = UIDevice.current.proximityState
+            try? AVAudioSession.sharedInstance().setCategory(toEar ? .playAndRecord : .playback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
     }
 
     // Real captured waveform, or a neutral flat one for older messages that lack it.
@@ -125,6 +147,8 @@ struct VoiceMessageView: View {
         player?.rate = rate
         player?.play()
         playing = true
+        SleepBlocker.shared.add("voice-play-\(message.id)")          // don't auto-lock mid-listen
+        UIDevice.current.isProximityMonitoringEnabled = true         // raise-to-ear active only while playing
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
             guard let p = player else { return }
@@ -135,12 +159,29 @@ struct VoiceMessageView: View {
                 progress = 0
                 timer?.invalidate(); timer = nil
                 p.currentTime = 0
+                playbackEnded(natural: true)
             }
         }
     }
 
-    private func pause() { player?.pause(); playing = false; timer?.invalidate(); timer = nil }
-    private func stop() { player?.stop(); playing = false; timer?.invalidate(); timer = nil }
+    private func pause() {
+        player?.pause(); playing = false; timer?.invalidate(); timer = nil
+        playbackEnded(natural: false)
+    }
+    private func stop() {
+        player?.stop(); playing = false; timer?.invalidate(); timer = nil
+        playbackEnded(natural: false)
+    }
+
+    // Shared teardown: release the sleep block + proximity monitoring, hand the audio session back with
+    // .notifyOthersOnDeactivation (Signal) so the user's music/podcast resumes instead of staying ducked,
+    // and — on a NATURAL end — announce the finish so the chat can auto-advance to the next voice note.
+    private func playbackEnded(natural: Bool) {
+        SleepBlocker.shared.remove("voice-play-\(message.id)")
+        UIDevice.current.isProximityMonitoringEnabled = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        if natural { NotificationCenter.default.post(name: .voiceNoteFinished, object: message.id) }
+    }
 }
 
 // Premium waveform (Signal/WhatsApp style): rounded amplitude bars, the played portion

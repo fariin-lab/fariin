@@ -112,6 +112,7 @@ final class AudioRecorder {
 
     private func beginMetering() {
         isRecording = true; elapsed = 0; levels = []; allLevels = []; smoothed = 0
+        Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (Signal's sleep block)
         timer?.invalidate()
         // Pre-compute the envelope smoothing coefficients from the fixed tick dt: a one-pole
         // low-pass, alpha = 1 − e^(−dt/τ). Fast attack τ + slow decay τ = real meter ballistics.
@@ -213,6 +214,7 @@ final class AudioRecorder {
 
     private func reset() {
         isRecording = false
+        Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         recorder = nil
         levels = []
         allLevels = []

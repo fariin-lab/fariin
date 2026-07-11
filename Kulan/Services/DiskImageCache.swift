@@ -1,6 +1,20 @@
 import UIKit
 import CryptoKit
 
+extension UIImage {
+    // Signal's quantized-decode idea: never hold a bitmap bigger than the screen needs. A 12MP photo
+    // decodes to ~48MB; bounded to 2048px it's ~12MB with no visible difference in a bubble or a
+    // full-screen view (deep pinch-zoom re-reads the full bytes from disk if ever needed).
+    func boundedForDisplay(maxPixels: CGFloat = 2048) -> UIImage {
+        let w = size.width * scale, h = size.height * scale
+        let m = max(w, h)
+        guard m > maxPixels else { return self }
+        let f = maxPixels / m
+        let target = CGSize(width: floor(w * f), height: floor(h * f))
+        return preparingThumbnail(of: target) ?? self
+    }
+}
+
 // Two-tier media cache: NSCache (memory) + persistent disk (app Caches dir).
 //
 // Once an image or story is fetched it is written to disk, so reopening a chat /
@@ -59,7 +73,9 @@ final class DiskImageCache {
                 }
                 // Force the bitmap decode NOW (off-main) — UIImage(data:) is lazy and would
                 // otherwise decode on the main thread at draw time, causing scroll hitches.
-                let img = raw.preparingForDisplay() ?? raw
+                // Bounded to display size so a huge original never becomes a huge bitmap in memory.
+                let bounded = raw.boundedForDisplay()
+                let img = (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw
                 self.mem.setObject(img, forKey: url as NSString)
                 // Touch the file so LRU trimming keeps recently-viewed media.
                 try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)

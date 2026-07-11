@@ -46,14 +46,20 @@ struct SecureImageView: View {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             var ui: UIImage?
+            var clearBytes: Data?
             if let enc {
-                if let clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: enc) { ui = UIImage(data: clear) }
+                if let clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: enc) {
+                    ui = UIImage(data: clear); clearBytes = clear
+                }
             } else {
-                ui = UIImage(data: data)
+                ui = UIImage(data: data); clearBytes = data
             }
             if let ui {
-                DiskImageCache.shared.store(ui, for: imageUrl)   // decrypted, file-protected on disk
-                image = ui
+                // Display + memory-cache a display-BOUNDED bitmap (Signal's decode buckets: a 12MP photo
+                // shouldn't live as a 48MB bitmap per bubble); the ORIGINAL bytes go to disk untouched.
+                let bounded = ui.boundedForDisplay()
+                DiskImageCache.shared.store(bounded, data: clearBytes, for: imageUrl)   // decrypted, file-protected on disk
+                image = bounded
             } else { failed = true }
         } catch {
             failed = true
