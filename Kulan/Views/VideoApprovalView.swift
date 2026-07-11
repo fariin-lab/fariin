@@ -12,7 +12,7 @@ struct VideoApprovalView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
-    @State private var playing = true
+    @State private var playing = false   // PAUSED by default — plays only when the user taps play (user request)
     @State private var hd = false
     @FocusState private var captionFocused: Bool
 
@@ -41,12 +41,18 @@ struct VideoApprovalView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            // Same layout as the image editor: the video aspect-FITS the area BETWEEN the chrome (the
+            // top bar + trim strip + caption, reserved by safeAreaInset below) instead of filling the
+            // whole screen behind them — fully visible / zoomed-out, letterboxed on black, rounded
+            // corners. (Was .ignoresSafeArea() → edge-to-edge full screen.)
             TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
                                scrubTime: scrubTime,
                                onTime: { t in if !draggingPlayhead { playhead = t } })
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
-                .ignoresSafeArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.horizontal, 2)
                 .contentShape(Rectangle())
                 .gesture(
                     MagnificationGesture()
@@ -112,16 +118,21 @@ struct VideoApprovalView: View {
             let startX = CGFloat(trimStart / dur) * W
             let endX = CGFloat(trimEnd / dur) * W
             ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    ForEach(thumbnails.indices, id: \.self) { i in
-                        Image(uiImage: thumbnails[i]).resizable().scaledToFill()
-                            .frame(width: W / CGFloat(thumbnails.count), height: stripHeight).clipped()
+                // Thumbnails + the dimmed end sections share ONE rounded clip so the strip's outer
+                // corners (including the dimmed parts) are rounded, not square.
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 0) {
+                        ForEach(thumbnails.indices, id: \.self) { i in
+                            Image(uiImage: thumbnails[i]).resizable().scaledToFill()
+                                .frame(width: W / CGFloat(thumbnails.count), height: stripHeight).clipped()
+                        }
                     }
+                    .frame(width: W, height: stripHeight)
+                    Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
+                    Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
                 }
-                .frame(width: W, height: stripHeight).clipShape(RoundedRectangle(cornerRadius: 8))
-                // Dim outside the selection.
-                Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
-                Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
+                .frame(width: W, height: stripHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 // Yellow selection frame (rounded to match the rounded handle caps).
                 RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
                     .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
@@ -295,7 +306,7 @@ final class TrimPlayerUIView: UIView {
                                  toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }
-        player.play()
+        // Do NOT auto-play — the owner's `playing` binding drives play/pause (paused by default).
     }
     required init?(coder: NSCoder) { fatalError("not implemented") }
 

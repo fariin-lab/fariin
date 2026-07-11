@@ -252,15 +252,20 @@ struct MediaApprovalView: View {
             let startX = CGFloat(s / dur) * W
             let endX = CGFloat(e / dur) * W
             ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    ForEach(thumbs.indices, id: \.self) { i in
-                        Image(uiImage: thumbs[i]).resizable().scaledToFill()
-                            .frame(width: W / CGFloat(thumbs.count), height: stripHeight).clipped()
+                // Thumbnails + dimmed ends share one rounded clip (rounded outer corners, not square).
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 0) {
+                        ForEach(thumbs.indices, id: \.self) { i in
+                            Image(uiImage: thumbs[i]).resizable().scaledToFill()
+                                .frame(width: W / CGFloat(thumbs.count), height: stripHeight).clipped()
+                        }
                     }
+                    .frame(width: W, height: stripHeight)
+                    Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
+                    Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
                 }
-                .frame(width: W, height: stripHeight).clipShape(RoundedRectangle(cornerRadius: 8))
-                Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
-                Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
+                .frame(width: W, height: stripHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
                     .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
                 // Playhead scrubber (tracks playback, draggable to scrub) within the trimmed range.
