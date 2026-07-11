@@ -48,46 +48,34 @@ struct ChatImageEditor: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                Color.black.ignoresSafeArea()
+        GeometryReader { geo in editorBody(geo.size) }
+    }
 
-                // ZOOMABLE canvas (Signal's AttachmentPrep hosts its media in a ZoomableMediaView):
-                // pinch to zoom in/out, pan while zoomed, double-tap to zoom. Preview-only zoom.
-                // While drawing, the static image shows instead so the pencil owns the touches.
-                // NB: image, drawing canvas AND the persistent overlay all live in the SAME geo.size space
-                // (no .ignoresSafeArea) so a stroke stays exactly where it was drawn after Done. When the
-                // canvas ignored the safe area but the overlay/flatten used geo.size, strokes shifted DOWN
-                // by the top inset on Done — the reported bug.
-                // The image area EXCLUDES the bottom chrome (Signal's approval layout: the image is
-                // inset by the toolbar height + safe area, never hidden behind it). Extracted into
-                // canvasView(_:) — the inline version blew the type-checker.
-                canvasView(canvasArea(geo.size))
-                chromeOverlay
-                cropOverlay
-            }
-            // Swipe DOWN anywhere on the canvas closes the keyboard (native feel), in addition to the
-            // tap-to-dismiss above. Reads the drag without consuming it, so zoom/pan still work.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 18)
-                    .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
-            )
-            // canvasSize feeds the flatten step — it MUST equal the rect the strokes were drawn in
-            // (the canvas area, not the full screen), or strokes shift on send.
-            .onAppear {
-                canvasSize = CGSize(width: geo.size.width, height: max(120, geo.size.height - bottomChromeH - 8))
-                recomputeEdited()
-                if startDrawing { isDrawing = true }
-            }
-            .onChange(of: geo.size) { _, s in
-                canvasSize = CGSize(width: s.width, height: max(120, s.height - bottomChromeH - 8))
-            }
-            .onChange(of: bottomChromeH) { _, h in
-                canvasSize = CGSize(width: geo.size.width, height: max(120, geo.size.height - h - 8))
-            }
-            .onChange(of: filterIndex) { _, _ in recomputeEdited() }
-            .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
+    // Extracted from `body` so the type-checker isn't overloaded (the ZStack + gesture + 5 onChange
+    // modifiers inline blew the expression limit).
+    private func editorBody(_ size: CGSize) -> some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            // The image area EXCLUDES the bottom chrome (Signal's approval layout: inset by the toolbar
+            // height, never hidden behind it). Canvas, drawing layer, and flatten all share this rect.
+            canvasView(canvasArea(size))
+            chromeOverlay
+            cropOverlay
         }
+        // Swipe DOWN anywhere on the canvas closes the keyboard (reads the drag without consuming it).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
+        )
+        .onAppear {
+            canvasSize = canvasArea(size)
+            recomputeEdited()
+            if startDrawing { isDrawing = true }
+        }
+        .onChange(of: size) { _, s in canvasSize = canvasArea(s) }
+        .onChange(of: bottomChromeH) { _, _ in canvasSize = canvasArea(size) }
+        .onChange(of: filterIndex) { _, _ in recomputeEdited() }
+        .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
     }
 
     // Chrome INSIDE the native safe area (no manual inset math). The canvas ignores the keyboard, so
