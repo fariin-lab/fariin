@@ -255,22 +255,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // to bottom). Only a single genuine new row animates; multi-row chunk loads and prepends do not.
         let animate = isAppend && wasAtBottom && appendedCount == 1
         if animate {
-            // Signal's send-message behavior: insert the new cell INSTANTLY (it lands just below the fold,
-            // fully opaque — NO fade, which was the "pop"), then spring the contentOffset down so the bubble
-            // slides smoothly up into view. This is Signal's scroll-up reveal (a UIKit spring on the offset),
-            // not a custom per-cell transform and not a diff fade.
+            // Premium send (iMessage/Telegram): insert the new cell instantly, land at the bottom so it's in
+            // view just above the composer, then the BUBBLE flies up out of the composer — it starts pushed
+            // down near the input field (slightly smaller) and springs to its resting position. Natural
+            // spring physics, no fade/pop.
             sendAnimating = true
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-                guard let self, self.collectionView.bounds.height > 0 else { return }
+                guard let self, self.collectionView.bounds.height > 0 else { self?.sendAnimating = false; return }
                 self.collectionView.layoutIfNeeded()   // exact frames for the appended row
                 let target = self.collectionView.contentSize.height - self.collectionView.bounds.height + self.collectionView.adjustedContentInset.bottom
                 let y = max(-self.collectionView.adjustedContentInset.top, target)
-                UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.6,
-                               options: [.allowUserInteraction, .curveEaseOut]) {
-                    self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)   // spring the scroll, not a per-cell anim
+                self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                self.collectionView.layoutIfNeeded()
+                let ip = IndexPath(item: self.currentIds.count - 1, section: 0)
+                guard let cell = self.collectionView.cellForItem(at: ip) else { self.sendAnimating = false; return }
+                // Start it down at the composer (its own height + the composer inset below), a touch smaller.
+                let startDy = cell.bounds.height + self.collectionView.adjustedContentInset.bottom
+                cell.transform = CGAffineTransform(translationX: 0, y: startDy).scaledBy(x: 0.9, y: 0.9)
+                UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.72, initialSpringVelocity: 0.6,
+                               options: [.allowUserInteraction]) {
+                    cell.transform = .identity
                 } completion: { _ in self.sendAnimating = false }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.sendAnimating = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.sendAnimating = false }
         } else {
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }

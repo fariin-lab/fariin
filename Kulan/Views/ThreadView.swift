@@ -964,7 +964,7 @@ struct ThreadView: View {
 
     // Native-list jump: flash the message (highlightId) and scroll the collection view to it.
     private func flashAndScroll(_ id: String) {
-        nativeScrollTarget = id
+        nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
         highlightId = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             if highlightId == id { withAnimation { highlightId = nil } }
@@ -1040,7 +1040,12 @@ struct ThreadView: View {
         let id = searchMatches[searchIndex].id
         Task {
             await repo.ensureLoaded(id)
-            await MainActor.run { nativeScrollTarget = id }   // no full-bubble flash for search — the term is highlighted in-text
+            await MainActor.run {
+                // The native list keys cells by rowId (clientId ?? id). Own sent messages keep a clientId, so
+                // scrolling by the raw message id found no cell → no scroll. Translate id → rowId. (No
+                // full-bubble flash for search; the term stays highlighted in-text.)
+                nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id
+            }
         }
     }
 
