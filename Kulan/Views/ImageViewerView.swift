@@ -76,6 +76,9 @@ struct ImageViewerView: View {
     @State private var confirmDelete = false
     @State private var shareItems: [Any]?
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
+    @State private var dismissDrag: CGSize = .zero        // drag-to-close: the image layer's offset
+    @State private var dismissProgress: Double = 0
+    @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
     private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
@@ -102,10 +105,14 @@ struct ImageViewerView: View {
                     ForEach(gallery) { m in
                         Group {
                             if let img = loaded[m.id] {
+                                // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at
+                                // the CONTAINER level below so it can't fight the TabView pager (the
+                                // 2-day bug). ZoomImageView keeps only pinch-zoom.
                                 ZoomImageView(image: img,
                                               onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
-                                              onDim: { dim = $0 }, onDismiss: { dismiss() },
-                                              allowsDismissPan: !suppressDismissPan)
+                                              onDim: { _ in }, onDismiss: {},
+                                              allowsDismissPan: false,
+                                              onZoom: { pageZoom = $0 })
                             } else {
                                 ProgressView().tint(.white)
                                     .task { await load(m) }
@@ -118,9 +125,38 @@ struct ImageViewerView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
             .ignoresSafeArea()
+            // Drag-to-close, Apple-native (Photos): ONLY the image layer moves 1:1 with the finger and
+            // shrinks slightly; the chrome stays put; the backdrop fades. Vertical-dominant drags only
+            // (horizontal falls through to the TabView pager), and only when the photo is NOT zoomed in.
+            .offset(dismissDrag)
+            .scaleEffect(1 - dismissProgress * 0.12)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 12)
+                    .onChanged { g in
+                        guard pageZoom <= 1.02 else { return }                 // zoomed → let the scroll view pan
+                        guard g.translation.height > 0,
+                              abs(g.translation.height) > abs(g.translation.width) else { return }  // vertical-down only
+                        dismissDrag = CGSize(width: g.translation.width * 0.5, height: g.translation.height)
+                        dismissProgress = min(1, g.translation.height / UIScreen.main.bounds.height)
+                        dim = 1 - dismissProgress * 0.85
+                    }
+                    .onEnded { g in
+                        guard dismissProgress > 0 else { return }
+                        if g.velocity.height > 700 || dismissProgress > 0.18 {
+                            dismiss()
+                        } else {
+                            withAnimation(.spring(response: 0.25, dampingFraction: 1)) {
+                                dismissDrag = .zero; dismissProgress = 0; dim = 1
+                            }
+                        }
+                    }
+            )
             // Signal's gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
             // so swiping to the next photo is instant instead of showing a spinner.
-            .onChange(of: current) { _, _ in prefetchNeighbors() }
+            .onChange(of: current) { _, _ in
+                prefetchNeighbors()
+                pageZoom = 1; dismissDrag = .zero; dismissProgress = 0; dim = 1   // fresh page: not zoomed
+            }
             .task { prefetchNeighbors() }
 
             VStack {
@@ -261,6 +297,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
     var onDim: (Double) -> Void
     var onDismiss: () -> Void
     var allowsDismissPan: Bool = true   // false in the media editor: zoom only, no drag-to-close
+    var onZoom: (CGFloat) -> Void = { _ in }   // reports live zoom scale so the container can gate drag-dismiss
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
@@ -269,6 +306,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
         vc.onDim = onDim
         vc.onDismiss = onDismiss
         vc.allowsDismissPan = allowsDismissPan
+        vc.onZoom = onZoom
         return vc
     }
     func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {
@@ -285,6 +323,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     var onDim: ((Double) -> Void)?
     var onDismiss: (() -> Void)?
     var allowsDismissPan = true
+    var onZoom: ((CGFloat) -> Void)?
 
     private var scrollView: ZoomableMediaView!
     private var imageView: UIImageView!
@@ -342,6 +381,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         (scrollView as? ZoomableMediaView)?.updateZoomScaleForLayout()
         view.layoutIfNeeded()
+        onZoom?(scrollView.zoomScale / scrollView.minimumZoomScale)   // 1.0 == fit (not zoomed)
     }
 
     // MARK: drag-down dismiss (only when not zoomed)
