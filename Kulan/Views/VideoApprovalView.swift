@@ -8,12 +8,19 @@ import UIKit
 // untouched if nothing was trimmed). Crop / pen are a follow-up (a larger video-composition feature).
 struct VideoApprovalView: View {
     let url: URL
-    var onSend: (_ finalURL: URL, _ caption: String) -> Void
+    var onSend: (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
     @State private var playing = true
+    @State private var hd = false
     @FocusState private var captionFocused: Bool
+
+    // Pinch-to-zoom + pan on the video preview (1×…4×), like the photo viewer.
+    @State private var zoom: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+    @State private var pan: CGSize = .zero
+    @GestureState private var drag: CGSize = .zero
 
     // Trim state
     @State private var duration: Double = 0
@@ -33,8 +40,20 @@ struct VideoApprovalView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd), scrubTime: scrubTime)
+                .scaleEffect(max(1, zoom * pinch))
+                .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
+                .gesture(
+                    MagnificationGesture()
+                        .updating($pinch) { v, s, _ in s = v }
+                        .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
+                )
+                .simultaneousGesture(
+                    zoom > 1 ? DragGesture().updating($drag) { v, s, _ in s = v.translation }
+                        .onEnded { v in pan.width += v.translation.width; pan.height += v.translation.height } : nil
+                )
+                .onTapGesture(count: 2) { withAnimation(.easeInOut(duration: 0.2)) { zoom = zoom > 1 ? 1 : 2; if zoom <= 1 { pan = .zero } } }
                 .onTapGesture { if captionFocused { captionFocused = false } else { playing.toggle() } }
             if !playing && scrubTime == nil {
                 Image(systemName: "play.circle.fill")
@@ -62,6 +81,13 @@ struct VideoApprovalView: View {
                 Text(trimLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 12).frame(height: 32).liquidGlass(Capsule(), interactive: false)
             }
+            // HD toggle (top-right) — 1080p when on, else 720p (matches the photo editor's HD).
+            Button { hd.toggle() } label: {
+                Text("HD").font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
+                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
     }
@@ -169,11 +195,11 @@ struct VideoApprovalView: View {
 
     private func send() {
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed else { onSend(url, cap); dismiss(); return }
+        guard trimmed else { onSend(url, cap, hd); dismiss(); return }
         exporting = true
         Task {
             let out = await exportTrimmed()
-            await MainActor.run { exporting = false; onSend(out ?? url, cap); dismiss() }
+            await MainActor.run { exporting = false; onSend(out ?? url, cap, hd); dismiss() }
         }
     }
 

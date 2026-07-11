@@ -17,7 +17,7 @@ enum VideoTranscoder {
     // to the first N seconds, never rejected). nil = full length (video messages).
     // stripAudio: the story editor's mute — re-composes with the video track ONLY, so the
     // sound is genuinely gone from the uploaded file (not just muted in the preview).
-    static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false) async -> Prepared? {
+    static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false, hd: Bool = false) async -> Prepared? {
         let asset = AVURLAsset(url: url)
         guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
         var duration = fullTime.seconds
@@ -36,7 +36,9 @@ enum VideoTranscoder {
 
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("send-\(UUID().uuidString).mp4")
         try? FileManager.default.removeItem(at: out)
-        guard let session = AVAssetExportSession(asset: exportAsset, presetName: AVAssetExportPreset1280x720) else { return nil }
+        // HD = 1080p (bigger file, sharper); standard = 720p (smaller, the default).
+        let preset = hd ? AVAssetExportPreset1920x1080 : AVAssetExportPreset1280x720
+        guard let session = AVAssetExportSession(asset: exportAsset, presetName: preset) else { return nil }
         session.shouldOptimizeForNetworkUse = true
         if let cap = maxSeconds, duration > cap {
             session.timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: cap, preferredTimescale: 600))

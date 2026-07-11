@@ -381,8 +381,8 @@ struct ThreadView: View {
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
-            VideoApprovalView(url: wrap.url) { finalURL, caption in
-                Task { await sendVideo(from: finalURL, caption: caption) }
+            VideoApprovalView(url: wrap.url) { finalURL, caption, hd in
+                Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
@@ -1694,8 +1694,8 @@ struct ThreadView: View {
 
     // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
     // the sender's copy on-device; the recipient's player deletes the server object).
-    private func sendVideo(from url: URL, caption: String = "") async {
-        guard let prepared = await VideoTranscoder.prepare(url) else {
+    private func sendVideo(from url: URL, caption: String = "", hd: Bool = false) async {
+        guard let prepared = await VideoTranscoder.prepare(url, hd: hd) else {
             try? FileManager.default.removeItem(at: url)
             await MainActor.run { sendError = "Couldn't process this video." }
             return
