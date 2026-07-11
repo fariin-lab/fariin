@@ -64,10 +64,45 @@ final class Crypto {
     private var pubCache: [String: Bytes] = [:]
     private let lock = NSLock()                 // guards pubCache for the sync decrypt path
     private var readyTask: Task<Void, Error>?
+    private var didWarm = false                 // one-time synchronous warm on the first decrypt
+    private static let pubKeysDefaultsKey = "crypto.pubKeys.v1"   // disk cache of others' PUBLIC keys (not secret)
 
     var isReady: Bool { mySecretKey != nil }
 
     private func currentUid() -> String? { Auth.auth().currentUser?.uid }
+
+    // Persist a peer's PUBLIC key to disk (public keys are not secret) so decrypt works on the FIRST
+    // render after a cold launch instead of showing "…" until the network fetch lands.
+    private func persistPubKey(_ uid: String, _ key: Bytes) {
+        var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
+        let b64 = Data(key).base64EncodedString()
+        guard dict[uid] != b64 else { return }
+        dict[uid] = b64
+        UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+    }
+
+    // One-time synchronous warm start, run lazily on the first decrypt (the chat-list render): load the
+    // existing keypair from the Keychain and every peer's persisted public key from disk. No network, no
+    // key generation — just enough to decrypt the last-message previews immediately (fixes the "…" flash
+    // where the chat list rendered before the async initKeys + network key fetches completed).
+    private func warmIfNeeded() {
+        lock.withLock {
+            guard !didWarm else { return }
+            didWarm = true
+            if let dict = UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String] {
+                for (uid, b64) in dict where pubCache[uid] == nil {
+                    if let d = Data(base64Encoded: b64) { pubCache[uid] = Bytes(d) }
+                }
+            }
+            if mySecretKey == nil,
+               let skB64 = Keychain.get(Self.skKeychainKey), let pkB64 = Keychain.get(Self.pkKeychainKey),
+               let sk = Data(base64Encoded: skB64), let pk = Data(base64Encoded: pkB64),
+               sk.count == sodium.box.SecretKeyBytes {
+                mySecretKey = Bytes(sk); myPublicKey = Bytes(pk)
+                if let uid = currentUid() { pubCache[uid] = Bytes(pk) }
+            }
+        }
+    }
 
     // MARK: - Setup
 
@@ -172,6 +207,7 @@ final class Crypto {
                let data = Data(base64Encoded: b64) {
                 let key = Bytes(data)
                 lock.withLock { pubCache[uid] = key }
+                persistPubKey(uid, key)   // disk cache → decrypt works on the next cold launch's first render
                 return key
             }
         } catch {
@@ -228,6 +264,7 @@ final class Crypto {
     func decrypt(_ raw: String, cid: String) -> String {
         if raw.hasPrefix("enc:") { return "[old message]" }
         guard raw.hasPrefix("enc1:") else { return raw }
+        warmIfNeeded()
         guard let sk = mySecretKey else { return "…" }
         guard let otherPub = lock.withLock({ pubCache[otherUid(cid)] }) else { return "…" }
 
@@ -420,6 +457,7 @@ final class Crypto {
     /// Decrypt a group message. Needs the AUTHOR's uid (sender pubkey) — opens my own wrap.
     func decryptGroup(_ raw: String, authorId: String) -> String {
         guard raw.hasPrefix("encg1:") else { return raw }
+        warmIfNeeded()
         guard let sk = mySecretKey, let me = currentUid() else { return "…" }
         guard let authorPub = lock.withLock({ pubCache[authorId] }) else { return "…" }
         let b64 = String(raw.dropFirst("encg1:".count))
