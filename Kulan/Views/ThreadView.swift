@@ -1125,8 +1125,13 @@ struct ThreadView: View {
                 },
                 onPickVideo: { url in
                     showAttachPanel = false
-                    // Open the video approval page (caption) before sending — parity with the image editor.
+                    // TAP a video → open the trim editor (caption/trim) before sending.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { videoToApprove = VideoWrap(url: url) }
+                },
+                onSendVideos: { urls, caption in
+                    showAttachPanel = false
+                    // SELECT + Send → send each selected video directly (no editor), with the caption.
+                    Task { for url in urls { await sendVideo(from: url, caption: caption) } }
                 },
                 onSendAlbum: { imgs, caption, viewOnce in
                     showAttachPanel = false

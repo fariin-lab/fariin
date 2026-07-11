@@ -11,7 +11,8 @@ struct AttachRecentsStrip: View {
     var onCamera: () -> Void = {}
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
-    var onPickVideo: (URL) -> Void
+    var onPickVideo: (URL) -> Void                              // TAP a video → open the trim editor
+    var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
     var onOpenAlbum: ([UIImage]) -> Void = { _ in }              // tapping a photo WHILE selecting → open the approval/paging page
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
@@ -334,7 +335,9 @@ struct AttachRecentsStrip: View {
                 caption = ""
                 viewOnce = false
                 hasSelection = false
-                for url in videos { onPickVideo(url) }
+                // SELECTED via checkbox + Send → send directly (with the caption). The editor page opens
+                // ONLY when you TAP a video (pick → onPickVideo), not from the Send button.
+                if !videos.isEmpty { onSendVideos(videos, cap) }
                 if !imgs.isEmpty { onSendAlbum(imgs, cap, once) }
             }
         }
