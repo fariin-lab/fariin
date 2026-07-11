@@ -14,7 +14,10 @@ struct SoundsNotificationsView: View {
     @State private var picker: SoundStore.Kind?
 
     private var dark: Bool { scheme == .dark }
-    private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }
+    // Native grouped-list colors, matching the profile page: white card in light mode
+    // (0x1C1C1E in dark) sitting on a grey/black grouped-background page, like Settings.
+    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     private var muteLabel: String { muted ? "Muted" : "Not muted" }
 
     var body: some View {
@@ -40,6 +43,7 @@ struct SoundsNotificationsView: View {
             .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .padding(16)
         }
+        .background(pageBackground.ignoresSafeArea())   // grouped-list page so the white card pops, like Settings
         .navigationTitle("Sounds & Notifications")
         .navigationBarTitleDisplayMode(.inline)
         .task { reload(); await loadMute() }
