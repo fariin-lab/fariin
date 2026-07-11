@@ -144,7 +144,7 @@ struct AttachRecentsStrip: View {
                         // open the multi-image approval (paging) of the selected set instead. Tap the
                         // CHECKBOX → (de)select. Separate, never conflict.
                         RecentThumb(asset: a, selectionNumber: selectionIndex(a),
-                                    onOpen: { selectedIds.isEmpty ? pick(a) : openSelected() },
+                                    onOpen: { openTapped(a) },
                                     onToggle: { toggle(a) })
                     }
                 case .notDetermined:
@@ -262,6 +262,18 @@ struct AttachRecentsStrip: View {
             }
         }
         albums = out
+    }
+
+    // Tap routing, reusing the existing image logic (the checkbox owns selection, never conflicts):
+    //   • VIDEO → always its own trim editor (pick → onPickVideo), exactly like tapping an image opens the
+    //     image editor — even mid-selection, since videos are edited one at a time. This was the bug: while
+    //     a selection was active, tapping a video hit openSelected(), which collects IMAGES only, so nothing
+    //     happened.
+    //   • IMAGE → single editor when nothing is selected, else the multi-image approval of the selection.
+    private func openTapped(_ a: PHAsset) {
+        if a.mediaType == .video { pick(a) }
+        else if selectedIds.isEmpty { pick(a) }
+        else { openSelected() }
     }
 
     private func pick(_ a: PHAsset) {
