@@ -414,8 +414,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     // MARK: - Jump to a message (reply / search)
 
+    // Center-if-not-entirely-on-screen (Signal's search/jump alignment): when the target row is already
+    // fully visible, don't move at all — repeated next/prev taps between two on-screen results then feel
+    // stable instead of re-centering the list on every tap.
     func scrollTo(id: String) {
         guard let ip = dataSource.indexPath(for: id) else { return }
+        if let attr = collectionView.layoutAttributesForItem(at: ip) {
+            let visible = CGRect(x: 0,
+                                 y: collectionView.contentOffset.y + collectionView.adjustedContentInset.top,
+                                 width: collectionView.bounds.width,
+                                 height: collectionView.bounds.height
+                                    - collectionView.adjustedContentInset.top
+                                    - collectionView.adjustedContentInset.bottom)
+            if visible.contains(attr.frame) { return }   // already entirely on screen → no scroll
+        }
         collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: true)
     }
 

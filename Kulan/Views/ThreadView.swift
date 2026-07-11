@@ -100,6 +100,7 @@ struct ThreadView: View {
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
     @State private var searchIndex = 0
+    @State private var lastSearchText: String?   // identical-query dedup (Signal): arrows/focus don't re-run the search
     @FocusState private var searchFocused: Bool
     // Signal-style UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
@@ -1017,7 +1018,7 @@ struct ThreadView: View {
 
     private func activateSearch() {
         withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
-        searchQuery = ""; searchMatches = []; searchIndex = 0
+        searchQuery = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil
         inputFocused = false
         Task {
             let corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
@@ -1029,15 +1030,47 @@ struct ThreadView: View {
     private func closeSearch() {
         searchFocused = false
         withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
-        searchQuery = ""; searchMatches = []; highlightId = nil
+        searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil
+        // Signal leaves the conversation where the last result was — no scroll restore on close.
     }
 
-    // Recompute matches (oldest→newest) and jump to the newest one, as you type.
+    // Recompute matches as you type — Signal's search semantics, our implementation:
+    //  • minimum 2 characters (shorter queries clear results, same as Signal's floor)
+    //  • identical-query dedup (arrow keys / focus changes don't re-run the search)
+    //  • token-prefix AND matching, case/diacritic/width-insensitive ("hel wor" matches "Hello World")
+    //  • corpus (history) + the LIVE window merged, so a just-sent or just-edited message is instantly
+    //    searchable (Signal's index updates on write; our corpus snapshot alone would be stale)
+    //  • capped at the newest 500 matches (Signal's kDefaultMaxResults)
+    //  • the focused position is PRESERVED across query refinement (clamped), measured from the newest
+    //    end — Signal clamps the previous index rather than yanking you back to the first result
     private func updateSearchMatches() {
-        let q = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { searchMatches = []; highlightId = nil; return }
-        searchMatches = searchCorpus.filter { $0.text.lowercased().contains(q) }.sorted { $0.date < $1.date }
-        searchIndex = max(0, searchMatches.count - 1)   // newest match first (Signal)
+        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 2 else {
+            searchMatches = []; lastSearchText = nil
+            return
+        }
+        guard q != lastSearchText else { return }   // identical query → no re-run (Signal's dedup)
+        lastSearchText = q
+        let terms = ChatSearch.queryTerms(q)
+        guard !terms.isEmpty else { searchMatches = []; return }
+
+        // How far from the NEWEST match the user currently is (preserved across refinement).
+        let distanceFromNewest = searchMatches.isEmpty ? 0 : max(0, (searchMatches.count - 1) - searchIndex)
+
+        var seen = Set<String>()
+        var pool: [InChatMessage] = []
+        for m in searchCorpus where seen.insert(m.id).inserted { pool.append(m) }
+        for m in repo.items where !m.text.isEmpty && !m.viewOnce && seen.insert(m.id).inserted {
+            pool.append(InChatMessage(id: m.id, text: m.text, authorId: m.authorId,
+                                      date: m.createdAt, tokens: ChatSearch.tokens(m.text)))
+        }
+        let matched = pool
+            .filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
+            .sorted { $0.date < $1.date }
+        searchMatches = Array(matched.suffix(500))   // keep the newest 500 (Signal's cap)
+
+        guard !searchMatches.isEmpty else { return }
+        searchIndex = max(0, (searchMatches.count - 1) - min(distanceFromNewest, searchMatches.count - 1))
         goToCurrentMatch()
     }
 
@@ -2580,9 +2613,13 @@ struct MessageBubble: View, Equatable {
         str.font = .system(size: 17)
         // In-chat search (Signal-style): highlight the matched TERM inside the text — never the whole
         // bubble. Applied before the plain-text fast path so text-only messages highlight too.
-        if !searchTerm.isEmpty {
+        // Gated at 2+ chars (the search floor) and matched case/diacritic/width-insensitively, so the
+        // highlight finds exactly what the search matched (café highlights for "cafe").
+        if searchTerm.count >= 2 {
             var from = full.startIndex
-            while let r = full.range(of: searchTerm, options: .caseInsensitive, range: from..<full.endIndex) {
+            while let r = full.range(of: searchTerm,
+                                     options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                                     range: from..<full.endIndex) {
                 let startOff = full.distance(from: full.startIndex, to: r.lowerBound)
                 let len = full.distance(from: r.lowerBound, to: r.upperBound)
                 let lo = str.index(str.startIndex, offsetByCharacters: startOff)

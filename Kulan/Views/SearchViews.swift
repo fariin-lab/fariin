@@ -315,6 +315,7 @@ struct InChatMessage: Identifiable {
     let text: String
     let authorId: String
     let date: Date
+    var tokens: [String] = []   // normalized search tokens, computed ONCE at corpus build (not per keystroke)
 }
 
 extension MessageSearch {
@@ -347,8 +348,10 @@ extension MessageSearch {
                 ? Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid, authorId: author)
                 : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid)
             guard !text.isEmpty else { return nil }
+            if data["viewOnce"] as? Bool == true { return nil }   // view-once is never searchable (Signal)
             let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            return InChatMessage(id: doc.documentID, text: text, authorId: author, date: date)
+            return InChatMessage(id: doc.documentID, text: text, authorId: author, date: date,
+                                 tokens: ChatSearch.tokens(text))
         }
         corpusCache[cid] = (Date(), out)
         return out
@@ -373,9 +376,10 @@ struct InChatSearchView: View {
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
     private var results: [InChatMessage] {
-        let q = trimmed.lowercased()
-        guard !q.isEmpty else { return [] }
-        return Array(corpus.filter { $0.text.lowercased().contains(q) }
+        guard trimmed.count >= 2 else { return [] }   // same 2-char floor as the in-conversation search
+        let terms = ChatSearch.queryTerms(trimmed)
+        guard !terms.isEmpty else { return [] }
+        return Array(corpus.filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
             .sorted { $0.date > $1.date }.prefix(100))
     }
 
