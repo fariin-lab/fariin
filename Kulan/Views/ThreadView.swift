@@ -3172,7 +3172,18 @@ struct MessageBubble: View, Equatable {
         } else if message.isImage {
             // ONE bubble (Signal/Telegram/WhatsApp): the photo on top, the caption flush below, sharing a
             // single background + a single rounded outline — never two separate bubbles.
+            // CAPTIONED sizing follows Signal's measure logic: the caption wraps at the STANDARD bubble
+            // width and the photo FILLS that width (tall photos crop at the height cap). Without this, a
+            // tall image's narrow aspect-fit width squeezed a long caption into a one-word-per-line column.
             let hasCaption = !message.text.isEmpty
+            let box: CGSize = {
+                guard hasCaption else { return imageDisplaySize }
+                let w: CGFloat = 240
+                guard let iw = message.width, let ih = message.height, iw > 0, ih > 0 else {
+                    return CGSize(width: w, height: 240)
+                }
+                return CGSize(width: w, height: min(340, w * ih / iw))
+            }()
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 VStack(alignment: .leading, spacing: 0) {
@@ -3186,7 +3197,8 @@ struct MessageBubble: View, Equatable {
                             Rectangle().fill(Color.gray.opacity(0.18))
                         }
                     }
-                    .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                    .frame(width: box.width, height: box.height)
+                    .clipped()   // a tall captioned photo fills+crops — never bleeds over the caption below
                     // Native zoom hero (same mechanism as the story close): the viewer grows out of this
                     // bubble and the drag-down dismiss shrinks back into it, following the finger.
                     .modifier(HeroSource(ns: imageNS, id: message.id))
@@ -3220,10 +3232,10 @@ struct MessageBubble: View, Equatable {
                             if isLastInCluster { metaRow.padding(.bottom, 1) }
                         }
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(width: imageDisplaySize.width, alignment: .leading)
+                        .frame(width: box.width, alignment: .leading)
                     }
                 }
-                .frame(width: imageDisplaySize.width)
+                .frame(width: box.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
