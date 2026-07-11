@@ -2040,8 +2040,12 @@ struct ThreadView: View {
     private func saveEdit() {
         guard let e = editingMessage else { return }
         let newText = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newText.isEmpty else { return }
-        Task { try? await ChatService.editMessage(cid: cid, messageId: e.id, newText: newText, group: isGroup ? groupMembers : nil) }
+        // Empty text = cancel the edit (Signal: an edit can't erase a message) — the old silent return
+        // left the composer STUCK in edit mode with no way out.
+        // Unchanged text = nothing to save; just leave edit mode.
+        if !newText.isEmpty && newText != e.text {
+            Task { try? await ChatService.editMessage(cid: cid, messageId: e.id, newText: newText, group: isGroup ? groupMembers : nil) }
+        }
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
         input = Drafts.shared.text(cid)   // the pre-edit draft (if any) was never sent — restore it
         inputFocused = false

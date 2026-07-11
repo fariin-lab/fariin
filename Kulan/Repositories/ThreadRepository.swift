@@ -44,7 +44,7 @@ final class ThreadRepository {
     // Decrypt cache: id -> built message, plus the raw (encrypted) reactions we last
     // saw, so we only rebuild a message when its one mutable field actually changes.
     private var byId: [String: Message] = [:]
-    private var rawReactions: [String: [String: String]] = [:]
+    private var rawReactions: [String: String] = [:]   // id -> change signature (reactions + text cipher + edited)
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private(set) var didInitialLoad = false
@@ -240,15 +240,24 @@ final class ThreadRepository {
         return fallbackOther.isEmpty ? [] : [fallbackOther]
     }
 
-    // Build a message, reusing the cached copy unless its reactions changed.
+    // Stable change signature for the MUTABLE fields of a message doc: reactions, the text cipher
+    // (EDITS — the old reactions-only gate meant an edited message never re-rendered), and the edited
+    // flag. Reaction keys are sorted so the signature is deterministic.
+    private func changeSig(_ data: [String: Any]) -> String {
+        let raw = (data["reactions"] as? [String: String]) ?? [:]
+        let reactions = raw.keys.sorted().map { "\($0)=\(raw[$0] ?? "")" }.joined(separator: ",")
+        return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false) + "|" + reactions
+    }
+
+    // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
     @discardableResult
     private func buildCached(_ doc: QueryDocumentSnapshot) -> Message {
         let id = doc.documentID, data = doc.data()
-        let raw = (data["reactions"] as? [String: String]) ?? [:]
-        if let cached = byId[id], rawReactions[id] == raw { return cached }
+        let sig = changeSig(data)
+        if let cached = byId[id], rawReactions[id] == sig { return cached }
         let m = Message(id: id, data: data, cid: cid, crypto: Crypto.shared)
         byId[id] = m
-        rawReactions[id] = raw
+        rawReactions[id] = sig
         return m
     }
 
@@ -269,23 +278,21 @@ final class ThreadRepository {
         // thread froze the UI during the navigation transition (the tester's "tap → gray →
         // hang"). Only NEW or reaction-changed docs are decrypted; the rest are reused.
         // (box.open is a thread-safe pure op, and my keys are set before any chat can open.)
+        let sigs = Dictionary(uniqueKeysWithValues: docs.map { ($0.documentID, changeSig($0.data())) })
         let needBuild = docs.filter { doc in
-            let raw = (doc.data()["reactions"] as? [String: String]) ?? [:]
-            return byId[doc.documentID] == nil || rawReactions[doc.documentID] != raw
+            byId[doc.documentID] == nil || rawReactions[doc.documentID] != sigs[doc.documentID]
         }
         guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq); return }
         let cidLocal = cid
         Task.detached(priority: .userInitiated) { [weak self] in
-            let built: [(String, [String: String], Message)] = needBuild.map { doc in
-                let raw = (doc.data()["reactions"] as? [String: String]) ?? [:]
-                return (doc.documentID, raw,
-                        Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
+            let built: [(String, Message)] = needBuild.map { doc in
+                (doc.documentID, Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
             }
             await MainActor.run {
                 guard let self else { return }
                 // Drop this batch if a NEWER snapshot already committed (out-of-order completion).
                 guard seq >= self.committedSeq else { return }
-                for (id, raw, m) in built { self.byId[id] = m; self.rawReactions[id] = raw }
+                for (id, m) in built { self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? "" }
                 self.commitSnapshot(docs, seq: seq)
             }
         }
