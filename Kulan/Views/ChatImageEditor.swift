@@ -268,7 +268,10 @@ struct ChatImageEditor: View {
                             .foregroundStyle(Color(.systemGray3))
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else {
-                        TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+                        // Multi-line caption (Signal): 1 → ~7 lines, then scrolls.
+                        TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
+                                  axis: .vertical)
+                            .lineLimit(1...7)
                             .foregroundStyle(.white).focused($captionFocused)
                     }
                     Button {
@@ -277,13 +280,15 @@ struct ChatImageEditor: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     } label: {
                         Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
-                            .font(.system(size: 20))
+                            .font(.system(size: 22))
                             .foregroundStyle(viewOnce ? Color(hex: 0x3DA1FD) : .white)
+                            .frame(width: 44, height: 44)   // bigger tap target (was a tiny 20pt glyph)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16).frame(height: 46)
-                .liquidGlass(Capsule(), interactive: true)
+                .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 46)
+                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 46, height: 46)

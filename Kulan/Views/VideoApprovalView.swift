@@ -181,10 +181,12 @@ struct VideoApprovalView: View {
 
     private var captionBar: some View {
         HStack(spacing: 10) {
-            TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+            TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
+                      axis: .vertical)
+                .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls (Signal)
                 .foregroundStyle(.white).focused($captionFocused)
-                .padding(.horizontal, 16).frame(height: 46)
-                .liquidGlass(Capsule(), interactive: true)
+                .padding(.horizontal, 16).padding(.vertical, 12).frame(minHeight: 46)
+                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)
             Button { send() } label: {
                 Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
                     .frame(width: 46, height: 46).liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))

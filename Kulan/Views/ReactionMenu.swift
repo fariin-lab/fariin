@@ -102,18 +102,22 @@ struct ReactionMenuOverlay: View {
     private let rowH: CGFloat = 44      // action row height
     private let gap: CGFloat = 10
 
+    // Pure clamping math (kept OUT of the ViewBuilder — mutating locals there don't compile).
+    private func groupTop(in size: CGSize, safeTop: CGFloat, safeBottom: CGFloat) -> CGFloat {
+        let menuH = CGFloat(rowCount) * rowH
+        let bubbleH = min(anchorFrame.height, size.height * 0.5)
+        var top = anchorFrame.minY - barH - 12               // bar 12pt above the bubble
+        let bottom = anchorFrame.minY + bubbleH + 12 + menuH  // menu 12pt below the bubble
+        if bottom > safeBottom { top -= (bottom - safeBottom) }   // shift the whole group up to fit
+        if top < safeTop { top = safeTop }                        // …but never above the safe top
+        return top
+    }
+
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top + 8
             let safeBottom = geo.size.height - geo.safeAreaInsets.bottom - 8
-            let menuH = CGFloat(rowCount) * rowH
-            let bubbleH = min(anchorFrame.height, geo.size.height * 0.5)
-            // Desired: bubble stays where it was; bar 12pt above it, menu 12pt below.
-            var groupTop = anchorFrame.minY - barH - 12
-            let groupBottom = anchorFrame.minY + bubbleH + 12 + menuH
-            // Clamp into the safe content area (Signal shifts the whole group up/down to fit).
-            if groupBottom > safeBottom { groupTop -= (groupBottom - safeBottom) }
-            if groupTop < safeTop { groupTop = safeTop }
+            let top = groupTop(in: geo.size, safeTop: safeTop, safeBottom: safeBottom)
 
             ZStack(alignment: .topLeading) {
                 // Blurred + dimmed backdrop (Signal: UIBlurEffect .regular + a light/dark tint).
@@ -128,7 +132,7 @@ struct ReactionMenuOverlay: View {
                     actions
                 }
                 .frame(width: geo.size.width - 32, alignment: isMe ? .trailing : .leading)
-                .offset(x: 16, y: groupTop)
+                .offset(x: 16, y: top)
                 // Spring from the bubble's side (Signal: scale 0.2 → 1, damping 0.8).
                 .scaleEffect(shown ? 1 : 0.4, anchor: isMe ? .topTrailing : .topLeading)
                 .opacity(shown ? 1 : 0)

@@ -118,11 +118,13 @@ struct AttachRecentsStrip: View {
                             .font(.system(size: 23, weight: .regular))
                             .foregroundStyle(viewOnce ? Color(hex: 0x0A84FF) : Color(.systemGray))
                             .contentTransition(.symbolEffect(.replace))
+                            .frame(width: 44, height: 44)   // bigger tap target (glyph alone was tiny)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 16).frame(height: 46)
+            .padding(.leading, 16).padding(.trailing, 4).frame(height: 46)
             .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue

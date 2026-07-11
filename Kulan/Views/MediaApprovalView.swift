@@ -167,11 +167,15 @@ struct MediaApprovalView: View {
                 .padding(.horizontal, 16)
             }
             HStack(spacing: 10) {
+                // Multi-line caption (Signal): grows from 1 up to ~7 lines, then scrolls.
                 TextField("", text: $caption,
-                          prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)))
+                          prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
+                          axis: .vertical)
+                    .lineLimit(1...7)
                     .foregroundStyle(.white).focused($captionFocused)
-                    .padding(.horizontal, 16).frame(height: 46)
-                    .liquidGlass(Capsule(), interactive: true)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .frame(minHeight: 46)
+                    .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 46, height: 46)
