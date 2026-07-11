@@ -229,7 +229,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
         let appendedCount = ids.count - currentIds.count
-        let anchor: (id: String, distanceFromTop: CGFloat)? = isPrepend ? captureTopAnchor() : nil
+        // Prepend (load older): capture the content height + offset so we can keep the visible content
+        // EXACTLY stable — after the older messages lay out, add their total height to the offset. The
+        // reader never jumps and is never auto-scrolled; the new older messages simply sit above.
+        let prepend: (oldHeight: CGFloat, oldOffset: CGFloat)? = isPrepend
+            ? (collectionView.contentSize.height, collectionView.contentOffset.y) : nil
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
 
@@ -270,8 +274,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         } else {
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
-                if let anchor { self.restore(anchor) }              // load-older: keep the reader's place
-                else if wasAtBottom && !isPrepend { self.pinBottom() }   // was at bottom: stay pinned
+                if let p = prepend {
+                    // Keep the reader's EXACT position: shift the offset down by the height the prepended
+                    // older messages added, so nothing on screen moves. No jump, no auto-scroll-down.
+                    self.collectionView.layoutIfNeeded()
+                    let delta = self.collectionView.contentSize.height - p.oldHeight
+                    self.collectionView.setContentOffset(CGPoint(x: 0, y: p.oldOffset + delta), animated: false)
+                } else if wasAtBottom && !isPrepend {
+                    self.pinBottom()                                 // was at bottom: stay pinned
+                }
             }
         }
     }
