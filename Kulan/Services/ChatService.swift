@@ -428,6 +428,14 @@ enum ChatService {
         if viewOnce { imgMsg["viewOnce"] = true }           // Signal-style view-once photo
         if let ui = UIImage(data: data) {                   // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
+            // BlurHash (Signal): a ~28-char sketch of the photo, sealed like the caption, so the
+            // recipient's bubble shows a real blurred preview before any bytes download.
+            if !viewOnce, let hash = BlurHash.encode(ui) {
+                let sealed = members != nil
+                    ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                    : (try? await Crypto.shared.encryptForConversation(cid, hash))
+                if let sealed, !sealed.isEmpty { imgMsg["blurhash"] = sealed }
+            }
         }
         batch.setData(imgMsg, forDocument: msgRef)
         var convUpdate: [String: Any] = [

@@ -3061,7 +3061,8 @@ struct MessageBubble: View, Equatable {
                         if let data = message.localImageData, let ui = UIImage(data: data) {
                             Image(uiImage: ui).resizable().scaledToFill()          // optimistic local photo
                         } else if let url = message.imageUrl {
-                            SecureImageView(imageUrl: url, enc: message.enc, cid: cid)
+                            SecureImageView(imageUrl: url, enc: message.enc, cid: cid,
+                                            placeholderHash: message.blurhash)     // blurred preview while downloading
                         } else {
                             Rectangle().fill(Color.gray.opacity(0.18))
                         }

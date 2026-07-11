@@ -64,6 +64,7 @@ struct Message: Identifiable, Equatable {
     var localAudioData: Data? = nil         // optimistic local voice note shown before upload
     var localFile: Bool = false             // optimistic file bubble shown before upload (no fileUrl yet)
     var width: Double? = nil                // image pixel size -> natural aspect ratio bubble
+    var blurhash: String? = nil             // sealed BlurHash of the photo → instant blurred placeholder
     var height: Double? = nil
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
     var callOutcome: String? = nil          // answered | missed
@@ -197,6 +198,11 @@ struct Message: Identifiable, Equatable {
             ?? (data["waveform"] as? [NSNumber])?.map { $0.intValue } ?? []
         self.width = (data["width"] as? NSNumber)?.doubleValue
         self.height = (data["height"] as? NSNumber)?.doubleValue
+        // Sealed exactly like the caption; sentinels (key not warm / tampered) render as no placeholder.
+        if let bh = data["blurhash"] as? String, !bh.isEmpty {
+            let clear = crypto.decrypt(bh, cid: cid, authorId: data["authorId"] as? String ?? "")
+            self.blurhash = (clear.isEmpty || clear == "…" || clear == "🔒") ? nil : clear
+        }
         self.callerUid = data["callerUid"] as? String
         self.callOutcome = data["callOutcome"] as? String
         self.callVideo = data["callVideo"] as? Bool ?? false

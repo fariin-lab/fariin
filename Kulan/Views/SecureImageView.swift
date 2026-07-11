@@ -10,6 +10,7 @@ struct SecureImageView: View {
     let enc: EncMeta?
     let cid: String
     var fill: Bool = true
+    var placeholderHash: String? = nil   // BlurHash → a real blurred preview instead of the gray shimmer
 
     @State private var image: UIImage?
     @State private var failed = false
@@ -28,6 +29,10 @@ struct SecureImageView: View {
             } else if failed {
                 Rectangle().fill(Color.gray.opacity(0.18))
                     .overlay { Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary) }
+            } else if let hash = placeholderHash, let blur = BlurHash.decode(hash) {
+                // Signal's placeholder chain: a recognizable blur of the ACTUAL photo (decoded from the
+                // ~28-char hash that travels in the message) beats a gray skeleton while bytes download.
+                Image(uiImage: blur).resizable().scaledToFill()
             } else {
                 SkeletonFill()   // shimmer skeleton while loading (replaces the spinner)
             }
