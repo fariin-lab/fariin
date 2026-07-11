@@ -554,7 +554,14 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
             recorder.prepare()                           // pre-warm so hold-to-record is instant
-            recorder.onInterrupt = { resetRecordingState() }   // call/Siri/alarm mid-record → drop the UI cleanly
+            // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) — flip to the
+            // locked bar so the user can send or cancel the partial note (was: recording discarded).
+            recorder.onInterrupt = {
+                recordingHeld = false
+                recordDrag = .zero
+                holdStarted = false
+                recordLocked = true
+            }
             // Restore an unsent draft (local-only). Never clobber text already being typed.
             if input.isEmpty { input = Drafts.shared.text(cid) }
             // Unread count from the cached conversation — only used to place the unread-divider
