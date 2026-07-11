@@ -63,59 +63,8 @@ struct ChatImageEditor: View {
                 // inset by the toolbar height + safe area, never hidden behind it). Extracted into
                 // canvasView(_:) — the inline version blew the type-checker.
                 canvasView(canvasArea(geo.size))
-
-                // Chrome INSIDE the native safe area (no manual inset math). The canvas above ignores
-                // the keyboard entirely, so opening the caption keyboard lifts ONLY this bottom bar —
-                // the photo and top X stay exactly where they are (Signal/Photos behaviour).
-                VStack(spacing: 0) {
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .liquidGlass(Circle(), interactive: true)
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        Spacer()
-                        if isDrawing {
-                            Button { bakeDrawing(); isDrawing = false } label: {
-                                Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                                    .padding(.horizontal, 18).frame(height: 44)
-                                    .liquidGlass(Capsule(), interactive: true)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 4)
-                    Spacer(minLength: 0)
-                    Group {
-                        if isDrawing { penBar.padding(.bottom, 8) }
-                        else { bottomBar.padding(.bottom, 8) }
-                    }
-                    // Live-measure the bottom chrome so the image area excludes exactly its height
-                    // (Signal queries its toolbar heights at runtime — no hardcoded constants). Skipped
-                    // while the caption keyboard is up so the canvas never resizes with the keyboard.
-                    .background(
-                        GeometryReader { g in
-                            Color.clear
-                                .onAppear { if !captionFocused { bottomChromeH = g.size.height } }
-                                .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h } }
-                        }
-                    )
-                }
-                .animation(.easeInOut(duration: 0.2), value: captionFocused)
-
-                // Crop presented INLINE with a cross-fade (Signal's in-place crop feel) — the same image
-                // stays put and the crop frame + controls fade in over it, instead of a modal slide-up.
-                if showCrop {
-                    ChatCropView(image: source, inline: true,
-                                 onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
-                        editedCache = Self.filtered(cropped, filterIndex)   // keep the current filter over the crop
-                    }
-                    .transition(.opacity)
-                    .zIndex(20)
-                }
+                chromeOverlay
+                cropOverlay
             }
             // Swipe DOWN anywhere on the canvas closes the keyboard (native feel), in addition to the
             // tap-to-dismiss above. Reads the drag without consuming it, so zoom/pan still work.
@@ -138,6 +87,61 @@ struct ChatImageEditor: View {
             }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
+        }
+    }
+
+    // Chrome INSIDE the native safe area (no manual inset math). The canvas ignores the keyboard, so
+    // opening the caption keyboard lifts ONLY this bottom bar — the photo and top X stay put.
+    private var chromeOverlay: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if isDrawing {
+                    Button { bakeDrawing(); isDrawing = false } label: {
+                        Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 18).frame(height: 44)
+                            .liquidGlass(Capsule(), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 4)
+            Spacer(minLength: 0)
+            Group {
+                if isDrawing { penBar.padding(.bottom, 8) }
+                else { bottomBar.padding(.bottom, 8) }
+            }
+            // Live-measure the bottom chrome so the image area excludes exactly its height (Signal
+            // queries toolbar heights at runtime). Skipped while the keyboard is up so the canvas
+            // never resizes with the keyboard.
+            .background(
+                GeometryReader { g in
+                    Color.clear
+                        .onAppear { if !captionFocused { bottomChromeH = g.size.height } }
+                        .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h } }
+                }
+            )
+        }
+        .animation(.easeInOut(duration: 0.2), value: captionFocused)
+    }
+
+    // Crop presented INLINE with a cross-fade (Signal's in-place crop feel).
+    @ViewBuilder private var cropOverlay: some View {
+        if showCrop {
+            ChatCropView(image: source, inline: true,
+                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
+                editedCache = Self.filtered(cropped, filterIndex)
+            }
+            .transition(.opacity)
+            .zIndex(20)
         }
     }
 

@@ -11,6 +11,7 @@ struct AddToGroupView: View {
     private var me: String { AuthService.shared.uid ?? "" }
     @State private var working: String? = nil   // cid currently being added
     @State private var notice: String?
+    @State private var pendingAdd: Conversation?   // group awaiting the "Add to Group?" confirmation
 
     // Every group I'm a member of, alphabetical.
     private var myGroups: [Conversation] {
@@ -32,7 +33,26 @@ struct AddToGroupView: View {
             }
             .navigationTitle("Add to a Group")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { CloseXButton { dismiss() } } }
+            .toolbar {
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarTrailing) { CloseXButton { dismiss() } }
+                        .sharedBackgroundVisibility(.hidden)   // don't double-wrap the glass X (the duplicate circle)
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) { CloseXButton { dismiss() } }
+                }
+            }
+            // Confirm before adding (native alert = real system Liquid Glass), like the mockup:
+            // "Add New Member / Add "X" to "Group"? / Add to Group · Cancel".
+            .confirmationDialog("Add New Member",
+                                isPresented: Binding(get: { pendingAdd != nil }, set: { if !$0 { pendingAdd = nil } }),
+                                titleVisibility: .visible) {
+                if let g = pendingAdd {
+                    Button("Add to Group") { add(to: g) }
+                    Button("Cancel", role: .cancel) { pendingAdd = nil }
+                }
+            } message: {
+                if let g = pendingAdd { Text("Add \"\(contactName)\" to \"\(g.displayName(me))\"?") }
+            }
             .alert("Add to a Group", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
                 Button("OK") { dismiss() }
             } message: { Text(notice ?? "") }
@@ -43,7 +63,7 @@ struct AddToGroupView: View {
         let already = g.users.contains(contactUid)
         Button {
             guard !already, working == nil else { return }
-            add(to: g)
+            pendingAdd = g   // ask first (confirmation dialog), then add on confirm
         } label: {
             HStack(spacing: 12) {
                 AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 44)

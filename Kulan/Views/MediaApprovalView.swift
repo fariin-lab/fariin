@@ -49,6 +49,7 @@ struct MediaApprovalView: View {
     @State private var trimEnd: [UUID: Double] = [:]
     @State private var strips: [UUID: [UIImage]] = [:]   // filmstrip thumbs
     @State private var scrubTime: Double?                // live seek while dragging a handle
+    @State private var playheads: [UUID: Double] = [:]   // live playback position per video → scrubber
 
     private let stripHeight: CGFloat = 44
     private let handleW: CGFloat = 12
@@ -105,7 +106,8 @@ struct MediaApprovalView: View {
                             playing: page == index && !exporting,
                             start: trimStart[id] ?? 0,
                             end: max((trimStart[id] ?? 0) + 0.1, trimEnd[id] ?? duration),
-                            scrubTime: page == index ? scrubTime : nil)
+                            scrubTime: page == index ? scrubTime : nil,
+                            onTime: { t in if scrubTime == nil { playheads[id] = t } })
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { captionFocused = false }
@@ -255,8 +257,19 @@ struct MediaApprovalView: View {
                 .frame(width: W, height: stripHeight).clipShape(RoundedRectangle(cornerRadius: 8))
                 Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
                 Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
-                RoundedRectangle(cornerRadius: 3).stroke(Color.yellow, lineWidth: 3)
+                RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
                     .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
+                // Playhead scrubber (tracks playback, draggable to scrub) within the trimmed range.
+                let e = trimEnd[id] ?? dur
+                let ph = min(max(playheads[id] ?? s, s), e)
+                let phX = CGFloat(ph / dur) * W
+                if e > s {
+                    Capsule().fill(.white)
+                        .frame(width: 3, height: stripHeight + 8)
+                        .shadow(color: .black.opacity(0.4), radius: 1.5)
+                        .offset(x: min(max(0, phX - 1.5), W - 3))
+                        .gesture(playheadDrag(id: id, duration: dur, width: W))
+                }
                 trimHandle.offset(x: max(0, startX - handleW / 2))
                     .gesture(handleDrag(id: id, duration: dur, isStart: true, width: W))
                 trimHandle.offset(x: min(W - handleW, endX - handleW / 2))
@@ -266,10 +279,22 @@ struct MediaApprovalView: View {
         .frame(height: stripHeight)
     }
 
+    // Fully-rounded yellow grip (premium/native look).
     private var trimHandle: some View {
-        RoundedRectangle(cornerRadius: 3).fill(Color.yellow)
+        RoundedRectangle(cornerRadius: handleW / 2, style: .continuous).fill(Color.yellow)
             .frame(width: handleW, height: stripHeight)
-            .overlay(RoundedRectangle(cornerRadius: 1.5).fill(.black.opacity(0.55)).frame(width: 2, height: 16))
+            .overlay(Capsule().fill(.black.opacity(0.55)).frame(width: 2.5, height: 16))
+    }
+
+    private func playheadDrag(id: UUID, duration: Double, width W: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                let t = Double(min(max(0, g.location.x), W) / W) * duration
+                let s = trimStart[id] ?? 0, e = trimEnd[id] ?? duration
+                playheads[id] = min(max(t, s), e)
+                scrubTime = playheads[id]
+            }
+            .onEnded { _ in scrubTime = nil }
     }
 
     private func handleDrag(id: UUID, duration: Double, isStart: Bool, width W: CGFloat) -> some Gesture {
@@ -377,9 +402,13 @@ private struct PagedTrimPlayer: UIViewRepresentable {
     var start: Double
     var end: Double
     var scrubTime: Double?
+    var onTime: ((Double) -> Void)? = nil
 
-    func makeUIView(context: Context) -> TrimPlayerUIView { TrimPlayerUIView(url: url) }
+    func makeUIView(context: Context) -> TrimPlayerUIView {
+        let v = TrimPlayerUIView(url: url); v.onTime = onTime; return v
+    }
     func updateUIView(_ v: TrimPlayerUIView, context: Context) {
+        v.onTime = onTime
         v.setRange(start: start, end: end)
         if let s = scrubTime { v.seek(to: s) }
         playing ? v.play() : v.pause()

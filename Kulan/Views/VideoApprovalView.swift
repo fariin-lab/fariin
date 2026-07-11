@@ -28,6 +28,8 @@ struct VideoApprovalView: View {
     @State private var trimEnd: Double = 0
     @State private var thumbnails: [UIImage] = []
     @State private var scrubTime: Double? = nil   // non-nil while dragging a handle → seek preview
+    @State private var playhead: Double = 0        // live playback position (seconds) → scrubber line
+    @State private var draggingPlayhead = false
     @State private var exporting = false
 
     private let stripHeight: CGFloat = 50
@@ -39,7 +41,9 @@ struct VideoApprovalView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd), scrubTime: scrubTime)
+            TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
+                               scrubTime: scrubTime,
+                               onTime: { t in if !draggingPlayhead { playhead = t } })
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .ignoresSafeArea()
@@ -118,10 +122,20 @@ struct VideoApprovalView: View {
                 // Dim outside the selection.
                 Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
                 Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
-                // Yellow selection frame.
-                RoundedRectangle(cornerRadius: 3).stroke(Color.yellow, lineWidth: 3)
+                // Yellow selection frame (rounded to match the rounded handle caps).
+                RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
                     .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
-                // Handles.
+                // PLAYHEAD scrubber: a white vertical line that tracks playback within the selection and
+                // can be dragged to scrub. Clamped to the trimmed range; hidden when the range is empty.
+                let phX = CGFloat((min(max(playhead, trimStart), trimEnd)) / dur) * W
+                if trimEnd > trimStart {
+                    Capsule().fill(.white)
+                        .frame(width: 3, height: stripHeight + 8)
+                        .shadow(color: .black.opacity(0.4), radius: 1.5)
+                        .offset(x: min(max(0, phX - 1.5), W - 3))
+                        .gesture(playheadDrag(width: W))
+                }
+                // Rounded trim handles.
                 trimHandle.offset(x: max(0, startX - handleW / 2))
                     .gesture(handleDrag(isStart: true, width: W))
                 trimHandle.offset(x: min(W - handleW, endX - handleW / 2))
@@ -133,10 +147,24 @@ struct VideoApprovalView: View {
         .padding(.horizontal, 16)
     }
 
+    // Fully-rounded yellow grip (premium/native look) with a darker notch in the middle.
     private var trimHandle: some View {
-        RoundedRectangle(cornerRadius: 3).fill(Color.yellow)
+        RoundedRectangle(cornerRadius: handleW / 2, style: .continuous).fill(Color.yellow)
             .frame(width: handleW, height: stripHeight)
-            .overlay(RoundedRectangle(cornerRadius: 1.5).fill(.black.opacity(0.55)).frame(width: 2, height: 18))
+            .overlay(Capsule().fill(.black.opacity(0.55)).frame(width: 2.5, height: 18))
+    }
+
+    // Drag the playhead to scrub; releasing resumes playback from that point.
+    private func playheadDrag(width W: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named("trim"))
+            .onChanged { g in
+                draggingPlayhead = true; playing = false
+                let dur = max(0.01, duration)
+                let t = Double(min(max(0, g.location.x), W) / W) * dur
+                playhead = min(max(t, trimStart), trimEnd)
+                scrubTime = playhead
+            }
+            .onEnded { _ in scrubTime = nil; draggingPlayhead = false; playing = true }
     }
 
     private func handleDrag(isStart: Bool, width W: CGFloat) -> some Gesture {
@@ -225,9 +253,13 @@ private struct TrimmingPlayerView: UIViewRepresentable {
     var start: Double
     var end: Double
     var scrubTime: Double?
+    var onTime: ((Double) -> Void)? = nil   // live playhead position (seconds)
 
-    func makeUIView(context: Context) -> TrimPlayerUIView { TrimPlayerUIView(url: url) }
+    func makeUIView(context: Context) -> TrimPlayerUIView {
+        let v = TrimPlayerUIView(url: url); v.onTime = onTime; return v
+    }
     func updateUIView(_ v: TrimPlayerUIView, context: Context) {
+        v.onTime = onTime
         v.setRange(start: start, end: end)
         if let s = scrubTime { v.seek(to: s) }
         playing ? v.play() : v.pause()
@@ -240,6 +272,7 @@ final class TrimPlayerUIView: UIView {
     private var timeObserver: Any?
     private var start: Double = 0
     private var end: Double = .greatestFiniteMagnitude
+    var onTime: ((Double) -> Void)?
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 
@@ -248,10 +281,13 @@ final class TrimPlayerUIView: UIView {
         super.init(frame: .zero)
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspect
-        // Loop within [start, end]: every 0.1s check the play head and seek back to start at the out-point.
+        // Loop within [start, end]: every 0.05s check the play head, report it (drives the scrubber),
+        // and seek back to start at the out-point.
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] time in
-            guard let self, self.player.rate > 0 else { return }
+            guard let self else { return }
+            self.onTime?(time.seconds)
+            guard self.player.rate > 0 else { return }
             if time.seconds >= self.end - 0.03 || time.seconds < self.start - 0.1 {
                 self.player.seek(to: CMTime(seconds: self.start, preferredTimescale: 600),
                                  toleranceBefore: .zero, toleranceAfter: .zero)
