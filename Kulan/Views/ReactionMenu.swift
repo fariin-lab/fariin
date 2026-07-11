@@ -43,51 +43,102 @@ enum EmojiCatalog {
 }
 
 // Floating dim overlay: a quick-emoji bar on top, message actions below.
+// Emoji press feedback (Signal scales the focused reaction up): a quick pop on touch-down.
+private struct ReactionPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 1.35 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
 struct ReactionMenuOverlay: View {
     let message: Message
     let cid: String
     let dark: Bool
     let isMe: Bool
     let myReaction: String?
+    var anchorFrame: CGRect = .zero   // the tapped bubble's GLOBAL frame (Signal anchors bar above / menu below)
+    var isGroup: Bool = false
+    var canPin: Bool = true
+    var isPinned: Bool = false
     var onPick: (String) -> Void
     var onMore: () -> Void
     var onReply: () -> Void
     var onForward: () -> Void
     var onPin: () -> Void
     var onCopy: () -> Void
+    var onSelect: () -> Void = {}
+    var onInfo: () -> Void = {}
+    var onSaveImage: () -> Void = {}
     var onEdit: () -> Void
     var onDelete: () -> Void
     var onReport: () -> Void
     var onDismiss: () -> Void
     @State private var shown = false
 
-    // Recents first, then the defaults, deduped and capped at 6.
+    // Signal's default reaction set: recents first, then the 6 defaults, deduped, capped at 6.
     private var quick: [String] {
         var set = ReactionRecents.get()
-        for e in ["❤️", "👍", "😂", "😮", "😢", "🙏"] where !set.contains(e) { set.append(e) }
+        for e in ["❤️", "👍", "👎", "😂", "😮", "😢"] where !set.contains(e) { set.append(e) }
         return Array(set.prefix(6))
     }
 
-    var body: some View {
-        ZStack {
-            // Native-style blurred backdrop (not a flat dim) — like iMessage/Telegram.
-            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onDismiss() }
-            // Emoji bar · the lifted message · the menu — all on the message's side.
-            VStack(alignment: isMe ? .trailing : .leading, spacing: 12) {
-                emojiBar
-                liftedBubble
-                actions
-            }
-            .frame(maxWidth: .infinity, alignment: isMe ? .trailing : .leading)
-            .padding(.horizontal, 20)
-            // iMessage-style pop: spring up + scale from the message's side, backdrop fades.
-            .scaleEffect(shown ? 1 : 0.86, anchor: isMe ? .topTrailing : .topLeading)
-            .opacity(shown ? 1 : 0)
-            .onAppear { withAnimation(.spring(response: 0.36, dampingFraction: 0.72)) { shown = true } }
-        }
+    // How many action rows the menu will show (drives clamping math).
+    private var rowCount: Int {
+        var n = 1                                   // Reply
+        if !message.isCall { n += 1 }               // Forward
+        if !message.text.isEmpty { n += 1 }         // Copy
+        if message.isImage { n += 1 }               // Save Image
+        n += 1                                       // Select
+        if isGroup && isMe && message.sendState == nil { n += 1 }   // Info
+        if canPin { n += 1 }                         // Pin
+        if isMe && !message.isImage && !message.isAudio && !message.isCall && message.sendState == nil { n += 1 }   // Edit
+        n += 1                                       // Delete / Report
+        return n
     }
+
+    private let barH: CGFloat = 60      // reaction pill height + shadow room
+    private let rowH: CGFloat = 44      // action row height
+    private let gap: CGFloat = 10
+
+    var body: some View {
+        GeometryReader { geo in
+            let safeTop = geo.safeAreaInsets.top + 8
+            let safeBottom = geo.size.height - geo.safeAreaInsets.bottom - 8
+            let menuH = CGFloat(rowCount) * rowH
+            let bubbleH = min(anchorFrame.height, geo.size.height * 0.5)
+            // Desired: bubble stays where it was; bar 12pt above it, menu 12pt below.
+            var groupTop = anchorFrame.minY - barH - 12
+            let groupBottom = anchorFrame.minY + bubbleH + 12 + menuH
+            // Clamp into the safe content area (Signal shifts the whole group up/down to fit).
+            if groupBottom > safeBottom { groupTop -= (groupBottom - safeBottom) }
+            if groupTop < safeTop { groupTop = safeTop }
+
+            ZStack(alignment: .topLeading) {
+                // Blurred + dimmed backdrop (Signal: UIBlurEffect .regular + a light/dark tint).
+                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+                    .overlay((dark ? Color.white : Color.black).opacity(0.12).ignoresSafeArea())
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismiss() }
+
+                VStack(alignment: isMe ? .trailing : .leading, spacing: 12) {
+                    emojiBar
+                    liftedBubble
+                    actions
+                }
+                .frame(width: geo.size.width - 32, alignment: isMe ? .trailing : .leading)
+                .offset(x: 16, y: groupTop)
+                // Spring from the bubble's side (Signal: scale 0.2 → 1, damping 0.8).
+                .scaleEffect(shown ? 1 : 0.4, anchor: isMe ? .topTrailing : .topLeading)
+                .opacity(shown ? 1 : 0)
+            }
+            .onAppear { withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) { shown = true } }
+        }
+        .ignoresSafeArea()
+    }
+
+    private func dismiss() { withAnimation(.easeOut(duration: 0.18)) { shown = false }; onDismiss() }
 
     // The ACTUAL tapped message lifted above the menu (native "peek" feel): the real
     // image, the real voice widget, or the real text bubble — never a placeholder string.
@@ -128,55 +179,57 @@ struct ReactionMenuOverlay: View {
 
     private func haptic() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
 
-    // Compact native-sized reaction bar: 26pt glyphs, frosted glass, trailing "…" button.
+    // Signal's reaction pill: 32pt glyphs, glass capsule, the 6 defaults + a trailing "…" more button.
+    // The selected emoji gets a circular highlight (Signal's selectedBackground).
     private var emojiBar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             ForEach(quick, id: \.self) { e in
                 Button { haptic(); onPick(e) } label: {
-                    Text(e).font(.system(size: 26))
-                        .padding(5)
-                        .background(myReaction == e ? Color.accentColor.opacity(0.22) : .clear, in: Circle())
+                    Text(e).font(.system(size: 30))
+                        .frame(width: 40, height: 44)
+                        .background(myReaction == e ? Color.accentColor.opacity(0.25) : .clear, in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReactionPressStyle())
             }
             Button { haptic(); onMore() } label: {
-                Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold))
+                Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 34, height: 34)
-                    .background(Theme.received(dark), in: Circle())
+                    .frame(width: 40, height: 40)
+                    .background(dark ? Color.white.opacity(0.12) : Color.black.opacity(0.06), in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReactionPressStyle())
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, 8).padding(.vertical, 6)
         .liquidGlass(Capsule())   // real iOS 26 Liquid Glass
         .shadow(color: .black.opacity(0.18), radius: 16, y: 6)   // float above the chat
     }
 
+    // Menu order matches the mockup: Reply · Forward · Copy · (Save) · Select · Info · Pin · Edit · Delete/Report.
     private var actions: some View {
         VStack(spacing: 0) {
             row("Reply", "arrowshape.turn.up.left", onReply)
             if !message.isCall {
-                menuDivider
-                row("Forward", "arrowshape.turn.up.right", onForward)
+                menuDivider; row("Forward", "arrowshape.turn.up.right", onForward)
             }
-            if !message.isImage && !message.text.isEmpty {
-                menuDivider
-                row("Copy", "doc.on.doc") { UIPasteboard.general.string = message.text; onCopy() }
+            if !message.text.isEmpty {
+                menuDivider; row("Copy", "doc.on.doc") { UIPasteboard.general.string = message.text; onCopy() }
             }
-            Divider().padding(.leading, 16)
-            row("Pin", "pin", onPin)
+            if message.isImage {
+                menuDivider; row("Save Image", "square.and.arrow.down", onSaveImage)
+            }
+            menuDivider; row("Select", "checkmark.circle", onSelect)
+            if isGroup && isMe && message.sendState == nil {
+                menuDivider; row("Info", "info.circle", onInfo)
+            }
+            if canPin {
+                menuDivider; row(isPinned ? "Unpin" : "Pin", isPinned ? "pin.slash" : "pin", onPin)
+            }
             if isMe && !message.isImage && !message.isAudio && !message.isCall && message.sendState == nil {
-                menuDivider
-                row("Edit", "pencil", onEdit)
+                menuDivider; row("Edit", "pencil", onEdit)
             }
-            if isMe {
-                menuDivider
-                row("Delete", "trash", onDelete, destructive: true)
-            } else {
-                // You can flag another person's message for review (App Store 1.2).
-                menuDivider
-                row("Report", "flag", onReport, destructive: true)
-            }
+            menuDivider
+            if isMe { row("Delete", "trash", onDelete, destructive: true) }
+            else { row("Report", "flag", onReport, destructive: true) }   // flag for review (App Store 1.2)
         }
         .frame(width: 250)
         .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous))   // rounder, Apple-style

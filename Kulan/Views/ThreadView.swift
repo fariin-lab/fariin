@@ -119,6 +119,8 @@ struct ThreadView: View {
     @State private var didAnchorUnread = false
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
+    @State private var reactionTarget: ReactionTarget?   // long-press → Signal-style reaction bar + menu
+    struct ReactionTarget: Identifiable { let id = UUID(); let message: Message; let frame: CGRect }
     @State private var pendingDelete: Message?
     @State private var editingMessage: Message?   // INLINE edit (Telegram-style) — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
@@ -496,6 +498,33 @@ struct ThreadView: View {
 
     var body: some View {
         threadContent
+        // Signal-style long-press overlay (emoji reaction bar + glass action menu, anchored to the
+        // bubble's real on-screen frame). Drawn OUTERMOST so it covers the composer too.
+        .overlay {
+            if let t = reactionTarget {
+                ReactionMenuOverlay(
+                    message: t.message, cid: cid, dark: dark, isMe: t.message.authorId == me,
+                    myReaction: t.message.reactions[me],
+                    anchorFrame: t.frame, isGroup: isGroup,
+                    canPin: (!isGroup || (conversation?.isAdmin(me) ?? false)),
+                    isPinned: repo.pinnedMessageIds.contains(t.message.id),
+                    onPick: { emoji in react(t.message, emoji); reactionTarget = nil },
+                    onMore: { let m = t.message; reactionTarget = nil; morePickerTarget = m },
+                    onReply: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }; inputFocused = true },
+                    onForward: { let m = t.message; reactionTarget = nil; forwardTarget = m },
+                    onCopy: { UIPasteboard.general.string = t.message.text; reactionTarget = nil },
+                    onPin: { let m = t.message; reactionTarget = nil; togglePin(m) },
+                    onSelect: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
+                    onInfo: { let m = t.message; reactionTarget = nil; infoTarget = m },
+                    onSaveImage: { let m = t.message; reactionTarget = nil; Task { await saveImageToPhotos(m) } },
+                    onEdit: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }; input = m.text; inputFocused = true },
+                    onDelete: { let m = t.message; reactionTarget = nil; pendingDelete = m },
+                    onReport: { let m = t.message; reactionTarget = nil; reportTarget = m },
+                    onDismiss: { reactionTarget = nil }
+                )
+                .transition(.opacity)
+            }
+        }
         // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
         .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid) }
@@ -879,6 +908,10 @@ struct ThreadView: View {
                 canPin: !isGroup || (conversation?.isAdmin(me) ?? false),
                 isPinned: repo.pinnedMessageIds.contains(msg.id),
                 onResend: { m in resend(m) },
+                onLongPress: { m, frame in
+                    guard !selecting else { return }   // in selection mode long-press does nothing
+                    withAnimation(.easeOut(duration: 0.18)) { reactionTarget = ReactionTarget(message: m, frame: frame) }
+                },
                 onJumpTo: { id in jumpTo(id) },
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 replyStoryNS: replyStoryNS,
@@ -1750,6 +1783,14 @@ struct ThreadView: View {
     }
 
     // Toggle my reaction (re-tapping the same emoji removes it) and remember it as recent.
+    private func togglePin(_ m: Message) {
+        if repo.pinnedMessageIds.contains(m.id) {
+            Task { await ChatService.removePinnedMessage(cid, m.id) }
+        } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
+            Task { await ChatService.addPinnedMessage(cid, m.id) }
+        }
+    }
+
     private func react(_ m: Message, _ emoji: String) {
         guard m.sendState == nil else { return }   // can't react to a message that isn't on the server yet
         let new = m.reactions[me] == emoji ? nil : emoji
@@ -2668,7 +2709,7 @@ struct MessageBubble: View, Equatable {
         let d = Int(message.duration ?? 0)
         return String(format: "%d:%02d", d / 60, d % 60)
     }
-    var onLongPress: (Message) -> Void = { _ in }
+    var onLongPress: (Message, CGRect) -> Void = { _, _ in }   // message + its GLOBAL frame → reaction overlay
     var onResend: (Message) -> Void = { _ in }
     var onJumpTo: (String) -> Void = { _ in }
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
@@ -2690,6 +2731,7 @@ struct MessageBubble: View, Equatable {
     private var onMyBubble: Color { .white }
 
     @State private var dragX: CGFloat = 0
+    @State private var bubbleFrame: CGRect = .zero   // live global frame → reaction overlay anchor
     // Reference flag (NOT @State): the waveform scrub and the reply gesture fire in the SAME drag event,
     // and a @State bool doesn't propagate synchronously within that event, so the reply read the stale
     // (false) value and still swiped. A class is mutated + read synchronously, killing the race.
@@ -2954,41 +2996,22 @@ struct MessageBubble: View, Equatable {
                     .alert("Sorry, this user doesn't seem to exist.", isPresented: $notFoundUser) {
                         Button("OK", role: .cancel) {}
                     }
-                    // REAL native context menu (same as the chat list) — iOS handles the
-                    // lift + blur + spring. No custom overlay.
-                    .contextMenu {
-                        Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
-                        if !message.text.isEmpty {
-                            Button { UIPasteboard.general.string = message.text } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    // Track the bubble's GLOBAL frame (cheap: only visible cells render). The long-press
+                    // reports it so the Signal-style overlay can anchor the reaction bar + menu to the
+                    // bubble's real on-screen position.
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { bubbleFrame = g.frame(in: .global) }
+                                .onChange(of: g.frame(in: .global)) { _, f in bubbleFrame = f }
                         }
-                        if message.isImage {
-                            Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
-                        }
-                        if isMe && !message.isImage && !message.isAudio && !message.isCall && message.sendState == nil {
-                            Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
-                        }
-                        if canPin {
-                            Button { onPin(message) } label: {
-                                Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
-                            }
-                        }
-                        if !message.isCall {
-                            Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                        }
-                        if message.sendState == nil {   // can't react until the message is on the server
-                            Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
-                        }
-                        // "Info" (group, my own messages) → who has read this message.
-                        if isGroup && isMe && message.sendState == nil {
-                            Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
-                        }
-                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
-                        Divider()
-                        if isMe {
-                            Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
-                        } else {
-                            Button(role: .destructive) { onReport(message) } label: { Label("Report", systemImage: "flag") }
-                        }
+                    )
+                    // Long-press → custom Signal-style reaction bar + glass menu (replaces the native
+                    // context menu, which can't show an inline emoji reaction bar). 0.28s ≈ Signal's
+                    // press; a .medium haptic fires as it presents.
+                    .onLongPressGesture(minimumDuration: 0.28) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
+                        onLongPress(message, bubbleFrame)
                     }
                     // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
                     .highPriorityGesture(TapGesture(count: 2).onEnded {
