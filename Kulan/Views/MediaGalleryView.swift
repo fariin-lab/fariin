@@ -352,15 +352,13 @@ struct MediaGalleryView: View {
     }
     private func exitSelection() { selecting = false; selection = [] }
 
-    // Go to Chat (Signal: return to the conversation at that message). Pop THIS gallery first, then —
-    // only AFTER that pop finishes — tell the open ThreadView to pop the profile and scroll. The two pops
-    // MUST be sequential: firing dismiss() and the profile-pop in the same runloop raced the NavigationStack
-    // into unwinding all the way to the root (the chat LIST), which is the bug being fixed here.
+    // Go to Chat (Signal's popToViewController: land directly on the conversation, no profile shown).
+    // We do NOT dismiss the gallery ourselves — dismiss() pops us to the PROFILE (a visible flash), and
+    // racing it with the profile-pop over-unwound to the chat list. Instead, just tell the open ThreadView
+    // to drop its ENTIRE profile→gallery branch at once (showContactInfo = false pops both in one
+    // animation), then it scrolls to + briefly flashes the message.
     private func goToChat(_ m: Message) {
-        dismiss()   // pop gallery -> profile
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
-        }
+        NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
     }
 
     private func deleteSelected() {

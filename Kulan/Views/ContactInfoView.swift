@@ -146,6 +146,12 @@ struct ContactInfoView: View {
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
+            // "Go to Chat" from the gallery: drop the gallery in the SAME runloop ThreadView drops this
+            // profile (showContactInfo=false), so SwiftUI collapses straight to the conversation in one
+            // animation — no profile flash (Signal's popToViewController).
+            .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { _ in
+                showAllMedia = false
+            }
             .navigationDestination(item: $openGroup) { g in
                 let me = AuthService.shared.uid ?? ""
                 ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
