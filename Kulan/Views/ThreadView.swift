@@ -3190,54 +3190,71 @@ struct MessageBubble: View, Equatable {
                 }
             }
         } else if message.isVideo {
+            // ONE bubble: video on top, caption flush below sharing a single background + outline
+            // (Signal/WhatsApp) — the caption was previously not rendered at all ("video + caption not
+            // working"). With a caption the meta lives in the caption row; a bare video floats it.
+            let hasCaption = !message.text.isEmpty
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
-                Group {
-                    if let data = message.localImageData, let ui = UIImage(data: data) {
-                        Image(uiImage: ui).resizable().scaledToFill()          // optimistic local thumbnail
-                    } else if let url = message.thumbUrl {
-                        SecureImageView(imageUrl: url, enc: message.thumbEnc, cid: cid)
-                    } else {
-                        Rectangle().fill(Color.gray.opacity(0.18))
-                    }
-                }
-                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
-                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-                .overlay {   // upload ring while sending, play disc once delivered
-                    if message.sendState == .sending {
-                        ZStack {
-                            Color.black.opacity(0.18)
-                            UploadingRing()
+                VStack(alignment: .leading, spacing: 0) {
+                    Group {
+                        if let data = message.localImageData, let ui = UIImage(data: data) {
+                            Image(uiImage: ui).resizable().scaledToFill()          // optimistic local thumbnail
+                        } else if let url = message.thumbUrl {
+                            SecureImageView(imageUrl: url, enc: message.thumbEnc, cid: cid)
+                        } else {
+                            Rectangle().fill(Color.gray.opacity(0.18))
                         }
-                        .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-                    } else {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 22)).foregroundStyle(.white)
-                            .padding(16)
-                            .background(.black.opacity(0.45), in: Circle())
                     }
-                }
-                .overlay(alignment: .topLeading) {   // length chip, WhatsApp-style corner
-                    HStack(spacing: 4) {
-                        Image(systemName: "video.fill").font(.system(size: 10))
-                        Text(videoDurationLabel).font(.system(size: 11, weight: .semibold))
+                    .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                    .clipped()
+                    .overlay {   // upload ring while sending, play disc once delivered
+                        if message.sendState == .sending {
+                            ZStack { Color.black.opacity(0.18); UploadingRing() }
+                        } else {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 22)).foregroundStyle(.white)
+                                .padding(16)
+                                .background(.black.opacity(0.45), in: Circle())
+                        }
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(.black.opacity(0.35), in: Capsule())
-                    .padding(7)
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    metaRow
+                    .overlay(alignment: .topLeading) {   // length chip, WhatsApp-style corner
+                        HStack(spacing: 4) {
+                            Image(systemName: "video.fill").font(.system(size: 10))
+                            Text(videoDurationLabel).font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 7).padding(.vertical, 3)
                         .background(.black.opacity(0.35), in: Capsule())
-                        .foregroundStyle(.white)
                         .padding(7)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !hasCaption {
+                            metaRow
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(.black.opacity(0.35), in: Capsule())
+                                .foregroundStyle(.white)
+                                .padding(7)
+                        }
+                    }
+                    .onTapGesture {
+                        if message.sendState == .failed { onResend(message) }
+                        else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
+                    }
+                    // Caption INSIDE the same bubble (Signal: the caption is the message body).
+                    if hasCaption {
+                        HStack(alignment: .bottom, spacing: 6) {
+                            Text(message.text).font(.system(size: 17))
+                                .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
+                            if isLastInCluster { metaRow.padding(.bottom, 1) }
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .frame(width: imageDisplaySize.width, alignment: .leading)
+                    }
                 }
-                .onTapGesture {
-                    if message.sendState == .failed { onResend(message) }
-                    else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
-                }
+                .frame(width: imageDisplaySize.width)
+                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
             // Album (2+ photos as ONE message): a grid + one caption, like Signal/Telegram.
