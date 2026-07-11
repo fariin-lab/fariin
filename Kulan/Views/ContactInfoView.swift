@@ -23,6 +23,7 @@ struct ContactInfoView: View {
     @State private var handle = ""
     @State private var about = ""
     @State private var muted = false
+    @State private var mutedUntil: Double = 0   // millis; drives the "Muted until <time>" menu header
     @State private var blocked = false
     @State private var loaded = false
     @State private var media: [Message] = []
@@ -177,7 +178,7 @@ struct ContactInfoView: View {
             }
             .sheet(isPresented: $showShare) { SendContactSheet(contactText: shareText) }
             .sheet(isPresented: $showAddGroup) {
-                NewGroupView(preselect: NewGroupView.Person(id: otherUid, name: shownName, photo: photoUrl))
+                AddToGroupView(contactUid: otherUid, contactName: shownName, contactPhoto: photoUrl)
             }
     }
 
@@ -280,6 +281,21 @@ struct ContactInfoView: View {
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
+    private func setMuted(_ until: Double) {
+        muted = true; mutedUntil = until
+        Task { await ChatService.setMute(cid, until: until) }
+    }
+    // "Muted until 1:12 PM" (today) / "Muted until 9 Jul, 1:12 PM" (later) / "Muted always" (Signal).
+    private var muteUntilLabel: String {
+        let secs = mutedUntil / 1000
+        if secs > Date().addingTimeInterval(3600 * 24 * 365 * 5).timeIntervalSince1970 { return "Muted always" }
+        let date = Date(timeIntervalSince1970: secs)
+        let t = Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(date: .abbreviated, time: .shortened)
+        return "Muted until \(t)"
+    }
+
     // "Change Wallpaper" (from the "…" menu): pop back to the chat, then open the wallpaper picker.
     private func changeWallpaper() {
         let target = cid
@@ -355,15 +371,21 @@ struct ContactInfoView: View {
                 actionTile("video", "video.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) }
                 actionTile("voice", "phone.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) }
             }
-            // Native menu (pops up) instead of a custom action sheet.
+            // Native menu (pops up) instead of a custom action sheet. Signal: when ALREADY muted, the menu
+            // is just "Muted until <time>" + Unmute — the durations only appear when the chat is unmuted.
             Menu {
-                if muted { Button("Unmute") { muted = false; Task { await ChatService.setMute(cid, until: 0) } } }
-                Section("Mute this chat for…") {
-                    Button("1 hour") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
-                    Button("8 hours") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
-                    Button("1 day") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(24)) } }
-                    Button("1 week") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
-                    Button("Always") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
+                if muted {
+                    Section(muteUntilLabel) {
+                        Button("Unmute") { muted = false; mutedUntil = 0; Task { await ChatService.setMute(cid, until: 0) } }
+                    }
+                } else {
+                    Section("Mute this chat for…") {
+                        Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
+                        Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
+                        Button("1 day") { setMuted(ChatService.muteUntil(24)) }
+                        Button("1 week") { setMuted(ChatService.muteUntil(168)) }
+                        Button("Always") { setMuted(ChatService.muteUntil(nil)) }
+                    }
                 }
             } label: {
                 tileLabel(muted ? "unmute" : "mute", muted ? "bell.fill" : "bell.slash.fill")
@@ -471,6 +493,7 @@ struct ContactInfoView: View {
             let me = AuthService.shared.uid ?? ""
             let muteUntil = ((d["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue ?? 0
             muted = muteUntil > Date().timeIntervalSince1970 * 1000
+            mutedUntil = muteUntil
             blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
         }
         media = await ChatService.sharedMedia(cid)
