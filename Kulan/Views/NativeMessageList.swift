@@ -232,13 +232,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // to bottom). Only a single genuine new row animates; multi-row chunk loads and prepends do not.
         let animate = isAppend && wasAtBottom && appendedCount == 1
         if animate {
+            // Signal's send-message behavior: insert the new cell INSTANTLY (it lands just below the fold,
+            // fully opaque — NO fade, which was the "pop"), then spring the contentOffset down so the bubble
+            // slides smoothly up into view. This is Signal's scroll-up reveal (a UIKit spring on the offset),
+            // not a custom per-cell transform and not a diff fade.
             sendAnimating = true
-            layout.animateInserts = true
-            dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
-                guard let self else { return }
-                self.layout.animateInserts = false
-                self.pinBottom(animated: true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.sendAnimating = false }
+            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+                guard let self, self.collectionView.bounds.height > 0 else { return }
+                self.collectionView.layoutIfNeeded()   // exact frames for the appended row
+                let target = self.collectionView.contentSize.height - self.collectionView.bounds.height + self.collectionView.adjustedContentInset.bottom
+                let y = max(-self.collectionView.adjustedContentInset.top, target)
+                UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.6,
+                               options: [.allowUserInteraction, .curveEaseOut]) {
+                    self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)   // spring the scroll, not a per-cell anim
+                } completion: { _ in self.sendAnimating = false }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.sendAnimating = false }
         } else {

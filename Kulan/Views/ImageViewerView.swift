@@ -338,17 +338,19 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         let h = max(1, view.bounds.height)
         switch g.state {
         case .changed:
-            let ty = max(0, t.y)                              // downward only
-            let scale = min(1.0, max(0.35, 1.0 - ty / (h * 1.2)))   // YB dismissScale shrink curve
-            let alpha = min(1.0, max(0.0, 1.0 - ty / (h * 0.7)))    // YB backdrop fade curve
-            scrollView.transform = CGAffineTransform(translationX: t.x, y: ty).scaledBy(x: scale, y: scale)
-            onDim?(Double(alpha))
+            // Telegram photo dismiss: the image FOLLOWS the finger 1:1 in BOTH axes (translationX/Y are
+            // the raw finger delta) and shrinks only gently as it travels down, while the black backdrop
+            // fades — it feels like you're physically dragging the photo away, not watching it scale off.
+            let progress = min(1.0, max(0, t.y) / h)
+            let scale = 1.0 - progress * 0.2                 // subtle shrink so it stays under the finger
+            scrollView.transform = CGAffineTransform(translationX: t.x, y: t.y).scaledBy(x: scale, y: scale)
+            onDim?(1.0 - Double(progress) * 0.85)
         case .ended, .cancelled:
-            // YB: dismissVelocityY = 800, dismissScale = 0.22 (fraction of height).
-            if g.velocity(in: view).y > 800 || t.y > h * 0.22 {
+            // Commit on a flick or once dragged ~18% of the height; otherwise spring back.
+            if g.velocity(in: view).y > 700 || t.y > h * 0.18 {
                 onDismiss?()
             } else {
-                UIView.animate(withDuration: 0.15) {   // YB restoreDuration
+                UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0) {
                     self.scrollView.transform = .identity
                 }
                 onDim?(1)

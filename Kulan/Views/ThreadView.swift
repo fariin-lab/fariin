@@ -1725,10 +1725,10 @@ struct ThreadView: View {
                     }
                 }
             }
-            .padding(.horizontal, 10).frame(height: 36)   // Apple's native search-bar height
+            .padding(.horizontal, 12).frame(height: 44)   // substantial native search field (matches the X)
             .liquidGlass(Capsule(), interactive: false)
             Button { closeSearch() } label: {
-                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // 44pt Apple tap target
             }
             .buttonStyle(.plain)
@@ -3061,26 +3061,9 @@ struct MessageBubble: View, Equatable {
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
-        } else if message.replyTo != nil {
-            // Reply present: a single-column Grid sizes the column to the WIDEST child, so the bubble
-            // hugs content (no full-width balloon) while the quote card's maxWidth:.infinity fills that
-            // column to match a wider body (no "half card" gap). Fixes both past complaints at once.
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 4) {
-                GridRow { replyQuote }
-                if let link = firstLinkURL {
-                    GridRow {
-                        LinkPreviewCard(url: link, isMe: isMe, dark: dark)
-                            .onTapGesture { _ = routeTappedURL(link) }
-                    }
-                }
-                GridRow { bodyLine }
-            }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 10)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else {
             VStack(alignment: .leading, spacing: 4) {
+                replyQuote   // hugs its own content now (no maxWidth:.infinity) → the bubble never balloons
                 // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
                 if let link = firstLinkURL {
                     LinkPreviewCard(url: link, isMe: isMe, dark: dark)
@@ -3213,11 +3196,9 @@ struct MessageBubble: View, Equatable {
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 5)
-            // Fill the bubble's content width so the quote card MATCHES a wider message body below it
-            // (was hugging → a "half" card with an empty gap). maxWidth's IDEAL stays content-sized, so a
-            // standalone reply doesn't balloon the bubble to full width — it only expands to fill a wider
-            // sibling.
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Hug the quote's own content (name + snippet), truncating a long snippet at the bubble width.
+            // The old maxWidth:.infinity ballooned the WHOLE bubble to full width even for a tiny reply (the
+            // big empty space). No width frame → hugs when short, truncates when long. iMessage/Telegram look.
             // Tint the quote box with the (contrasting) text color so it's always visible —
             // the old white tint vanished on the white "mine" bubble in dark mode.
             .background(fg.opacity(0.12))
