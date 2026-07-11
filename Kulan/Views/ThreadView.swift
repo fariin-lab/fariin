@@ -62,6 +62,7 @@ struct ThreadView: View {
     @State private var sendError: String?
     @State private var showCamera = false
     @State private var showAttachPanel = false
+    @State private var attachDetent: PresentationDetent = .medium   // grows to .large when the caption field focuses
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
     @State private var showPollSoon = false   // Poll tile → "coming soon" sheet
     @State private var showFileImporter = false
@@ -400,7 +401,7 @@ struct ThreadView: View {
                 Task { await sendAlbum(imgs, caption: caption, hd: hd) }   // ONE album message
             }
         }
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false }) { attachPanel.presentationDetents([.medium, .large]) }   // opens half (≈2 rows), pull up for more
+        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = .medium }) { attachPanel.presentationDetents([.medium, .large], selection: $attachDetent) }   // opens half (≈2 rows), pull up for more / caption focus
         .sheet(isPresented: $showPollSoon) { pollSoonSheet.presentationDetents([.fraction(0.6)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
@@ -856,6 +857,7 @@ struct ThreadView: View {
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 replyStoryNS: replyStoryNS,
                 isHighlighted: msg.id == highlightId,
+                searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
                 otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
@@ -1026,7 +1028,7 @@ struct ThreadView: View {
         let id = searchMatches[searchIndex].id
         Task {
             await repo.ensureLoaded(id)
-            await MainActor.run { nativeScrollTarget = id; highlightId = id }
+            await MainActor.run { nativeScrollTarget = id }   // no full-bubble flash for search — the term is highlighted in-text
         }
     }
 
@@ -1139,6 +1141,7 @@ struct ThreadView: View {
                         else { multiImages = MultiImagesWrap(images: imgs) }
                     }
                 },
+                onCaptionFocused: { attachDetent = .large },
                 hasSelection: $recentsHasSelection)
                 .padding(.top, 10)
             // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
@@ -1709,23 +1712,24 @@ struct ThreadView: View {
     private var searchBar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
                 TextField("Search", text: $searchQuery)
+                    .font(.system(size: 17))   // native search-field text
                     .focused($searchFocused)
                     .submitLabel(.search)
                     .autocorrectionDisabled()
                     .onChange(of: searchQuery) { _, _ in updateSearchMatches() }
                 if !searchQuery.isEmpty {
                     Button { searchQuery = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 15)).foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 9)
+            .padding(.horizontal, 10).frame(height: 36)   // Apple's native search-bar height
             .liquidGlass(Capsule(), interactive: false)
             Button { closeSearch() } label: {
-                Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // 44pt Apple tap target
             }
             .buttonStyle(.plain)
         }
@@ -1736,14 +1740,14 @@ struct ThreadView: View {
     // matches + a count, like Signal.
     private var searchNavBar: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 22) {
-                Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 17, weight: .semibold)) }
+            HStack(spacing: 24) {
+                Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 16, weight: .semibold)) }
                     .disabled(searchIndex <= 0 || searchMatches.isEmpty)
-                Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 17, weight: .semibold)) }
+                Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 16, weight: .semibold)) }
                     .disabled(searchIndex >= searchMatches.count - 1 || searchMatches.isEmpty)
             }
             .tint(.primary)
-            .padding(.horizontal, 20).padding(.vertical, 11)
+            .padding(.horizontal, 18).frame(height: 44)   // 44pt Apple tap target, matches the close X
             .liquidGlass(Capsule(), interactive: true)
             Spacer()
             if !searchMatches.isEmpty || !searchQuery.isEmpty {
@@ -2428,7 +2432,7 @@ struct MessageBubble: View, Equatable {
     static func == (l: MessageBubble, r: MessageBubble) -> Bool {
         l.message == r.message && l.isMe == r.isMe && l.dark == r.dark && l.cid == r.cid
             && l.isGroup == r.isGroup && l.canPin == r.canPin && l.isPinned == r.isPinned
-            && l.isHighlighted == r.isHighlighted
+            && l.isHighlighted == r.isHighlighted && l.searchTerm == r.searchTerm
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
             && l.isViewedOnce == r.isViewedOnce
@@ -2477,6 +2481,7 @@ struct MessageBubble: View, Equatable {
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
     var replyStoryNS: Namespace.ID? = nil   // native zoom anchor for the story-quote thumbnail
     var isHighlighted: Bool = false
+    var searchTerm: String = ""           // in-chat search: highlight this term inside the text (Signal-style)
     var isFirstInCluster: Bool = true
     var isLastInCluster: Bool = true
     var otherLastRead: Double = 0
@@ -2527,6 +2532,20 @@ struct MessageBubble: View, Equatable {
         let full = message.text
         var str = AttributedString(full)
         str.font = .system(size: 17)
+        // In-chat search (Signal-style): highlight the matched TERM inside the text — never the whole
+        // bubble. Applied before the plain-text fast path so text-only messages highlight too.
+        if !searchTerm.isEmpty {
+            var from = full.startIndex
+            while let r = full.range(of: searchTerm, options: .caseInsensitive, range: from..<full.endIndex) {
+                let startOff = full.distance(from: full.startIndex, to: r.lowerBound)
+                let len = full.distance(from: r.lowerBound, to: r.upperBound)
+                let lo = str.index(str.startIndex, offsetByCharacters: startOff)
+                let hi = str.index(lo, offsetByCharacters: len)
+                str[lo..<hi].backgroundColor = Color.yellow
+                str[lo..<hi].foregroundColor = Color.black
+                from = r.upperBound
+            }
+        }
         // Fast path: plain text with no links/@/mentions skips ALL regex work (the common case).
         guard full.contains("http") || full.contains("@") || !message.mentions.isEmpty else { return Text(str) }
         let ns = full as NSString
@@ -2568,6 +2587,16 @@ struct MessageBubble: View, Equatable {
             }
         }
         return Text(str)
+    }
+
+    // The message text + trailing time as one line (short) or wrapped (long) — shared by the plain and
+    // the reply-quote layouts so the two stay identical.
+    private var bodyLine: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            bodyText
+                .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+            if isLastInCluster { metaRow.padding(.bottom, 1) }   // time once per cluster
+        }
     }
 
     // Route a tapped link: web URL -> "Open link?" confirm; kulan://u/<handle> -> open the
@@ -3032,22 +3061,33 @@ struct MessageBubble: View, Equatable {
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
+        } else if message.replyTo != nil {
+            // Reply present: a single-column Grid sizes the column to the WIDEST child, so the bubble
+            // hugs content (no full-width balloon) while the quote card's maxWidth:.infinity fills that
+            // column to match a wider body (no "half card" gap). Fixes both past complaints at once.
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 4) {
+                GridRow { replyQuote }
+                if let link = firstLinkURL {
+                    GridRow {
+                        LinkPreviewCard(url: link, isMe: isMe, dark: dark)
+                            .onTapGesture { _ = routeTappedURL(link) }
+                    }
+                }
+                GridRow { bodyLine }
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 10)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                replyQuote
                 // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
                 if let link = firstLinkURL {
                     LinkPreviewCard(url: link, isMe: isMe, dark: dark)
                         .onTapGesture { _ = routeTappedURL(link) }
                 }
-                // Text + time laid out in a real HStack so the time can never
-                // overlap the words. Short msgs => same line; long msgs => the
-                // text wraps and the time stays at the bottom-right corner.
-                HStack(alignment: .bottom, spacing: 6) {
-                    bodyText
-                        .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
-                    if isLastInCluster { metaRow.padding(.bottom, 1) }   // time once per cluster
-                }
+                // Text + time laid out in a real HStack so the time can never overlap the words.
+                bodyLine
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)

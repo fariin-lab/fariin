@@ -352,12 +352,15 @@ struct MediaGalleryView: View {
     }
     private func exitSelection() { selecting = false; selection = [] }
 
-    // Go to Chat: pop THIS gallery ourselves, then tell the open ThreadView to pop the profile too and
-    // scroll to the message. (Setting the parent's binding alone didn't pop while this child was pushed —
-    // nested isPresented destinations don't cascade, so nothing happened.)
+    // Go to Chat (Signal: return to the conversation at that message). Pop THIS gallery first, then —
+    // only AFTER that pop finishes — tell the open ThreadView to pop the profile and scroll. The two pops
+    // MUST be sequential: firing dismiss() and the profile-pop in the same runloop raced the NavigationStack
+    // into unwinding all the way to the root (the chat LIST), which is the bug being fixed here.
     private func goToChat(_ m: Message) {
-        dismiss()
-        NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
+        dismiss()   // pop gallery -> profile
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
+        }
     }
 
     private func deleteSelected() {

@@ -56,6 +56,11 @@ struct ChatCropView: View {
                     .gesture(moveGesture)
                 cornerHandles
             }
+            // A FIXED coordinate space for the crop gestures. The corner/move handles are placed with
+            // .position(from crop), so they MOVE as you drag — measuring the drag in the handle's own
+            // (.local) space fed its movement back into the translation → the crop "shook". Measuring in
+            // this stable canvas space instead means translation = pure finger movement, no feedback.
+            .coordinateSpace(name: "cropCanvas")
             .onAppear { layout(geo.size) }
             .onChange(of: geo.size) { _, s in layout(s) }
         }
@@ -220,7 +225,7 @@ struct ChatCropView: View {
     // MARK: Gestures
 
     private var moveGesture: some Gesture {
-        DragGesture()
+        DragGesture(coordinateSpace: .named("cropCanvas"))
             .onChanged { g in
                 if start == .zero { start = crop }
                 var r = start.offsetBy(dx: g.translation.width, dy: g.translation.height)
@@ -232,7 +237,7 @@ struct ChatCropView: View {
     }
 
     private func cornerGesture(_ c: Corner) -> some Gesture {
-        DragGesture()
+        DragGesture(coordinateSpace: .named("cropCanvas"))
             .onChanged { g in
                 if start == .zero { start = crop }
                 edited = true

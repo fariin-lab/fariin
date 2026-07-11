@@ -14,7 +14,9 @@ struct AttachRecentsStrip: View {
     var onPickVideo: (URL) -> Void
     var onSendAlbum: ([UIImage], String) -> Void = { _, _ in }   // multi-select → send with a caption
     var onOpenAlbum: ([UIImage]) -> Void = { _ in }              // tapping a photo WHILE selecting → open the approval/paging page
+    var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
+    @FocusState private var captionFocused: Bool
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
@@ -92,18 +94,24 @@ struct AttachRecentsStrip: View {
             TextField("", text: $caption,
                       prompt: Text("Add a caption…").foregroundColor(Color(.systemGray)))
                 .foregroundStyle(.primary)
+                .focused($captionFocused)
                 .padding(.horizontal, 16).frame(height: 46)
                 .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
+                // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
+                // arrow on clear glass, which read as a different, washed-out button).
                 Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(Color(hex: 0x3DA1FD))
+                    .foregroundStyle(.white)
                     .frame(width: 46, height: 46)
-                    .liquidGlass(Circle(), interactive: true)   // real Liquid Glass send button (no count)
+                    .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+        // Focusing the caption grows the sheet to .large so this bar pins above the keyboard instead of
+        // the medium sheet shoving the whole content up (the caption "jumping" to mid-screen).
+        .onChange(of: captionFocused) { _, focused in if focused { onCaptionFocused() } }
     }
 
     private var grid: some View {
