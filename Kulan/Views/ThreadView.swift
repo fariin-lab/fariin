@@ -691,7 +691,7 @@ struct ThreadView: View {
                 if let id = msg?.id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
                 if ids.count > 1 { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 20)   // align the bar edges under the native nav bar (back button / call pill), not a flat 16
             .padding(.top, 6).padding(.bottom, 2)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
