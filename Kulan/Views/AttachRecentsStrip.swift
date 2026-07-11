@@ -98,14 +98,22 @@ struct AttachRecentsStrip: View {
     private var captionBar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 8) {
+                // View-once media can't carry a caption (WhatsApp/Signal), so the field is disabled + the
+                // prompt says why when View Once is on.
                 TextField("", text: $caption,
-                          prompt: Text("Add a caption…").foregroundColor(Color(.systemGray)))
+                          prompt: Text(viewOnce ? "No caption for View Once" : "Add a caption…")
+                            .foregroundColor(Color(.systemGray)))
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
+                    .disabled(viewOnce)
                 // View Once (WhatsApp/Signal): the "1" toggle inside the caption field, for a single photo.
-                // When on, the photo self-destructs after the recipient opens it once.
+                // When on, the photo self-destructs after the recipient opens it once — and the caption is
+                // cleared + disabled.
                 if selectedIds.count == 1 {
-                    Button { viewOnce.toggle() } label: {
+                    Button {
+                        viewOnce.toggle()
+                        if viewOnce { caption = ""; captionFocused = false }
+                    } label: {
                         Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
                             .font(.system(size: 23, weight: .regular))
                             .foregroundStyle(viewOnce ? Color(hex: 0x0A84FF) : Color(.systemGray))
