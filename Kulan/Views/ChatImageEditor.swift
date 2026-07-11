@@ -60,42 +60,9 @@ struct ChatImageEditor: View {
                 // canvas ignored the safe area but the overlay/flatten used geo.size, strokes shifted DOWN
                 // by the top inset on Done — the reported bug.
                 // The image area EXCLUDES the bottom chrome (Signal's approval layout: the image is
-                // inset by the toolbar height + safe area, never hidden behind it) — the photo aspect-
-                // FITS this area, fully visible and letterboxed on black, uniformly for every ratio.
-                // The canvas, drawing layer and persistent overlay all share this SAME rect so a stroke
-                // stays exactly where it was drawn after Done.
-                let canvasArea = CGSize(width: geo.size.width,
-                                        height: max(120, geo.size.height - bottomChromeH - 8))
-                ZStack {
-                    if isDrawing {
-                        Image(uiImage: edited)
-                            .resizable().scaledToFit()
-                            .frame(width: canvasArea.width, height: canvasArea.height)
-                        // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
-                        DrawingCanvas(drawing: $drawing, isActive: true,
-                                      penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
-                                      showsToolPicker: false,
-                                      inkType: isHighlighter ? .marker : .pen,
-                                      penWidth: penWidth)
-                            .frame(width: canvasArea.width, height: canvasArea.height)
-                    } else {
-                        ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
-                                      onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                            .frame(width: canvasArea.width, height: canvasArea.height)
-                        // PERSISTENT drawing: after Done the strokes stay visible over the photo (the bug was
-                        // the canvas only showing while actively drawing → the drawing "disappeared").
-                        if !drawing.bounds.isEmpty {
-                            Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: canvasArea), scale: UIScreen.main.scale))
-                                .resizable()
-                                .frame(width: canvasArea.width, height: canvasArea.height)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                }
-                // Rounded canvas ONLY in draw mode (Signal's editor radius 18; plain review has none).
-                .clipShape(RoundedRectangle(cornerRadius: isDrawing ? 18 : 0, style: .continuous))
-                .frame(width: canvasArea.width, height: canvasArea.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // inset by the toolbar height + safe area, never hidden behind it). Extracted into
+                // canvasView(_:) — the inline version blew the type-checker.
+                canvasView(canvasArea(geo.size))
 
                 // Chrome INSIDE the native safe area (no manual inset math). The canvas above ignores
                 // the keyboard entirely, so opening the caption keyboard lifts ONLY this bottom bar —
@@ -111,7 +78,7 @@ struct ChatImageEditor: View {
                         .buttonStyle(.plain)
                         Spacer()
                         if isDrawing {
-                            Button { isDrawing = false } label: {
+                            Button { bakeDrawing(); isDrawing = false } label: {
                                 Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                                     .padding(.horizontal, 18).frame(height: 44)
                                     .liquidGlass(Capsule(), interactive: true)
@@ -174,6 +141,60 @@ struct ChatImageEditor: View {
         }
     }
 
+    // Image area = full width, height minus the live-measured bottom chrome (Signal insets the
+    // scroll area by its toolbar heights at runtime — the photo is never hidden behind the bars).
+    private func canvasArea(_ s: CGSize) -> CGSize {
+        CGSize(width: s.width, height: max(120, s.height - bottomChromeH - 8))
+    }
+
+    // The photo aspect-FITS the canvas area — fully visible, letterboxed on black, one uniform rule
+    // for every ratio (1:1, 4:5, 3:4, 2:3, 4:3, 3:2, 16:9, 9:16, 19.5:9, 20:9). Pinch zoom keeps
+    // min = fit. Strokes are BAKED into the image when draw mode ends (see bakeDrawing) — they live
+    // in the image's own pixels, so zoom/pan can never desync an annotation from the photo.
+    @ViewBuilder private func canvasView(_ area: CGSize) -> some View {
+        ZStack {
+            if isDrawing {
+                Image(uiImage: edited)
+                    .resizable().scaledToFit()
+                    .frame(width: area.width, height: area.height)
+                // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
+                DrawingCanvas(drawing: $drawing, isActive: true,
+                              penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                              showsToolPicker: false,
+                              inkType: isHighlighter ? .marker : .pen,
+                              penWidth: penWidth)
+                    .frame(width: area.width, height: area.height)
+            } else {
+                ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
+                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                    .frame(width: area.width, height: area.height)
+            }
+        }
+        // Rounded canvas ONLY in draw mode (Signal's editor radius 18; plain review has none).
+        .clipShape(RoundedRectangle(cornerRadius: isDrawing ? 18 : 0, style: .continuous))
+        .frame(width: area.width, height: area.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // Composite the current strokes INTO the image (at the exact rect they were drawn in) and clear
+    // the live drawing. After this, annotations are pixels of the photo itself — zooming/panning the
+    // editor (or the recipient's viewer) moves them in perfect sync, permanently anchored.
+    @MainActor private func bakeDrawing() {
+        guard !drawing.bounds.isEmpty else { return }
+        let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        let composed = ZStack {
+            Image(uiImage: edited).resizable().scaledToFit().frame(width: size.width, height: size.height)
+            Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale)).resizable()
+        }
+        .frame(width: size.width, height: size.height)
+        let r = ImageRenderer(content: composed)
+        r.scale = UIScreen.main.scale
+        if let baked = r.uiImage {
+            editedCache = baked
+            drawing = PKDrawing()
+        }
+    }
+
     // Brush bottom bar: color palette slider (white → rainbow), then undo · pen/highlighter · width · ✓.
     private var penBar: some View {
         let currentColor = penHue == 0 ? Color.white : Color(hue: penHue, saturation: 1, brightness: 1)
@@ -200,7 +221,7 @@ struct ChatImageEditor: View {
                 Spacer()
                 // Edit-only (opened straight into pen from the multi-image screen): finishing the drawing
                 // returns the photo immediately — no extra editor page in between.
-                Button { if editOnly { returnEdited() } else { isDrawing = false } } label: {
+                Button { if editOnly { returnEdited() } else { bakeDrawing(); isDrawing = false } } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                         .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
                 }
@@ -229,7 +250,7 @@ struct ChatImageEditor: View {
             if !captionFocused {
                 HStack(spacing: 10) {
                     tool("crop", active: false) { withAnimation(.easeInOut(duration: 0.28)) { showCrop = true } }
-                    tool("scribble", active: isDrawing) { isDrawing.toggle() }
+                    tool("scribble", active: isDrawing) { if isDrawing { bakeDrawing() }; isDrawing.toggle() }
                     if !editOnly { tool("", active: hd, label: "HD") { hd.toggle() } }
                     Spacer()
                 }
