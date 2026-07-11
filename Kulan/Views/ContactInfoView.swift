@@ -134,6 +134,9 @@ struct ContactInfoView: View {
         .navigationBarBackButtonHidden(false)
         .toolbar { navTrailing }
         .task {
+            // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
+            // re-entry); the async load() then refreshes it.
+            if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
             await load()
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
             localName = ContactNames.shared.name(for: otherUid)

@@ -865,16 +865,23 @@ enum ChatService {
 
     /// Recent image messages in a conversation (for the Shared Media section).
     /// Filters client-side to avoid needing a composite index.
+    // Warm cache so the profile's "All Media" strip renders INSTANTLY on re-entry instead of popping
+    // in after a fresh Firestore round-trip each time ("coming late / not stable").
+    @MainActor private static var sharedMediaCache: [String: [Message]] = [:]
+    @MainActor static func cachedSharedMedia(_ cid: String) -> [Message]? { sharedMediaCache[cid] }
+
     static func sharedMedia(_ cid: String) async -> [Message] {
         do {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true)
                 .limit(to: 60).getDocuments()
-            return snap.documents
+            let out = snap.documents
                 .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
-                .filter { $0.isImage }
+                .filter { $0.isImage || $0.isVideo }
+            await MainActor.run { sharedMediaCache[cid] = out }
+            return out
         } catch {
-            return []
+            return await MainActor.run { sharedMediaCache[cid] ?? [] }
         }
     }
 
