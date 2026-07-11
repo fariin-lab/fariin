@@ -1,15 +1,25 @@
 import SwiftUI
 import UIKit
 
-// UIKit-backed message list that reproduces Signal's conversation SCROLL BEHAVIOUR (our own code). A
-// UICollectionView hosts our existing SwiftUI rows (MessageBubble etc.) via UIHostingConfiguration, so
-// no bubble feature is lost — only the scroll container differs from the SwiftUI list. Because the
-// collection view controls its own contentOffset, we can reproduce the three behaviours a SwiftUI
-// LazyVStack structurally cannot:
-//   1. Open at the EXACT bottom on the first frame (no estimate-then-correct jump / blink).
-//   2. Scroll CONTINUITY when older messages load at the top — an on-screen message is anchored and its
-//      position restored after the insert, so the view never lurches (Signal's key anti-jump idea).
-//   3. Stay pinned to the bottom across keyboard / composer height changes when already at the bottom.
+// UIKit-backed message list that reproduces Signal's conversation open + scroll behaviour (our own
+// code). A UICollectionView hosts our existing SwiftUI rows (MessageBubble etc.) via
+// UIHostingConfiguration, so no bubble feature is lost — only the scroll container differs.
+//
+// ROOT-CAUSE FIX (the "shake / jump / flicker on open"): we do NOT self-size cells. Self-sizing means
+// the collection view lays out with an ESTIMATED height, scrolls to the bottom using the wrong total,
+// then measures each SwiftUI cell and CORRECTS — and that correction is the visible shake. Signal never
+// self-sizes: its ConversationViewLayout pre-measures every cell and lays out EXACT frames, so the very
+// first frame is already final and scroll-to-bottom lands perfectly.
+//
+// We copy that exactly:
+//   1. Each row's height is measured up-front (UIHostingController.sizeThatFits at the real width,
+//      cached by row id) and fed to a custom layout that stacks exact frames. Our bubbles reserve their
+//      true height synchronously from stored image/video dimensions, so a photo decoding later never
+//      changes a row height — the pre-measure is correct on the first pass.
+//   2. Genuine late height changes (only link-preview cards, which fetch Open-Graph data async) are
+//      reconciled ONCE via a GeometryReader height report, with scroll position preserved — the same way
+//      Signal re-lays-out when media sizes land late. Gated until after the first reveal so it can never
+//      affect the open.
 struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in order (Message.rowId)
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
@@ -45,43 +55,50 @@ struct NativeMessageList: UIViewControllerRepresentable {
     }
 }
 
+// Per-cell rendered-height report (SwiftUI truth). Scoped per hosting cell, so cells never interfere.
+private struct RowHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 final class MessageListController: UIViewController, UICollectionViewDelegate {
     var coordinator: NativeMessageList.Coordinator!
     private var collectionView: UICollectionView!
+    private var layout: ExactHeightLayout!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var reg: UICollectionView.CellRegistration<UICollectionViewCell, String>!
+
     private var currentIds: [String] = []
-    private var didInitialScroll = false
-    private var pendingBottomScroll = false   // open/at-bottom settle window: keep re-pinning to the bottom
+    private var heights: [String: CGFloat] = [:]   // rowId -> exact measured height (Signal's cellSize cache)
+    private var measuredWidth: CGFloat = 0
+
+    // Off-screen SwiftUI sizer: hosts a row and returns its exact height for a given width (no display).
+    // A child VC so it inherits our trait collection (Dynamic Type), matching the on-screen render.
+    private let sizer = UIHostingController(rootView: AnyView(Color.clear))
+
+    private var didInitialScroll = false      // the first open has landed at the bottom
+    private var didReveal = false             // hidden until the first frame is final (Signal's hasAppliedFirstLoad)
+    private var scheduledEmptyReveal = false  // one-shot fallback for a genuinely-empty / slow-decrypt chat
+    private var pendingBottomOnOpen = false   // brief open window: keep pinned to bottom
+    private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
+    private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
-    private var stickBottomThroughLayout = false   // keep the bottom pinned across keyboard/composer resizes
-    private var contentSizeObs: NSKeyValueObservation?   // re-pin to bottom while self-sizing cells settle
-    private var settleWork: DispatchWorkItem?
-    private var sendAnimating = false   // an animated send/receive glide is in flight — do NOT snap-pin over it
-    private var didReveal = false       // hidden until the first load is fully settled (Signal's hasAppliedFirstLoad)
-    private var scheduledEmptyReveal = false   // one-shot fallback reveal for a genuinely-empty/slow chat
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // A PLAIN self-sizing vertical layout — NOT UICollectionLayoutListConfiguration, whose "list"
-        // styling drew separators / inset cell backgrounds (the boxes/borders around bubbles). Here each
-        // cell is full-width, self-sizes to its SwiftUI content, and has no chrome of its own.
-        let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
-                                              heightDimension: .estimated(60))
-        let item = NSCollectionLayoutItem(layoutSize: itemSize)
-        let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
-        let section = NSCollectionLayoutSection(group: group)
-        let layout = ComposerEmergeLayout(section: section)
+        layout = ExactHeightLayout()
+        layout.heightForItem = { [weak self] index in
+            guard let self, index < self.currentIds.count else { return 44 }
+            return self.heights[self.currentIds[index]] ?? 44
+        }
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
-        // Invisible until the first load settles (Signal shows the conversation only once the first
-        // render state has landed) — the bubbles appear fully formed, never mid-measure.
-        collectionView.alpha = 0
+        collectionView.alpha = 0   // invisible until the first render is final — never shows a mid-measure frame
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
-        // .always so SwiftUI's safe-area insets (nav bar on top, the floating composer on the bottom)
-        // become the collection view's adjustedContentInset — the last message clears the composer and
-        // scrollToBottom lands exactly above it.
+        // .always so SwiftUI's safe-area insets (nav bar on top, floating composer on the bottom) become
+        // the collection view's adjustedContentInset — the last message clears the composer and the
+        // bottom-scroll lands exactly above it.
         collectionView.contentInsetAdjustmentBehavior = .always
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -91,28 +108,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
-        buildDataSource()   // collectionView now exists — safe to wire the diffable data source
-        // ROOT CAUSE of the open-jump: cells self-size (estimated height → measured), so contentSize
-        // changes AFTER the initial scroll-to-bottom and the visible messages shift. Keep the bottom
-        // anchored by re-pinning whenever contentSize changes during the open / at-bottom window; the
-        // size corrections then land on off-screen content above, invisibly.
-        contentSizeObs = collectionView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
-            guard let self, !self.sendAnimating else { return }   // never stomp an in-flight send glide
-            if self.pendingBottomScroll || self.stickBottomThroughLayout {
-                // Corrections must be INSTANT — UICollectionView animates self-sizing invalidations by
-                // default, which rendered the settle as visible bubble motion (the "jump animation").
-                UIView.performWithoutAnimation { self.pinBottom() }
-            }
-        }
-    }
 
-    deinit { contentSizeObs?.invalidate(); settleWork?.cancel() }
+        // Off-screen sizer, in the hierarchy (0-alpha) so it inherits traits for accurate measurement.
+        addChild(sizer)
+        sizer.view.alpha = 0
+        sizer.view.isUserInteractionEnabled = false
+        sizer.view.frame = .zero
+        view.addSubview(sizer.view)
+        sizer.didMove(toParent: self)
+
+        buildDataSource()
+    }
 
     private func buildDataSource() {
         reg = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
-            guard let self else { return }
-            cell.contentConfiguration = UIHostingConfiguration { self.coordinator.parent.row(id) }
-                .margins(.all, 0)
+            let content = self?.coordinator.parent.row(id) ?? AnyView(EmptyView())
+            cell.contentConfiguration = UIHostingConfiguration {
+                content
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: RowHeightKey.self, value: g.size.height)
+                    })
+                    .onPreferenceChange(RowHeightKey.self) { h in
+                        self?.reportHeight(h, for: id)
+                    }
+            }
+            .margins(.all, 0)
             cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
         }
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] cv, ip, id in
@@ -120,82 +140,155 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         }
     }
 
+    // MARK: - Measurement (Signal's pre-measured cellSize)
+
+    // Exact height of a row for the given width, measured off-screen. Deterministic for every bubble type
+    // (heights come from stored dimensions / fixed frames), so this equals the on-screen render.
+    private func measure(_ id: String, width: CGFloat) -> CGFloat {
+        sizer.rootView = coordinator.parent.row(id)
+        let size = sizer.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
+        return ceil(size.height)
+    }
+
+    // Ensure every id in `ids` has a cached height (measured at the current width). No-op once cached.
+    private func measureMissing(_ ids: [String], width: CGFloat) {
+        guard width > 0 else { return }
+        for id in ids where heights[id] == nil { heights[id] = measure(id, width: width) }
+        measuredWidth = width
+    }
+
+    // Late rendered-height report from a cell. During open we trust the synchronous pre-measure; after
+    // reveal, a genuine change (a link-preview card fetching Open-Graph data) re-lays-out ONCE with the
+    // reader's position preserved — nothing else can change a row height, so this fires rarely.
+    private func reportHeight(_ h: CGFloat, for id: String) {
+        let hh = ceil(h)
+        guard hh > 0 else { return }
+        if let old = heights[id] {
+            guard abs(old - hh) > 2 else { return }   // ignore sub-pixel noise
+        } else {
+            heights[id] = hh
+            return
+        }
+        guard didReveal else { return }   // never reconcile during the open — the pre-measure owns it
+        heights[id] = hh
+        DispatchQueue.main.async { [weak self] in self?.reconcile() }
+    }
+
+    // Re-lay-out after a late height change, keeping the viewport stable (Signal's late-media re-layout).
+    private func reconcile() {
+        guard collectionView.bounds.height > 0 else { return }
+        let wasBottom = computeAtBottom()
+        let anchor = captureTopAnchor()
+        layout.invalidateLayout()
+        collectionView.layoutIfNeeded()
+        if wasBottom { pinBottom() }
+        else if let anchor { restore(anchor) }
+    }
+
+    // MARK: - Apply
+
     func apply(rowIds ids: [String]) {
+        let width = collectionView.bounds.width
+
         guard ids != currentIds else {
-            // Same rows, but SwiftUI state changed (reaction/edit/read tick): refresh only the on-screen
-            // cells. THROTTLED: reconfiguring on every parent re-render (each keystroke, typing dots)
-            // churned layout and left STALE, OVERLAPPING cell frames — the invisible overlapped cells
-            // then swallowed long-press/swipe on the rows beneath (couldn't reply/react on GIFs/calls).
+            // Same rows, SwiftUI state changed (reaction / edit / read tick): refresh only on-screen cells.
+            // Any height change from that lands through reportHeight → reconcile, so we don't measure here.
             let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
             guard !visible.isEmpty else { return }
             var snapshot = dataSource.snapshot()
             snapshot.reconfigureItems(visible)
-            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-                // Re-measure + re-place after the reconfigure so no cell keeps a stale frame.
-                self?.collectionView.collectionViewLayout.invalidateLayout()
-            }
+            dataSource.apply(snapshot, animatingDifferences: false)
             return
         }
 
         let wasAtBottom = computeAtBottom()
-        let isFirst = currentIds.isEmpty
-        // A top-prepend (load older) = the new list ENDS WITH the entire old list. For that we anchor an
-        // on-screen row and restore its position after the insert, so nothing lurches.
+        // A top-prepend (load older) = the new list ENDS WITH the entire old list. Anchor an on-screen row
+        // and restore its position after the insert, so nothing lurches.
         let isPrepend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.suffix(currentIds.count)) == currentIds
         // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
-        let appendedCount = ids.count - currentIds.count   // captured BEFORE currentIds is reassigned
+        let appendedCount = ids.count - currentIds.count
         let anchor: (id: String, distanceFromTop: CGFloat)? = isPrepend ? captureTopAnchor() : nil
+
+        measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(ids, toSection: 0)
-        let overlap = ids.filter { currentIds.contains($0) }
-        if !overlap.isEmpty { snapshot.reconfigureItems(overlap) }
         currentIds = ids
 
-        let shouldStick = isFirst || !didInitialScroll || (wasAtBottom && !isPrepend)
-        // Send/receive at the bottom ANIMATES — Signal's exact recipe (ConversationViewController+CVC):
-        // an animated performBatchUpdates insert + scrollAction .bottomForNewMessage(isAnimated: true).
-        // First load and prepends stay non-animated (Signal wraps those in zero-duration animations).
-        // ONLY a genuine single new message (one appended row) animates — the initial open loads messages
-        // in CHUNKS (cache→live), and animating those multi-row appends was the "jumping" bubbles on open.
-        // Also never animate during the open settle window (pendingBottomScroll).
-        let animate = isAppend && didInitialScroll && wasAtBottom && appendedCount == 1 && !pendingBottomScroll
+        // First content: apply, then land at the exact bottom and reveal. (If width isn't ready yet the
+        // list applies invisibly and viewDidLayoutSubviews performs the open once it is.)
+        if !didInitialScroll {
+            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+                self?.performFirstOpenIfReady()
+            }
+            return
+        }
+
+        // Send / receive at the bottom ANIMATES (Signal's recipe: animated batch insert + animated scroll
+        // to bottom). Only a single genuine new row animates; multi-row chunk loads and prepends do not.
+        let animate = isAppend && wasAtBottom && appendedCount == 1
         if animate {
-            // Signal's send animation (ConversationViewController): an ANIMATED batch insert (the new cell
-            // fades in) followed by an ANIMATED scroll to the bottom, so the list glides up to reveal the
-            // new bubble. No custom per-cell transforms — this is the native UIKit behaviour Signal uses.
             sendAnimating = true
+            layout.animateInserts = true
             dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
                 guard let self else { return }
-                let target = self.collectionView.contentSize.height - self.collectionView.bounds.height
-                    + self.collectionView.adjustedContentInset.bottom
-                let y = max(-self.collectionView.adjustedContentInset.top, target)
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
+                self.layout.animateInserts = false
+                self.pinBottom(animated: true)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.sendAnimating = false }
             }
-            // Safety: release even if the completion is dropped mid-transition.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.sendAnimating = false }
         } else {
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
-                if let anchor {
-                    self.restore(anchor)          // load-older: keep the reader's place
-                } else if shouldStick {
-                    self.beginBottomSettle()      // open: land + stay at bottom, no motion
-                }
+                if let anchor { self.restore(anchor) }              // load-older: keep the reader's place
+                else if wasAtBottom && !isPrepend { self.pinBottom() }   // was at bottom: stay pinned
             }
         }
     }
 
-    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        sendAnimating = false
+    // The first open: measure everything at the real width, place exact frames, land at the bottom, reveal.
+    // Everything the user sees is already final — no estimate → measure correction, so no shake.
+    private func performFirstOpenIfReady() {
+        guard !didInitialScroll,
+              collectionView.bounds.width > 0, collectionView.bounds.height > 0,
+              !currentIds.isEmpty else { return }
+        measureMissing(currentIds, width: collectionView.bounds.width)
+        layout.invalidateLayout()
+        collectionView.layoutIfNeeded()
+        didInitialScroll = true
+        pinBottom()
+        // Keep pinned for one runloop as a belt-and-suspenders guard, then release to free scrolling.
+        pendingBottomOnOpen = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pinBottom()
+            self.reveal()
+            self.pendingBottomOnOpen = false
+        }
     }
 
-    // MARK: - Scroll continuity (Signal's anti-jump idea, our implementation)
+    private func reveal() {
+        guard !didReveal, collectionView.bounds.height > 0 else { return }
+        didReveal = true
+        collectionView.alpha = 1
+    }
+
+    // Empty on first layout (cold decrypt in flight): reveal WITH content if it lands within ~0.6s (via the
+    // normal open path), else reveal the empty state so the composer still shows.
+    private func scheduleEmptyReveal() {
+        guard !scheduledEmptyReveal else { return }
+        scheduledEmptyReveal = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, !self.didReveal else { return }
+            self.reveal()
+        }
+    }
+
+    // MARK: - Scroll continuity (anchor / restore) — Signal's anti-jump idea, our implementation
 
     private func captureTopAnchor() -> (id: String, distanceFromTop: CGFloat)? {
         guard let ip = collectionView.indexPathsForVisibleItems.min(),
@@ -216,103 +309,41 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
-        stickBottomThroughLayout = didInitialScroll && !pendingBottomScroll && !sendAnimating && computeAtBottom()
+        stickBottom = didInitialScroll && !pendingBottomOnOpen && !sendAnimating && computeAtBottom()
+        // Width change (rotation / split view): every measured height is width-dependent — drop + re-measure.
+        let w = collectionView.bounds.width
+        if w > 0, measuredWidth > 0, w != measuredWidth {
+            heights.removeAll(keepingCapacity: true)
+            for id in currentIds { heights[id] = measure(id, width: w) }
+            measuredWidth = w
+            layout.invalidateLayout()
+        }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if !didReveal {
-            // Reveal immediately once there's content; if the list is still EMPTY (messages are
-            // decrypting on a cold open), wait briefly so it reveals WITH the messages instead of
-            // flashing an empty chat and popping them in late.
-            if !currentIds.isEmpty { revealAfterSettle() } else { scheduleEmptyReveal() }
+        if !didInitialScroll {
+            if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
+            else { scheduleEmptyReveal() }
+            return
         }
-        guard !sendAnimating else { return }   // never snap over an in-flight send glide
-        if pendingBottomScroll { settleNow() }                                          // first real layout → full synchronous settle
-        else if stickBottomThroughLayout { UIView.performWithoutAnimation { pinBottom() } }
+        guard !sendAnimating, !pendingBottomOnOpen else { return }
+        if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
         else { clampOffsetIfBeyondContent() }
     }
 
-    // Open / at-bottom send-receive: settle the self-sizing cells SYNCHRONOUSLY, before the frame is
-    // drawn. Each layoutIfNeeded pass resolves estimated→measured heights for the cells now on screen;
-    // pinning the bottom then exposes the next batch, so a few passes converge — all inside one
-    // CATransaction and without implicit animations, so the user NEVER sees intermediate positions.
-    // (Async re-pins across frames were the visible "jump animation": UIKit animates self-sizing
-    // corrections by default.)
-    private func beginBottomSettle() {
-        didInitialScroll = true
-        pendingBottomScroll = true
-        settleNow()
-        settleWork?.cancel()
-        let w = DispatchWorkItem { [weak self] in
-            self?.pendingBottomScroll = false
-            self?.clampOffsetIfBeyondContent()
-        }
-        settleWork = w
-        // Longer window: the contentSize observer keeps re-pinning the bottom while self-sizing cells
-        // (and any late-measuring hosted cells) settle, so a late height change can't visibly shift the
-        // just-revealed content.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: w)
-    }
-
-    private func settleNow() {
-        guard collectionView.bounds.height > 0 else { return }   // pre-layout: viewDidLayoutSubviews will settle
-        UIView.performWithoutAnimation {
-            for _ in 0..<4 {
-                collectionView.layoutIfNeeded()
-                pinBottom()
-            }
-        }
-        revealAfterSettle()
-    }
-
-    // First open: some hosted-SwiftUI cell heights resolve one runloop AFTER the synchronous passes, so
-    // reveal on the NEXT runloop turn — after one more settle — while still invisible. The user only
-    // ever sees the final, fully-formed layout (no pop/bounce during the push transition).
-    // Empty on first layout (cold decrypt in flight): reveal WITH content if it lands within ~0.6s
-    // (via the content path), else fall back to revealing the empty state so the composer still shows.
-    private func scheduleEmptyReveal() {
-        guard !scheduledEmptyReveal else { return }
-        scheduledEmptyReveal = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, !self.didReveal else { return }
-            self.revealAfterSettle()
-        }
-    }
-
-    private func revealAfterSettle() {
-        guard !didReveal else { return }
-        // TWO runloops of invisible settling before we reveal: hosted-SwiftUI cells resolve their real
-        // heights ASYNC (estimate → measure), and a single pass sometimes revealed mid-measure → the
-        // bubbles "shook" as the last cells snapped to size. A second runloop lets every visible cell
-        // reach its final height first, so the reveal shows a fully-stable layout.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.didReveal, self.collectionView.bounds.height > 0 else { return }
-            UIView.performWithoutAnimation {
-                for _ in 0..<3 { self.collectionView.layoutIfNeeded(); self.pinBottom() }
-            }
-            DispatchQueue.main.async {
-                guard !self.didReveal, self.collectionView.bounds.height > 0 else { return }
-                UIView.performWithoutAnimation {
-                    for _ in 0..<2 { self.collectionView.layoutIfNeeded(); self.pinBottom() }
-                    self.didReveal = true
-                    self.collectionView.alpha = 1
-                }
-            }
-        }
-    }
-
-    private func pinBottom() {
+    private func pinBottom(animated: Bool = false) {
         guard collectionView.bounds.height > 0 else { return }
         let target = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
         let y = max(-collectionView.adjustedContentInset.top, target)
-        if abs(collectionView.contentOffset.y - y) > 0.5 {
+        if animated {
+            collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
+        } else if abs(collectionView.contentOffset.y - y) > 0.5 {
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
         }
     }
 
-    // Never leave the view scrolled PAST the content (the "sometimes empty chat" bug): when the content
-    // shrinks (estimated → measured heights), clamp the offset back onto the real content.
+    // Never leave the view scrolled PAST the content: clamp the offset back onto the real content.
     private func clampOffsetIfBeyondContent() {
         guard collectionView.bounds.height > 0 else { return }
         let maxY = max(-collectionView.adjustedContentInset.top,
@@ -329,11 +360,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: true)
     }
 
+    // MARK: - Scroll observation
+
     private func computeAtBottom() -> Bool {
         guard collectionView.contentSize.height > 0 else { return true }
         let bottomEdge = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
         return bottomEdge >= collectionView.contentSize.height - 44
     }
+
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { sendAnimating = false }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let atBottom = computeAtBottom()
@@ -348,36 +383,71 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     }
 }
 
-// Compositional layout whose APPEARING cells emerge from the composer (Apple's native insert-animation
-// hook, initialLayoutAttributesForAppearingItem): a freshly inserted bottom cell starts translated down
-// at the input-field position with a slight scale, and UIKit's surrounding spring animates it up into
-// place — the iMessage send feel, built entirely from native animation APIs.
-final class ComposerEmergeLayout: UICollectionViewCompositionalLayout {
-    var emergeFromComposer = false
+// Signal-style pre-measured layout: cell heights are known before layout (never self-sized), so every
+// frame is exact on the first pass. `heightForItem` reads the controller's measured-height cache; prepare
+// stacks the rows into exact frames and an exact content height. This is the whole anti-shake mechanism —
+// with no estimate → measure step, there is nothing to correct and nothing to hide.
+final class ExactHeightLayout: UICollectionViewLayout {
+    var heightForItem: ((Int) -> CGFloat)?
+    var animateInserts = false            // a fade-in for a freshly inserted (sent/received) bottom cell
+
+    private var frames: [CGRect] = []
+    private var contentHeight: CGFloat = 0
+    private(set) var layoutWidth: CGFloat = 0
     private var inserted: Set<IndexPath> = []
 
+    override func prepare() {
+        super.prepare()
+        guard let cv = collectionView else { return }
+        layoutWidth = cv.bounds.width
+        let count = cv.numberOfItems(inSection: 0)
+        frames.removeAll(keepingCapacity: true)
+        frames.reserveCapacity(count)
+        var y: CGFloat = 0
+        for i in 0..<count {
+            let h = heightForItem?(i) ?? 44
+            frames.append(CGRect(x: 0, y: y, width: layoutWidth, height: h))
+            y += h
+        }
+        contentHeight = y
+    }
+
+    override var collectionViewContentSize: CGSize { CGSize(width: layoutWidth, height: contentHeight) }
+
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        var result: [UICollectionViewLayoutAttributes] = []
+        for i in frames.indices where frames[i].intersects(rect) {
+            let a = UICollectionViewLayoutAttributes(forCellWith: IndexPath(item: i, section: 0))
+            a.frame = frames[i]
+            result.append(a)
+        }
+        return result
+    }
+
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
+        guard indexPath.item < frames.count else { return nil }
+        let a = UICollectionViewLayoutAttributes(forCellWith: indexPath)
+        a.frame = frames[indexPath.item]
+        return a
+    }
+
+    override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
+        newBounds.width != layoutWidth
+    }
+
+    // Fade a freshly inserted bottom cell in (the sent/received bubble), so an animated send glides the
+    // list up while the new bubble fades — the native UIKit behaviour, no custom per-cell transforms.
     override func prepare(forCollectionViewUpdates updateItems: [UICollectionViewUpdateItem]) {
         super.prepare(forCollectionViewUpdates: updateItems)
         inserted = Set(updateItems.compactMap { $0.updateAction == .insert ? $0.indexPathAfterUpdate : nil })
     }
-
-    override func finalizeCollectionViewUpdates() {
-        super.finalizeCollectionViewUpdates()
-        inserted = []
-    }
-
-    override func initialLayoutAttributesForAppearingItem(at itemIndexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
-        let attr = super.initialLayoutAttributesForAppearingItem(at: itemIndexPath)
-        guard emergeFromComposer, inserted.contains(itemIndexPath),
-              let final = layoutAttributesForItem(at: itemIndexPath),
-              let cv = collectionView else { return attr }
+    override func finalizeCollectionViewUpdates() { super.finalizeCollectionViewUpdates(); inserted = [] }
+    override func initialLayoutAttributesForAppearingItem(at ip: IndexPath) -> UICollectionViewLayoutAttributes? {
+        guard animateInserts, inserted.contains(ip), let final = layoutAttributesForItem(at: ip) else {
+            return super.initialLayoutAttributesForAppearingItem(at: ip)
+        }
         let a = final.copy() as! UICollectionViewLayoutAttributes
-        // iMessage: the bubble forms at the input field FULL-SIZE (no shrink) and springs straight up into
-        // place. Start it at the visible bottom edge (just above the composer) with NO scale.
-        let viewportBottom = cv.contentOffset.y + cv.bounds.height - cv.adjustedContentInset.bottom
-        let dy = max(0, viewportBottom - final.frame.minY)
-        a.transform = CGAffineTransform(translationX: 0, y: dy)
-        a.alpha = 1   // no fade — it slides, like iMessage
+        a.alpha = 0
         return a
     }
 }
