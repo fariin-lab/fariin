@@ -3007,15 +3007,17 @@ struct MessageBubble: View, Equatable {
                     .padding(.top, 1)
                 }
             }
+            // Jump-to flash, Signal-style: a brief dim pulse over THE BUBBLE CONTENT ONLY (the photo /
+            // voice note / text bubble itself). Applied BEFORE the maxWidth frame so it hugs the actual
+            // content — the old row-level background painted a full-width block behind the whole row.
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.primary.opacity(isHighlighted ? 0.18 : 0))
+                    .allowsHitTesting(false)
+            )
             .frame(maxWidth: maxBubbleWidth, alignment: isMe ? .trailing : .leading)
             if !isMe { Spacer(minLength: 0) }
         }
-        // Brief accent flash when jumped-to via a reply tap.
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.accentColor.opacity(isHighlighted ? 0.12 : 0))
-                .padding(.horizontal, -6)
-        )
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
         // Telegram-style swipe-to-reply: drag the bubble left past a threshold.
         .offset(x: dragX)
