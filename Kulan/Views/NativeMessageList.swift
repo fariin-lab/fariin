@@ -107,6 +107,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // the collection view's adjustedContentInset — the last message clears the composer and the
         // bottom-scroll lands exactly above it.
         collectionView.contentInsetAdjustmentBehavior = .always
+        // Small gap above the composer (Signal's conversation bottom inset) so the LAST message — and
+        // especially its reaction badge, which hangs below the bubble — isn't jammed against / clipped
+        // by the floating composer. This adds to the safe-area (composer height) inset.
+        collectionView.contentInset.bottom = 12
         // iOS 26 draws HARD scroll-edge dividers where a UIKit scroll view meets the nav bar / composer
         // bars — the "borders" that appeared once this list became the only list. Hide them: the chat
         // header and composer are borderless glass, matching the app's native look.
