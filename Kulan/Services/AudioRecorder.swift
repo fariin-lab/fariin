@@ -214,7 +214,9 @@ final class AudioRecorder {
         recorder.stop()
         let wf = waveform()
         reset()
-        guard duration >= 0.5, let data = try? Data(contentsOf: url) else {
+        // Floor at 1.0s: anything shorter displays as "0:00" (Int-floored) — never send a 0:00 note.
+        // The smallest sendable note is ~1s, which shows 0:01.
+        guard duration >= 1.0, let data = try? Data(contentsOf: url) else {
             try? FileManager.default.removeItem(at: url)   // don't leak temp files for tap-too-short clips
             return nil
         }

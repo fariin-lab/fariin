@@ -253,7 +253,7 @@ struct ContactInfoView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
                         .frame(width: 36, height: 36)   // Signal's contact-row avatar size (.thirtySix)
-                        .background(Circle().fill(Color(.systemGray3)))
+                        .background(Circle().fill(Color(.systemGray4)))   // lighter grey (was systemGray3, too dark)
                     Text("Add to a Group").foregroundStyle(.primary)
                     Spacer()
                 }
