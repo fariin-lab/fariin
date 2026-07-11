@@ -14,6 +14,7 @@ struct AttachRecentsStrip: View {
     var onPickVideo: (URL) -> Void                              // TAP a video → open the trim editor
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
+    var onSendMixed: ([ApprovalMedia], String) -> Void = { _, _ in }   // SELECT + Send → ONE mixed group (ordered)
     var onOpenMedia: ([ApprovalMedia]) -> Void = { _ in }        // tapping media WHILE selecting → the mixed approval pager
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
@@ -349,31 +350,38 @@ struct AttachRecentsStrip: View {
     // selected VIDEO is sent on its own (the album carries images only — Signal/WhatsApp do the same).
     private func sendSelected() {
         let ids = selectedIds
+        let onceWanted = viewOnce && ids.count == 1
         let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
         loadingPick = true
         Task {
-            var imgs: [UIImage] = []
-            var videos: [URL] = []
+            // Build the ORDERED mixed list (selection order) so photos + videos ship as ONE group.
+            var ordered: [ApprovalMedia] = []
             for id in ids {
                 guard let a = byId[id] else { continue }
                 if a.mediaType == .video {
-                    if let url = await Self.videoURL(a) { videos.append(url) }
+                    if let url = await Self.videoURL(a) {
+                        let asset = AVURLAsset(url: url)
+                        let dur = (try? await asset.load(.duration).seconds) ?? 0
+                        let gen = AVAssetImageGenerator(asset: asset)
+                        gen.appliesPreferredTrackTransform = true
+                        gen.maximumSize = CGSize(width: 640, height: 640)
+                        let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
+                        ordered.append(.video(UUID(), url, thumb, dur))
+                    }
                 } else if let ui = await Self.fullImage(a) {
-                    imgs.append(ui)
+                    ordered.append(.image(UUID(), ui))
                 }
             }
             let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-            let once = viewOnce && imgs.count == 1   // view-once applies to a single photo only
             await MainActor.run {
                 loadingPick = false
-                selectedIds = []
-                caption = ""
-                viewOnce = false
-                hasSelection = false
-                // SELECTED via checkbox + Send → send directly. The caption rides ONCE — on the photo
-                // album when photos exist, else on the video batch (was duplicated onto both).
-                if !videos.isEmpty { onSendVideos(videos, imgs.isEmpty ? cap : "") }
-                if !imgs.isEmpty { onSendAlbum(imgs, cap, once) }
+                selectedIds = []; caption = ""; viewOnce = false; hasSelection = false
+                guard !ordered.isEmpty else { return }
+                // A single view-once photo keeps its dedicated view-once send (view-once can't be an album).
+                if onceWanted, ordered.count == 1, case .image(_, let ui) = ordered[0] {
+                    onSendAlbum([ui], cap, true); return
+                }
+                onSendMixed(ordered, cap)   // ONE group (grouping handled downstream; single item fast-paths)
             }
         }
     }

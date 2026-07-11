@@ -411,23 +411,11 @@ struct ThreadView: View {
             }
         }
         .fullScreenCover(item: $mediaToApprove) { wrap in
-            // Mixed approval pager (images + videos, per-item edit, one caption, one send). Photos go
-            // out as ONE album message; each video follows as its own message (Signal/WhatsApp group
-            // media the same way). The caption rides exactly ONCE — on the album when photos exist,
-            // else on the first video.
-            MediaApprovalView(items: wrap.items) { imgs, videos, caption, hd in
-                Task {
-                    var cap = caption
-                    if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
-                        await sendPhoto(d, caption: cap); cap = ""
-                    } else if imgs.count >= 2 {
-                        await sendAlbum(imgs, caption: cap, hd: hd); cap = ""
-                    }
-                    for url in videos {
-                        await sendVideo(from: url, caption: cap, hd: hd)
-                        cap = ""   // caption once, on the first message of the batch
-                    }
-                }
+            // Mixed approval pager (images + videos, per-item edit, one caption, one send). EVERYTHING
+            // selected — photos AND videos, in order — is delivered as ONE album message group (Signal/
+            // WhatsApp), with one caption. A single lone image/video keeps its dedicated fast path.
+            MediaApprovalView(items: wrap.items) { ordered, caption, hd in
+                Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
             }
         }
         .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = .medium }) { attachPanel.presentationDetents([.medium, .large], selection: $attachDetent) }   // opens half (≈2 rows), pull up for more / caption focus
@@ -1234,6 +1222,21 @@ struct ThreadView: View {
                         }
                     }
                 },
+                onSendMixed: { items, caption in
+                    // SELECT + Send with a mix (or 2+) → ONE grouped album message (photos + videos).
+                    showAttachPanel = false
+                    Task {
+                        var ordered: [SendMedia] = []
+                        for it in items {
+                            switch it {
+                            case .image(_, let ui): ordered.append(.image(ui))
+                            case .video(_, let url, let thumb, let dur):
+                                ordered.append(.video(url: url, thumb: thumb ?? UIImage(), duration: dur))
+                            }
+                        }
+                        await sendMixedGroup(ordered, caption: caption, hd: false)
+                    }
+                },
                 onOpenMedia: { items in
                     // Tapping media while selecting → the mixed approval pager. A single item keeps its
                     // dedicated editor (image editor / video trim editor); 2+ open the pager.
@@ -1533,6 +1536,57 @@ struct ThreadView: View {
         }
         do { try await ChatService.sendAlbum(cid: cid, images: datas, caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+    }
+
+    // Send a MIXED media group (photos + videos in order) as ONE album message. A single lone item
+    // takes its dedicated fast path (photo editor / video approval already handled those); this is the
+    // 2+ / mixed case. Videos are transcoded first, then everything ships in one sendMixedAlbum call.
+    private func sendMixedGroup(_ ordered: [SendMedia], caption: String, hd: Bool) async {
+        // A lone item → the normal single-media send (keeps the existing UX).
+        if ordered.count == 1 {
+            switch ordered[0] {
+            case .image(let ui):
+                if let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) { await sendPhoto(d, caption: caption) }
+            case .video(let url, _, _):
+                await sendVideo(from: url, caption: caption, hd: hd)
+            }
+            return
+        }
+
+        // Optimistic grouped bubble: thumbnails in order + which are videos (play badge).
+        let previews: [Data] = ordered.compactMap { item in
+            switch item {
+            case .image(let ui): return ui.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
+            case .video(_, let thumb, _): return thumb.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
+            }
+        }
+        let isVideoFlags = ordered.map { if case .video = $0 { return true } else { return false } }
+        let clientId = UUID().uuidString
+        await MainActor.run {
+            repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
+                                    clientId: clientId, sendState: .sending, localAlbumIsVideo: isVideoFlags))
+        }
+
+        // Build the send items: images as-is, videos transcoded (HD toggle) to the delivery codec.
+        var sendItems: [ChatService.AlbumSendItem] = []
+        for item in ordered {
+            switch item {
+            case .image(let ui):
+                if let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) { sendItems.append(.image(d)) }
+            case .video(let url, let thumb, let duration):
+                guard let prepared = await VideoTranscoder.prepare(url, hd: hd) else { continue }
+                try? FileManager.default.removeItem(at: url)
+                let thumbData = thumb.jpegData(compressionQuality: 0.8) ?? prepared.thumbnail
+                sendItems.append(.video(prepared.data, thumbnail: thumbData,
+                                        duration: duration > 0 ? duration : prepared.duration,
+                                        width: prepared.width, height: prepared.height))
+            }
+        }
+        guard !sendItems.isEmpty else { await MainActor.run { repo.markFailed(clientId: clientId) }; return }
+        do {
+            try await ChatService.sendMixedAlbum(cid: cid, items: sendItems, caption: caption,
+                                                 clientId: clientId, group: isGroup ? groupMembers : nil)
+        } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
     private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
@@ -3398,19 +3452,44 @@ struct MessageBubble: View, Equatable {
         }
     }
 
+    // Is album item `i` a video? (works for both the optimistic bubble and the delivered message)
+    private func albumItemIsVideo(_ i: Int) -> Bool {
+        if message.localAlbumIsVideo.indices.contains(i) { return message.localAlbumIsVideo[i] }
+        if message.album.indices.contains(i) { return message.album[i].isVideo }
+        return false
+    }
+
     private func albumTile(_ i: Int, _ w: CGFloat, _ h: CGFloat, extra: Int = 0) -> some View {
         Group {
             if !message.localAlbum.isEmpty, message.localAlbum.indices.contains(i), let ui = UIImage(data: message.localAlbum[i]) {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else if message.album.indices.contains(i) {
                 let it = message.album[i]
-                SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)
+                SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)   // photo, or video poster
             } else {
                 Rectangle().fill(Color.gray.opacity(0.18))
             }
         }
         .frame(width: w, height: h).clipped()
         .overlay {
+            // Video item → a play glyph + duration badge over its poster.
+            if albumItemIsVideo(i), extra == 0 {
+                ZStack {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: min(w, h) * 0.28))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .shadow(color: .black.opacity(0.4), radius: 3)
+                    if message.album.indices.contains(i), message.album[i].duration > 0 {
+                        VStack { Spacer(); HStack {
+                            Text(albumVideoDuration(message.album[i].duration))
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(.black.opacity(0.5), in: Capsule())
+                            Spacer()
+                        } }.padding(5)
+                    }
+                }
+            }
             if extra > 0 {
                 ZStack { Color.black.opacity(0.5); Text("+\(extra)").font(.title.weight(.bold)).foregroundStyle(.white) }
             }
@@ -3419,14 +3498,34 @@ struct MessageBubble: View, Equatable {
         .onTapGesture { if message.sendState == nil { openAlbumItem(i) } }
     }
 
+    private func albumVideoDuration(_ s: Double) -> String {
+        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
     // Tap an album photo → open the full-screen viewer paged over EVERY photo in the album (Signal:
     // an album opens as a swipeable gallery, starting on the tapped photo). Each album item becomes a
     // synthetic image Message so ImageViewerView can page through them.
     private func openAlbumItem(_ i: Int) {
         guard message.album.indices.contains(i) else { return }
-        let gallery: [Message] = message.album.enumerated().map { idx, it in
-            let data: [String: Any] = ["type": "image", "imageUrl": it.imageUrl, "enc": it.enc.asDict,
-                                       "authorId": message.authorId, "width": it.width, "height": it.height]
+        let it = message.album[i]
+        // Video item → play it full-screen (synthetic video Message from its videoUrl/videoEnc, keyed by
+        // a per-item id so VideoCache stores each album video separately).
+        if it.isVideo, let vurl = it.videoUrl, let venc = it.videoEnc {
+            let d: [String: Any] = ["type": "video", "videoUrl": vurl, "enc": venc.asDict,
+                                    "thumbUrl": it.imageUrl, "thumbEnc": it.enc.asDict,
+                                    "authorId": message.authorId, "width": it.width, "height": it.height,
+                                    "duration": it.duration]
+            // Mailman is already album-safe: groups never delete; in 1:1 the author (sender) never
+            // deletes (guarded), so viewing your own album video keeps the server copy for the recipient.
+            let vmsg = Message(id: "\(message.id)-\(i)", data: d, cid: cid, crypto: Crypto.shared)
+            onTapVideo(vmsg)
+            return
+        }
+        // Image items → page through ONLY the album's images (skip videos) in the full-screen gallery.
+        let imageItems = message.album.enumerated().filter { !$0.element.isVideo }
+        let gallery: [Message] = imageItems.map { idx, im in
+            let data: [String: Any] = ["type": "image", "imageUrl": im.imageUrl, "enc": im.enc.asDict,
+                                       "authorId": message.authorId, "width": im.width, "height": im.height]
             return Message(id: "\(message.id)-\(idx)", data: data, cid: cid, crypto: Crypto.shared)
         }
         onTapAlbum(gallery, "\(message.id)-\(i)")

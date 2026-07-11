@@ -2,6 +2,12 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
+// A finalized item ready to send, in the user's selection order (mixed photos + videos → ONE group).
+enum SendMedia {
+    case image(UIImage)
+    case video(url: URL, thumb: UIImage, duration: Double)   // final (trimmed) url + poster + duration
+}
+
 // One media item awaiting approval — the mixed-selection unit (Signal's approval flow treats images
 // and videos as one attachment list; so do we).
 enum ApprovalMedia: Identifiable {
@@ -33,7 +39,7 @@ enum ApprovalMedia: Identifiable {
 // final images + video URLs so the chat can deliver the whole group in one action.
 struct MediaApprovalView: View {
     @State var items: [ApprovalMedia]
-    var onSend: (_ images: [UIImage], _ videos: [URL], _ caption: String, _ hd: Bool) -> Void
+    var onSend: (_ ordered: [SendMedia], _ caption: String, _ hd: Bool) -> Void   // ORDERED mixed group
     @Environment(\.dismiss) private var dismiss
 
     @State private var page = 0
@@ -359,29 +365,40 @@ struct MediaApprovalView: View {
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         exporting = true
         Task {
-            var images: [UIImage] = []
-            var videos: [URL] = []
+            // Build the ORDERED mixed list (selection order preserved) so the chat can deliver photos
+            // AND videos as ONE group.
+            var ordered: [SendMedia] = []
             for item in items {
                 switch item {
                 case .image(_, let ui):
-                    images.append(ui)
-                case .video(let id, let url, _, let duration):
+                    ordered.append(.image(ui))
+                case .video(let id, let url, let poster, let duration):
+                    let finalURL: URL
                     if trimmed(id, duration: duration),
-                       let out = await Self.exportTrimmed(url: url,
-                                                          start: trimStart[id] ?? 0,
-                                                          end: trimEnd[id] ?? duration) {
-                        videos.append(out)   // trimmed copy
+                       let out = await Self.exportTrimmed(url: url, start: trimStart[id] ?? 0, end: trimEnd[id] ?? duration) {
+                        finalURL = out
                     } else {
-                        videos.append(url)   // untrimmed (or export failed → send original)
+                        finalURL = url
                     }
+                    // A poster for the grid: the trimmed range's first frame, else the loaded thumb.
+                    let thumb = poster ?? (await Self.firstFrame(finalURL)) ?? UIImage()
+                    ordered.append(.video(url: finalURL, thumb: thumb, duration: duration))
                 }
             }
             await MainActor.run {
                 exporting = false
-                onSend(images, videos, cap, hd)
+                onSend(ordered, cap, hd)
                 dismiss()
             }
         }
+    }
+
+    private static func firstFrame(_ url: URL) async -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 640, height: 640)
+        return (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
     }
 
     private static func exportTrimmed(url: URL, start: Double, end: Double) async -> URL? {

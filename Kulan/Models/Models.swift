@@ -58,6 +58,7 @@ struct Message: Identifiable, Equatable {
     var viewOnce: Bool = false        // view-once photo (Signal-style): recipient can open it exactly once
     var album: [AlbumItem] = []       // 2+ photos sent together = ONE album message (grid + one caption)
     var localAlbum: [Data] = []       // optimistic album previews shown before upload
+    var localAlbumIsVideo: [Bool] = [] // per optimistic item: is it a video? (→ play badge before upload)
     var createdAt: Date
     var sendState: MessageSendState? = nil  // set only on local optimistic messages
     var localImageData: Data? = nil         // optimistic local photo shown before upload
@@ -166,7 +167,8 @@ struct Message: Identifiable, Equatable {
     }
 
     /// Local optimistic ALBUM — shows the picked photos as a grid instantly before upload.
-    init(localAlbum: [Data], caption: String, authorId: String, clientId: String, sendState: MessageSendState) {
+    init(localAlbum: [Data], caption: String, authorId: String, clientId: String, sendState: MessageSendState,
+         localAlbumIsVideo: [Bool] = []) {
         self.id = clientId
         self.authorId = authorId
         self.text = caption
@@ -176,10 +178,22 @@ struct Message: Identifiable, Equatable {
         self.createdAt = Date()
         self.sendState = sendState
         self.localAlbum = localAlbum
+        self.localAlbumIsVideo = localAlbumIsVideo
     }
 
-    // One photo inside an album message.
-    struct AlbumItem: Equatable { let imageUrl: String; let enc: EncMeta; let width: Double; let height: Double }
+    // One item inside an album message — a photo OR a video (mixed media grouping, like Signal/WA).
+    // For a video, `imageUrl`/`enc` are its POSTER thumbnail; `videoUrl`/`videoEnc`/`duration` are the clip.
+    struct AlbumItem: Equatable {
+        let imageUrl: String
+        let enc: EncMeta
+        let width: Double
+        let height: Double
+        var kind: String = "image"          // "image" | "video"
+        var videoUrl: String? = nil
+        var videoEnc: EncMeta? = nil
+        var duration: Double = 0
+        var isVideo: Bool { kind == "video" }
+    }
 
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
         self.id = id
@@ -226,7 +240,11 @@ struct Message: Identifiable, Equatable {
                   let enc = (d["enc"] as? [String: Any]).flatMap(EncMeta.init(map:)) else { return nil }
             return AlbumItem(imageUrl: url, enc: enc,
                              width: (d["width"] as? NSNumber)?.doubleValue ?? 1,
-                             height: (d["height"] as? NSNumber)?.doubleValue ?? 1)
+                             height: (d["height"] as? NSNumber)?.doubleValue ?? 1,
+                             kind: d["kind"] as? String ?? "image",
+                             videoUrl: d["videoUrl"] as? String,
+                             videoEnc: (d["videoEnc"] as? [String: Any]).flatMap(EncMeta.init(map:)),
+                             duration: (d["duration"] as? NSNumber)?.doubleValue ?? 0)
         } ?? []
         if let r = data["replyTo"] as? [String: Any] {
             self.replyTo = ReplyRef(

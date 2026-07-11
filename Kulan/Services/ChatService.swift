@@ -514,6 +514,100 @@ enum ChatService {
         try await batch.commit()
     }
 
+    // One item to send inside a MIXED album (photos + videos in ONE message group).
+    enum AlbumSendItem {
+        case image(Data)                                                        // jpeg bytes
+        case video(Data, thumbnail: Data, duration: Double, width: Double, height: Double)  // mp4 + poster
+    }
+
+    /// Send images AND videos together as ONE album message (Signal/WhatsApp mixed grouping). Every
+    /// item is E2EE'd + uploaded independently, then a single doc carries the mixed array; videos
+    /// store {kind:"video", imageUrl=poster, videoUrl, videoEnc, duration}. One caption, one timestamp,
+    /// one delivery status — the group never splits into separate messages.
+    static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
+                               clientId: String? = nil, group: [String]? = nil) async throws {
+        var members = group
+        if members == nil, !cid.contains("_") {
+            let snap = try? await db.collection("conversations").document(cid).getDocument()
+            members = snap?.data()?["users"] as? [String]
+        }
+        let convRef = db.collection("conversations").document(cid)
+        let msgRef = convRef.collection("messages").document()
+
+        func seal(_ data: Data) async throws -> (Data, EncMeta) {
+            if let members { return try await Crypto.shared.encryptBytesForGroup(data, members: members) }
+            let r = try await Crypto.shared.encryptBytes(cid, data)
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            return r
+        }
+        func upload(_ cipher: Data, _ suffix: String) async throws -> String {
+            let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID)-\(suffix).enc")
+            let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
+            _ = try await ref.putDataAsync(cipher, metadata: sm)
+            return try await ref.downloadURL().absoluteString
+        }
+
+        var out: [[String: Any]] = []
+        var videoCount = 0, photoCount = 0
+        for (i, item) in items.enumerated() {
+            switch item {
+            case .image(let raw):
+                photoCount += 1
+                let data = downscaledJPEG(raw)
+                let (cipher, meta) = try await seal(data)
+                let url = try await upload(cipher, "\(i)")
+                if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url) }
+                let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
+                out.append(["kind": "image", "imageUrl": url, "enc": meta.asDict,
+                            "width": Double(sz.width), "height": Double(sz.height)])
+            case .video(let mp4, let thumb, let duration, let w, let h):
+                videoCount += 1
+                // Poster thumbnail (shown in the grid) + the encrypted video clip.
+                let thumbJpeg = downscaledJPEG(thumb)
+                let (thumbCipher, thumbMeta) = try await seal(thumbJpeg)
+                let thumbUrl = try await upload(thumbCipher, "\(i)-thumb")
+                if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl) }
+                let (vidCipher, vidMeta) = try await seal(mp4)
+                let vidUrl = try await upload(vidCipher, "\(i)-video")
+                out.append(["kind": "video", "imageUrl": thumbUrl, "enc": thumbMeta.asDict,
+                            "videoUrl": vidUrl, "videoEnc": vidMeta.asDict, "duration": duration,
+                            "width": w, "height": h])
+            }
+        }
+
+        var captionCipher = ""
+        let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            if let members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmed, members: members)) ?? "" }
+            else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmed)) ?? "" }
+        }
+
+        let batch = db.batch()
+        var msg: [String: Any] = [
+            "type": "album", "album": out, "text": captionCipher,
+            "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+        ]
+        if let clientId { msg["clientId"] = clientId }
+        batch.setData(msg, forDocument: msgRef)
+        // Chat-list preview: describe the mix.
+        let preview: String = {
+            if videoCount > 0 && photoCount > 0 { return "🎬 \(items.count) Media" }
+            if videoCount > 0 { return "🎥 \(videoCount) Video\(videoCount > 1 ? "s" : "")" }
+            return "📷 \(photoCount) Photos"
+        }()
+        var convUpdate: [String: Any] = [
+            "lastMessage": preview, "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
+        ]
+        if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
+        else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
+        }
+        batch.updateData(convUpdate, forDocument: convRef)
+        try await batch.commit()
+    }
+
     /// Encrypt + send a voice note. Same E2EE pipeline as photos: the m4a bytes
     /// are sealed and the ciphertext uploaded; the server never hears the audio.
     static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil) async throws {
