@@ -158,7 +158,7 @@ struct ThreadView: View {
 
     @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
             VStack(spacing: 0) {
-            pinnedBar(proxy)
+            if !searchActive { pinnedBar(proxy) }   // search owns the top area — the pin bar hides while searching
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
@@ -198,18 +198,28 @@ struct ThreadView: View {
                     // landed — that was the "opens in the middle" bug.)
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
-                } else if mine || isAtBottom {
-                    // My own send always jumps to the bottom; a received message only when I'm already
-                    // there. Double-frame the pin (pinBottomStable) so the freshly-inserted bubble —
-                    // whose height isn't final on the same runloop (text reflow, async image size) —
-                    // can't shift the bottom out from under the scroll (the jump).
-                    pinBottomStable(proxy)
-                } else {
+                } else if mine {
+                    // My own send ALWAYS glides to the newest message — even when I was reading history.
+                    // (At the bottom the list's insert animation already lands there; this covers the
+                    // scrolled-up case the old ScrollViewProxy pin could no longer reach.)
+                    if !isAtBottom { nativeScrollTarget = "BOTTOM" }
+                } else if !isAtBottom {
                     newWhileAway += 1
                 }
-                if !repo.iBlocked { ChatService.markReadThrottled(cid) }   // throttled (1 write / 2s burst); never leaks reads to a blocked user
+                // Read receipts: only for INCOMING messages the user can actually see (at the bottom) —
+                // never for own sends, never while scrolled up reading history (audit: receipts were
+                // sent for messages the user hadn't seen).
+                if !mine && isAtBottom && !repo.iBlocked { ChatService.markReadThrottled(cid) }
             }
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
+            // Scrolled back down to the newest message → NOW the missed messages are seen: clear the
+            // away-counter and send the (throttled) read receipt.
+            .onChange(of: isAtBottom) { _, atBottom in
+                if atBottom {
+                    newWhileAway = 0
+                    if !repo.iBlocked { ChatService.markReadThrottled(cid) }
+                }
+            }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
             .onChange(of: repo.pinnedMessageIds) { _, ids in pinIndex = max(0, ids.count - 1) }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
@@ -230,7 +240,8 @@ struct ThreadView: View {
             .overlay(alignment: .bottomTrailing) {
                 if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
                     Button {
-                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                        nativeScrollTarget = "BOTTOM"   // smooth animated glide to the newest message
+                        newWhileAway = 0
                     } label: {
                         Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold))
                             // Explicit per-mode color + a soft counter-shadow so the glyph stays
@@ -919,6 +930,16 @@ struct ThreadView: View {
     // is gone along with the Settings toggle.
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         nativeList
+            .contentShape(Rectangle())
+            // Tap anywhere on the conversation → dismiss the keyboard (iMessage/Signal). This gesture
+            // lived on the deleted SwiftUI fallback list; simultaneous so bubble taps still work.
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    inputFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
+                }
+            )
     }
 
     // UIKit (Signal-style) message list. Reuses the SAME rowView, so every bubble feature is identical.

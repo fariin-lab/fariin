@@ -107,6 +107,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // the collection view's adjustedContentInset — the last message clears the composer and the
         // bottom-scroll lands exactly above it.
         collectionView.contentInsetAdjustmentBehavior = .always
+        // iOS 26 draws HARD scroll-edge dividers where a UIKit scroll view meets the nav bar / composer
+        // bars — the "borders" that appeared once this list became the only list. Hide them: the chat
+        // header and composer are borderless glass, matching the app's native look.
+        if #available(iOS 26.0, *) {
+            collectionView.topEdgeEffect.isHidden = true
+            collectionView.bottomEdgeEffect.isHidden = true
+        }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -423,6 +430,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // fully visible, don't move at all — repeated next/prev taps between two on-screen results then feel
     // stable instead of re-centering the list on every tap.
     func scrollTo(id: String) {
+        // Sentinel: the scroll-to-latest button + own-send-while-scrolled-up route here — a smooth
+        // animated glide to the exact bottom (the old ScrollViewProxy path was a no-op on this list).
+        if id == "BOTTOM" { pinBottom(animated: true); return }
         guard let ip = dataSource.indexPath(for: id) else { return }
         if let attr = collectionView.layoutAttributesForItem(at: ip) {
             let visible = CGRect(x: 0,
