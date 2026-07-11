@@ -397,6 +397,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Re-assert the hidden scroll-edge effects every layout — SwiftUI/UIKit can reset them, which
+        // brought the top/bottom "border" bands back.
+        if #available(iOS 26.0, *) {
+            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
+            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
+        }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
             else { scheduleEmptyReveal() }
