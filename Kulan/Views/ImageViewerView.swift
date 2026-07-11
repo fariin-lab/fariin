@@ -327,23 +327,28 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
     }
+    // Flick-to-dismiss copied from YBImageBrowser (indulgeIn/YBImageBrowser, YBIBImageCell +
+    // YBIBInteractionProfile). Only the interaction is copied: the image follows the finger and
+    // shrinks toward center over height*1.2 (floor 0.35), the backdrop fades over height*0.7, and
+    // release dismisses on a flick (|v.y| > 800) OR a drag past height*0.22 — else it snaps back
+    // in 0.15s. Down-locked here (Signal DirectionalPan) since Kulan only closes downward.
     @objc private func handleDismiss(_ g: UIPanGestureRecognizer) {
         guard scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01 else { return }
         let t = g.translation(in: view)
+        let h = max(1, view.bounds.height)
         switch g.state {
         case .changed:
-            let ty: CGFloat = max(0, t.y)
-            let progress: Double = min(1.0, Double(ty) / 400.0)
-            // Apple Photos feel: the image SHRINKS toward the finger and follows it in both axes,
-            // while the black backdrop fades to reveal the content behind.
-            let scale = CGFloat(1.0 - progress * 0.35)
+            let ty = max(0, t.y)                              // downward only
+            let scale = min(1.0, max(0.35, 1.0 - ty / (h * 1.2)))   // YB dismissScale shrink curve
+            let alpha = min(1.0, max(0.0, 1.0 - ty / (h * 0.7)))    // YB backdrop fade curve
             scrollView.transform = CGAffineTransform(translationX: t.x, y: ty).scaledBy(x: scale, y: scale)
-            onDim?(1.0 - progress * 0.9)
+            onDim?(Double(alpha))
         case .ended, .cancelled:
-            if t.y > 120 || g.velocity(in: view).y > 800 {
+            // YB: dismissVelocityY = 800, dismissScale = 0.22 (fraction of height).
+            if g.velocity(in: view).y > 800 || t.y > h * 0.22 {
                 onDismiss?()
             } else {
-                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0) {
+                UIView.animate(withDuration: 0.15) {   // YB restoreDuration
                     self.scrollView.transform = .identity
                 }
                 onDim?(1)
