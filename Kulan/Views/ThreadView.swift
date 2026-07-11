@@ -86,7 +86,8 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
-    @State private var floatingDateShown = false   // shows on first scroll, then stays (Signal-style)
+    @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
+    @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -888,9 +889,14 @@ struct ThreadView: View {
     }
 
     private func bumpFloatingDate() {
-        // Signal: the floating date STAYS pinned at the top while you scroll — it never fades out, only
-        // its date text changes. So once shown it stays visible.
-        if !floatingDateShown { withAnimation(.easeInOut(duration: 0.2)) { floatingDateShown = true } }
+        // Signal/Telegram: the floating date pill is shown WHILE scrolling (topmost message's day, updated
+        // as sections cross the top) and fades out ~1.2s after scrolling stops. topVisibleId changes are our
+        // scroll-activity signal; each change re-arms the idle fade.
+        if !floatingDateShown { withAnimation(.easeOut(duration: 0.15)) { floatingDateShown = true } }
+        floatingDateFade?.cancel()
+        let work = DispatchWorkItem { withAnimation(.easeIn(duration: 0.35)) { floatingDateShown = false } }
+        floatingDateFade = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
@@ -924,6 +930,7 @@ struct ThreadView: View {
                 }).padding(.horizontal, 12))
             },
             onReachedTop: { repo.loadOlder() },
+            loadingOlder: repo.loadingOlder,
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             topVisibleId: $topVisibleId

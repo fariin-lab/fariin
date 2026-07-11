@@ -24,6 +24,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in order (Message.rowId)
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
+    var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
@@ -41,6 +42,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        vc.setLoadingOlder(loadingOlder)
         vc.apply(rowIds: rowIds)
         if let target = scrollTarget {
             vc.scrollTo(id: target)
@@ -75,6 +77,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // Off-screen SwiftUI sizer: hosts a row and returns its exact height for a given width (no display).
     // A child VC so it inherits our trait collection (Dynamic Type), matching the on-screen render.
     private let sizer = UIHostingController(rootView: AnyView(Color.clear))
+
+    // Signal's load-older indicator: a small spinner pinned at the top of the list while older messages
+    // page in. Kept as a fixed overlay (not a scrolling cell / content inset) so it can't disturb the
+    // exact-frame layout or the prepend anchor math.
+    private let topSpinner = UIActivityIndicatorView(style: .medium)
 
     private var didInitialScroll = false      // the first open has landed at the bottom
     private var didReveal = false             // hidden until the first frame is final (Signal's hasAppliedFirstLoad)
@@ -117,7 +124,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         view.addSubview(sizer.view)
         sizer.didMove(toParent: self)
 
+        topSpinner.hidesWhenStopped = true
+        topSpinner.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(topSpinner)
+        NSLayoutConstraint.activate([
+            topSpinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            topSpinner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+        ])
+
         buildDataSource()
+    }
+
+    func setLoadingOlder(_ loading: Bool) {
+        if loading { topSpinner.startAnimating() } else { topSpinner.stopAnimating() }
     }
 
     private func buildDataSource() {

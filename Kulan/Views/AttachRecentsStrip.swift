@@ -35,7 +35,11 @@ struct AttachRecentsStrip: View {
         VStack(spacing: 0) {
             header
             if showAlbums { albumsList } else { grid }
-            // ≥1 selected → a caption + Send bar (the parent hides the source row in its place).
+        }
+        // ≥1 selected → a caption + Send bar as a native bottom inset bar, so iOS pins it directly above
+        // the keyboard (no home-indicator gap between the bar and the keyboard) and above the home
+        // indicator when the keyboard is down — exactly like a composer.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if !selectedIds.isEmpty { captionBar }
         }
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
