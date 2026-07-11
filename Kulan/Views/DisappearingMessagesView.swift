@@ -33,10 +33,17 @@ struct DisappearingMessagesView: View {
                         optionRow(opt.0, opt.1)
                     }
                     Button { showCustom = true } label: {
-                        HStack {
-                            if isCustomSelected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-                            Text(customLabel).foregroundStyle(.primary)
+                        HStack(spacing: 0) {
+                            checkSlot(isCustomSelected)
+                            Text("Custom Time").foregroundStyle(.primary)
                             Spacer()
+                            // Selected custom duration as a trailing gray value (native detail style),
+                            // not inline parentheses.
+                            if isCustomSelected {
+                                Text(ChatService.disappearLabel(selected))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.trailing, 6)
+                            }
                             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                         }
                         .contentShape(Rectangle())
@@ -69,10 +76,20 @@ struct DisappearingMessagesView: View {
         }
     }
 
+    // Fixed-width leading checkmark GUTTER (native picker-list style): every row's text shares the
+    // same indent whether or not it's selected — the old inline checkmark shifted only the selected
+    // row's text to the right.
+    @ViewBuilder private func checkSlot(_ on: Bool) -> some View {
+        ZStack {
+            if on { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor) }
+        }
+        .frame(width: 34, alignment: .leading)
+    }
+
     private func optionRow(_ label: String, _ seconds: Int) -> some View {
         Button { selected = seconds } label: {
-            HStack {
-                if selected == seconds { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            HStack(spacing: 0) {
+                checkSlot(selected == seconds)
                 Text(label).foregroundStyle(.primary)
                 Spacer()
             }
@@ -81,11 +98,8 @@ struct DisappearingMessagesView: View {
         .buttonStyle(.plain)
     }
 
-    // The custom row shows a checkmark + the value when the selection isn't one of the presets.
+    // The custom row is selected when the value isn't one of the presets.
     private var isCustomSelected: Bool { selected != 0 && !presets.contains { $0.1 == selected } }
-    private var customLabel: String {
-        isCustomSelected ? "Custom Time (\(ChatService.disappearLabel(selected)))" : "Custom Time"
-    }
 }
 
 // A value + unit wheel picker for a custom disappearing timer.

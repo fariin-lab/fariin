@@ -45,13 +45,12 @@ struct GifPickerView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 5) {
-                    Text("POWERED BY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-                    Text("GIPHY").font(.system(size: 12, weight: .heavy)).foregroundStyle(.primary)
-                }
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
-                .background(.bar)
+                // Subtle inline attribution (required by Giphy's terms) — no `.bar` material band, which
+                // drew a hard border line above the search bar.
+                Text("Powered by GIPHY")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity)
             }
             .task { if gifs.isEmpty { gifs = await GiphyService.shared.search("") } }
         }
