@@ -93,24 +93,30 @@ struct ImageViewerView: View {
         ZStack {
             Color.black.opacity(dim).ignoresSafeArea()
 
-            // Horizontal paging between photos; each page zooms/dismisses independently.
-            TabView(selection: $current) {
-                ForEach(gallery) { m in
-                    Group {
-                        if let img = loaded[m.id] {
-                            ZoomImageView(image: img,
-                                          onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
-                                          onDim: { dim = $0 }, onDismiss: { dismiss() },
-                                          allowsDismissPan: !suppressDismissPan)
-                        } else {
-                            ProgressView().tint(.white)
-                                .task { await load(m) }
+            // Horizontal paging between photos; each page zooms/dismisses independently. EVERY page is
+            // pinned to the exact full screen size (GeometryReader) so a portrait (9:16) and a landscape
+            // (16:9) photo page identically — mixed aspect ratios were paging with inconsistent geometry
+            // (offset/jank at the page seam). The image aspect-fits + centers WITHIN each uniform page.
+            GeometryReader { geo in
+                TabView(selection: $current) {
+                    ForEach(gallery) { m in
+                        Group {
+                            if let img = loaded[m.id] {
+                                ZoomImageView(image: img,
+                                              onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
+                                              onDim: { dim = $0 }, onDismiss: { dismiss() },
+                                              allowsDismissPan: !suppressDismissPan)
+                            } else {
+                                ProgressView().tint(.white)
+                                    .task { await load(m) }
+                            }
                         }
+                        .frame(width: geo.size.width, height: geo.size.height)   // uniform page size
+                        .tag(m.id)
                     }
-                    .tag(m.id)
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
             // Signal's gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
             // so swiping to the next photo is instant instead of showing a spinner.
