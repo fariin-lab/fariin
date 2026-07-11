@@ -108,12 +108,12 @@ struct MediaApprovalView: View {
                 .ignoresSafeArea()
         case .video(let id, let url, _, let duration):
             // Loops within the trimmed range; plays only while ITS page is showing.
+            // Playhead does NOT auto-run with playback (user request) — it only moves when dragged.
             PagedTrimPlayer(url: url,
                             playing: page == index && !exporting,
                             start: trimStart[id] ?? 0,
                             end: max((trimStart[id] ?? 0) + 0.1, trimEnd[id] ?? duration),
-                            scrubTime: page == index ? scrubTime : nil,
-                            onTime: { t in if scrubTime == nil { playheads[id] = t } })
+                            scrubTime: page == index ? scrubTime : nil)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { captionFocused = false }

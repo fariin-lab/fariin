@@ -32,7 +32,7 @@ struct VideoApprovalView: View {
     @State private var draggingPlayhead = false
     @State private var exporting = false
 
-    private let stripHeight: CGFloat = 50
+    private let stripHeight: CGFloat = 40   // 40px trim strip (user request)
     private let handleW: CGFloat = 12
     private let minDuration: Double = 1   // keep at least ~1s
 
@@ -45,15 +45,14 @@ struct VideoApprovalView: View {
             // top bar + trim strip + caption, reserved by safeAreaInset below) instead of filling the
             // whole screen behind them — fully visible / zoomed-out, letterboxed on black, rounded
             // corners. (Was .ignoresSafeArea() → edge-to-edge full screen.)
+            // The white playhead line does NOT auto-run with playback (user request) — it only moves
+            // when the user drags it. So onTime is ignored for the playhead.
             TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
-                               scrubTime: scrubTime,
-                               onTime: { t in if !draggingPlayhead { playhead = t } })
+                               scrubTime: scrubTime)
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .padding(.horizontal, 2)
-                .contentShape(Rectangle())
+                .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
                 .gesture(
                     MagnificationGesture()
                         .updating($pinch) { v, s, _ in s = v }
@@ -74,7 +73,9 @@ struct VideoApprovalView: View {
                 ZStack { Color.black.opacity(0.4).ignoresSafeArea(); ProgressView().tint(.white).scaleEffect(1.3) }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { topBar }
+        // Top bar FLOATS over the video (X · HD) instead of sitting on a black band above it — the
+        // video extends up to the top, no black "header". Only the bottom chrome insets the video.
+        .overlay(alignment: .top) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
         .task { await loadVideo() }
     }
@@ -155,7 +156,7 @@ struct VideoApprovalView: View {
             .coordinateSpace(name: "trim")
         }
         .frame(height: stripHeight)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 20)   // left/right margin so the strip + handles don't touch the edges
     }
 
     // Fully-rounded yellow grip (premium/native look) with a darker notch in the middle.
