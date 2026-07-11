@@ -37,9 +37,32 @@ final class DiskImageCache {
 
     private init() {
         mem.countLimit = 250
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        dir = caches.appendingPathComponent("MediaCache", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Application Support, NOT Caches: iOS reclaims Caches under storage pressure, which was making
+        // cached photos/avatars re-download after the OS purged them. Application Support is permanent
+        // (Signal/WhatsApp store media here); the 250 MB LRU below bounds growth ourselves. Excluded
+        // from iCloud backup + file-protected at rest.
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        dir = base.appendingPathComponent("MediaCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        var mutableDir = dir; try? mutableDir.setResourceValues(values)
+        // One-time migration: move any files from the old Caches location so nothing re-downloads
+        // on the first launch after this change.
+        let oldDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MediaCache", isDirectory: true)
+        if FileManager.default.fileExists(atPath: oldDir.path) {
+            io.async { [dir] in
+                let fm = FileManager.default
+                if let items = try? fm.contentsOfDirectory(at: oldDir, includingPropertiesForKeys: nil) {
+                    for u in items {
+                        let dest = dir.appendingPathComponent(u.lastPathComponent)
+                        if !fm.fileExists(atPath: dest.path) { try? fm.moveItem(at: u, to: dest) }
+                    }
+                }
+                try? fm.removeItem(at: oldDir)
+            }
+        }
         // Signal's LRUCache evacuates in the background: decoded UIImages are the app's biggest heap
         // objects, and a backgrounded app holding hundreds of them is first in line for jetsam (and
         // background thermal work). The disk tier stays, so reopening is still instant.

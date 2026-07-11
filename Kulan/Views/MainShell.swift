@@ -121,9 +121,15 @@ struct MainShell: View {
     }
 
     private func loadSettingsIcon() async {
-        guard let s = profile.me?.photoUrl, let url = URL(string: s),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let img = UIImage(data: data) else { return }
+        guard let s = profile.me?.photoUrl, let url = URL(string: s) else { return }
+        // Persistent cache first (same store as every other avatar) — was a raw URLSession fetch that
+        // re-downloaded my own profile photo on every launch.
+        var img = await DiskImageCache.shared.image(for: s)
+        if img == nil, let (data, _) = try? await URLSession.shared.data(from: url), let ui = UIImage(data: data) {
+            DiskImageCache.shared.store(ui, data: data, for: s)
+            img = ui
+        }
+        guard let img else { return }
         let circ = img.circularIcon(28)   // tab-icon size — 56 overflowed onto the label
         await MainActor.run { settingsIcon = circ }
     }

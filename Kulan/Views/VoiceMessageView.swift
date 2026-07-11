@@ -110,11 +110,11 @@ struct VoiceMessageView: View {
         }
         .onDisappear {
             stop()
-            // Clean the decrypted tmp copies once this bubble is off-screen and silent (E2EE plaintext
-            // shouldn't accumulate in tmp). A replay simply re-decrypts.
+            // Clean only the OPTIMISTIC just-recorded tmp file (still uploading). The DECRYPTED note now
+            // lives in the persistent, file-protected AudioCache (Application Support) — it must NOT be
+            // deleted here, or every scroll-away + relaunch would re-download & re-decrypt it (the bug).
             if !playing {
                 let fm = FileManager.default
-                fm.removeItemIfExists(at: fm.temporaryDirectory.appendingPathComponent("play-\(message.id).m4a"))
                 fm.removeItemIfExists(at: fm.temporaryDirectory.appendingPathComponent("local-\(message.rowId).m4a"))
             }
         }
@@ -174,16 +174,25 @@ struct VoiceMessageView: View {
             play()
             return
         }
+        // PERSISTENT cache hit → play from the local file instantly, no download, no decrypt (survives
+        // relaunch + scroll-away). This is the fix for "voice notes re-download every launch".
+        if let local = AudioCache.url(for: message.id) {
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            player = try? AVAudioPlayer(contentsOf: local)
+            play()
+            return
+        }
         guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else { return }
         loading = true
         defer { loading = false }
         guard let (cipher, _) = try? await URLSession.shared.data(from: url),
               let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return }
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("play-\(message.id).m4a")
-        try? data.write(to: tmp)
+        // Persist the decrypted note (Application Support, file-protected) so it never re-downloads.
+        let local = AudioCache.store(data, for: message.id)
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        player = try? AVAudioPlayer(contentsOf: tmp)
+        player = try? AVAudioPlayer(contentsOf: local)
         play()
     }
 

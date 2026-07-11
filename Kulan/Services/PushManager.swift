@@ -16,6 +16,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Large PERSISTENT URLCache — this is the story viewer's cache tier (StoryUI's image loader +
+        // its AVPlayer both read URLCache.shared first). It was left at the tiny iOS default, so warmed
+        // story images/videos were evicted between launches and re-downloaded. A 100 MB memory / 1 GB
+        // disk store keeps story media on disk across relaunches. Set FIRST, before any URLSession runs.
+        let storyCache = URLCache(memoryCapacity: 100 * 1024 * 1024,
+                                  diskCapacity: 1024 * 1024 * 1024,
+                                  directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                                      .appendingPathComponent("URLCache", isDirectory: true))
+        URLCache.shared = storyCache
+
         FirebaseApp.configure()
 
         // REAL on-disk offline persistence (the win the JS SDK couldn't do in Hermes).
