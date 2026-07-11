@@ -380,9 +380,10 @@ struct MediaApprovalView: View {
                     } else {
                         finalURL = url
                     }
-                    // A poster for the grid: the trimmed range's first frame, else the loaded thumb.
-                    let thumb = poster ?? (await Self.firstFrame(finalURL)) ?? UIImage()
-                    ordered.append(.video(url: finalURL, thumb: thumb, duration: duration))
+                    // A poster for the grid: the loaded thumb, else the final clip's first frame.
+                    var thumb = poster
+                    if thumb == nil { thumb = await Self.firstFrame(finalURL) }
+                    ordered.append(.video(url: finalURL, thumb: thumb ?? UIImage(), duration: duration))
                 }
             }
             await MainActor.run {

@@ -93,9 +93,23 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // default, exactly like the list. We only install the titleView (the native way to put an
         // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            if vc.navigationItem.standardAppearance != nil { vc.navigationItem.standardAppearance = nil }
-            if vc.navigationItem.scrollEdgeAppearance != nil { vc.navigationItem.scrollEdgeAppearance = nil }
-            if vc.navigationItem.compactAppearance != nil { vc.navigationItem.compactAppearance = nil }
+            // Native iOS blur in EVERY state, and NO bottom separator (the "border" the user kept
+            // seeing). configureWithDefaultBackground() gives the system frosted-glass material;
+            // shadowColor = .clear removes the hairline. Applied to BOTH standard (scrolled) and
+            // scroll-edge (at top) so the blur is always present and the border never appears. The
+            // buttons/avatar/title are untouched — this only styles the bar background.
+            let a = UINavigationBarAppearance()
+            a.configureWithDefaultBackground()
+            a.shadowColor = .clear
+            if vc.navigationItem.standardAppearance == nil || vc.navigationItem.standardAppearance?.shadowColor != .clear {
+                vc.navigationItem.standardAppearance = a
+            }
+            if vc.navigationItem.scrollEdgeAppearance == nil || vc.navigationItem.scrollEdgeAppearance?.shadowColor != .clear {
+                vc.navigationItem.scrollEdgeAppearance = a
+            }
+            if vc.navigationItem.compactAppearance == nil || vc.navigationItem.compactAppearance?.shadowColor != .clear {
+                vc.navigationItem.compactAppearance = a
+            }
         }
 
         private func assertTitleView() {
