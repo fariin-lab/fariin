@@ -481,8 +481,13 @@ struct ThreadView: View {
         // scroll to + flash the message.
         .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { note in
             guard let p = note.object as? GoToMessage, p.cid == cid else { return }
-            showContactInfo = false   // pops ContactInfoView + MediaGalleryView back to the chat
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            // Collapse the whole profile→gallery branch with animations DISABLED. SwiftUI's nested
+            // boolean navigation pops one level at a time (gallery→profile→chat), so an animated pop
+            // FLASHES the profile. Disabling the animation cuts straight to the conversation — the
+            // profile is never rendered. (ContactInfoView clears showAllMedia the same way.)
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { showContactInfo = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 Task { await repo.ensureLoaded(p.messageId); await MainActor.run { flashAndScroll(p.messageId) } }
             }
         }

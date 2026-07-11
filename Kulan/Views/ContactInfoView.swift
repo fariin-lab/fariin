@@ -147,11 +147,12 @@ struct ContactInfoView: View {
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
-            // "Go to Chat" from the gallery: drop the gallery in the SAME runloop ThreadView drops this
-            // profile (showContactInfo=false), so SwiftUI collapses straight to the conversation in one
-            // animation — no profile flash (Signal's popToViewController).
+            // "Go to Chat" from the gallery: drop the gallery with animations DISABLED, in the same runloop
+            // ThreadView drops this profile, so the whole branch collapses instantly to the conversation —
+            // the profile is never rendered (SwiftUI's boolean nav can't animate a multi-level pop cleanly).
             .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { _ in
-                showAllMedia = false
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { showAllMedia = false }
             }
             .navigationDestination(item: $openGroup) { g in
                 let me = AuthService.shared.uid ?? ""
