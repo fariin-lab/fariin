@@ -381,8 +381,8 @@ struct ThreadView: View {
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
-            VideoApprovalView(url: wrap.url) { caption in
-                Task { await sendVideo(from: wrap.url, caption: caption) }
+            VideoApprovalView(url: wrap.url) { finalURL, caption in
+                Task { await sendVideo(from: finalURL, caption: caption) }
             }
         }
         .fullScreenCover(isPresented: $showCamera) {

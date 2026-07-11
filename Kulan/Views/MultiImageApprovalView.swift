@@ -60,7 +60,7 @@ struct MultiImageApprovalView: View {
         }
     }
 
-    // X (close) top-left · HD top-right — Apple's standard corner placement.
+    // X (close) top-left only. HD lives in the bottom tool row (crop · pen · HD) — one HD, not two.
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
@@ -71,14 +71,6 @@ struct MultiImageApprovalView: View {
             }
             .buttonStyle(.plain)
             Spacer()
-            Button { hd.toggle() } label: {
-                Text("HD").font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
-                    .frame(width: 44, height: 44)
-                    .liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
