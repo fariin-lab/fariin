@@ -157,6 +157,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] cv, ip, id in
             cv.dequeueConfiguredReusableCell(using: self!.reg, for: ip, item: id)
         }
+        // Install section 0 IMMEDIATELY (empty) so the very first layout pass never sees a section-less
+        // data source — an empty new chat previously reached prepare() with zero sections and crashed.
+        var initial = NSDiffableDataSourceSnapshot<Int, String>()
+        initial.appendSections([0])
+        dataSource.apply(initial, animatingDifferences: false)
     }
 
     // MARK: - Measurement (Signal's pre-measured cellSize)
@@ -476,6 +481,14 @@ final class ExactHeightLayout: UICollectionViewLayout {
     override func prepare() {
         super.prepare()
         guard let cv = collectionView else { return }
+        // CRASH GUARD (build 283 SIGABRT): before the FIRST snapshot lands, the diffable data source
+        // reports ZERO sections — asking numberOfItems(inSection: 0) then trips UIKit's internal
+        // assertion and aborts. An empty brand-new chat hit exactly this (its first apply() returned
+        // through the same-ids guard without ever installing a section).
+        guard cv.numberOfSections > 0 else {
+            frames = []; contentHeight = 0; builtCount = -1; builtGeneration = -1
+            return
+        }
         let count = cv.numberOfItems(inSection: 0)
         if builtGeneration == generation, cv.bounds.width == layoutWidth, count == builtCount { return }
         layoutWidth = cv.bounds.width

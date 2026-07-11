@@ -106,7 +106,6 @@ struct ThreadView: View {
     @FocusState private var searchFocused: Bool
     // Signal-style UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
-    @AppStorage("experimental.nativeList") private var useNativeList = true
     @State private var isAtBottom = true
     @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left (WhatsApp)
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
@@ -165,7 +164,7 @@ struct ThreadView: View {
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
-            .opacity((useNativeList || revealed) ? 1 : 0)
+            .opacity(1)   // the UIKit list manages its own reveal (alpha until the first frame is final)
             // Reveal only once the FULL first page is loaded + laid out (didInitialLoad) — NOT on the
             // first single message. Revealing on the first message showed the chat while cache→live
             // chunks were still landing, so the pinned-bottom layout re-flowed DURING the push and the
@@ -791,37 +790,11 @@ struct ThreadView: View {
         .padding(.horizontal, 36).padding(.top, 14).padding(.bottom, 6)
     }
 
-    private func messageList(_ proxy: ScrollViewProxy) -> some View {
-        LazyVStack(spacing: 0) {
-            // Scroll-to-top spinner: pages in older history, then restores the anchor.
-            // Only after the first load — never as a blank-screen "loading" before it.
-            if repo.canLoadOlder && repo.didInitialLoad {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .id("TOP")
-                    .onAppear { loadOlderWithAnchor(proxy) }
-            }
-            // "You created this group" intro card at the very top (when no older history).
-            if isGroup && !repo.canLoadOlder { groupIntroCard }
-            ForEach(Array(repo.items.enumerated()), id: \.element.rowId) { index, msg in
-                rowView(at: index, msg, jumpTo: { id in jump(to: id, proxy) })
-            }
-            if repo.otherTyping && !repo.iBlocked && typingPref {
-                TypingBubble(dark: dark).padding(.top, 6).id("TYPING")
-            }
-            // Bottom sentinel: drives "am I at the bottom?" for the scroll button.
-            Color.clear.frame(height: 1).id("BOTTOM")
-                .onAppear { isAtBottom = true; newWhileAway = 0; persistScrollPosition() }   // at bottom → remember .bottom
-                .onDisappear { isAtBottom = false }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
+    // (The old SwiftUI fallback list was deleted 2026-07-11 — the Signal-style UIKit list is THE list.
+    // Its ForEach(Array(repo.items.enumerated())) copied every Message per render and watchdogged
+    // build 280 on the main thread.)
 
-    // ONE row builder used by BOTH the SwiftUI list and the UIKit list, so a message looks identical in
-    // either. `jumpTo` is routed by the caller (SwiftUI path -> ScrollViewProxy; UIKit path -> the
-    // collection view), keeping this proxy-free.
+    // ONE row builder used by the UIKit list for every row (date/divider/bubble), proxy-free.
     // The per-chat custom bubble colour (local). Reading `.version` registers observation so bubbles
     // re-render live when the colour is changed in the wallpaper sheet.
     private var chatColorSpec: ChatColorSpec? {
@@ -935,22 +908,11 @@ struct ThreadView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
+    // The Signal-style UIKit list is THE list (user decision 2026-07-11: "completely use this").
+    // The old SwiftUI fallback — and its main-thread Message-array copy that watchdogged build 280 —
+    // is gone along with the Settings toggle.
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
-        if useNativeList {
-            nativeList
-        } else {
-            ScrollView {
-                messageList(proxy)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            inputFocused = false
-                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                            to: nil, from: nil, for: nil)
-                        }
-                    )
-            }
-        }
+        nativeList
     }
 
     // UIKit (Signal-style) message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -1783,15 +1745,7 @@ struct ThreadView: View {
 
     // Scroll to a message (e.g. the original of a tapped reply) and flash it briefly.
     private func jump(to id: String, _ proxy: ScrollViewProxy) {
-        if useNativeList {
-            flashAndScroll(id)   // UIKit list scrolls via the collection view (nativeScrollTarget)
-            return
-        }
-        withAnimation(.easeInOut) { proxy.scrollTo(id, anchor: .center) }
-        highlightId = id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            if highlightId == id { withAnimation { highlightId = nil } }
-        }
+        flashAndScroll(id)   // the UIKit list scrolls via the collection view (nativeScrollTarget)
     }
 
     // Tapped a "Status" reply quote → open that status if it's still live, else say it's gone.

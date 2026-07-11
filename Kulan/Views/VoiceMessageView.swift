@@ -7,6 +7,22 @@ import UIKit
 extension Notification.Name {
     static let voiceNoteFinished = Notification.Name("voiceNoteFinished")   // object = finished message id
     static let voiceNotePlay = Notification.Name("voiceNotePlay")           // object = message id to start
+    static let voiceNoteStopOthers = Notification.Name("voiceNoteStopOthers") // object = the id NOW playing → others pause
+}
+
+// Playback ownership (Signal's single shared audio player, minimal form): exactly one voice note owns
+// the audio session at a time. Only the OWNER may deactivate the session / touch proximity on teardown —
+// this is what stopped every off-screen bubble's onDisappear from nuking the shared session (and the
+// auto-advance chain from cutting its own playback). `pendingPlayId` hands auto-advance to a bubble
+// that isn't on screen yet (its cell claims the play in onAppear).
+enum VoiceAudio {
+    static var activeId: String?
+    static var pendingPlayId: String?
+    // Never touch the audio session while a CALL owns it (1:1 or group) — a scrolled voice bubble must
+    // not reroute/deactivate call audio.
+    @MainActor static var callActive: Bool {
+        CallService.shared.state != .idle || GroupCallService.shared.isActive
+    }
 }
 
 // Playback bubble for a voice note: downloads the encrypted bytes, decrypts them
@@ -23,6 +39,7 @@ struct VoiceMessageView: View {
     @State private var loading = false
     @State private var progress: Double = 0
     @State private var timer: Timer?
+    @State private var scrubbing = false   // a live drag owns the scrubber — the 20Hz timer must not fight it
     @State private var rate: Float = 1.0   // playback speed (1× / 1.5× / 2×), like Signal/WhatsApp
 
     // Signal's CVAudioPlayback caches: the chosen speed sticks for the WHOLE conversation, and a paused
@@ -59,7 +76,8 @@ struct VoiceMessageView: View {
             VStack(alignment: .leading, spacing: 4) {
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
                              unplayed: tint.opacity(0.3), playing: playing,
-                             onSeek: { pct in seek(pct) }, onScrub: onScrub)
+                             onSeek: { pct in seek(pct) },
+                             onScrub: { s in scrubbing = s; onScrub(s) })
                     .frame(width: 158, height: 26)
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
@@ -83,8 +101,29 @@ struct VoiceMessageView: View {
         .onAppear {
             rate = Self.rateByCid[cid] ?? 1                                   // per-chat speed sticks (Signal)
             if !playing, let saved = Self.pausedProgress[message.id] { progress = saved }   // restore paused position
+            // Auto-advance handoff for a bubble that was OFF-SCREEN when its turn came: the router parks
+            // the id; the freshly-realized cell claims it here (the notification would have been dropped).
+            if VoiceAudio.pendingPlayId == message.id {
+                VoiceAudio.pendingPlayId = nil
+                if !playing { toggle() }
+            }
         }
-        .onDisappear { stop() }
+        .onDisappear {
+            stop()
+            // Clean the decrypted tmp copies once this bubble is off-screen and silent (E2EE plaintext
+            // shouldn't accumulate in tmp). A replay simply re-decrypts.
+            if !playing {
+                let fm = FileManager.default
+                fm.removeItemIfExists(at: fm.temporaryDirectory.appendingPathComponent("play-\(message.id).m4a"))
+                fm.removeItemIfExists(at: fm.temporaryDirectory.appendingPathComponent("local-\(message.rowId).m4a"))
+            }
+        }
+        // Single-player rule (Signal): when ANOTHER note starts, pause this one. The new owner has
+        // already claimed VoiceAudio.activeId, so our teardown won't touch the shared session.
+        .onReceive(NotificationCenter.default.publisher(for: .voiceNoteStopOthers)) { note in
+            guard let id = note.object as? String, id != message.id, playing else { return }
+            pause()
+        }
         // Auto-advance (Signal): the chat posts .voiceNotePlay with the NEXT note's id when the previous
         // one finishes — if it's this bubble and it isn't already playing, start it.
         .onReceive(NotificationCenter.default.publisher(for: .voiceNotePlay)) { note in
@@ -113,8 +152,9 @@ struct VoiceMessageView: View {
     }
 
     private func seek(_ pct: Double) {
+        guard let p = player else { return }   // no player yet → a tap must not move the scrubber visually
         progress = max(0, min(1, pct))
-        if let p = player { p.currentTime = progress * p.duration }
+        p.currentTime = progress * p.duration
     }
 
     private func toggle() {
@@ -149,6 +189,11 @@ struct VoiceMessageView: View {
 
     private func play() {
         guard player != nil else { return }
+        guard !VoiceAudio.callActive else { return }   // never steal the session from an active call
+        // Claim playback ownership FIRST, then pause any other playing note (its teardown sees a
+        // different owner and leaves the shared session alone) — Signal's single-player rule.
+        VoiceAudio.activeId = message.id
+        NotificationCenter.default.post(name: .voiceNoteStopOthers, object: message.id)
         // Playing it = heard: clears the accent mic in the chat list + the dot here.
         if !isMe { withAnimation(.easeOut(duration: 0.25)) {
             PlayedVoice.shared.markPlayed(cid: cid, messageId: message.id, createdAt: message.createdAt)
@@ -167,7 +212,9 @@ struct VoiceMessageView: View {
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
             guard let p = player else { return }
             if p.isPlaying {
-                progress = p.duration > 0 ? p.currentTime / p.duration : 0
+                if !scrubbing {   // a live drag owns the scrubber — don't fight the finger
+                    progress = p.duration > 0 ? p.currentTime / p.duration : 0
+                }
             } else {
                 playing = false
                 progress = 0
@@ -186,18 +233,34 @@ struct VoiceMessageView: View {
     }
     private func stop() {
         if playing { Self.pausedProgress[message.id] = progress }     // scrolled away mid-play → resumable
+        let hadPlayer = player != nil
         player?.stop(); playing = false; timer?.invalidate(); timer = nil
-        playbackEnded(natural: false)
+        if hadPlayer { playbackEnded(natural: false) }                // bubbles that never played touch NOTHING
     }
 
-    // Shared teardown: release the sleep block + proximity monitoring, hand the audio session back with
-    // .notifyOthersOnDeactivation (Signal) so the user's music/podcast resumes instead of staying ducked,
-    // and — on a NATURAL end — announce the finish so the chat can auto-advance to the next voice note.
+    // Teardown — OWNER-ONLY (this was the critical bug: every bubble scrolling off-screen deactivated
+    // the shared session, cutting the user's music and the auto-advance chain's own playback). Only the
+    // note that currently owns playback releases the session/proximity; and never during a call.
     private func playbackEnded(natural: Bool) {
         SleepBlocker.shared.remove("voice-play-\(message.id)")
+        guard VoiceAudio.activeId == message.id else { return }   // another note owns audio now — hands off
+        VoiceAudio.activeId = nil
         UIDevice.current.isProximityMonitoringEnabled = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        if !VoiceAudio.callActive {
+            // Leave the category on plain playback (raise-to-ear may have set .playAndRecord — the mic
+            // must not stay hot), then hand the session back so music/podcasts resume.
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
         if natural { NotificationCenter.default.post(name: .voiceNoteFinished, object: message.id) }
+    }
+}
+
+extension FileManager {
+    // Best-effort delete (voice-note tmp plaintext cleanup) — silent no-op when the file isn't there.
+    func removeItemIfExists(at url: URL) {
+        guard fileExists(atPath: url.path) else { return }
+        try? removeItem(at: url)
     }
 }
 

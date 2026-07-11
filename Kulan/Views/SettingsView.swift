@@ -379,18 +379,10 @@ struct PrivacySettingsView: View {
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
     @AppStorage("shareLastSeen") private var shareLastSeen = true
-    @AppStorage("experimental.nativeList") private var nativeList = true
-
     var body: some View {
         List {
-            Section {
-                Toggle(isOn: $nativeList) { Label("Signal-style message list", systemImage: "bubble.left.and.bubble.right") }.tint(.green)
-            } header: {
-                Text("Experimental")
-            } footer: {
-                Text("UIKit-based chat scrolling (like Signal): opens at the exact bottom, no jump when loading older messages. On by default. Turn off to fall back to the old list. Reopen a chat after changing this.")
-            }
-
+            // (The Signal-style message list is now THE list — the experimental toggle and the old
+            // SwiftUI fallback were removed 2026-07-11 per user decision.)
             Section {
                 Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)
                 Toggle(isOn: $typingIndicators) { Label("Typing Indicators", systemImage: "ellipsis.bubble") }.tint(.green)

@@ -38,19 +38,35 @@ final class AudioRecorder {
         AVEncoderBitRateKey: 40_000,
     ]
 
+    // Set when a call/Siri/alarm interrupted an in-flight recording: the partial note is PRESERVED
+    // (paused, file kept) instead of discarded — the user can still send or cancel it (Signal keeps an
+    // interrupted draft; the old behavior deleted a long recording with no recovery).
+    var wasInterrupted = false
+
     init() {
         // Observe audio-session interruptions (phone call, Siri, alarm, another app grabbing the mic).
-        // On .began the system has already stopped the input, so discard the partial note cleanly and
-        // let the view drop its recording UI — no stuck timer, no half file.
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let self,
                   let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .began,
-                  self.isRecording else { return }
-            self.cancel()
-            self.onInterrupt?()
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            switch type {
+            case .began:
+                guard self.isRecording else { return }
+                self.recorder?.pause()          // keep the file + captured audio — do NOT discard
+                self.timer?.invalidate(); self.timer = nil
+                self.wasInterrupted = true      // the view flips to the locked bar (send/cancel the draft)
+                self.onInterrupt?()
+            case .ended:
+                // Resume only if iOS says we should and the user hasn't finished/cancelled meanwhile.
+                let opts = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init)
+                if self.wasInterrupted, self.isRecording, opts?.contains(.shouldResume) == true {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    self.recorder?.record()
+                }
+            @unknown default: break
+            }
         }
     }
 
