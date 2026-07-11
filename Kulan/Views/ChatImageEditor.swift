@@ -162,8 +162,8 @@ struct ChatImageEditor: View {
                     .frame(width: area.width, height: area.height)
             }
         }
-        // Rounded canvas ONLY in draw mode (Signal's editor radius 18; plain review has none).
-        .clipShape(RoundedRectangle(cornerRadius: isDrawing ? 18 : 0, style: .continuous))
+        // Rounded canvas corners (user request) — a soft 18pt radius on the editing surface.
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .frame(width: area.width, height: area.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -261,7 +261,8 @@ struct ChatImageEditor: View {
 
             // Caption + send (Signal's text toolbar). The ① toggle (Signal's viewOnceButton) sits in the
             // capsule; view-once media can't carry a caption, so the field becomes "View Once Media".
-            HStack(spacing: 10) {
+            // .bottom-aligned so the send button hugs the bottom of a tall multi-line caption (iMessage).
+            HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 8) {
                     if viewOnce {
                         Text("View Once Media")
@@ -287,11 +288,11 @@ struct ChatImageEditor: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 46)
-                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)
+                .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 40)
+                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
                 Button { send() } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 46, height: 46)
+                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)   // 40px send button (user spec)
                         .background(Color(hex: 0x3DA1FD), in: Circle())
                 }
                 .buttonStyle(StoryPressStyle())
@@ -301,19 +302,19 @@ struct ChatImageEditor: View {
         .padding(.horizontal, 16)
     }
 
-    // Round glass tool button (Signal's .roundMedia button style): 44pt, white glyph, accent when active.
+    // Round glass tool button (crop · pen · HD): 40pt (user spec), white glyph, accent when active.
     @ViewBuilder
     private func tool(_ icon: String, active: Bool, label: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Group {
                 if let label {
-                    Text(label).font(.system(size: 13, weight: .bold))
+                    Text(label).font(.system(size: 12, weight: .bold))
                 } else {
-                    Image(systemName: icon).font(.system(size: 17, weight: .medium))
+                    Image(systemName: icon).font(.system(size: 16, weight: .medium))
                 }
             }
             .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
-            .frame(width: 44, height: 44)
+            .frame(width: 40, height: 40)
             .liquidGlass(Circle(), interactive: true)
             .contentShape(Circle())
         }
