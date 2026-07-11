@@ -2735,6 +2735,7 @@ struct MessageBubble: View, Equatable {
 
     @State private var dragX: CGFloat = 0
     @State private var bubbleFrame: CGRect = .zero   // live global frame → reaction overlay anchor
+    @State private var pressing = false              // long-press build-up: bubble shrinks while held (Signal)
     // Reference flag (NOT @State): the waveform scrub and the reply gesture fire in the SAME drag event,
     // and a @State bool doesn't propagate synchronously within that event, so the reply read the stale
     // (false) value and still swiped. A class is mutated + read synchronously, killing the race.
@@ -3009,12 +3010,17 @@ struct MessageBubble: View, Equatable {
                                 .onChange(of: g.frame(in: .global)) { _, f in bubbleFrame = f }
                         }
                     )
-                    // Long-press → custom Signal-style reaction bar + glass menu (replaces the native
-                    // context menu, which can't show an inline emoji reaction bar). 0.28s ≈ Signal's
-                    // press; a .medium haptic fires as it presents.
-                    .onLongPressGesture(minimumDuration: 0.28) {
+                    // Long-press → custom Signal-style reaction bar + glass menu. 0.2s = Signal's
+                    // minimumPressDuration (snappier than before). The bubble scales down slightly WHILE
+                    // pressing (Signal's build-up "peek"), then a .medium haptic fires as it presents.
+                    .scaleEffect(pressing ? 0.96 : 1)
+                    .animation(.easeOut(duration: 0.18), value: pressing)
+                    .onLongPressGesture(minimumDuration: 0.2, maximumDistance: 24) {
+                        pressing = false
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
                         onLongPress(message, bubbleFrame)
+                    } onPressingChanged: { isPressing in
+                        pressing = isPressing
                     }
                     // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
                     .highPriorityGesture(TapGesture(count: 2).onEnded {

@@ -236,26 +236,27 @@ struct ReactionMenuOverlay: View {
             else { row("Report", "flag", onReport, destructive: true) }   // flag for review (App Store 1.2)
         }
         .frame(width: 250)
-        .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous))   // rounder, Apple-style
-        .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
+        .liquidGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))   // native UIMenu corner (~14)
+        .shadow(color: .black.opacity(0.2), radius: 24, y: 12)                  // native menu drop shadow
     }
 
-    // Full-width hairline between rows — matches the native context-menu separators.
+    // Full-bleed hairline between rows — the native context-menu separator.
     private var menuDivider: some View {
-        Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5)
+        Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 0.5)
     }
 
+    // Native UIMenu row: title on the LEFT, icon on the RIGHT (trailing), 17pt label, ~44pt tall.
     @ViewBuilder
     private func row(_ title: String, _ icon: String, _ action: @escaping () -> Void, destructive: Bool = false) -> some View {
         Button(action: { haptic(); action() }) {
-            HStack(spacing: 14) {
-                Image(systemName: icon).frame(width: 24)   // icon on the left, like Signal/iOS menus
+            HStack(spacing: 12) {
                 Text(title)
                 Spacer(minLength: 8)
+                Image(systemName: icon).font(.system(size: 18)).frame(width: 22)   // trailing icon (native)
             }
-            .font(.system(size: 17))   // native context-menu metrics
+            .font(.system(size: 17))
             .foregroundStyle(destructive ? Color.red : Color.primary)
-            .padding(.horizontal, 16).padding(.vertical, 11)
+            .padding(.horizontal, 16).frame(height: 44)   // native row height
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
