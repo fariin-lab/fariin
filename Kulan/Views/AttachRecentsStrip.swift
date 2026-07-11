@@ -14,7 +14,7 @@ struct AttachRecentsStrip: View {
     var onPickVideo: (URL) -> Void                              // TAP a video → open the trim editor
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
-    var onOpenAlbum: ([UIImage]) -> Void = { _ in }              // tapping a photo WHILE selecting → open the approval/paging page
+    var onOpenMedia: ([ApprovalMedia]) -> Void = { _ in }        // tapping media WHILE selecting → the mixed approval pager
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
     @FocusState private var captionFocused: Bool
@@ -272,15 +272,12 @@ struct AttachRecentsStrip: View {
         albums = out
     }
 
-    // Tap routing, reusing the existing image logic (the checkbox owns selection, never conflicts):
-    //   • VIDEO → always its own trim editor (pick → onPickVideo), exactly like tapping an image opens the
-    //     image editor — even mid-selection, since videos are edited one at a time. This was the bug: while
-    //     a selection was active, tapping a video hit openSelected(), which collects IMAGES only, so nothing
-    //     happened.
-    //   • IMAGE → single editor when nothing is selected, else the multi-image approval of the selection.
+    // Tap routing (the checkbox owns selection, never conflicts):
+    //   • Nothing selected → tap opens the SINGLE editor for that item (image editor / video trim editor).
+    //   • Selection active → tap opens the MIXED approval pager over the whole selection (images AND
+    //     videos together — swipe between all of them, edit each, one caption, one send).
     private func openTapped(_ a: PHAsset) {
-        if a.mediaType == .video { pick(a) }
-        else if selectedIds.isEmpty { pick(a) }
+        if selectedIds.isEmpty { pick(a) }
         else { openSelected() }
     }
 
@@ -310,22 +307,36 @@ struct AttachRecentsStrip: View {
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
-    // Tapping a photo while a selection is active → load the selected PHOTOS (in order) and open the
-    // multi-image approval page (paging + per-image edit + one caption).
+    // Tapping media while a selection is active → load EVERY selected item (images AND videos, in tap
+    // order) and open the mixed approval pager (swipe all, per-item edit, one caption, one send).
     private func openSelected() {
         let ids = selectedIds
         let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
         loadingPick = true
         Task {
-            var imgs: [UIImage] = []
+            var out: [ApprovalMedia] = []
             for id in ids {
-                if let a = byId[id], a.mediaType == .image, let ui = await Self.fullImage(a) { imgs.append(ui) }
+                guard let a = byId[id] else { continue }
+                if a.mediaType == .video {
+                    if let url = await Self.videoURL(a) {
+                        // Duration + a poster thumb for the pager rail.
+                        let asset = AVURLAsset(url: url)
+                        let dur = (try? await asset.load(.duration).seconds) ?? 0
+                        let gen = AVAssetImageGenerator(asset: asset)
+                        gen.appliesPreferredTrackTransform = true
+                        gen.maximumSize = CGSize(width: 320, height: 320)
+                        let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
+                        out.append(.video(UUID(), url, thumb, dur))
+                    }
+                } else if let ui = await Self.fullImage(a) {
+                    out.append(.image(UUID(), ui))
+                }
             }
             await MainActor.run {
                 loadingPick = false
-                if imgs.isEmpty { return }
-                selectedIds = []; caption = ""; hasSelection = false
-                onOpenAlbum(imgs)
+                if out.isEmpty { return }
+                selectedIds = []; caption = ""; viewOnce = false; hasSelection = false
+                onOpenMedia(out)
             }
         }
     }
@@ -355,9 +366,9 @@ struct AttachRecentsStrip: View {
                 caption = ""
                 viewOnce = false
                 hasSelection = false
-                // SELECTED via checkbox + Send → send directly (with the caption). The editor page opens
-                // ONLY when you TAP a video (pick → onPickVideo), not from the Send button.
-                if !videos.isEmpty { onSendVideos(videos, cap) }
+                // SELECTED via checkbox + Send → send directly. The caption rides ONCE — on the photo
+                // album when photos exist, else on the video batch (was duplicated onto both).
+                if !videos.isEmpty { onSendVideos(videos, imgs.isEmpty ? cap : "") }
                 if !imgs.isEmpty { onSendAlbum(imgs, cap, once) }
             }
         }

@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import Photos
 import CoreTransferable
+import AVFoundation
 import UIKit
 import FirebaseFirestore
 import UniformTypeIdentifiers
@@ -44,8 +45,8 @@ struct ThreadView: View {
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
-    @State private var multiImages: MultiImagesWrap? // 2+ picked photos → Signal-style approval screen
-    struct MultiImagesWrap: Identifiable { let id = UUID(); let images: [UIImage] }
+    @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
+    struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
     struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video → approval page (caption)
     // A tapped album opens a swipeable gallery of its photos (synthetic image messages), starting on
     // the tapped one.
@@ -398,11 +399,24 @@ struct ThreadView: View {
                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
             }
         }
-        .fullScreenCover(item: $multiImages) { wrap in
-            // Signal's multi-image approval: pages + rail + one caption; sends in selection order,
-            // the caption follows the batch as the message body (our follow-up-text pattern).
-            MultiImageApprovalView(images: wrap.images) { imgs, caption, hd in
-                Task { await sendAlbum(imgs, caption: caption, hd: hd) }   // ONE album message
+        .fullScreenCover(item: $mediaToApprove) { wrap in
+            // Mixed approval pager (images + videos, per-item edit, one caption, one send). Photos go
+            // out as ONE album message; each video follows as its own message (Signal/WhatsApp group
+            // media the same way). The caption rides exactly ONCE — on the album when photos exist,
+            // else on the first video.
+            MediaApprovalView(items: wrap.items) { imgs, videos, caption, hd in
+                Task {
+                    var cap = caption
+                    if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
+                        await sendPhoto(d, caption: cap); cap = ""
+                    } else if imgs.count >= 2 {
+                        await sendAlbum(imgs, caption: cap, hd: hd); cap = ""
+                    }
+                    for url in videos {
+                        await sendVideo(from: url, caption: cap, hd: hd)
+                        cap = ""   // caption once, on the first message of the batch
+                    }
+                }
             }
         }
         .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = .medium }) { attachPanel.presentationDetents([.medium, .large], selection: $attachDetent) }   // opens half (≈2 rows), pull up for more / caption focus
@@ -1193,8 +1207,12 @@ struct ThreadView: View {
                 },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
-                    // SELECT + Send → send each selected video directly (no editor), with the caption.
-                    Task { for url in urls { await sendVideo(from: url, caption: caption) } }
+                    // SELECT + Send → send each selected video directly (no editor). The caption rides
+                    // ONCE, on the first video (was duplicated onto every video in the batch).
+                    Task {
+                        var cap = caption
+                        for url in urls { await sendVideo(from: url, caption: cap); cap = "" }
+                    }
                 },
                 onSendAlbum: { imgs, caption, viewOnce in
                     showAttachPanel = false
@@ -1208,12 +1226,18 @@ struct ThreadView: View {
                         }
                     }
                 },
-                onOpenAlbum: { imgs in
-                    // Tapping a photo while selecting → open the multi-image approval page (paging).
+                onOpenMedia: { items in
+                    // Tapping media while selecting → the mixed approval pager. A single item keeps its
+                    // dedicated editor (image editor / video trim editor); 2+ open the pager.
                     showAttachPanel = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        if imgs.count == 1 { editImage = EditImageWrap(image: imgs[0]) }
-                        else { multiImages = MultiImagesWrap(images: imgs) }
+                        if items.count == 1, case .image(_, let ui) = items[0] {
+                            editImage = EditImageWrap(image: ui)
+                        } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
+                            videoToApprove = VideoWrap(url: url)
+                        } else {
+                            mediaToApprove = MediaWrap(items: items)
+                        }
                     }
                 },
                 onCaptionFocused: { attachDetent = .large },
@@ -1729,25 +1753,35 @@ struct ThreadView: View {
             await MainActor.run { editImage = EditImageWrap(image: ui) }
             return
         }
-        // Load all picked photos IN ORDER (selection order = send order, like Signal); a single video
-        // opens the approval page (caption); videos mixed with photos still send straight through.
-        var photos: [UIImage] = []
+        // Load every picked item IN ORDER (selection order = send order, like Signal) into the unified
+        // media list: a lone photo/video keeps its dedicated editor; anything else (multiple photos,
+        // multiple videos, or a MIX) opens the mixed approval pager — swipe all, edit each, one caption.
+        var items: [ApprovalMedia] = []
         for item in picked {
             if isVideoItem(item) {
                 if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                    if picked.count == 1 { await MainActor.run { videoToApprove = VideoWrap(url: movie.url) } }
-                    else { await sendVideo(from: movie.url) }
+                    let asset = AVURLAsset(url: movie.url)
+                    let dur = (try? await asset.load(.duration).seconds) ?? 0
+                    let gen = AVAssetImageGenerator(asset: asset)
+                    gen.appliesPreferredTrackTransform = true
+                    gen.maximumSize = CGSize(width: 320, height: 320)
+                    let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
+                    items.append(.video(UUID(), movie.url, thumb, dur))
                 }
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       let ui = UIImage(data: data) {
-                photos.append(ui)
+                items.append(.image(UUID(), ui))
             }
         }
-        guard !photos.isEmpty else { return }
-        if photos.count == 1 {
-            await MainActor.run { editImage = EditImageWrap(image: photos[0]) }
-        } else {
-            await MainActor.run { multiImages = MultiImagesWrap(images: photos) }
+        guard !items.isEmpty else { return }
+        await MainActor.run {
+            if items.count == 1, case .image(_, let ui) = items[0] {
+                editImage = EditImageWrap(image: ui)
+            } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
+                videoToApprove = VideoWrap(url: url)
+            } else {
+                mediaToApprove = MediaWrap(items: items)
+            }
         }
     }
 
