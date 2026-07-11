@@ -29,6 +29,7 @@ struct ChatImageEditor: View {
     @State private var aspectIndex = 0
     @State private var hd = false
     @State private var canvasSize: CGSize = .zero
+    @State private var bottomChromeH: CGFloat = 118   // measured live from the actual bottom bars (Signal queries toolbar heights at runtime)
     @FocusState private var captionFocused: Bool
 
     private static let ctx = CIContext()
@@ -58,30 +59,43 @@ struct ChatImageEditor: View {
                 // (no .ignoresSafeArea) so a stroke stays exactly where it was drawn after Done. When the
                 // canvas ignored the safe area but the overlay/flatten used geo.size, strokes shifted DOWN
                 // by the top inset on Done — the reported bug.
-                if isDrawing {
-                    Image(uiImage: edited)
-                        .resizable().scaledToFit()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                    // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
-                    DrawingCanvas(drawing: $drawing, isActive: true,
-                                  penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
-                                  showsToolPicker: false,
-                                  inkType: isHighlighter ? .marker : .pen,
-                                  penWidth: penWidth)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                } else {
-                    ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
-                                  onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                    // PERSISTENT drawing: after Done the strokes stay visible over the photo (the bug was
-                    // the canvas only showing while actively drawing → the drawing "disappeared").
-                    if !drawing.bounds.isEmpty {
-                        Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
-                            .resizable()
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .allowsHitTesting(false)
+                // The image area EXCLUDES the bottom chrome (Signal's approval layout: the image is
+                // inset by the toolbar height + safe area, never hidden behind it) — the photo aspect-
+                // FITS this area, fully visible and letterboxed on black, uniformly for every ratio.
+                // The canvas, drawing layer and persistent overlay all share this SAME rect so a stroke
+                // stays exactly where it was drawn after Done.
+                let canvasArea = CGSize(width: geo.size.width,
+                                        height: max(120, geo.size.height - bottomChromeH - 8))
+                ZStack {
+                    if isDrawing {
+                        Image(uiImage: edited)
+                            .resizable().scaledToFit()
+                            .frame(width: canvasArea.width, height: canvasArea.height)
+                        // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
+                        DrawingCanvas(drawing: $drawing, isActive: true,
+                                      penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                                      showsToolPicker: false,
+                                      inkType: isHighlighter ? .marker : .pen,
+                                      penWidth: penWidth)
+                            .frame(width: canvasArea.width, height: canvasArea.height)
+                    } else {
+                        ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
+                                      onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                            .frame(width: canvasArea.width, height: canvasArea.height)
+                        // PERSISTENT drawing: after Done the strokes stay visible over the photo (the bug was
+                        // the canvas only showing while actively drawing → the drawing "disappeared").
+                        if !drawing.bounds.isEmpty {
+                            Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: canvasArea), scale: UIScreen.main.scale))
+                                .resizable()
+                                .frame(width: canvasArea.width, height: canvasArea.height)
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
+                // Rounded canvas ONLY in draw mode (Signal's editor radius 18; plain review has none).
+                .clipShape(RoundedRectangle(cornerRadius: isDrawing ? 18 : 0, style: .continuous))
+                .frame(width: canvasArea.width, height: canvasArea.height)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                 // Chrome INSIDE the native safe area (no manual inset math). The canvas above ignores
                 // the keyboard entirely, so opening the caption keyboard lifts ONLY this bottom bar —
@@ -108,8 +122,20 @@ struct ChatImageEditor: View {
                     .padding(.horizontal)
                     .padding(.top, 4)
                     Spacer(minLength: 0)
-                    if isDrawing { penBar.padding(.bottom, 8) }
-                    else { bottomBar.padding(.bottom, 8) }
+                    Group {
+                        if isDrawing { penBar.padding(.bottom, 8) }
+                        else { bottomBar.padding(.bottom, 8) }
+                    }
+                    // Live-measure the bottom chrome so the image area excludes exactly its height
+                    // (Signal queries its toolbar heights at runtime — no hardcoded constants). Skipped
+                    // while the caption keyboard is up so the canvas never resizes with the keyboard.
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { if !captionFocused { bottomChromeH = g.size.height } }
+                                .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h } }
+                        }
+                    )
                 }
                 .animation(.easeInOut(duration: 0.2), value: captionFocused)
 
@@ -130,8 +156,19 @@ struct ChatImageEditor: View {
                 DragGesture(minimumDistance: 18)
                     .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
             )
-            .onAppear { canvasSize = geo.size; recomputeEdited(); if startDrawing { isDrawing = true } }
-            .onChange(of: geo.size) { _, s in canvasSize = s }
+            // canvasSize feeds the flatten step — it MUST equal the rect the strokes were drawn in
+            // (the canvas area, not the full screen), or strokes shift on send.
+            .onAppear {
+                canvasSize = CGSize(width: geo.size.width, height: max(120, geo.size.height - bottomChromeH - 8))
+                recomputeEdited()
+                if startDrawing { isDrawing = true }
+            }
+            .onChange(of: geo.size) { _, s in
+                canvasSize = CGSize(width: s.width, height: max(120, s.height - bottomChromeH - 8))
+            }
+            .onChange(of: bottomChromeH) { _, h in
+                canvasSize = CGSize(width: geo.size.width, height: max(120, geo.size.height - h - 8))
+            }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
         }
