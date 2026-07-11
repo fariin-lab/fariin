@@ -150,14 +150,20 @@ struct ReactionMenuOverlay: View {
         Group {
             if message.isImage {
                 imageLift
+            } else if message.isVideo {
+                videoLift
+            } else if message.isAlbum {
+                albumLift
             } else if message.isAudio {
                 VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)
                     .padding(.horizontal, 13).padding(.vertical, 9)
                     .background(isMe ? Theme.accent(dark) : Theme.received(dark))
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .frame(maxWidth: 260, alignment: isMe ? .trailing : .leading)
+            } else if message.isFile {
+                fileLift
             } else {
-                Text(message.text)
+                Text(message.text.isEmpty ? " " : message.text)
                     .font(.body)
                     .foregroundColor(isMe ? Theme.onAccent(dark) : (dark ? .white : .black))
                     .padding(.horizontal, 13).padding(.vertical, 9)
@@ -179,6 +185,51 @@ struct ReactionMenuOverlay: View {
         }
         .frame(maxWidth: 240, maxHeight: 280)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // Video → its poster thumbnail + a play glyph (matches the bubble).
+    @ViewBuilder private var videoLift: some View {
+        Group {
+            if let t = message.thumbUrl, let e = message.thumbEnc {
+                SecureImageView(imageUrl: t, enc: e, cid: cid)
+            } else if let data = message.localImageData, let ui = UIImage(data: data) {
+                Image(uiImage: ui).resizable().scaledToFill()
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.25))
+            }
+        }
+        .frame(maxWidth: 240, maxHeight: 280)
+        .overlay { Image(systemName: "play.circle.fill").font(.system(size: 44)).foregroundStyle(.white.opacity(0.9)) }
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // Album → the first item's thumbnail (a representative preview of the group).
+    @ViewBuilder private var albumLift: some View {
+        Group {
+            if let d = message.localAlbum.first, let ui = UIImage(data: d) {
+                Image(uiImage: ui).resizable().scaledToFill()
+            } else if let it = message.album.first {
+                SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.25))
+            }
+        }
+        .frame(maxWidth: 240, maxHeight: 240)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // File → the document row look (icon + name) inside a bubble.
+    @ViewBuilder private var fileLift: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.fill").font(.system(size: 22))
+                .foregroundStyle(isMe ? Theme.onAccent(dark) : .secondary)
+            Text(message.fileName ?? "Document").lineLimit(1)
+                .foregroundColor(isMe ? Theme.onAccent(dark) : (dark ? .white : .black))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(isMe ? Theme.accent(dark) : Theme.received(dark))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(maxWidth: 260, alignment: isMe ? .trailing : .leading)
     }
 
     private func haptic() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
@@ -236,30 +287,43 @@ struct ReactionMenuOverlay: View {
             else { row("Report", "flag", onReport, destructive: true) }   // flag for review (App Store 1.2)
         }
         .frame(width: 250)
-        .liquidGlass(RoundedRectangle(cornerRadius: 14, style: .continuous))   // native UIMenu corner (~14)
-        .shadow(color: .black.opacity(0.2), radius: 24, y: 12)                  // native menu drop shadow
+        // Native UIMenu material: the system frosted-menu blur (regularMaterial) with the exact 13pt
+        // continuous corner, clipped, plus the soft menu drop shadow. (Was iOS 26 interactive glass,
+        // which reads more transparent than a real context menu.)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .shadow(color: .black.opacity(0.22), radius: 32, y: 14)
     }
 
-    // Full-bleed hairline between rows — the native context-menu separator.
+    // Native context-menu separator: a hairline that reads through the material vibrancy.
     private var menuDivider: some View {
-        Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 0.5)
+        Rectangle().fill(Color.primary.opacity(0.09)).frame(height: 1.0 / UIScreen.main.scale)
     }
 
-    // Native UIMenu row: title on the LEFT, icon on the RIGHT (trailing), 17pt label, ~44pt tall.
+    // Native UIMenu row: title LEFT, icon TRAILING, 17pt label, ~44pt tall, and — the missing native
+    // cue — the row greys under the finger on touch-down (MenuRowStyle).
     @ViewBuilder
     private func row(_ title: String, _ icon: String, _ action: @escaping () -> Void, destructive: Bool = false) -> some View {
         Button(action: { haptic(); action() }) {
             HStack(spacing: 12) {
                 Text(title)
                 Spacer(minLength: 8)
-                Image(systemName: icon).font(.system(size: 18)).frame(width: 22)   // trailing icon (native)
+                Image(systemName: icon).font(.system(size: 18)).frame(width: 22)
             }
             .font(.system(size: 17))
             .foregroundStyle(destructive ? Color.red : Color.primary)
-            .padding(.horizontal, 16).frame(height: 44)   // native row height
+            .padding(.horizontal, 16).frame(height: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MenuRowStyle())
+    }
+}
+
+// Native context-menu row press feedback: the row fills with the system grey while held.
+private struct MenuRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.primary.opacity(0.14) : Color.clear)
     }
 }
 
