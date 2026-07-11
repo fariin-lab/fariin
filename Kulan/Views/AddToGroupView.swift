@@ -11,7 +11,6 @@ struct AddToGroupView: View {
     private var me: String { AuthService.shared.uid ?? "" }
     @State private var working: String? = nil   // cid currently being added
     @State private var notice: String?
-    @State private var pendingAdd: Conversation?   // group awaiting the "Add to Group?" confirmation
 
     // Every group I'm a member of, alphabetical.
     private var myGroups: [Conversation] {
@@ -41,18 +40,6 @@ struct AddToGroupView: View {
                     ToolbarItem(placement: .topBarTrailing) { CloseXButton { dismiss() } }
                 }
             }
-            // Confirm before adding (native alert = real system Liquid Glass), like the mockup:
-            // "Add New Member / Add "X" to "Group"? / Add to Group · Cancel".
-            .confirmationDialog("Add New Member",
-                                isPresented: Binding(get: { pendingAdd != nil }, set: { if !$0 { pendingAdd = nil } }),
-                                titleVisibility: .visible) {
-                if let g = pendingAdd {
-                    Button("Add to Group") { add(to: g) }
-                    Button("Cancel", role: .cancel) { pendingAdd = nil }
-                }
-            } message: {
-                if let g = pendingAdd { Text("Add \"\(contactName)\" to \"\(g.displayName(me))\"?") }
-            }
             .alert("Add to a Group", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
                 Button("OK") { dismiss() }
             } message: { Text(notice ?? "") }
@@ -63,7 +50,8 @@ struct AddToGroupView: View {
         let already = g.users.contains(contactUid)
         Button {
             guard !already, working == nil else { return }
-            pendingAdd = g   // ask first (confirmation dialog), then add on confirm
+            confirmAdd(g)   // native UIKit action sheet (bottom, with Cancel) — SwiftUI's
+                            // confirmationDialog rendered as a Cancel-less popover here.
         } label: {
             HStack(spacing: 12) {
                 AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 44)
@@ -79,6 +67,27 @@ struct AddToGroupView: View {
         }
         .buttonStyle(.plain)
         .disabled(already || working != nil)
+    }
+
+    // Native UIKit action sheet — always a BOTTOM sheet with a Cancel on iPhone (unlike SwiftUI's
+    // confirmationDialog, which rendered as a Cancel-less popover inside this sheet).
+    private func confirmAdd(_ g: Conversation) {
+        let sheet = UIAlertController(
+            title: "Add New Member",
+            message: "Add \"\(contactName)\" to \"\(g.displayName(me))\"?",
+            preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Add to Group", style: .default) { _ in add(to: g) })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        // Find the top-most presented VC to present from.
+        var top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        // iPad popover anchor (harmless on iPhone, where it's a bottom sheet).
+        sheet.popoverPresentationController?.sourceView = top?.view
+        if let v = top?.view {
+            sheet.popoverPresentationController?.sourceRect = CGRect(x: v.bounds.midX, y: v.bounds.maxY - 60, width: 0, height: 0)
+        }
+        top?.present(sheet, animated: true)
     }
 
     private func add(to g: Conversation) {
