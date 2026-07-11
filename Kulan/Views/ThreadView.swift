@@ -156,9 +156,16 @@ struct ThreadView: View {
         ScrollViewReader { proxy in scrollStack(proxy) }
     }
 
+    // Extracted so the type-checker isn't overloaded (the inline `if` in the big chain broke the build).
+    @ViewBuilder private func topPinArea(_ proxy: ScrollViewProxy) -> some View {
+        if !searchActive {   // search owns the top area — the pin bar hides while searching
+            pinnedBar(proxy)
+        }
+    }
+
     @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
             VStack(spacing: 0) {
-            if !searchActive { pinnedBar(proxy) }   // search owns the top area — the pin bar hides while searching
+            topPinArea(proxy)
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
@@ -212,14 +219,6 @@ struct ThreadView: View {
                 if !mine && isAtBottom && !repo.iBlocked { ChatService.markReadThrottled(cid) }
             }
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
-            // Scrolled back down to the newest message → NOW the missed messages are seen: clear the
-            // away-counter and send the (throttled) read receipt.
-            .onChange(of: isAtBottom) { _, atBottom in
-                if atBottom {
-                    newWhileAway = 0
-                    if !repo.iBlocked { ChatService.markReadThrottled(cid) }
-                }
-            }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
             .onChange(of: repo.pinnedMessageIds) { _, ids in pinIndex = max(0, ids.count - 1) }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
@@ -940,6 +939,14 @@ struct ThreadView: View {
                                                     to: nil, from: nil, for: nil)
                 }
             )
+            // Scrolled back down to the newest message → the missed messages are now seen: clear the
+            // away-counter and send the (throttled) read receipt.
+            .onChange(of: isAtBottom) { _, atBottom in
+                if atBottom {
+                    newWhileAway = 0
+                    if !repo.iBlocked { ChatService.markReadThrottled(cid) }
+                }
+            }
     }
 
     // UIKit (Signal-style) message list. Reuses the SAME rowView, so every bubble feature is identical.
