@@ -197,11 +197,11 @@ struct VideoApprovalView: View {
                       axis: .vertical)
                 .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls (Signal)
                 .foregroundStyle(.white).focused($captionFocused)
-                .padding(.horizontal, 16).padding(.vertical, 12).frame(minHeight: 46)
-                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)
+                .padding(.horizontal, 16).padding(.vertical, 9).frame(minHeight: 40)
+                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
             Button { send() } label: {
-                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 46, height: 46).liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
+                Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))   // 40px send (user spec)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain).disabled(exporting)

@@ -127,14 +127,14 @@ struct AttachRecentsStrip: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 46)
+            .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 40)
             .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
                 // arrow on clear glass, which read as a different, washed-out button).
-                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold))
+                Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
+                    .frame(width: 40, height: 40)   // 40px send (user spec)
                     .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
                     .contentShape(Circle())
             }

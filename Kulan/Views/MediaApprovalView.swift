@@ -179,12 +179,12 @@ struct MediaApprovalView: View {
                           axis: .vertical)
                     .lineLimit(1...7)
                     .foregroundStyle(.white).focused($captionFocused)
-                    .padding(.horizontal, 16).padding(.vertical, 12)
-                    .frame(minHeight: 46)
-                    .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .frame(minHeight: 40)
+                    .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
                 Button { send() } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 46, height: 46)
+                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)   // 40px send (user spec)
                         .background(Color(hex: 0x3DA1FD), in: Circle())
                 }
                 .buttonStyle(StoryPressStyle())
