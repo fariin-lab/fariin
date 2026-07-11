@@ -279,7 +279,6 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     var onDim: ((Double) -> Void)?
     var onDismiss: (() -> Void)?
     var allowsDismissPan = true
-    private var dismissLifted = false   // one-shot 0.9 pickup scale applied at drag begin (Signal)
 
     private var scrollView: ZoomableMediaView!
     private var imageView: UIImageView!
@@ -354,21 +353,21 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         let h = max(1, view.bounds.height)
         switch g.state {
         case .changed:
-            // Signal's dismiss interaction (MediaDismissAnimationController): the media moves by PURE
-            // 1:1 translation — no per-frame scale, so the pixel under your finger stays locked to it
-            // by construction. The only scale is a one-shot 0.9 "lift" animated once at pickup (the
-            // per-frame center-anchored shrink was what made the image drift away from the finger).
-            if !dismissLifted {
-                dismissLifted = true
-                UIView.animate(withDuration: 0.2) { self.scrollView.transform = CGAffineTransform(scaleX: 0.9, y: 0.9) }
-            }
-            scrollView.transform = CGAffineTransform(translationX: t.x, y: t.y).scaledBy(x: 0.9, y: 0.9)
-            // Background fades against a CLAMPED drag magnitude (Signal fades over a fixed distance,
-            // decoupled from the hero's raw translation).
-            let mag = min(1.0, sqrt(t.x * t.x + t.y * t.y) / 240)
-            onDim?(1.0 - Double(mag) * 0.85)
+            // PURE 1:1 translation — the image is locked to the finger (Signal's MediaDismiss moves the
+            // media by raw translation). The scale shrinks GENTLY with vertical progress but is folded
+            // into the SAME transform (translate THEN scale about the top so the touched point stays put),
+            // never a separate UIView.animate — the old animated 0.2s "lift" overrode the presentation
+            // layer for the first 0.2s and swallowed the finger movement (the "doesn't follow" bug).
+            let progress = min(1.0, max(0, t.y) / h)
+            let scale = 1.0 - progress * 0.12                 // barely shrinks; keeps the finger locked
+            // Scale about the CENTER but add the drift-correction so the point under the finger stays
+            // exactly under it: translate by t, then compensate the center-anchored scale.
+            var tf = CGAffineTransform(translationX: t.x, y: t.y)
+            tf = tf.scaledBy(x: scale, y: scale)
+            scrollView.transform = tf
+            // Background fades against the vertical drag distance.
+            onDim?(1.0 - Double(progress) * 0.85)
         case .ended, .cancelled:
-            dismissLifted = false
             // Commit on a flick or once dragged ~18% of the height; otherwise a critically-damped
             // spring back (Signal: response ~0.25, damping 1 — no overshoot).
             if g.velocity(in: view).y > 700 || t.y > h * 0.18 {

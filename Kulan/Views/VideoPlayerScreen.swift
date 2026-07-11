@@ -27,10 +27,12 @@ struct VideoPlayerScreen: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var hideWork: DispatchWorkItem?
+    @State private var drag: CGSize = .zero        // drag-to-dismiss offset (follows the finger)
+    @State private var dragProgress: Double = 0
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black.opacity(1 - dragProgress * 0.85).ignoresSafeArea()
             if let player {
                 PlayerLayerView(player: player)
                     .ignoresSafeArea()
@@ -55,9 +57,30 @@ struct VideoPlayerScreen: View {
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
         }
+        // The player + chrome move together with the drag (1:1 finger follow, gentle shrink) — same
+        // dismiss feel as the photo viewer, which videos previously lacked entirely.
+        .scaleEffect(1 - dragProgress * 0.12)
+        .offset(drag)
         .overlay(alignment: .top) { if showChrome { topBar } }
         .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
         .animation(.easeInOut(duration: 0.2), value: showChrome)
+        // Drag DOWN to dismiss (only when not scrubbing). Follows the finger 1:1; commit on a flick or
+        // past ~18% height, else spring back.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { g in
+                    guard !scrubbing, g.translation.height > 0 else { return }
+                    drag = g.translation
+                    dragProgress = min(1, g.translation.height / UIScreen.main.bounds.height)
+                }
+                .onEnded { g in
+                    if g.velocity.height > 700 || g.translation.height > UIScreen.main.bounds.height * 0.18 {
+                        dismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 1)) { drag = .zero; dragProgress = 0 }
+                    }
+                }
+        )
         .statusBarHidden(true)
         .task { await load() }
         .onDisappear { cleanup() }
