@@ -557,9 +557,8 @@ struct ThreadView: View {
             // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) — flip to the
             // locked bar so the user can send or cancel the partial note (was: recording discarded).
             recorder.onInterrupt = {
-                recordingHeld = false
                 recordDrag = .zero
-                holdStarted = false
+                holdStarted = false   // recordingHeld is computed (holdStarted && !recordLocked) → goes false
                 recordLocked = true
             }
             // Restore an unsent draft (local-only). Never clobber text already being typed.
