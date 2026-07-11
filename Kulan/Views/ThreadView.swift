@@ -568,6 +568,7 @@ struct ThreadView: View {
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
+            Task { await drainSendQueue() }              // re-drive any text send lost to an app kill
             recorder.prepare()                           // pre-warm so hold-to-record is instant
             // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) — flip to the
             // locked bar so the user can send or cancel the partial note (was: recording discarded).
@@ -1681,11 +1682,17 @@ struct ThreadView: View {
     }
 
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = []) async {
+        // DURABLE: persist the send BEFORE the network call so a mid-send app kill doesn't lose the
+        // message — it's re-driven on the next chat open (drainSendQueue). Removed once it lands.
+        SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
+                      ts: Date().timeIntervalSince1970)
         do {
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions)
+            SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
         } catch {
-            // Keep the message as a failed bubble (tap to retry); flag the encryption case.
+            // Keep the message as a failed bubble (tap to retry); flag the encryption case. The queue
+            // entry stays so the next chat open retries it automatically.
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
                 if error is MissingRecipientKeyError {
@@ -1694,6 +1701,24 @@ struct ThreadView: View {
                         : "\(title) hasn't opened Kulan yet, so encryption isn't set up. Your message will send once they do."
                 }
             }
+        }
+    }
+
+    // Re-drive any persisted text sends for this chat that never completed (app killed mid-send). Skips
+    // ones that actually landed (clientId already on the server) to avoid duplicates.
+    private func drainSendQueue() async {
+        for entry in SendQueue.pending(for: cid) {
+            // Already reconciled in this session's window? skip.
+            if repo.messages.contains(where: { $0.clientId == entry.clientId }) { SendQueue.remove(clientId: entry.clientId); continue }
+            if await SendQueue.alreadySent(cid: cid, clientId: entry.clientId) { SendQueue.remove(clientId: entry.clientId); continue }
+            let reply: ReplyRef? = entry.replyId.map { ReplyRef(id: $0, authorId: entry.replyAuthor ?? "", text: entry.replyText ?? "") }
+            await MainActor.run {
+                if !repo.messages.contains(where: { $0.clientId == entry.clientId }) {
+                    repo.addPending(Message(localText: entry.text, authorId: me, clientId: entry.clientId,
+                                            replyTo: reply, sendState: .sending))
+                }
+            }
+            await deliver(text: entry.text, reply: reply, clientId: entry.clientId, mentions: entry.mentions)
         }
     }
 
