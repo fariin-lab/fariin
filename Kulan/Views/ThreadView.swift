@@ -3189,7 +3189,7 @@ struct MessageBubble: View, Equatable {
                 albumGrid
                 if !message.text.isEmpty {
                     HStack(alignment: .bottom, spacing: 6) {
-                        Text(message.text).font(.system(size: 15))
+                        Text(message.text).font(.system(size: 17))   // same as a normal message (Signal never shrinks caption text)
                             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                         if isLastInCluster { metaRow.padding(.bottom, 1) }
                     }
@@ -3310,7 +3310,7 @@ struct MessageBubble: View, Equatable {
                     // Caption INSIDE the same bubble (Signal: the caption is the message body).
                     if hasCaption {
                         HStack(alignment: .bottom, spacing: 6) {
-                            Text(message.text).font(.system(size: 15))
+                            Text(message.text).font(.system(size: 17))   // same as a normal message (Signal never shrinks caption text)
                                 .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
                             if isLastInCluster { metaRow.padding(.bottom, 1) }
                         }
