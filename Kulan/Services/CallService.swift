@@ -27,7 +27,7 @@ final class CallService: NSObject {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
             if state == .active {
-                if cameraOn { isSpeaker = true }   // video calls default to speakerphone (like FaceTime)
+                if cameraOn { isSpeaker = true; wantsSpeaker = true }   // video calls default to speakerphone (like FaceTime)
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
                 startRouteObservation()   // smart speaker button: track where audio actually goes
             }
@@ -245,8 +245,15 @@ final class CallService: NSObject {
         isMuted.toggle()
         localAudioTrack?.isEnabled = !isMuted
     }
+    // The user's EXPLICIT speaker choice. CallKit/WebRTC re-activate the audio session at
+    // connect/answer and reset the route to the earpiece — which used to silently erase a speaker
+    // tap made during "Calling…" (the "speaker sometimes doesn't work" bug). Intent is remembered
+    // here and re-asserted whenever the system resets the route out from under it.
+    private var wantsSpeaker = false
+
     func toggleSpeaker() {
         isSpeaker.toggle()
+        wantsSpeaker = isSpeaker
         // Use AVAudioSession directly — CallKit owns the session in manual mode and
         // RTCAudioSession.lockForConfiguration() can deadlock when called while CallKit
         // is also configuring the session (e.g. right after answer/connect).
@@ -278,9 +285,19 @@ final class CallService: NSObject {
         if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
         else if outputs.contains(where: { $0.portType == .builtInReceiver }) || outputs.isEmpty { audioRoute = .earpiece }
         else { audioRoute = .external }
+        // The user asked for speaker but a system reset (CallKit re-activation at connect, WebRTC
+        // reconfigure) bounced the route back to the earpiece → RE-ASSERT the choice. External devices
+        // (AirPods/car) always win — never fight a real device route.
+        if wantsSpeaker, audioRoute == .earpiece {
+            try? session.overrideOutputAudioPort(.speaker)
+            // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
+            return
+        }
         // Keep the toggle state honest no matter WHAT moved the route (picker, AirPods
         // connecting mid-call, CallKit) — the button highlight reads from this.
         isSpeaker = audioRoute == .speaker
+        // Manual earpiece choice / external route: intent follows reality so we don't re-assert later.
+        if audioRoute == .external { wantsSpeaker = false }
         // Any external playback device around? Bluetooth headsets surface as available INPUTS
         // during a playAndRecord call; a currently-external route obviously counts too.
         let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,

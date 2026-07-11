@@ -134,15 +134,9 @@ struct CallView: View {
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
         // toggle / stream-swap don't tear down + rebuild the Metal view (which caused black flicker).
         ZStack {
-            ZStack {
-                if let ui = bgImage {
-                    Image(uiImage: ui).resizable().scaledToFill().blur(radius: 50)
-                        .overlay(Color.black.opacity(0.4))
-                }
-                LinearGradient(colors: [Color(hex: 0x4A3B7A), Color(hex: 0x191222)],
-                               startPoint: .top, endPoint: .bottom)
-                    .opacity(bgImage != nil ? 0.55 : 1)
-            }
+            // Always a solid BLACK base (user decision 2026-07-11) — no more purple gradient /
+            // avatar-blur wash. Video still renders on top for video calls.
+            Color.black
             if call.isVideo {
                 VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
@@ -197,8 +191,8 @@ struct CallView: View {
 
     private func topCircle(_ icon: String) -> some View {
         Image(systemName: icon)
-            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-            .frame(width: 40, height: 40)
+            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+            .frame(width: 48, height: 48)   // 48px top buttons (user spec, matches the app's glass controls)
             // NON-interactive glass: `.interactive()` glass consumes the touch itself, so the
             // wrapping Button's action never fired — the minimize chevron did nothing when tapped.
             .liquidGlass(Circle(), interactive: false)
