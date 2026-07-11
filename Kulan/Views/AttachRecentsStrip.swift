@@ -96,13 +96,15 @@ struct AttachRecentsStrip: View {
     // Caption + Send bar shown while items are selected (replaces the source row). The selected COUNT is
     // shown at the header top-right (not on the send button); the send button is real Liquid Glass.
     private var captionBar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 8) {
+        HStack(alignment: .bottom, spacing: 10) {   // send hugs the bottom as the caption grows
+            HStack(alignment: .bottom, spacing: 8) {
                 // View-once media can't carry a caption (WhatsApp/Signal), so the field is disabled + the
                 // prompt says why when View Once is on.
                 TextField("", text: $caption,
                           prompt: Text(viewOnce ? "No caption for View Once" : "Add a caption…")
-                            .foregroundColor(Color(.systemGray)))
+                            .foregroundColor(Color(.systemGray)),
+                          axis: .vertical)
+                    .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls (Signal)
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
                     .disabled(viewOnce)
@@ -124,8 +126,8 @@ struct AttachRecentsStrip: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.leading, 16).padding(.trailing, 4).frame(height: 46)
-            .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
+            .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 46)
+            .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
                 // arrow on clear glass, which read as a different, washed-out button).
