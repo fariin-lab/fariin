@@ -54,7 +54,7 @@ jobs:
           dwarfdump --uuid "$DWARF"
           echo "================ SYMBOLICATED ================"
           for a in $ADDRESSES; do
-            addr=$(printf '0x%x' $(( 0x100000000 + a )))
+            addr=$(printf '0x%x' $(( 0x100000000 + 0x$a )))
             echo "FRAME $a => $(atos -o "$DWARF" -arch arm64 -l 0x100000000 "$addr")"
           done
           echo "=============================================="
