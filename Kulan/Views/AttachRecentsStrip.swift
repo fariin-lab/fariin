@@ -315,7 +315,13 @@ struct AttachRecentsStrip: View {
                 caption = ""
                 hasSelection = false
                 for url in videos { onPickVideo(url) }
-                if !imgs.isEmpty { onSendAlbum(imgs, cap) }
+                // Exactly ONE photo → open the single-image editor (big preview + crop/pen/caption), the
+                // same page tapping a photo gives. Only 2+ go out as a quick album with the caption bar.
+                if imgs.count == 1 && videos.isEmpty {
+                    onOpenAlbum(imgs)
+                } else if !imgs.isEmpty {
+                    onSendAlbum(imgs, cap)
+                }
             }
         }
     }
