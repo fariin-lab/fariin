@@ -65,6 +65,7 @@ struct Message: Identifiable, Equatable {
     var localFile: Bool = false             // optimistic file bubble shown before upload (no fileUrl yet)
     var width: Double? = nil                // image pixel size -> natural aspect ratio bubble
     var blurhash: String? = nil             // sealed BlurHash of the photo → instant blurred placeholder
+    var localMediaURL: String? = nil        // pending video/file payload persisted to tmp → retry can re-send the REAL bytes
     var height: Double? = nil
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
     var callOutcome: String? = nil          // answered | missed

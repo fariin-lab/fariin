@@ -376,7 +376,16 @@ final class ThreadRepository {
                 var c = m; c.reactions.removeValue(forKey: otherUid); return c
             }
         }
-        messages = msgs.sorted { $0.createdAt < $1.createdAt }
+        var sorted = msgs.sorted { $0.createdAt < $1.createdAt }
+        // Double-echo dedupe: a retry racing a slow-but-successful original can produce TWO server docs
+        // with the same clientId. Show only the FIRST (earlier) one — the duplicate is invisible to the
+        // user even before any server-side cleanup.
+        var seenClientIds = Set<String>()
+        sorted.removeAll { m in
+            guard let c = m.clientId else { return false }
+            return !seenClientIds.insert(c).inserted
+        }
+        messages = sorted
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems()
     }

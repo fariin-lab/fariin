@@ -1325,11 +1325,20 @@ struct ThreadView: View {
         // Optimistic bubble FIRST (instant feedback) — the encrypt+upload then runs in the background and
         // the server echo reconciles it by clientId. Was: awaited the whole upload before anything showed.
         let clientId = UUID().uuidString
+        // Persist the document bytes keyed by clientId so a failed send can actually retry (the old
+        // retry path had nothing to re-send for files).
+        let retryURL = FileManager.default.temporaryDirectory.appendingPathComponent("pending-file-\(clientId)")
+        try? data.write(to: retryURL)
         await MainActor.run {
-            repo.addPending(Message(localFileName: name, fileSize: data.count, authorId: me,
-                                    clientId: clientId, sendState: .sending))
+            var pending = Message(localFileName: name, fileSize: data.count, authorId: me,
+                                  clientId: clientId, sendState: .sending)
+            pending.localMediaURL = retryURL.path
+            repo.addPending(pending)
         }
-        do { try await ChatService.sendFile(cid: cid, data: data, fileName: name, clientId: clientId, group: isGroup ? groupMembers : nil) }
+        do {
+            try await ChatService.sendFile(cid: cid, data: data, fileName: name, clientId: clientId, group: isGroup ? groupMembers : nil)
+            try? FileManager.default.removeItem(at: retryURL)
+        }
         catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the file. Try again." } }
     }
 
@@ -1428,22 +1437,82 @@ struct ThreadView: View {
         }
     }
 
-    // Re-try a failed message: flip its bubble back to .sending and send again.
+    // Re-try a failed message — re-drives the SAME send path that produced it, with the SAME clientId.
+    // Per-type routing (video checked BEFORE localImageData, which only holds its THUMBNAIL — the old
+    // single-branch retry re-sent that thumbnail as a photo, and audio/file/album retries sent nothing).
     private func resend(_ m: Message) {
         let clientId = m.clientId ?? UUID().uuidString
+        // The original send may have actually SUCCEEDED after the failure flip (slow network): if its
+        // echo is already in the window, just drop the stale failed pending — never send a duplicate.
+        if repo.messages.contains(where: { $0.clientId == clientId }) {
+            repo.removePending(clientId: clientId)
+            return
+        }
         repo.removePending(clientId: clientId)
-        if let data = m.localImageData {
-            repo.addPending(Message(localImageData: data, width: m.width ?? 1, height: m.height ?? 1,
+
+        if m.isVideo, let path = m.localMediaURL,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+            var p = Message(localVideoThumb: m.localImageData ?? Data(), duration: m.duration ?? 0,
+                            width: m.width ?? 1, height: m.height ?? 1,
+                            authorId: me, clientId: clientId, sendState: .sending)
+            p.localMediaURL = path; p.text = m.text
+            repo.addPending(p)
+            Task {
+                do {
+                    try await ChatService.sendVideo(cid: cid, video: data, thumbnail: m.localImageData ?? Data(),
+                                                    duration: m.duration ?? 0, width: m.width ?? 1, height: m.height ?? 1,
+                                                    caption: m.text, clientId: clientId, group: isGroup ? groupMembers : nil)
+                    try? FileManager.default.removeItem(atPath: path)
+                } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+            }
+        } else if m.isAudio, let data = m.localAudioData {
+            repo.addPending(Message(localAudioData: data, duration: m.duration ?? 0, waveform: m.waveform,
                                     authorId: me, clientId: clientId, sendState: .sending))
             Task {
-                do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil) }
+                do { try await ChatService.sendAudio(cid: cid, data: data, duration: m.duration ?? 0,
+                                                     waveform: m.waveform, replyTo: m.replyTo,
+                                                     clientId: clientId, group: isGroup ? groupMembers : nil) }
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
-        } else {
+        } else if m.isAlbum, !m.localAlbum.isEmpty {
+            repo.addPending(Message(localAlbum: m.localAlbum, caption: m.text,
+                                    authorId: me, clientId: clientId, sendState: .sending))
+            Task {
+                do { try await ChatService.sendAlbum(cid: cid, images: m.localAlbum, caption: m.text,
+                                                     clientId: clientId, group: isGroup ? groupMembers : nil) }
+                catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+            }
+        } else if m.isFile, let path = m.localMediaURL,
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+            var p = Message(localFileName: m.fileName ?? "Document", fileSize: m.fileSize ?? data.count,
+                            authorId: me, clientId: clientId, sendState: .sending)
+            p.localMediaURL = path
+            repo.addPending(p)
+            Task {
+                do {
+                    try await ChatService.sendFile(cid: cid, data: data, fileName: m.fileName ?? "Document",
+                                                   clientId: clientId, group: isGroup ? groupMembers : nil)
+                    try? FileManager.default.removeItem(atPath: path)
+                } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+            }
+        } else if let data = m.localImageData {
+            // Plain photo — retry keeps the caption AND the view-once flag (both were stripped before).
+            var p = Message(localImageData: data, width: m.width ?? 1, height: m.height ?? 1,
+                            authorId: me, clientId: clientId, sendState: .sending)
+            p.text = m.text; p.viewOnce = m.viewOnce
+            repo.addPending(p)
+            Task {
+                do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId,
+                                                     group: isGroup ? groupMembers : nil,
+                                                     viewOnce: m.viewOnce, caption: m.text) }
+                catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+            }
+        } else if !m.text.isEmpty {
             repo.addPending(Message(localText: m.text, authorId: me, clientId: clientId,
                                     replyTo: m.replyTo, sendState: .sending))
             Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId) }
         }
+        // (empty text + no payload: nothing to resend — drop the pending rather than recreate a ghost)
     }
 
     // Send a photo with an instant optimistic bubble, then reconcile on the echo.
@@ -1806,15 +1875,23 @@ struct ThreadView: View {
             return
         }
         let clientId = UUID().uuidString
+        // Persist the transcoded bytes to tmp keyed by clientId so a FAILED send can retry the REAL
+        // video (the old retry path only had the thumbnail and re-sent it as a photo — data loss).
+        let retryURL = FileManager.default.temporaryDirectory.appendingPathComponent("pending-video-\(clientId).mp4")
+        try? prepared.data.write(to: retryURL)
         await MainActor.run {
-            repo.addPending(Message(localVideoThumb: prepared.thumbnail, duration: prepared.duration,
-                                    width: prepared.width, height: prepared.height,
-                                    authorId: me, clientId: clientId, sendState: .sending))
+            var pending = Message(localVideoThumb: prepared.thumbnail, duration: prepared.duration,
+                                  width: prepared.width, height: prepared.height,
+                                  authorId: me, clientId: clientId, sendState: .sending)
+            pending.localMediaURL = retryURL.path
+            pending.text = caption
+            repo.addPending(pending)
         }
         do {
             try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
                                             duration: prepared.duration, width: prepared.width, height: prepared.height,
                                             caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil)
+            try? FileManager.default.removeItem(at: retryURL)   // delivered → retry payload no longer needed
         } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
