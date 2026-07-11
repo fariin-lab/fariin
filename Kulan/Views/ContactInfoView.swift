@@ -180,6 +180,7 @@ struct ContactInfoView: View {
             .sheet(isPresented: $showShare) { SendContactSheet(contactText: shareText) }
             .sheet(isPresented: $showAddGroup) {
                 AddToGroupView(contactUid: otherUid, contactName: shownName, contactPhoto: photoUrl)
+                    .presentationDetents([.medium, .large])   // small sheet by default (user request)
             }
     }
 
