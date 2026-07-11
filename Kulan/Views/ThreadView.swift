@@ -3206,17 +3206,34 @@ struct MessageBubble: View, Equatable {
         } else if message.isImage {
             // ONE bubble (Signal/Telegram/WhatsApp): the photo on top, the caption flush below, sharing a
             // single background + a single rounded outline — never two separate bubbles.
-            // CAPTIONED sizing follows Signal's measure logic: the caption wraps at the STANDARD bubble
-            // width and the photo FILLS that width (tall photos crop at the height cap). Without this, a
-            // tall image's narrow aspect-fit width squeezed a long caption into a one-word-per-line column.
+            // Signal's media sizing algorithm (CVMediaAlbumView/CVComponentBodyMedia measure rules,
+            // reimplemented): aspect clamped to [0.35, 2.857] (very tall/wide images clamp, squares fill
+            // the box), the box height caps at the max media width, the CAPTION reserves only a MIN-width
+            // floor (it never stretches or distorts the media beyond that), tiny originals never upscale,
+            // and the caption wraps at the bubble width with 12pt insets.
             let hasCaption = !message.text.isEmpty
             let box: CGSize = {
-                guard hasCaption else { return imageDisplaySize }
-                let w: CGFloat = 240
-                guard let iw = message.width, let ih = message.height, iw > 0, ih > 0 else {
-                    return CGSize(width: w, height: 240)
+                let boxMax = min(maxBubbleWidth, 350)   // Signal's maxMediaMessageWidth cap
+                let aspect: CGFloat = {
+                    guard let w = message.width, let h = message.height, w > 0, h > 0 else { return 1 }
+                    return min(max(CGFloat(w / h), 0.35), 2.857)
+                }()
+                // Caption min-width floor: single-line caption width + 2×12pt text insets, capped at the box.
+                let minW: CGFloat = hasCaption
+                    ? min(boxMax, (message.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 15)]).width + 24)
+                    : 0
+                var w = boxMax * aspect, h = boxMax
+                w = max(w, minW)
+                if w > boxMax { w = boxMax; h = boxMax / aspect }
+                // Anti-upscale: never enlarge a tiny original (but never drop below 150pt either).
+                if let sw = message.width, let sh = message.height {
+                    let srcShort = CGFloat(min(sw, sh)), dispShort = min(w, h)
+                    if dispShort > srcShort, dispShort > 150 {
+                        let f = max(150, srcShort) / dispShort
+                        w *= f; h *= f
+                    }
                 }
-                return CGSize(width: w, height: min(340, w * ih / iw))
+                return CGSize(width: w.rounded(), height: h.rounded())
             }()
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
