@@ -83,7 +83,17 @@ struct ChatImageEditor: View {
     private var chromeOverlay: some View {
         VStack(spacing: 0) {
             HStack {
-                Button { dismiss() } label: {
+                Button {
+                    // In the PEN page (draw mode entered from the editor's scribble tool): X = CANCEL →
+                    // discard the current strokes and return to the EDITOR page, not dismiss everything.
+                    // (editOnly opens straight into draw with no editor behind it, so there X dismisses.)
+                    if isDrawing && !editOnly {
+                        drawing = PKDrawing()
+                        isDrawing = false
+                    } else {
+                        dismiss()
+                    }
+                } label: {
                     Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                         .frame(width: 44, height: 44)
                         .liquidGlass(Circle(), interactive: true)
