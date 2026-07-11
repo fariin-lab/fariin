@@ -109,6 +109,7 @@ struct AttachRecentsStrip: View {
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
                     .disabled(viewOnce)
+                    .padding(.vertical, 9)   // single-line vertical centering; ① stays bottom-aligned
                 // View Once (WhatsApp/Signal): the "1" toggle inside the caption field, for a single photo.
                 // When on, the photo self-destructs after the recipient opens it once — and the caption is
                 // cleared + disabled.
@@ -118,16 +119,16 @@ struct AttachRecentsStrip: View {
                         if viewOnce { caption = ""; captionFocused = false }
                     } label: {
                         Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
-                            .font(.system(size: 23, weight: .regular))
+                            .font(.system(size: 20, weight: .regular))
                             .foregroundStyle(viewOnce ? Color(hex: 0x0A84FF) : Color(.systemGray))
                             .contentTransition(.symbolEffect(.replace))
-                            .frame(width: 44, height: 44)   // bigger tap target (glyph alone was tiny)
+                            .frame(width: 40, height: 40)   // matches the 40px bar; bottom-aligned
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 40)
+            .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
             .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue

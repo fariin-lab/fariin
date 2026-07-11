@@ -263,7 +263,9 @@ struct ChatImageEditor: View {
             // capsule; view-once media can't carry a caption, so the field becomes "View Once Media".
             // .bottom-aligned so the send button hugs the bottom of a tall multi-line caption (iMessage).
             HStack(alignment: .bottom, spacing: 10) {
-                HStack(spacing: 8) {
+                // .bottom-aligned inner row too, so the ① toggle STAYS at the bottom (next to the last
+                // line + send) as the caption grows — it was floating UP with the first line.
+                HStack(alignment: .bottom, spacing: 8) {
                     if viewOnce {
                         Text("View Once Media")
                             .foregroundStyle(Color(.systemGray3))
@@ -274,6 +276,7 @@ struct ChatImageEditor: View {
                                   axis: .vertical)
                             .lineLimit(1...7)
                             .foregroundStyle(.white).focused($captionFocused)
+                            .padding(.vertical, 9)   // vertical centering for a single line
                     }
                     Button {
                         viewOnce.toggle()
@@ -281,14 +284,14 @@ struct ChatImageEditor: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     } label: {
                         Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
-                            .font(.system(size: 22))
+                            .font(.system(size: 20))
                             .foregroundStyle(viewOnce ? Color(hex: 0x3DA1FD) : .white)
-                            .frame(width: 44, height: 44)   // bigger tap target (was a tiny 20pt glyph)
+                            .frame(width: 40, height: 40)   // matches the 40px bar; bottom-aligned
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 6).frame(minHeight: 40)
+                .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
