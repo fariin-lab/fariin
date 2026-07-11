@@ -228,6 +228,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
+        // A top-TRIM (the repo LRU-dropped the oldest window overflow) = the new list is a SUFFIX of the
+        // old. Anchor a visible row and restore it so the trim is invisible to the reader.
+        let isTopTrim = !currentIds.isEmpty && ids.count < currentIds.count
+            && Array(currentIds.suffix(ids.count)) == ids
+        let trimAnchor: (id: String, distanceFromTop: CGFloat)? = isTopTrim ? captureTopAnchor() : nil
         let appendedCount = ids.count - currentIds.count
         // Prepend (load older): capture the content height + offset so we can keep the visible content
         // EXACTLY stable — after the older messages lay out, add their total height to the offset. The
@@ -236,6 +241,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             ? (collectionView.contentSize.height, collectionView.contentOffset.y) : nil
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
+        if ids.count < currentIds.count {   // rows left (trim/delete): drop their cached heights too
+            let keep = Set(ids)
+            heights = heights.filter { keep.contains($0.key) }
+        }
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
@@ -287,6 +296,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
                     self.collectionView.layoutIfNeeded()
                     let delta = self.collectionView.contentSize.height - p.oldHeight
                     self.collectionView.setContentOffset(CGPoint(x: 0, y: p.oldOffset + delta), animated: false)
+                } else if let anchor = trimAnchor {
+                    self.restore(anchor)                             // top-trim: keep the reader's place
                 } else if wasAtBottom && !isPrepend {
                     self.pinBottom()                                 // was at bottom: stay pinned
                 }

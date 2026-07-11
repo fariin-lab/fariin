@@ -286,7 +286,11 @@ final class Crypto {
     // same plaintext, so caching it avoids re-running libsodium box.open per frame (a
     // real scroll-smoothness win, Signal-style "decrypt once, reuse"). NSCache is
     // thread-safe and self-evicting under memory pressure.
-    private let previewCache = NSCache<NSString, NSString>()
+    private let previewCache: NSCache<NSString, NSString> = {
+        let c = NSCache<NSString, NSString>()
+        c.countLimit = 500   // bounded (Signal caps every hot cache) — plaintext previews are small but not free
+        return c
+    }()
     func decryptCached(_ raw: String, cid: String) -> String {
         let key = "\(cid)|\(raw)" as NSString
         if let hit = previewCache.object(forKey: key) { return hit as String }

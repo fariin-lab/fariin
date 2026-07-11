@@ -28,6 +28,13 @@ final class ThreadRepository {
     let cid: String
 
     private let pageSize = 40
+    // Signal's MessageLoader caps the in-memory window (~500) and LRU-drops the oldest — an unbounded
+    // window is a memory + main-thread cost that feeds watchdog kills on huge chats. We trim on live
+    // commits above a high-water mark (paging older may exceed the cap briefly; the next live commit
+    // trims back, and canLoadOlder flips true so the dropped history re-pages on scroll).
+    private let windowCap = 500
+    private let windowHighWater = 800
+    private var windowTrimmed = false   // oldestDoc cursor no longer matches the kept window → cursor by value
 
     var messages: [Message] = []           // confirmed server messages (ascending)
     var pending: [Message] = []            // optimistic, not yet echoed back
@@ -297,9 +304,22 @@ final class ThreadRepository {
             didInitialLoad = true
             if docs.count < pageSize { canLoadOlder = false }   // short first page => no history
         }
+        trimWindowIfNeeded()
         rebuild()
         let echoed = Set(byId.values.compactMap { $0.clientId })
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
+    }
+
+    // LRU-drop the OLDEST messages once the window blows past the high-water mark (Signal's 500-cap).
+    // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
+    private func trimWindowIfNeeded() {
+        guard byId.count > windowHighWater else { return }
+        let sorted = byId.values.sorted { $0.createdAt < $1.createdAt }
+        for m in sorted.prefix(sorted.count - windowCap) {
+            byId.removeValue(forKey: m.id); rawReactions.removeValue(forKey: m.id)
+        }
+        windowTrimmed = true
+        canLoadOlder = true   // the dropped history can page back in on scroll
     }
 
     // Periodic sweep so messages disappear over time even while the chat is open;
@@ -345,11 +365,19 @@ final class ThreadRepository {
     /// Page in the next older window (called on scroll-to-top). `completion` runs after
     /// the list updates so the view can restore the scroll anchor (no jump).
     func loadOlder(completion: @escaping () -> Void = {}) {
-        guard canLoadOlder, !loadingOlder, let cursor = oldestDoc else { completion(); return }
-        loadingOlder = true
-        db.collection("conversations").document(cid).collection("messages")
+        guard canLoadOlder, !loadingOlder else { completion(); return }
+        let base = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
-            .start(afterDocument: cursor)
+        // After a window trim the doc-snapshot cursor points BELOW the dropped range, so cursor by the
+        // oldest KEPT message's value instead — dropped history pages back in seamlessly.
+        let query: Query
+        if windowTrimmed, let oldest = messages.first {
+            query = base.start(after: [Timestamp(date: oldest.createdAt)])
+        } else if let cursor = oldestDoc {
+            query = base.start(afterDocument: cursor)
+        } else { completion(); return }
+        loadingOlder = true
+        query
             .limit(to: pageSize)
             .getDocuments { [weak self] snap, _ in
                 guard let self else { return }
@@ -366,7 +394,7 @@ final class ThreadRepository {
     // Page older history until `messageId` is loaded (so in-chat search can scroll to a match that's
     // far above the current window), or we run out of history. Bounded so a bad id can't loop forever.
     @MainActor
-    func ensureLoaded(_ messageId: String, maxPages: Int = 40) async {
+    func ensureLoaded(_ messageId: String, maxPages: Int = 12) async {   // 12×40 ≈ the window cap — never page unbounded history into memory
         var pages = 0
         while !items.contains(where: { $0.id == messageId }) && canLoadOlder && pages < maxPages {
             await withCheckedContinuation { cont in loadOlder { cont.resume() } }

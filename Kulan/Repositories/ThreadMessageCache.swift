@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 // Last-decrypted messages per chat, kept in memory ONLY (wiped when the app is killed).
 //
@@ -12,10 +13,23 @@ import Foundation
 // reopen after is instant. Main-actor only (written from ThreadRepository on the main thread).
 final class ThreadMessageCache {
     static let shared = ThreadMessageCache()
-    private init() {}
+    private init() {
+        // Background shrink (Signal's cache-evacuation idea, softened): keep the cache so reopening a
+        // chat after backgrounding is still instant, but trim each chat to ~2 screens of messages so a
+        // backgrounded app isn't holding thousands of decrypted Message structs under memory/thermal
+        // pressure (the SwiftUI-layout watchdog kill happened exactly there).
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            for (cid, msgs) in self.byCid where msgs.count > self.backgroundCap {
+                self.byCid[cid] = Array(msgs.suffix(self.backgroundCap))
+            }
+        }
+    }
 
     private var byCid: [String: [Message]] = [:]
-    private let cap = 200   // bound memory — the recent window is all the first screen needs
+    private let cap = 200            // bound memory — the recent window is all the first screen needs
+    private let backgroundCap = 60   // ~2 screens; enough for an instant reopen after backgrounding
 
     func store(_ cid: String, _ messages: [Message]) {
         byCid[cid] = messages.suffix(cap).map { $0 }

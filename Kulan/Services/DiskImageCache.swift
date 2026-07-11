@@ -26,6 +26,13 @@ final class DiskImageCache {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         dir = caches.appendingPathComponent("MediaCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Signal's LRUCache evacuates in the background: decoded UIImages are the app's biggest heap
+        // objects, and a backgrounded app holding hundreds of them is first in line for jetsam (and
+        // background thermal work). The disk tier stays, so reopening is still instant.
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.mem.removeAllObjects()
+        }
     }
 
     private func key(_ url: String) -> String {

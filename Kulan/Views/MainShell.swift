@@ -54,7 +54,13 @@ struct MainShell: View {
         }
         // Load call history at startup so the badge is right before the tab is ever opened
         // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).
-        .task { await CallsRepository.shared.load() }
+        // STAGGERED ~1.5s (Signal's AppReadiness): this isn't needed for the first frame, and launching
+        // it alongside the chat-list listener + key warm + stories load made a main-thread stampede in
+        // the fragile launch window. Delaying non-critical launch work spreads the load out.
+        .task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await CallsRepository.shared.load()
+        }
     }
 
     // Your profile photo as the Settings tab icon (full-color circle); falls back to a
