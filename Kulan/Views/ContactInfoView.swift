@@ -53,7 +53,12 @@ struct ContactInfoView: View {
     private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
     private var dark: Bool { scheme == .dark }
-    private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }
+    // Native grouped-list card color: WHITE in light, 0x1C1C1E in dark — the exact
+    // fill iOS Settings uses for its rows. It sits on `pageBackground` (grey/black) so
+    // the cards pop, instead of the old flat grey-on-white look.
+    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    // The grouped-list page behind the cards (light grey / true black), like Settings.
+    private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     private var otherUid: String {
         let me = AuthService.shared.uid ?? ""
         return cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
@@ -120,6 +125,7 @@ struct ContactInfoView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
         }
+        .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
