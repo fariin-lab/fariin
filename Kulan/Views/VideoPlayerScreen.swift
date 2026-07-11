@@ -29,21 +29,41 @@ struct VideoPlayerScreen: View {
     @State private var hideWork: DispatchWorkItem?
     @State private var drag: CGSize = .zero        // drag-to-dismiss offset (follows the finger)
     @State private var dragProgress: Double = 0
+    // Pinch-zoom + pan (Signal hosts video in the same zoomable view as photos).
+    @State private var zoom: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+    @State private var pan: CGSize = .zero
+    @GestureState private var panDrag: CGSize = .zero
+    @State private var wasPlayingBeforeScrub = false
+
+    private var zoomed: Bool { max(1, zoom * pinch) > 1.01 }
 
     var body: some View {
         ZStack {
             Color.black.opacity(1 - dragProgress * 0.85).ignoresSafeArea()
             if let player {
                 PlayerLayerView(player: player)
+                    .scaleEffect(max(1, zoom * pinch))
+                    .offset(x: pan.width + panDrag.width, y: pan.height + panDrag.height)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
+                    .gesture(
+                        MagnificationGesture()
+                            .updating($pinch) { v, s, _ in s = v }
+                            .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeInOut(duration: 0.25)) { zoom = zoomed ? 1 : 2; if zoom <= 1 { pan = .zero } }
+                    }
                     .onTapGesture { toggleChrome() }
-                if !isPlaying {   // center play button when paused / at end (Signal)
+                if !isPlaying && !zoomed {   // center play button (glass) when paused / at end
                     Button { togglePlay() } label: {
-                        Image(systemName: "play.fill").font(.system(size: 32)).foregroundStyle(.white)
-                            .frame(width: 72, height: 72).background(.black.opacity(0.35), in: Circle())
+                        Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.white)
+                            .frame(width: 74, height: 74)
+                            .liquidGlass(Circle(), interactive: true)
                     }
                     .buttonStyle(.plain)
+                    .transition(.opacity)
                 }
             } else if unavailable {
                 VStack(spacing: 10) {
@@ -57,23 +77,30 @@ struct VideoPlayerScreen: View {
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
         }
-        // The player + chrome move together with the drag (1:1 finger follow, gentle shrink) — same
-        // dismiss feel as the photo viewer, which videos previously lacked entirely.
+        // The whole viewer follows the finger down to dismiss + shrinks gently.
         .scaleEffect(1 - dragProgress * 0.12)
         .offset(drag)
         .overlay(alignment: .top) { if showChrome { topBar } }
         .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
-        .animation(.easeInOut(duration: 0.2), value: showChrome)
-        // Drag DOWN to dismiss (only when not scrubbing). Follows the finger 1:1; commit on a flick or
-        // past ~18% height, else spring back.
+        .animation(.easeInOut(duration: 0.25), value: showChrome)
+        .animation(.easeInOut(duration: 0.2), value: isPlaying)
+        // ONE drag: when zoomed in it PANS the video; at fit it's the drag-down-to-dismiss (1:1 finger
+        // follow, commit on flick / past 18%, else spring back).
         .simultaneousGesture(
-            DragGesture(minimumDistance: 12)
+            DragGesture(minimumDistance: 8)
+                .updating($panDrag) { v, s, _ in if zoomed { s = v.translation } }
                 .onChanged { g in
-                    guard !scrubbing, g.translation.height > 0 else { return }
+                    guard !zoomed, !scrubbing, g.translation.height > 0,
+                          abs(g.translation.height) > abs(g.translation.width) else { return }
                     drag = g.translation
                     dragProgress = min(1, g.translation.height / UIScreen.main.bounds.height)
                 }
                 .onEnded { g in
+                    if zoomed {
+                        pan.width += g.translation.width; pan.height += g.translation.height
+                        return
+                    }
+                    guard dragProgress > 0 else { return }
                     if g.velocity.height > 700 || g.translation.height > UIScreen.main.bounds.height * 0.18 {
                         dismiss()
                     } else {
@@ -86,42 +113,55 @@ struct VideoPlayerScreen: View {
         .onDisappear { cleanup() }
     }
 
+    // Minimalist glass X (top-left).
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
                 Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 40, height: 40).background(.black.opacity(0.4), in: Circle())
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             Spacer()
         }
         .padding(.horizontal, 14).padding(.top, 6)
-        .transition(.opacity)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    // Signal's bottom scrubber: play/pause · elapsed · slider · duration, on a soft dark gradient.
+    // Real Liquid Glass bottom bar (Signal's minimalist control cluster): play/pause · elapsed ·
+    // scrubber · duration in ONE glass capsule. Mono-digit 13pt labels.
     private var scrubberBar: some View {
         HStack(spacing: 12) {
             Button { togglePlay() } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.system(size: 18)).foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
-            Text(fmt(current)).font(.caption.monospacedDigit()).foregroundStyle(.white)
+            Text(fmt(current)).font(.system(size: 13).monospacedDigit()).foregroundStyle(.white)
+            // Scrub = pause-then-resume (Signal): remember whether it was playing, pause while dragging,
+            // seek live, resume on release only if it was playing.
             Slider(value: $progress, in: 0...1) { editing in
                 scrubbing = editing
-                if editing { cancelAutoHide() }
-                else { seek(to: progress); scheduleAutoHide() }
+                if editing {
+                    wasPlayingBeforeScrub = isPlaying
+                    player?.pause(); isPlaying = false
+                    cancelAutoHide()
+                } else {
+                    seek(to: progress)
+                    if wasPlayingBeforeScrub { player?.play(); isPlaying = true }
+                    scheduleAutoHide()
+                }
             }
             .tint(.white)
-            Text(fmt(duration)).font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.7))
+            Text(fmt(duration)).font(.system(size: 13).monospacedDigit()).foregroundStyle(.white.opacity(0.65))
         }
-        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 12)
-        .background(
-            LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-        )
-        .transition(.opacity)
+        .padding(.horizontal, 16).frame(height: 44)
+        .liquidGlass(Capsule(), interactive: true)
+        .padding(.horizontal, 12).padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func fmt(_ s: Double) -> String {
@@ -190,8 +230,8 @@ struct VideoPlayerScreen: View {
         let p = AVPlayer(url: url)
         player = p
         duration = message.duration ?? 0
-        // Progress every 0.2s (don't fight the user while scrubbing).
-        timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main) { time in
+        // Smooth scrubber (Signal runs a high-frequency observer); don't fight the user while scrubbing.
+        timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { time in
             if duration <= 0, let d = p.currentItem?.duration.seconds, d.isFinite { duration = d }
             guard !scrubbing else { return }
             current = time.seconds
