@@ -51,6 +51,7 @@ final class ThreadRepository {
 
     var otherTyping = false
     var typingNames: [String] = []   // group: who is currently typing
+    private var typingExpiry: Timer? // Signal: incoming typing self-clears after 15s — a crashed sender's flag can't stick
     var otherOnline = false
     var otherLastActive: Date?
     var otherLastReadMillis: Double = 0
@@ -132,6 +133,7 @@ final class ThreadRepository {
                 // skip the O(N log N) rebuild.
                 if isOneToOne {
                     self.otherTyping = (d?["typing"] as? [String: Any])?[other] as? Bool ?? false
+                    self.armTypingExpiry()
                     if let ts = (d?["lastRead"] as? [String: Any])?[other] as? Timestamp {
                         self.otherLastReadMillis = ts.dateValue().timeIntervalSince1970 * 1000
                     }
@@ -144,6 +146,7 @@ final class ThreadRepository {
                     let typers = others.filter { (typingMap[$0] as? Bool) == true }
                     self.otherTyping = !typers.isEmpty
                     self.typingNames = typers.map { names[$0] ?? "Someone" }
+                    self.armTypingExpiry()
                     if !others.isEmpty {
                         let readMap = d?["lastRead"] as? [String: Any] ?? [:]
                         let times = others.map { (readMap[$0] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0 }
@@ -187,6 +190,7 @@ final class ThreadRepository {
         expiryTimer?.invalidate()
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.sweepExpired()
+            self?.sweepStuckSends()
         }
         // Attach the message listener IMMEDIATELY — the thread must paint without waiting
         // on key fetches. (Bug fixed: previously this listener was created only AFTER
@@ -310,6 +314,31 @@ final class ThreadRepository {
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
     }
 
+    // Incoming typing self-clears after 15s without a refresh (Signal's IncomingIndicators): if the
+    // sender's app crashed/lost network before writing typing=false, the bubble would otherwise stick
+    // until some other doc change. Re-armed on every snapshot where typing is (still) true.
+    private func armTypingExpiry() {
+        typingExpiry?.invalidate(); typingExpiry = nil
+        guard otherTyping else { return }
+        typingExpiry = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+            self?.otherTyping = false
+            self?.typingNames = []
+        }
+    }
+
+    // Signal's FailedMessagesJob idea, adapted: a bubble must never spin "sending" forever. Any
+    // optimistic message still .sending after 2 minutes flips to .failed ("Tap to retry"). If its
+    // upload later succeeds anyway, the server echo removes the pending — the state self-corrects.
+    private func sweepStuckSends() {
+        let cutoff = Date().addingTimeInterval(-120)
+        var changed = false
+        for i in pending.indices where pending[i].sendState == .sending && pending[i].createdAt < cutoff {
+            pending[i].sendState = .failed
+            changed = true
+        }
+        if changed { refreshItems() }
+    }
+
     // LRU-drop the OLDEST messages once the window blows past the high-water mark (Signal's 500-cap).
     // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
     private func trimWindowIfNeeded() {
@@ -407,7 +436,8 @@ final class ThreadRepository {
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         expiryTimer?.invalidate(); expiryTimer = nil
+        typingExpiry?.invalidate(); typingExpiry = nil
     }
 
-    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); expiryTimer?.invalidate() }
+    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); expiryTimer?.invalidate(); typingExpiry?.invalidate() }
 }

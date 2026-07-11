@@ -54,6 +54,7 @@ struct ThreadView: View {
     @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
+    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (Signal's pause timer)
     @State private var viewerImage: Message?
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
@@ -204,7 +205,7 @@ struct ThreadView: View {
                 } else {
                     newWhileAway += 1
                 }
-                if !repo.iBlocked { Task { await ChatService.markRead(cid) } }   // don't leak reads to a blocked user
+                if !repo.iBlocked { ChatService.markReadThrottled(cid) }   // throttled (1 write / 2s burst); never leaks reads to a blocked user
             }
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
@@ -2124,6 +2125,18 @@ struct ThreadView: View {
                 if now != typingSent {
                     typingSent = now
                     Task { await ChatService.setTyping(cid, now) }
+                }
+                // Signal's pause timer: typing auto-stops after 3s of no keystrokes (even with text still
+                // in the field), so a parked draft doesn't show "typing…" forever on the other side.
+                typingIdleStop?.cancel()
+                if now {
+                    let work = DispatchWorkItem {
+                        guard typingSent else { return }
+                        typingSent = false
+                        Task { await ChatService.setTyping(cid, false) }
+                    }
+                    typingIdleStop = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
                 }
             }
     }

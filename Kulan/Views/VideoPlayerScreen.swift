@@ -139,10 +139,18 @@ struct VideoPlayerScreen: View {
 
     private func load() async {
         if let local = VideoCache.url(for: message.id) { await MainActor.run { startPlayer(local) }; return }
-        guard let s = message.videoUrl, let url = URL(string: s), let meta = message.enc,
-              let (cipher, resp) = try? await URLSession.shared.data(from: url),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+        // Known-gone (mailman: delivered 1:1 videos are deleted server-side; a 404 is PERMANENT).
+        // Terminal state — show unavailable instantly, never re-fetch (Signal's unrecoverable-attachment state).
+        if DeadMedia.contains(message.id) { await MainActor.run { unavailable = true }; return }
+        guard let s = message.videoUrl, let url = URL(string: s), let meta = message.enc else {
+            await MainActor.run { unavailable = true }; return
+        }
+        guard let (cipher, resp) = try? await URLSession.shared.data(from: url) else {
+            await MainActor.run { unavailable = true }; return   // transient network failure — NOT terminal
+        }
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200, let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+            if code == 403 || code == 404 { DeadMedia.mark(message.id) }   // object deleted → permanent, never re-fetch
             await MainActor.run { unavailable = true }
             return
         }

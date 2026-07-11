@@ -942,6 +942,26 @@ enum ChatService {
             .setData(["lastRead": [uid: FieldValue.serverTimestamp()]], merge: true)
     }
 
+    // Throttled read receipts (Signal's ReceiptSender debounce): the per-received-message call in an
+    // open chat was one Firestore write PER message — a 20-message burst = 20 billed writes. This fires
+    // immediately when idle, then suppresses further writes for 2s and sends ONE trailing write if more
+    // messages arrived during the window (read state is monotonic, so the newest write covers them all).
+    private static var readCooldownUntil: [String: Date] = [:]
+    private static var readTrailing: Set<String> = []
+    @MainActor
+    static func markReadThrottled(_ cid: String) {
+        let now = Date()
+        if let until = readCooldownUntil[cid], until > now {
+            readTrailing.insert(cid)
+            return
+        }
+        readCooldownUntil[cid] = now.addingTimeInterval(2)
+        Task { await markRead(cid) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.05) {
+            if readTrailing.remove(cid) != nil { markReadThrottled(cid) }
+        }
+    }
+
     static func setPinned(_ cid: String, _ value: Bool) async {
         try? await db.collection("conversations").document(cid)
             .setData(["pinnedBy": [uid: value]], merge: true)
