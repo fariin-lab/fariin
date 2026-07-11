@@ -35,6 +35,9 @@ struct VideoPlayerScreen: View {
     @State private var pan: CGSize = .zero
     @GestureState private var panDrag: CGSize = .zero
     @State private var wasPlayingBeforeScrub = false
+    @State private var skipFlash = 0            // -1 = back 10, +1 = forward 10 (which side flashed)
+    @State private var skipFlashShown = false
+    @State private var skipFlashWork: DispatchWorkItem?
 
     private var zoomed: Bool { max(1, zoom * pinch) > 1.01 }
 
@@ -52,10 +55,12 @@ struct VideoPlayerScreen: View {
                             .updating($pinch) { v, s, _ in s = v }
                             .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
                     )
-                    .onTapGesture(count: 2) {
-                        withAnimation(.easeInOut(duration: 0.25)) { zoom = zoomed ? 1 : 2; if zoom <= 1 { pan = .zero } }
+                    // Double-tap the LEFT half → back 10s, RIGHT half → forward 10s (YouTube/native).
+                    .onTapGesture(count: 2, coordinateSpace: .global) { loc in
+                        if loc.x < UIScreen.main.bounds.width / 2 { skip(-10) } else { skip(10) }
                     }
-                    .onTapGesture { toggleChrome() }
+                    // Single tap on the video → play/pause (user request), and reveal the controls.
+                    .onTapGesture { togglePlay(); showChromeBriefly() }
                 if !isPlaying && !zoomed {   // center play button (glass) when paused / at end
                     Button { togglePlay() } label: {
                         Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.white)
@@ -63,6 +68,16 @@ struct VideoPlayerScreen: View {
                             .liquidGlass(Circle(), interactive: true)
                     }
                     .buttonStyle(.plain)
+                    .transition(.opacity)
+                }
+                // ±10s skip flash (double-tap side) — a glass pill on the tapped half.
+                if skipFlashShown {
+                    HStack {
+                        if skipFlash < 0 { skipBadge("gobackward.10"); Spacer() }
+                        else { Spacer(); skipBadge("goforward.10") }
+                    }
+                    .padding(.horizontal, 40)
+                    .allowsHitTesting(false)
                     .transition(.opacity)
                 }
             } else if unavailable {
@@ -113,6 +128,12 @@ struct VideoPlayerScreen: View {
         .onDisappear { cleanup() }
     }
 
+    private func skipBadge(_ icon: String) -> some View {
+        Image(systemName: icon).font(.system(size: 26, weight: .medium)).foregroundStyle(.white)
+            .frame(width: 66, height: 66)
+            .liquidGlass(Circle(), interactive: false)
+    }
+
     // Minimalist glass X (top-left).
     private var topBar: some View {
         HStack {
@@ -133,13 +154,7 @@ struct VideoPlayerScreen: View {
     // scrubber · duration in ONE glass capsule. Mono-digit 13pt labels.
     private var scrubberBar: some View {
         HStack(spacing: 12) {
-            Button { togglePlay() } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .buttonStyle(.plain)
+            // No play/pause button here (user request) — tap the video center to play/pause.
             Text(fmt(current)).font(.system(size: 13).monospacedDigit()).foregroundStyle(.white)
             // Scrub = pause-then-resume (Signal): remember whether it was playing, pause while dragging,
             // seek live, resume on release only if it was playing.
@@ -189,6 +204,26 @@ struct VideoPlayerScreen: View {
     private func toggleChrome() {
         showChrome.toggle()
         if showChrome && isPlaying { scheduleAutoHide() } else { cancelAutoHide() }
+    }
+    // Ensure the controls are visible right after a tap, then auto-hide again if playing.
+    private func showChromeBriefly() {
+        showChrome = true
+        if isPlaying { scheduleAutoHide() } else { cancelAutoHide() }
+    }
+    // Jump ±N seconds, clamped to the clip (double-tap left/right). Flashes a brief indicator.
+    private func skip(_ seconds: Double) {
+        guard let player, duration > 0 else { return }
+        let t = max(0, min(duration, current + seconds))
+        player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        current = t
+        progress = duration > 0 ? t / duration : 0
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        skipFlash = seconds < 0 ? -1 : 1
+        withAnimation(.easeOut(duration: 0.15)) { skipFlashShown = true }
+        skipFlashWork?.cancel()
+        let w = DispatchWorkItem { withAnimation(.easeIn(duration: 0.25)) { skipFlashShown = false } }
+        skipFlashWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
     }
     private func scheduleAutoHide() {
         cancelAutoHide()
