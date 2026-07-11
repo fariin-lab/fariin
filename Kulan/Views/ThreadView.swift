@@ -500,31 +500,7 @@ struct ThreadView: View {
         threadContent
         // Signal-style long-press overlay (emoji reaction bar + glass action menu, anchored to the
         // bubble's real on-screen frame). Drawn OUTERMOST so it covers the composer too.
-        .overlay {
-            if let t = reactionTarget {
-                ReactionMenuOverlay(
-                    message: t.message, cid: cid, dark: dark, isMe: t.message.authorId == me,
-                    myReaction: t.message.reactions[me],
-                    anchorFrame: t.frame, isGroup: isGroup,
-                    canPin: (!isGroup || (conversation?.isAdmin(me) ?? false)),
-                    isPinned: repo.pinnedMessageIds.contains(t.message.id),
-                    onPick: { emoji in react(t.message, emoji); reactionTarget = nil },
-                    onMore: { let m = t.message; reactionTarget = nil; morePickerTarget = m },
-                    onReply: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }; inputFocused = true },
-                    onForward: { let m = t.message; reactionTarget = nil; forwardTarget = m },
-                    onCopy: { UIPasteboard.general.string = t.message.text; reactionTarget = nil },
-                    onPin: { let m = t.message; reactionTarget = nil; togglePin(m) },
-                    onSelect: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
-                    onInfo: { let m = t.message; reactionTarget = nil; infoTarget = m },
-                    onSaveImage: { let m = t.message; reactionTarget = nil; Task { await saveImageToPhotos(m) } },
-                    onEdit: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }; input = m.text; inputFocused = true },
-                    onDelete: { let m = t.message; reactionTarget = nil; pendingDelete = m },
-                    onReport: { let m = t.message; reactionTarget = nil; reportTarget = m },
-                    onDismiss: { reactionTarget = nil }
-                )
-                .transition(.opacity)
-            }
-        }
+        .overlay { reactionOverlay }
         // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
         .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid) }
@@ -907,11 +883,11 @@ struct ThreadView: View {
                 onSaveImage: { m in Task { await saveImageToPhotos(m) } },
                 canPin: !isGroup || (conversation?.isAdmin(me) ?? false),
                 isPinned: repo.pinnedMessageIds.contains(msg.id),
-                onResend: { m in resend(m) },
                 onLongPress: { m, frame in
                     guard !selecting else { return }   // in selection mode long-press does nothing
                     withAnimation(.easeOut(duration: 0.18)) { reactionTarget = ReactionTarget(message: m, frame: frame) }
                 },
+                onResend: { m in resend(m) },
                 onJumpTo: { id in jumpTo(id) },
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 replyStoryNS: replyStoryNS,
@@ -1783,6 +1759,33 @@ struct ThreadView: View {
     }
 
     // Toggle my reaction (re-tapping the same emoji removes it) and remember it as recent.
+    // Extracted from `body` (the inline overlay + 15 closures blew the type-checker).
+    @ViewBuilder private var reactionOverlay: some View {
+        if let t = reactionTarget {
+            ReactionMenuOverlay(
+                message: t.message, cid: cid, dark: dark, isMe: t.message.authorId == me,
+                myReaction: t.message.reactions[me],
+                anchorFrame: t.frame, isGroup: isGroup,
+                canPin: (!isGroup || (conversation?.isAdmin(me) ?? false)),
+                isPinned: repo.pinnedMessageIds.contains(t.message.id),
+                onPick: { emoji in react(t.message, emoji); reactionTarget = nil },
+                onMore: { let m = t.message; reactionTarget = nil; morePickerTarget = m },
+                onReply: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }; inputFocused = true },
+                onForward: { let m = t.message; reactionTarget = nil; forwardTarget = m },
+                onCopy: { UIPasteboard.general.string = t.message.text; reactionTarget = nil },
+                onPin: { let m = t.message; reactionTarget = nil; togglePin(m) },
+                onSelect: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
+                onInfo: { let m = t.message; reactionTarget = nil; infoTarget = m },
+                onSaveImage: { let m = t.message; reactionTarget = nil; Task { await saveImageToPhotos(m) } },
+                onEdit: { let m = t.message; reactionTarget = nil; withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }; input = m.text; inputFocused = true },
+                onDelete: { let m = t.message; reactionTarget = nil; pendingDelete = m },
+                onReport: { let m = t.message; reactionTarget = nil; reportTarget = m },
+                onDismiss: { reactionTarget = nil }
+            )
+            .transition(.opacity)
+        }
+    }
+
     private func togglePin(_ m: Message) {
         if repo.pinnedMessageIds.contains(m.id) {
             Task { await ChatService.removePinnedMessage(cid, m.id) }
