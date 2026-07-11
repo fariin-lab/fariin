@@ -79,6 +79,7 @@ struct ImageViewerView: View {
     @State private var dismissDrag: CGSize = .zero        // drag-to-close: the image layer's offset
     @State private var dismissProgress: Double = 0
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
+    @State private var dismissEngaged = false            // vertical drag locked in → no horizontal drift
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
     private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
@@ -130,22 +131,33 @@ struct ImageViewerView: View {
             // (horizontal falls through to the TabView pager), and only when the photo is NOT zoomed in.
             .offset(dismissDrag)
             .scaleEffect(1 - dismissProgress * 0.12)
+            // Apple Photos drag-to-close: the image moves DOWN ONLY (horizontal is LOCKED to 0 — no
+            // left/right drift), shrinks slightly, backdrop fades. Once a clearly-vertical drag starts
+            // it LOCKS into dismiss mode for the rest of the gesture, so a diagonal finger can't drift
+            // sideways or hand off to the pager. A clearly-horizontal swipe never engages → the pager
+            // still pages between photos.
             .simultaneousGesture(
-                DragGesture(minimumDistance: 12)
+                DragGesture(minimumDistance: 10)
                     .onChanged { g in
-                        guard pageZoom <= 1.02 else { return }                 // zoomed → let the scroll view pan
-                        guard g.translation.height > 0,
-                              abs(g.translation.height) > abs(g.translation.width) else { return }  // vertical-down only
-                        dismissDrag = CGSize(width: g.translation.width * 0.5, height: g.translation.height)
-                        dismissProgress = min(1, g.translation.height / UIScreen.main.bounds.height)
+                        guard pageZoom <= 1.02 else { return }                 // zoomed → scroll view pans
+                        if !dismissEngaged {
+                            guard g.translation.height > 8,
+                                  g.translation.height > abs(g.translation.width) * 1.5 else { return }
+                            dismissEngaged = true
+                        }
+                        let dy = max(0, g.translation.height)
+                        dismissDrag = CGSize(width: 0, height: dy)             // VERTICAL ONLY
+                        dismissProgress = min(1, dy / UIScreen.main.bounds.height)
                         dim = 1 - dismissProgress * 0.85
                     }
                     .onEnded { g in
-                        guard dismissProgress > 0 else { return }
+                        let engaged = dismissEngaged
+                        dismissEngaged = false
+                        guard engaged else { return }
                         if g.velocity.height > 700 || dismissProgress > 0.18 {
                             dismiss()
                         } else {
-                            withAnimation(.spring(response: 0.25, dampingFraction: 1)) {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                                 dismissDrag = .zero; dismissProgress = 0; dim = 1
                             }
                         }
@@ -155,7 +167,7 @@ struct ImageViewerView: View {
             // so swiping to the next photo is instant instead of showing a spinner.
             .onChange(of: current) { _, _ in
                 prefetchNeighbors()
-                pageZoom = 1; dismissDrag = .zero; dismissProgress = 0; dim = 1   // fresh page: not zoomed
+                pageZoom = 1; dismissDrag = .zero; dismissProgress = 0; dim = 1; dismissEngaged = false   // fresh page
             }
             .task { prefetchNeighbors() }
 
