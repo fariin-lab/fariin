@@ -239,8 +239,15 @@ struct ThreadView: View {
             .overlay(alignment: .bottomTrailing) {
                 if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
                     Button {
-                        nativeScrollTarget = "BOTTOM"   // smooth animated glide to the newest message
-                        newWhileAway = 0
+                        // Two-stage (Signal): if there are unread messages I haven't reached yet, jump
+                        // to the FIRST unread; otherwise glide to the newest message.
+                        if let unread = firstUnreadId, repo.items.contains(where: { $0.id == unread }) {
+                            nativeScrollTarget = unread
+                            firstUnreadId = nil   // consumed → next press goes to the bottom
+                        } else {
+                            nativeScrollTarget = "BOTTOM"
+                            newWhileAway = 0
+                        }
                     } label: {
                         Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold))
                             // Explicit per-mode color + a soft counter-shadow so the glyph stays
@@ -273,6 +280,16 @@ struct ThreadView: View {
             .overlay {
                 if !repo.didInitialLoad {
                     ThreadSkeleton().allowsHitTesting(false)
+                }
+            }
+            // Brief centered toast (e.g. reply to a deleted original).
+            .overlay(alignment: .center) {
+                if let t = jumpToast {
+                    Text(t).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.black.opacity(0.8), in: Capsule())
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                 }
             }
             .floatingBottomBar {
@@ -949,7 +966,16 @@ struct ThreadView: View {
             row: { id in
                 guard let idx = repo.items.firstIndex(where: { $0.rowId == id }) else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
-                    Task { await repo.ensureLoaded(jid); await MainActor.run { flashAndScroll(jid) } }
+                    Task {
+                        await repo.ensureLoaded(jid)
+                        await MainActor.run {
+                            // Reply-to-deleted (Signal tombstone): if the original is gone, say so
+                            // instead of silently doing nothing. The quote itself still shows its saved
+                            // snapshot, so the reply is never blank.
+                            if repo.items.contains(where: { $0.id == jid }) { flashAndScroll(jid) }
+                            else { showJumpToast("Original message was deleted") }
+                        }
+                    }
                 }).padding(.horizontal, 12))
             },
             onReachedTop: { repo.loadOlder() },
@@ -981,6 +1007,14 @@ struct ThreadView: View {
     }
 
     // Native-list jump: flash the message (highlightId) and scroll the collection view to it.
+    @State private var jumpToast: String?
+    private func showJumpToast(_ msg: String) {
+        withAnimation(.easeOut(duration: 0.2)) { jumpToast = msg }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation(.easeIn(duration: 0.25)) { if jumpToast == msg { jumpToast = nil } }
+        }
+    }
+
     private func flashAndScroll(_ id: String) {
         nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
         highlightId = id
