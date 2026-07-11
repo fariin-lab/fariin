@@ -12,7 +12,7 @@ struct AttachRecentsStrip: View {
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void
-    var onSendAlbum: ([UIImage], String) -> Void = { _, _ in }   // multi-select → send with a caption
+    var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
     var onOpenAlbum: ([UIImage]) -> Void = { _ in }              // tapping a photo WHILE selecting → open the approval/paging page
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
@@ -23,6 +23,7 @@ struct AttachRecentsStrip: View {
     @State private var loadingPick = false   // fetching the full-size asset after a tap
     @State private var selectedIds: [String] = []    // chosen asset ids, in tap order (checkbox taps)
     @State private var caption = ""                  // caption for the selected batch
+    @State private var viewOnce = false              // WhatsApp/Signal "view once" toggle (single photo only)
     @State private var showAlbums = false
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
@@ -91,12 +92,25 @@ struct AttachRecentsStrip: View {
     // shown at the header top-right (not on the send button); the send button is real Liquid Glass.
     private var captionBar: some View {
         HStack(spacing: 10) {
-            TextField("", text: $caption,
-                      prompt: Text("Add a caption…").foregroundColor(Color(.systemGray)))
-                .foregroundStyle(.primary)
-                .focused($captionFocused)
-                .padding(.horizontal, 16).frame(height: 46)
-                .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
+            HStack(spacing: 8) {
+                TextField("", text: $caption,
+                          prompt: Text("Add a caption…").foregroundColor(Color(.systemGray)))
+                    .foregroundStyle(.primary)
+                    .focused($captionFocused)
+                // View Once (WhatsApp/Signal): the "1" toggle inside the caption field, for a single photo.
+                // When on, the photo self-destructs after the recipient opens it once.
+                if selectedIds.count == 1 {
+                    Button { viewOnce.toggle() } label: {
+                        Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
+                            .font(.system(size: 23, weight: .regular))
+                            .foregroundStyle(viewOnce ? Color(hex: 0x0A84FF) : Color(.systemGray))
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).frame(height: 46)
+            .liquidGlass(Capsule(), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
                 // arrow on clear glass, which read as a different, washed-out button).
@@ -309,19 +323,15 @@ struct AttachRecentsStrip: View {
                 }
             }
             let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+            let once = viewOnce && imgs.count == 1   // view-once applies to a single photo only
             await MainActor.run {
                 loadingPick = false
                 selectedIds = []
                 caption = ""
+                viewOnce = false
                 hasSelection = false
                 for url in videos { onPickVideo(url) }
-                // Exactly ONE photo → open the single-image editor (big preview + crop/pen/caption), the
-                // same page tapping a photo gives. Only 2+ go out as a quick album with the caption bar.
-                if imgs.count == 1 && videos.isEmpty {
-                    onOpenAlbum(imgs)
-                } else if !imgs.isEmpty {
-                    onSendAlbum(imgs, cap)
-                }
+                if !imgs.isEmpty { onSendAlbum(imgs, cap, once) }
             }
         }
     }

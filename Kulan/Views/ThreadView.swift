@@ -1121,13 +1121,13 @@ struct ThreadView: View {
                     // Open the video approval page (caption) before sending — parity with the image editor.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { videoToApprove = VideoWrap(url: url) }
                 },
-                onSendAlbum: { imgs, caption in
+                onSendAlbum: { imgs, caption, viewOnce in
                     showAttachPanel = false
-                    // Selected via checkboxes + captioned inline: 1 photo → send as one (caption inside);
-                    // 2+ → send as one album with the caption.
+                    // Selected via checkboxes + captioned inline: 1 photo → send as one (caption + optional
+                    // view-once); 2+ → send as one album with the caption (view-once is single-photo only).
                     Task {
                         if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
-                            await sendPhoto(d, caption: caption)
+                            await sendPhoto(d, viewOnce: viewOnce, caption: caption)
                         } else if imgs.count >= 2 {
                             await sendAlbum(imgs, caption: caption, hd: false)
                         }
