@@ -831,6 +831,9 @@ struct ThreadView: View {
                 nameFor: { personName($0) },
                 avatarFor: { conversation?.photos[$0] },
                 onReply: { m in
+                    // Replying cancels any in-progress edit (they can't both be active — otherwise send
+                    // would commit the edit and silently drop the reply).
+                    if editingMessage != nil { editingMessage = nil; input = Drafts.shared.text(cid) }
                     withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
                     inputFocused = true   // replying = you're about to type → open the keyboard
                 },
@@ -1449,8 +1452,18 @@ struct ThreadView: View {
         }
         repo.removePending(clientId: clientId)
 
-        if m.isVideo, let path = m.localMediaURL,
-           let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+        if m.isVideo {
+            // Video retry needs the transcoded bytes we persisted to tmp. If that file is gone (OS
+            // purged tmp / relaunch), DO NOT fall through to the image branch — localImageData holds
+            // only the POSTER thumbnail, so that path would silently send a still photo instead of the
+            // video. Re-mark failed and surface it instead.
+            guard let path = m.localMediaURL,
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                repo.addPending(m)   // keep the failed video bubble; the payload is unrecoverable
+                repo.markFailed(clientId: clientId)
+                sendError = "This video can't be re-sent — please pick it again."
+                return
+            }
             var p = Message(localVideoThumb: m.localImageData ?? Data(), duration: m.duration ?? 0,
                             width: m.width ?? 1, height: m.height ?? 1,
                             authorId: me, clientId: clientId, sendState: .sending)
@@ -1544,28 +1557,46 @@ struct ThreadView: View {
             return
         }
 
-        // Optimistic grouped bubble: thumbnails in order + which are videos (play badge).
-        let previews: [Data] = ordered.compactMap { item in
-            switch item {
-            case .image(let ui): return ui.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
-            case .video(_, let thumb, _): return thumb.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
-            }
+        // Optimistic grouped bubble: thumbnails in order + which are videos (play badge). Build BOTH
+        // arrays in ONE pass so their indices ALWAYS align (a compactMap'd previews vs a map'd flags
+        // list drifted apart when a thumbnail failed to encode → play badges on the wrong tiles).
+        var previews: [Data] = []
+        var isVideoFlags: [Bool] = []
+        for item in ordered {
+            let (thumb, isVid): (UIImage, Bool) = {
+                switch item {
+                case .image(let ui): return (ui, false)
+                case .video(_, let t, _): return (t, true)
+                }
+            }()
+            let jpeg = thumb.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
+                ?? Data()   // keep a placeholder so the index stays in lockstep with the flags
+            previews.append(jpeg)
+            isVideoFlags.append(isVid)
         }
-        let isVideoFlags = ordered.map { if case .video = $0 { return true } else { return false } }
         let clientId = UUID().uuidString
         await MainActor.run {
             repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
                                     clientId: clientId, sendState: .sending, localAlbumIsVideo: isVideoFlags))
         }
 
-        // Build the send items: images as-is, videos transcoded (HD toggle) to the delivery codec.
+        // Build the send items: images as-is, videos transcoded (HD toggle) to the delivery codec. If
+        // ANY item fails to prepare, fail the WHOLE group (don't silently drop an item — the album
+        // would ship with fewer items than the bubble showed).
         var sendItems: [ChatService.AlbumSendItem] = []
         for item in ordered {
             switch item {
             case .image(let ui):
-                if let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) { sendItems.append(.image(d)) }
+                guard let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) else {
+                    await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't prepare one of the photos." }
+                    return
+                }
+                sendItems.append(.image(d))
             case .video(let url, let thumb, let duration):
-                guard let prepared = await VideoTranscoder.prepare(url, hd: hd) else { continue }
+                guard let prepared = await VideoTranscoder.prepare(url, hd: hd) else {
+                    await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't process one of the videos." }
+                    return
+                }
                 try? FileManager.default.removeItem(at: url)
                 let thumbData = thumb.jpegData(compressionQuality: 0.8) ?? prepared.thumbnail
                 sendItems.append(.video(prepared.data, thumbnail: thumbData,
@@ -3042,11 +3073,6 @@ struct MessageBubble: View, Equatable {
                             Button(role: .destructive) { onReport(message) } label: { Label("Report", systemImage: "flag") }
                         }
                     }
-                    // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
-                    .highPriorityGesture(TapGesture(count: 2).onEnded {
-                        guard message.sendState == nil else { return }   // not until it's on the server
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        onReact(myReaction == "❤️" ? nil : "❤️")
                     // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
                     .highPriorityGesture(TapGesture(count: 2).onEnded {
                         guard message.sendState == nil else { return }   // not until it's on the server
