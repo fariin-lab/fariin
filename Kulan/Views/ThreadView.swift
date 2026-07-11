@@ -3065,9 +3065,11 @@ struct MessageBubble: View, Equatable {
                         }
                     )
                     // Long-press → custom Signal-style reaction bar + glass menu. 0.2s = Signal's
-                    // minimumPressDuration (snappier than before). The bubble scales down slightly WHILE
-                    // pressing (Signal's build-up "peek"), then a .medium haptic fires as it presents.
-                    .scaleEffect(pressing ? 0.96 : 1)
+                    // minimumPressDuration. The bubble scales down slightly WHILE pressing (build-up
+                    // "peek") — but NOT while swiping to reply (dragX != 0), where the 0.96→1 scale read
+                    // as a "zoom in" on large media. Text was fine because it's small; now all bubble
+                    // types swipe stably.
+                    .scaleEffect(pressing && dragX == 0 ? 0.96 : 1)
                     .animation(.easeOut(duration: 0.18), value: pressing)
                     .onLongPressGesture(minimumDuration: 0.2, maximumDistance: 24) {
                         pressing = false
