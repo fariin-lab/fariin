@@ -101,6 +101,7 @@ struct ThreadView: View {
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
     @State private var searchIndex = 0
     @State private var lastSearchText: String?   // identical-query dedup (Signal): arrows/focus don't re-run the search
+    @State private var searchJumpSeq = 0         // coalesces rapid next/prev jumps — only the latest target lands
     @FocusState private var searchFocused: Bool
     // Signal-style UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
@@ -1083,12 +1084,19 @@ struct ThreadView: View {
     private func goToCurrentMatch() {
         guard searchMatches.indices.contains(searchIndex) else { return }
         let id = searchMatches[searchIndex].id
+        // Coalesce rapid next/prev taps (Signal's lastOnly load queue): each tap supersedes the one
+        // before, so N fast taps land ONE scroll on the final target instead of racing N ensureLoaded
+        // pagers + N scroll animations.
+        searchJumpSeq += 1
+        let seq = searchJumpSeq
         Task {
-            await repo.ensureLoaded(id)
+            await repo.ensureLoaded(id)   // page older history in until the match is in the window
             await MainActor.run {
+                guard seq == searchJumpSeq else { return }   // a newer jump superseded this one
                 // The native list keys cells by rowId (clientId ?? id). Own sent messages keep a clientId, so
                 // scrolling by the raw message id found no cell → no scroll. Translate id → rowId. (No
-                // full-bubble flash for search; the term stays highlighted in-text.)
+                // full-bubble flash for search; the term stays highlighted in-text. A deleted match simply
+                // no-ops — the id resolves to no row, same graceful degradation as Signal.)
                 nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id
             }
         }
