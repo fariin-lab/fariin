@@ -719,7 +719,10 @@ struct ThreadView: View {
                 if let id = msg?.id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
                 if ids.count > 1 { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
             }
-            .scenePadding(.horizontal)   // iOS system content margin (matches the native nav bar), not a custom number
+            // 20pt = the nav bar's own button inset on iOS 26 (the glass back-button circle's leading
+            // edge). scenePadding resolved to 16pt here, leaving the bar poking 4pt past the back button;
+            // this lines the bar's edges up exactly under the back button and the call/video pill.
+            .padding(.horizontal, 20)
             .padding(.top, 6).padding(.bottom, 2)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
