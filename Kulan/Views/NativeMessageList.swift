@@ -198,6 +198,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         guard collectionView.bounds.height > 0 else { return }
         let wasBottom = computeAtBottom()
         let anchor = captureTopAnchor()
+        layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
         if wasBottom { pinBottom() }
@@ -250,6 +251,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         snapshot.appendSections([0])
         snapshot.appendItems(ids, toSection: 0)
         currentIds = ids
+        layout.generation += 1   // ids/heights changed → next prepare() rebuilds frames (O(1) check otherwise)
 
         // First content: apply, then land at the exact bottom and reveal. (If width isn't ready yet the
         // list applies invisibly and viewDidLayoutSubviews performs the open once it is.)
@@ -312,6 +314,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
               collectionView.bounds.width > 0, collectionView.bounds.height > 0,
               !currentIds.isEmpty else { return }
         measureMissing(currentIds, width: collectionView.bounds.width)
+        layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
         didInitialScroll = true
@@ -371,6 +374,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             heights.removeAll(keepingCapacity: true)
             for id in currentIds { heights[id] = measure(id, width: w) }
             measuredWidth = w
+            layout.generation += 1
             layout.invalidateLayout()
         }
     }
@@ -445,17 +449,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 final class ExactHeightLayout: UICollectionViewLayout {
     var heightForItem: ((Int) -> CGFloat)?
     var animateInserts = false            // a fade-in for a freshly inserted (sent/received) bottom cell
+    // Signal's renderStateId: an O(1) identity check instead of re-stacking frames on every prepare().
+    // The controller bumps this whenever ids/heights change; unchanged generation + width + count →
+    // the cached frames are reused untouched (prepare() is called constantly during scrolling).
+    var generation = 0
 
     private var frames: [CGRect] = []
     private var contentHeight: CGFloat = 0
     private(set) var layoutWidth: CGFloat = 0
     private var inserted: Set<IndexPath> = []
+    private var builtGeneration = -1
+    private var builtCount = -1
 
     override func prepare() {
         super.prepare()
         guard let cv = collectionView else { return }
-        layoutWidth = cv.bounds.width
         let count = cv.numberOfItems(inSection: 0)
+        if builtGeneration == generation, cv.bounds.width == layoutWidth, count == builtCount { return }
+        layoutWidth = cv.bounds.width
         frames.removeAll(keepingCapacity: true)
         frames.reserveCapacity(count)
         var y: CGFloat = 0
@@ -465,6 +476,8 @@ final class ExactHeightLayout: UICollectionViewLayout {
             y += h
         }
         contentHeight = y
+        builtGeneration = generation
+        builtCount = count
     }
 
     override var collectionViewContentSize: CGSize { CGSize(width: layoutWidth, height: contentHeight) }

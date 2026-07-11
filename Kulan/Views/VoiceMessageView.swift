@@ -25,9 +25,15 @@ struct VoiceMessageView: View {
     @State private var timer: Timer?
     @State private var rate: Float = 1.0   // playback speed (1× / 1.5× / 2×), like Signal/WhatsApp
 
+    // Signal's CVAudioPlayback caches: the chosen speed sticks for the WHOLE conversation, and a paused
+    // note's position survives its cell scrolling off-screen and back (cell reuse resets @State).
+    private static var rateByCid: [String: Float] = [:]
+    private static var pausedProgress: [String: Double] = [:]
+
     private var rateLabel: String { rate == 1 ? "1×" : (rate == 1.5 ? "1.5×" : "2×") }
     private func cycleRate() {
         rate = rate == 1 ? 1.5 : (rate == 1.5 ? 2 : 1)
+        Self.rateByCid[cid] = rate
         if playing { player?.rate = rate }
     }
 
@@ -73,6 +79,10 @@ struct VoiceMessageView: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            rate = Self.rateByCid[cid] ?? 1                                   // per-chat speed sticks (Signal)
+            if !playing, let saved = Self.pausedProgress[message.id] { progress = saved }   // restore paused position
         }
         .onDisappear { stop() }
         // Auto-advance (Signal): the chat posts .voiceNotePlay with the NEXT note's id when the previous
@@ -143,6 +153,10 @@ struct VoiceMessageView: View {
         if !isMe { withAnimation(.easeOut(duration: 0.25)) {
             PlayedVoice.shared.markPlayed(cid: cid, messageId: message.id, createdAt: message.createdAt)
         } }
+        // Resume a paused position that survived cell reuse (progress restored in onAppear).
+        if let p = player, progress > 0, progress < 0.98, p.currentTime == 0 {
+            p.currentTime = progress * p.duration
+        }
         player?.enableRate = true
         player?.rate = rate
         player?.play()
@@ -157,6 +171,7 @@ struct VoiceMessageView: View {
             } else {
                 playing = false
                 progress = 0
+                Self.pausedProgress.removeValue(forKey: message.id)   // finished → next play starts fresh
                 timer?.invalidate(); timer = nil
                 p.currentTime = 0
                 playbackEnded(natural: true)
@@ -166,9 +181,11 @@ struct VoiceMessageView: View {
 
     private func pause() {
         player?.pause(); playing = false; timer?.invalidate(); timer = nil
+        Self.pausedProgress[message.id] = progress                    // survives cell reuse
         playbackEnded(natural: false)
     }
     private func stop() {
+        if playing { Self.pausedProgress[message.id] = progress }     // scrolled away mid-play → resumable
         player?.stop(); playing = false; timer?.invalidate(); timer = nil
         playbackEnded(natural: false)
     }

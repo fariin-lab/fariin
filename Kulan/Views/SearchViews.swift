@@ -320,7 +320,13 @@ struct InChatMessage: Identifiable {
 extension MessageSearch {
     // Load (up to `limit`) of ONE chat's messages, decrypting only the text. Group messages are sealed
     // per-sender, so every author's key is warmed first (same as the global corpus loader).
+    // Signal indexes messages incrementally instead of re-scanning on every search. Kulan's version:
+    // cache the decrypted corpus per chat for a short TTL, so reopening search moments later doesn't
+    // re-fetch + re-decrypt up to 1000 messages again.
+    private static var corpusCache: [String: (at: Date, corpus: [InChatMessage])] = [:]
+
     static func loadChat(cid: String, isGroup: Bool, me: String, limit: Int = 1000) async -> [InChatMessage] {
+        if let hit = corpusCache[cid], Date().timeIntervalSince(hit.at) < 120 { return hit.corpus }
         let db = Firestore.firestore()
         guard let snap = try? await db.collection("conversations").document(cid)
             .collection("messages")
@@ -334,7 +340,7 @@ extension MessageSearch {
             let other = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
             _ = await Crypto.shared.preloadKey(other)
         }
-        return snap.documents.compactMap { doc -> InChatMessage? in
+        let out = snap.documents.compactMap { doc -> InChatMessage? in
             let data = doc.data()
             let author = data["authorId"] as? String ?? ""
             let text = isGroup
@@ -344,6 +350,8 @@ extension MessageSearch {
             let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             return InChatMessage(id: doc.documentID, text: text, authorId: author, date: date)
         }
+        corpusCache[cid] = (Date(), out)
+        return out
     }
 }
 

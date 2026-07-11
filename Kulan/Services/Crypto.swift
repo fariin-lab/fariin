@@ -196,11 +196,28 @@ final class Crypto {
         (await preloadKey(uid)).map { Data($0) }
     }
 
+    // In-flight fetch dedup (Signal's ProfileFetcher): on a cold start the chat list, the open thread,
+    // and group-member warms all request the same keys SIMULTANEOUSLY — without dedup each fires its
+    // own Firestore read. Concurrent callers now share one Task per uid.
+    private var keyFetches: [String: Task<Bytes?, Never>] = [:]
+
     /// Fetch + cache another user's public key. Returns nil if they have none yet.
     @discardableResult
     func preloadKey(_ uid: String) async -> Bytes? {
         guard !uid.isEmpty else { return nil }
         if let cached = lock.withLock({ pubCache[uid] }) { return cached }
+        let task: Task<Bytes?, Never> = lock.withLock {
+            if let existing = keyFetches[uid] { return existing }
+            let t = Task { await self.fetchKey(uid) }
+            keyFetches[uid] = t
+            return t
+        }
+        let result = await task.value
+        lock.withLock { _ = keyFetches.removeValue(forKey: uid) }
+        return result
+    }
+
+    private func fetchKey(_ uid: String) async -> Bytes? {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
             if let b64 = snap.data()?["publicKey"] as? String,
