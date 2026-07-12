@@ -187,25 +187,26 @@ struct ThreadView: View {
             // home-indicator/keyboard, NOT the bar — that mistake left the list's bottom inset ~46pt so the
             // last messages sat behind the composer).
             .floatingBottomBar {
-                bottomBarContent
-                    .background {
-                        GeometryReader { geo in
-                            Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
-                                composerBarHeight = h
+                // SIGNAL'S EXACT MODEL — NO background at all. Signal's iOS-26 input toolbar is a
+                // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
+                // controls themselves are Liquid Glass, blurring what passes directly under THEM.
+                // Our pills already are native glassEffect in a GlassEffectContainer — every
+                // full-width rectangle tried behind them created the boundary that read as "the border".
+                VStack(spacing: 0) {
+                    // Jump-to-bottom arrow STACKED above the composer, INSIDE the bar's bounds — an
+                    // offset overlay rendered outside the bar was visible but not hit-testable (the
+                    // "arrow not working" bug). As bar content it's fully tappable + rides the keyboard.
+                    HStack { Spacer(); jumpToBottomButton }
+                        .padding(.bottom, 10)
+                    bottomBarContent
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
+                                    composerBarHeight = h
+                                }
                             }
                         }
-                    }
-                    // SIGNAL'S EXACT MODEL — NO background at all. Signal's iOS-26 input toolbar is a
-                    // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
-                    // controls themselves are Liquid Glass, blurring what passes directly under THEM.
-                    // Our pills already are native glassEffect in a GlassEffectContainer — every
-                    // full-width rectangle I tried behind them (.bar / edge-effect / ultraThinMaterial)
-                    // created the horizontal boundary that read as "the border". Nothing behind = no line.
-                    // Jump-to-bottom arrow rides ABOVE the composer bar (and with the keyboard), never under
-                    // it — anchoring it to the full-bleed list put it at the raw screen bottom, hidden.
-                    .overlay(alignment: .topTrailing) {
-                        jumpToBottomButton.offset(y: -52)   // 40pt button + 12pt gap above the bar
-                    }
+                }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
