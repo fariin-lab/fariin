@@ -142,13 +142,20 @@ struct VideoApprovalView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
                     .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
                 // PLAYHEAD scrubber: a white vertical line that tracks playback within the selection and
-                // can be dragged to scrub. Clamped to the trimmed range; hidden when the range is empty.
+                // can be dragged to scrub. Its X is clamped INSIDE the yellow selection frame (between the
+                // two handles' inner edges) so it can never sit on top of / overlap a trim handle.
                 let phX = CGFloat((min(max(playhead, trimStart), trimEnd)) / dur) * W
                 if trimEnd > trimStart {
+                    // Visual stays a thin 3pt line; the TOUCH TARGET is a 32pt-wide invisible strip
+                    // around it (contentShape), so it's easy to grab without changing the look.
+                    let minX = startX + handleW / 2 + 1          // inside the left handle
+                    let maxX = endX - handleW / 2 - 4            // inside the right handle
                     Capsule().fill(.white)
                         .frame(width: 3, height: stripHeight + 8)
                         .shadow(color: .black.opacity(0.4), radius: 1.5)
-                        .offset(x: min(max(0, phX - 1.5), W - 3))
+                        .frame(width: 32, height: stripHeight + 16)   // big invisible hit area
+                        .contentShape(Rectangle())
+                        .offset(x: min(max(minX, phX), max(minX, maxX)) - 16)
                         .gesture(playheadDrag(width: W))
                 }
                 // Rounded trim handles.
@@ -170,7 +177,8 @@ struct VideoApprovalView: View {
             .overlay(Capsule().fill(.black.opacity(0.55)).frame(width: 2.5, height: 18))
     }
 
-    // Drag the playhead to scrub; releasing resumes playback from that point.
+    // Drag the playhead to scrub: seek-only. The video stays PAUSED on release — playback only ever
+    // starts when the user explicitly taps Play (user spec).
     private func playheadDrag(width W: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .named("trim"))
             .onChanged { g in
@@ -180,19 +188,26 @@ struct VideoApprovalView: View {
                 playhead = min(max(t, trimStart), trimEnd)
                 scrubTime = playhead
             }
-            .onEnded { _ in scrubTime = nil; draggingPlayhead = false; playing = true }
+            .onEnded { _ in scrubTime = nil; draggingPlayhead = false }   // stays paused — no auto-play
     }
 
+    // Drag a trim handle: adjusts only the trim range, previewing the boundary frame. Stays PAUSED on
+    // release (no auto-play). If the playhead falls outside the new range it jumps to the boundary.
     private func handleDrag(isStart: Bool, width W: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .named("trim"))
             .onChanged { g in
+                playing = false
                 let dur = max(0.01, duration)
                 let t = Double(min(max(0, g.location.x), W) / W) * dur
-                if isStart { trimStart = min(t, trimEnd - minDuration); scrubTime = trimStart }
-                else { trimEnd = max(t, trimStart + minDuration); scrubTime = trimEnd }
-                playing = false
+                if isStart {
+                    trimStart = min(t, trimEnd - minDuration); scrubTime = trimStart
+                    if playhead < trimStart { playhead = trimStart }   // playback position can't precede the start
+                } else {
+                    trimEnd = max(t, trimStart + minDuration); scrubTime = trimEnd
+                    if playhead > trimEnd { playhead = trimEnd }       // ...or exceed the end
+                }
             }
-            .onEnded { _ in scrubTime = nil; playing = true }
+            .onEnded { _ in scrubTime = nil }   // stays paused — no auto-play
     }
 
     private var captionBar: some View {
