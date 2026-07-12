@@ -56,8 +56,8 @@ struct ChatImageEditor: View {
     private func editorBody(_ size: CGSize) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            // The image area EXCLUDES the bottom chrome (Signal's approval layout: inset by the toolbar
-            // height, never hidden behind it). Canvas, drawing layer, and flatten all share this rect.
+            // FULL-SCREEN image (matches the multi-image editor): the photo fills the screen and the
+            // tools/caption float over it. Canvas, drawing layer, and flatten all share this rect.
             canvasView(canvasArea(size))
             chromeOverlay
             cropOverlay
@@ -143,11 +143,10 @@ struct ChatImageEditor: View {
         }
     }
 
-    // Image area = full width, height minus the live-measured bottom chrome (Signal insets the
-    // scroll area by its toolbar heights at runtime — the photo is never hidden behind the bars).
-    private func canvasArea(_ s: CGSize) -> CGSize {
-        CGSize(width: s.width, height: max(120, s.height - bottomChromeH - 8))
-    }
+    // Image area = the FULL screen (user request: match the multi-image editor, where the photo fills
+    // the screen and the tools/caption float OVER it — the old inset-above-the-chrome canvas read as a
+    // "half screen" editor). Canvas, drawing layer, and flatten all share this rect.
+    private func canvasArea(_ s: CGSize) -> CGSize { s }
 
     // The photo aspect-FITS the canvas area — fully visible, letterboxed on black, one uniform rule
     // for every ratio (1:1, 4:5, 3:4, 2:3, 4:3, 3:2, 16:9, 9:16, 19.5:9, 20:9). Pinch zoom keeps
@@ -172,10 +171,9 @@ struct ChatImageEditor: View {
                     .frame(width: area.width, height: area.height)
             }
         }
-        // Rounded canvas corners (user request) — a soft 18pt radius on the editing surface.
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        // Full-screen canvas like the multi-image editor: centered, no rounded card, chrome floats over.
         .frame(width: area.width, height: area.height)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // Composite the current strokes INTO the image (at the exact rect they were drawn in) and clear
