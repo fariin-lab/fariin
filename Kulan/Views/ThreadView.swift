@@ -3052,11 +3052,24 @@ struct MessageBubble: View, Equatable {
     // The message text + trailing time as one line (short) or wrapped (long) — shared by the plain and
     // the reply-quote layouts so the two stay identical.
     private var bodyLine: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            bodyText
-                .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
-            metaRow.padding(.bottom, 1)   // time on EVERY bubble (Signal/WhatsApp — user spec)
-        }
+        // Signal's exact layout: the text flows FULL WIDTH, and only the LAST line reserves room for the
+        // timestamp. An HStack { text; time } instead reserved a full-height column beside the text, so
+        // EVERY line wrapped early → the big empty column on the right. Here we append an INVISIBLE inline
+        // run that mirrors the metaRow (same font/glyphs → exact same width) to the end of the text, so
+        // only the last line leaves a gap, then overlay the REAL time bottom-trailing on top of that gap.
+        (bodyText + metaPlaceholder.foregroundColor(.clear))
+            .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+            .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+    }
+
+    // A Text that renders IDENTICALLY to metaRow (edited? · time · tick?) but is drawn clear — used only
+    // to reserve the trailing space on the message's last line. Same fonts/symbols → widths match exactly.
+    private var metaPlaceholder: Text {
+        var t = Text("  ")   // small gap between the words and the time (matches the HStack spacing)
+        if message.edited { t = t + Text("edited ").italic() }
+        t = t + Text(timeString)
+        if isMe { t = t + Text(" ") + Text(Image(systemName: "checkmark.circle.fill")) }
+        return t.font(.system(size: 10))
     }
 
     // Route a tapped link: web URL -> "Open link?" confirm; kulan://u/<handle> -> open the
