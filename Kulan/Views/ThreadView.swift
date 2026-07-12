@@ -65,7 +65,9 @@ struct ThreadView: View {
     @State private var sendError: String?
     @State private var showCamera = false
     @State private var showAttachPanel = false
-    @State private var attachDetent: PresentationDetent = .medium   // grows to .large when the caption field focuses
+    // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
+    static let attachOpenDetent: PresentationDetent = .fraction(0.62)
+    @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
     @State private var showPollSoon = false   // Poll tile → "coming soon" sheet
     @State private var showFileImporter = false
@@ -494,9 +496,9 @@ struct ThreadView: View {
                 Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
             }
         }
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = .medium }) {
+        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
-                .presentationDetents([.medium, .large], selection: $attachDetent)   // opens half, pull up for more
+                .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
@@ -1286,7 +1288,8 @@ struct ThreadView: View {
     // Top: one-tap recents strip (camera-roll photos + videos). Below: the pickers.
     private var attachPanel: some View {
         VStack(spacing: 0) {
-            Capsule().fill(.secondary.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
+            // (No custom grabber — the sheet's SYSTEM drag indicator already shows one; drawing our own
+            // capsule produced the "two lines" at the top.)
             // Grid: X + "Recents ▾" album dropdown header, Camera tile, then recent photos/videos.
             AttachRecentsStrip(
                 onCamera: {

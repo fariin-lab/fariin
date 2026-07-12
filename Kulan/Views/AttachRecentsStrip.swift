@@ -104,12 +104,12 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
-                // Selected count — a 48px Liquid Glass (blur) circle showing only the number.
+                // Selected count — BLUE glass circle with a white number (user spec; was clear glass).
                 if !selectedIds.isEmpty {
                     Text("\(selectedIds.count)")
-                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.primary)
+                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 48, height: 48)
-                        .liquidGlass(Circle(), interactive: false)
+                        .liquidGlass(Circle(), interactive: false, tint: Theme.defaultBubble(false))
                 }
             }
         }
