@@ -27,6 +27,10 @@ struct AttachRecentsStrip: View {
     private let pageSize = 200                                // batch size per page-in
     @State private var loadingPick = false   // fetching the full-size asset after a tap
     @State private var selectedIds: [String] = []    // chosen asset ids, in tap order (checkbox taps)
+    // GLOBAL selection store (native-picker/Signal/WhatsApp pattern): the selected PHAssets themselves,
+    // captured at toggle time — selection survives browsing between albums. Resolving from the visible
+    // album's array dropped everything picked in OTHER folders (the cross-album selection bug).
+    @State private var selectedAssets: [String: PHAsset] = [:]
     @State private var caption = ""                  // caption for the selected batch
     @State private var viewOnce = false              // WhatsApp/Signal "view once" toggle (single photo only)
     @State private var showAlbums = false
@@ -360,8 +364,13 @@ struct AttachRecentsStrip: View {
     }
 
     private func toggle(_ a: PHAsset) {
-        if let i = selectedIds.firstIndex(of: a.localIdentifier) { selectedIds.remove(at: i) }
-        else { selectedIds.append(a.localIdentifier) }
+        if let i = selectedIds.firstIndex(of: a.localIdentifier) {
+            selectedIds.remove(at: i)
+            selectedAssets.removeValue(forKey: a.localIdentifier)
+        } else {
+            selectedIds.append(a.localIdentifier)
+            selectedAssets[a.localIdentifier] = a   // keep the asset itself — survives album switches
+        }
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
@@ -369,7 +378,7 @@ struct AttachRecentsStrip: View {
     // order) and open the mixed approval pager (swipe all, per-item edit, one caption, one send).
     private func openSelected() {
         let ids = selectedIds
-        let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
+        let byId = resolveSelected(ids)   // global store, NOT the visible album (cross-album selection)
         loadingPick = true
         Task {
             var out: [ApprovalMedia] = []
@@ -393,7 +402,7 @@ struct AttachRecentsStrip: View {
             await MainActor.run {
                 loadingPick = false
                 if out.isEmpty { return }
-                selectedIds = []; caption = ""; viewOnce = false; hasSelection = false
+                selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
                 onOpenMedia(out)
             }
         }
@@ -401,10 +410,22 @@ struct AttachRecentsStrip: View {
 
     // Load every selected item (in tap order): photos go out as an album (or the editor for one), each
     // selected VIDEO is sent on its own (the album carries images only — Signal/WhatsApp do the same).
+    // Resolve the selection from the GLOBAL store; any id somehow missing (e.g. state restored) is
+    // re-fetched from the library by identifier, so no selected item is ever silently dropped.
+    private func resolveSelected(_ ids: [String]) -> [String: PHAsset] {
+        var byId = selectedAssets
+        let missing = ids.filter { byId[$0] == nil }
+        if !missing.isEmpty {
+            PHAsset.fetchAssets(withLocalIdentifiers: missing, options: nil)
+                .enumerateObjects { a, _, _ in byId[a.localIdentifier] = a }
+        }
+        return byId
+    }
+
     private func sendSelected() {
         let ids = selectedIds
         let onceWanted = viewOnce && ids.count == 1
-        let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
+        let byId = resolveSelected(ids)   // global store, NOT the visible album (cross-album selection)
         loadingPick = true
         Task {
             // Build the ORDERED mixed list (selection order) so photos + videos ship as ONE group.
@@ -428,7 +449,7 @@ struct AttachRecentsStrip: View {
             let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
             await MainActor.run {
                 loadingPick = false
-                selectedIds = []; caption = ""; viewOnce = false; hasSelection = false
+                selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
                 guard !ordered.isEmpty else { return }
                 // A single view-once photo keeps its dedicated view-once send (view-once can't be an album).
                 if onceWanted, ordered.count == 1, case .image(_, let ui) = ordered[0] {

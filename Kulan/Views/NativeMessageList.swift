@@ -118,14 +118,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // The earlier fully-manual .never + SwiftUI GeometryReader insets desynced during keyboard
         // transitions (readers reporting late/0 → top inset 0 → bubbles under the header).
         collectionView.contentInsetAdjustmentBehavior = .always
-        // TOP edge-effect stays at the iOS 26 default: content scrolls UNDER the nav bar so its soft fade
-        // is hidden behind the header (seamless top). BOTTOM edge-effect is turned OFF: content stops just
-        // ABOVE the floating composer (it does not scroll under it), so the default bottom fade renders as
-        // a visible band there — the "bottom border". Hiding it lets content end cleanly above the
-        // transparent composer with no band.
-        if #available(iOS 26.0, *) {
-            collectionView.bottomEdgeEffect.isHidden = true
-        }
+        // BOTH edge-effects stay at the iOS 26 native default (soft progressive blur of the content
+        // itself). Content now scrolls UNDER the composer full-bleed, so the bottom edge blurs messages
+        // exactly the way the top does under the header — the SAME native mechanism, no material bar.
+        // (When content used to STOP above the composer, this fade read as a band — that's gone now.)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -520,10 +516,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateBottomInset()   // safe-area values are valid here — keeps the bottom inset exact
-        // Keep the BOTTOM edge-effect off (UIKit can reset it) so no fade/band shows above the composer.
-        if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
-            collectionView.bottomEdgeEffect.isHidden = true
-        }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
             else { scheduleEmptyReveal() }

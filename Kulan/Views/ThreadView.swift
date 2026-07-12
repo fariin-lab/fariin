@@ -195,10 +195,10 @@ struct ThreadView: View {
                             }
                         }
                     }
-                    // NATIVE bar blur (Apple's own `.bar` material, nothing custom): messages frost softly
-                    // as they scroll under the composer, matching the header. Extends into the home-indicator
-                    // region so the frost reaches the screen's bottom edge.
-                    .background(.bar, ignoresSafeAreaEdges: .bottom)
+                    // NO material bar (user: the .bar rectangle read as a border). The bottom matches the
+                    // TOP's exact mechanism instead: system-default chrome + the collection view's native
+                    // iOS 26 soft scroll-edge effect, which progressively blurs the content itself as it
+                    // passes under the composer (re-enabled in NativeMessageList).
                     // Jump-to-bottom arrow rides ABOVE the composer bar (and with the keyboard), never under
                     // it — anchoring it to the full-bleed list put it at the raw screen bottom, hidden.
                     .overlay(alignment: .topTrailing) {
