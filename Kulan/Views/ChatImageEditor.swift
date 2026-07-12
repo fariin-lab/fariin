@@ -172,15 +172,17 @@ struct ChatImageEditor: View {
                               penWidth: penWidth)
                     .frame(width: area.width, height: area.height)
             } else if isTallMedia {
-                // LONG PORTRAIT (9:16+): the EXACT same structure as the single VIDEO editor —
-                // .aspectRatio(imageAspect, .fit) sizes the zoom view to the image's own fitted rect and
-                // .clipShape rounds THAT rect, so the corners hug the image itself, never the full-screen
-                // container. Pinch zoom works normally inside (ZoomImageView; zooming in fills naturally).
+                // LONG PORTRAIT (9:16+): EXACTLY like the single VIDEO editor — the media aspect-FITS the
+                // area ABOVE the bottom toolbar/caption (reserved via .padding(.bottom, bottomChromeH), the
+                // video's safeAreaInset equivalent), centered with black margins, rounded corners on the
+                // image itself, chrome sitting over BLACK (not the photo → no peach tint). Pinch zoom fills
+                // the screen naturally (ZoomImageView); default is zoomed-out-to-fit.
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
                               onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
                     .aspectRatio(edited.size.width / edited.size.height, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .frame(width: area.width, height: area.height)   // centered in the canvas
+                    .padding(.bottom, bottomChromeH)                 // reserve the toolbar area (video parity)
+                    .frame(width: area.width, height: area.height)
             } else {
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
                               onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)

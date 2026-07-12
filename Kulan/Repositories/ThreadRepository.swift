@@ -205,7 +205,10 @@ final class ThreadRepository {
                 guard let self, let snap else { return }
                 // Don't blank an open thread on an empty offline snapshot.
                 if snap.metadata.isFromCache && snap.documents.isEmpty && !self.messages.isEmpty { return }
-                self.applyLiveSnapshot(snap.documents)
+                // Pass whether this is a cache/local snapshot — deletes are only trusted from the SERVER
+                // (a from-cache/resync snapshot can transiently drop docs that still exist → the "message
+                // gone for a few seconds then comes back" bug).
+                self.applyLiveSnapshot(snap.documents, fromCache: snap.metadata.isFromCache)
             }
         // Load keys in the BACKGROUND (in parallel). Warming the recipient's key here also
         // means the first send is instant instead of blocking on the fetch. Once the key
@@ -221,8 +224,12 @@ final class ThreadRepository {
             }
             await MainActor.run {
                 guard !self.lastDocs.isEmpty else { return }   // new chat: nothing to re-decrypt
-                self.byId.removeAll(); self.rawReactions.removeAll()
-                self.applyLiveSnapshot(self.lastDocs)
+                // Force a re-decrypt of the window (keys just arrived) WITHOUT clearing byId: emptying it
+                // blanked the whole list until the off-main decrypt finished AND dropped any paged-older
+                // history. Clearing only the sig cache makes applyLiveSnapshot re-decrypt the window while
+                // byId stays populated, so nothing ever goes blank and older messages are preserved.
+                self.rawReactions.removeAll()
+                self.applyLiveSnapshot(self.lastDocs, fromCache: false)
             }
         }
     }
@@ -269,7 +276,7 @@ final class ThreadRepository {
 
     // Apply the live (recent-window) snapshot: refresh/insert the window's messages,
     // reconcile deletes within the window's time range, keep paged-older messages.
-    private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot]) {
+    private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool) {
         lastDocs = docs   // remember the window so we can re-decrypt once the key arrives
         snapshotSeq += 1
         let seq = snapshotSeq
@@ -282,7 +289,7 @@ final class ThreadRepository {
         let needBuild = docs.filter { doc in
             byId[doc.documentID] == nil || rawReactions[doc.documentID] != sigs[doc.documentID]
         }
-        guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq); return }
+        guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq, fromCache: fromCache); return }
         let cidLocal = cid
         Task.detached(priority: .userInitiated) { [weak self] in
             let built: [(String, Message)] = needBuild.map { doc in
@@ -293,19 +300,22 @@ final class ThreadRepository {
                 // Drop this batch if a NEWER snapshot already committed (out-of-order completion).
                 guard seq >= self.committedSeq else { return }
                 for (id, m) in built { self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? "" }
-                self.commitSnapshot(docs, seq: seq)
+                self.commitSnapshot(docs, seq: seq, fromCache: fromCache)
             }
         }
     }
 
     // Reconcile the window (deletes, paging cursor, first-load flag) and republish — runs
     // on the main thread AFTER the (off-main) decryption merges its results into the cache.
-    private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int) {
+    private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int, fromCache: Bool) {
         guard seq >= committedSeq else { return }   // never let an older snapshot overwrite a newer one
         committedSeq = seq
         let windowIds = Set(docs.map { $0.documentID })
-        // A doc missing from the window but newer than its oldest edge was deleted.
-        if let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
+        // A doc missing from the window but newer than its oldest edge was deleted — but ONLY trust the
+        // SERVER for this. A from-cache/resync snapshot can transiently omit a doc that still exists;
+        // deleting on it made the message vanish for a few seconds until the next full snapshot re-added
+        // it ("gone then comes back"). Cache snapshots may still ADD/UPDATE (below), just never DELETE.
+        if !fromCache, let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
             for (id, m) in byId where m.createdAt >= cutoff && !windowIds.contains(id) {
                 byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
             }
