@@ -195,11 +195,12 @@ struct ThreadView: View {
                             }
                         }
                     }
-                    // Native SUBTLE material, STRICTLY the composer's own bounds (Apple Messages style):
-                    // ultraThinMaterial is Apple's lightest system blur — messages frost gently only where
-                    // they pass directly under the bar. (The scroll-edge effect bled a tall blur gradient
-                    // far into the conversation; the heavier .bar material read as a solid band.)
-                    .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
+                    // SIGNAL'S EXACT MODEL — NO background at all. Signal's iOS-26 input toolbar is a
+                    // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
+                    // controls themselves are Liquid Glass, blurring what passes directly under THEM.
+                    // Our pills already are native glassEffect in a GlassEffectContainer — every
+                    // full-width rectangle I tried behind them (.bar / edge-effect / ultraThinMaterial)
+                    // created the horizontal boundary that read as "the border". Nothing behind = no line.
                     // Jump-to-bottom arrow rides ABOVE the composer bar (and with the keyboard), never under
                     // it — anchoring it to the full-bleed list put it at the raw screen bottom, hidden.
                     .overlay(alignment: .topTrailing) {
