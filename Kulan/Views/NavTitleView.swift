@@ -101,8 +101,11 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             guard vc.navigationItem.standardAppearance?.shadowColor != nil
                     || vc.navigationItem.standardAppearance == nil else { return }
             let appearance = UINavigationBarAppearance()
-            appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
-            appearance.shadowColor = nil   // <-- kills the hairline separator (Signal's fix)
+            // The SYSTEM DEFAULT background = the native iOS 26 liquid glass (build 270's header, and the
+            // SAME material family as the composer's safeAreaBar). The explicit systemChromeMaterial blur
+            // I tried was heavier/greyer — that was the "blurry band" that didn't match the bottom.
+            appearance.configureWithDefaultBackground()
+            appearance.shadowColor = nil   // configureWithDefaultBackground re-adds a hairline — kill it
             vc.navigationItem.standardAppearance = appearance
             vc.navigationItem.scrollEdgeAppearance = appearance
             vc.navigationItem.compactAppearance = appearance
