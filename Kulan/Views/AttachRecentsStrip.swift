@@ -22,6 +22,9 @@ struct AttachRecentsStrip: View {
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
+    @State private var fetchResult: PHFetchResult<PHAsset>?   // the FULL library fetch (lazy) — assets pages out of it
+    @State private var loadedCount = 0                        // how many of fetchResult are materialized into `assets`
+    private let pageSize = 200                                // batch size per page-in
     @State private var loadingPick = false   // fetching the full-size asset after a tap
     @State private var selectedIds: [String] = []    // chosen asset ids, in tap order (checkbox taps)
     @State private var caption = ""                  // caption for the selected batch
@@ -149,6 +152,18 @@ struct AttachRecentsStrip: View {
 
     private var grid: some View {
         ScrollView(.vertical, showsIndicators: false) {
+            // Limited access: a slim banner with a Manage button so the user can add more photos to the
+            // shared selection (otherwise the picker silently shows only the old subset forever).
+            if status == .limited {
+                HStack(spacing: 8) {
+                    Text("Only some photos are shared with Kulan.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Manage") { presentLimitedPicker() }
+                        .font(.footnote.weight(.semibold))
+                }
+                .padding(.horizontal, 16).padding(.bottom, 8)
+            }
             LazyVGrid(columns: cols, spacing: 6) {
                 cameraTile                                   // first cell = Camera (Telegram/WhatsApp)
                 switch status {
@@ -160,6 +175,7 @@ struct AttachRecentsStrip: View {
                         RecentThumb(asset: a, selectionNumber: selectionIndex(a),
                                     onOpen: { openTapped(a) },
                                     onToggle: { toggle(a) })
+                            .onAppear { loadMoreIfNeeded(a) }   // near the end → page in the next batch
                     }
                 case .notDetermined:
                     accessTile("Allow Photos", icon: "photo.on.rectangle.angled") { request() }
@@ -244,16 +260,52 @@ struct AttachRecentsStrip: View {
         }
     }
 
+    // Fetch the WHOLE library (no fetchLimit — the old 60 cap was why most of the library never showed),
+    // newest first, images+videos only (predicate, so nothing is skipped by manual filtering). The
+    // PHFetchResult is lazy, so the fetch itself is cheap; assets are MATERIALIZED in pages of `pageSize`
+    // as the grid scrolls (loadMoreIfNeeded), like Signal's windowed gallery.
     private func load() {
         let f = PHFetchOptions()
         f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        f.fetchLimit = 60
+        f.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d",
+                                  PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
         let res = selectedAlbum.map { PHAsset.fetchAssets(in: $0, options: f) } ?? PHAsset.fetchAssets(with: f)
+        fetchResult = res
+        loadedCount = 0
+        assets = []
+        appendNextPage()
+    }
+
+    // Materialize the next page of the fetch result into the grid's array.
+    private func appendNextPage() {
+        guard let res = fetchResult, loadedCount < res.count else { return }
+        let end = min(loadedCount + pageSize, res.count)
         var out: [PHAsset] = []
-        res.enumerateObjects { a, _, _ in
-            if a.mediaType == .image || a.mediaType == .video { out.append(a) }
+        out.reserveCapacity(end - loadedCount)
+        res.enumerateObjects(at: IndexSet(integersIn: loadedCount..<end), options: []) { a, _, _ in
+            out.append(a)
         }
-        assets = out
+        assets.append(contentsOf: out)
+        loadedCount = end
+    }
+
+    // Called as thumbnails appear: nearing the end of the loaded window → page in the next batch.
+    private func loadMoreIfNeeded(_ a: PHAsset) {
+        guard let res = fetchResult, loadedCount < res.count, assets.count >= 30 else { return }
+        let tail = assets.suffix(15)
+        if tail.contains(where: { $0.localIdentifier == a.localIdentifier }) { appendNextPage() }
+    }
+
+    // Limited Photos access: let the user extend the shared selection in place (Signal's manage flow),
+    // then reload so the new items appear immediately.
+    private func presentLimitedPicker() {
+        var top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
+        while let p = top?.presentedViewController { top = p }
+        guard let top else { return }
+        PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: top) { _ in
+            DispatchQueue.main.async { load(); loadAlbums() }
+        }
     }
 
     // Build the album list: Recents (whole library) + non-empty smart albums + user albums.
