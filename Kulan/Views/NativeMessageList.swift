@@ -112,12 +112,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // adjustedContentInset == our contentInset. This is what makes messages scroll softly UNDER the
         // bars (the borderless "before"/build-270 look) instead of stopping at a hard edge = the border.
         collectionView.contentInsetAdjustmentBehavior = .never
-        // Signal uses NO collection-view edge effect — the frosted nav bar + composer do ALL the fading
-        // as content passes under them. Keep the collection's OWN edge effect OFF so it never stacks a
-        // second band on top of the bars.
+        // THE borderless mechanism (this is what build 270's SwiftUI ScrollView did automatically and I
+        // wrongly turned off): the SOFT scroll-edge-effect progressively blurs/fades the message content
+        // itself as it slides under the header + composer — a gradient, NOT a hard band. This is the
+        // "messages go a bit blurry under the header" look; the bars stay subtle and the fade does the work.
         if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
+            collectionView.topEdgeEffect.isHidden = false
+            collectionView.topEdgeEffect.style = .soft
+            collectionView.bottomEdgeEffect.isHidden = false
+            collectionView.bottomEdgeEffect.style = .soft
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -398,10 +401,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Re-assert edges OFF every layout (UIKit can reset them). The bars do the fading, not the list.
+        // Re-assert the SOFT edge-fade every layout (UIKit can reset it) — the gradient blur that softly
+        // fades messages under the header + composer (build 270's look), no band.
         if #available(iOS 26.0, *) {
-            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
-            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
+            if collectionView.topEdgeEffect.style != .soft { collectionView.topEdgeEffect.style = .soft }
+            if collectionView.bottomEdgeEffect.style != .soft { collectionView.bottomEdgeEffect.style = .soft }
         }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
