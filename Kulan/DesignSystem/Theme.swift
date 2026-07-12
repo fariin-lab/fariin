@@ -93,18 +93,14 @@ extension View {
         }
     }
 
-    /// Composer as a native iOS 26 blur bar (`safeAreaBar`), matching the header now that the message
-    /// list runs under the bars: messages frost softly UNDER the composer's Liquid Glass instead of
-    /// behind a transparent pill. The bar only banded before (build 291) because content wasn't scrolling
-    /// under it; now it does (and edges use the default soft fade), so it reads seamless like the top.
-    /// safeAreaInset fallback for older OSes. Look only — scroll/sending untouched.
-    @ViewBuilder
+    /// FLOATING composer (`safeAreaInset`, no bar background) — the composer's own glass pills float over
+    /// the wallpaper with NO frosted bar behind them, so there is no bottom band/border. `safeAreaBar`
+    /// (a full-width native blur bar) DID band, because the message list does not scroll under it the way
+    /// it scrolls under the system nav bar (the composer is not a system bar, so the under-bar trick that
+    /// fixed the header can't apply without re-feeding the composer inset — the change that broke sending
+    /// before). Transparent float = borderless and safe. scroll/sending untouched.
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
-        if #available(iOS 26.0, *) {
-            self.safeAreaBar(edge: .bottom, content: content)
-        } else {
-            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
-        }
+        self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
     }
 }
 
