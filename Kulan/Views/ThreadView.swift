@@ -195,6 +195,10 @@ struct ThreadView: View {
                             }
                         }
                     }
+                    // NATIVE bar blur (Apple's own `.bar` material, nothing custom): messages frost softly
+                    // as they scroll under the composer, matching the header. Extends into the home-indicator
+                    // region so the frost reaches the screen's bottom edge.
+                    .background(.bar, ignoresSafeAreaEdges: .bottom)
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
