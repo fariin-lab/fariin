@@ -57,7 +57,7 @@ struct MediaApprovalView: View {
     @State private var scrubTime: Double?                // live seek while dragging a handle
     @State private var playheads: [UUID: Double] = [:]   // live playback position per video → scrubber
 
-    private let stripHeight: CGFloat = 44
+    private let stripHeight: CGFloat = 40   // IDENTICAL to the single video editor (shared VideoTrimStrip)
     private let handleW: CGFloat = 12
     private let minDuration: Double = 1
 
@@ -161,7 +161,7 @@ struct MediaApprovalView: View {
                 // Video page → its trim filmstrip sits directly above the tools.
                 if case .video(let id, _, _, let duration)? = current, let thumbs = strips[id], duration > 0 {
                     trimStrip(id: id, duration: duration, thumbs: thumbs)
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 20)   // IDENTICAL margin to the single editor's strip
                 }
                 HStack(spacing: 10) {
                     // Image tools only make sense on an image page; HD applies to the whole batch.

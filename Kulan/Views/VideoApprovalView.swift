@@ -109,10 +109,13 @@ struct VideoApprovalView: View {
 
     @ViewBuilder private var bottomControls: some View {
         VStack(spacing: 12) {
-            if !thumbnails.isEmpty && duration > 0 { trimStrip }
+            // Trim bar HIDES while the caption keyboard is up (user request; matches the multi pager) —
+            // typing needs the space, and trimming while typing isn't a real flow.
+            if !thumbnails.isEmpty && duration > 0 && !captionFocused { trimStrip }
             captionBar
         }
         .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.2), value: captionFocused)
     }
 
     // THE shared trimmer (VideoTrimStrip) — one implementation for the single editor AND the multi
