@@ -97,8 +97,9 @@ struct WallpaperPickerSheet: View {
             chatColorSection
             bottomBar
         }
-        .padding(.top, 16).padding(.bottom, 10)
-        .presentationDetents([.height(408)])
+        .padding(.top, 8)      // native gap under the system grabber (was a big dead band)
+        .padding(.bottom, 12)
+        .presentationDetents([.height(384)])   // fits the content — no empty band under the Photos button
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
@@ -188,7 +189,7 @@ struct WallpaperPickerSheet: View {
                 if hasCustom {
                     Button { resetToDefault() } label: {
                         Text("Reset").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-                            .frame(height: 40).padding(.horizontal, 16)
+                            .frame(height: 48).padding(.horizontal, 18)   // 48pt — matches the X (user spec)
                             .liquidGlass(Capsule(), interactive: true)
                             .contentShape(Capsule())
                     }
