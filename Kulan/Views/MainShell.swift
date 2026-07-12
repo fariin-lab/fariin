@@ -1255,6 +1255,10 @@ struct ChatRow: View, Equatable {
         if s.hasPrefix("🎥 Video") {   // video MESSAGE (🎥) — distinct from 📹 call markers
             return ("video.fill", "Video" + String(s.dropFirst("🎥 Video".count)))
         }
+        // Generic media markers ("🎥 2 Videos", "📷 Photos", "📷 3 Photos"…): same native icon+label
+        // treatment as single photos/videos — never raw emoji text in the preview.
+        if s.hasPrefix("🎥 ") { return ("video.fill", String(s.dropFirst("🎥 ".count))) }
+        if s.hasPrefix("📷 ") { return ("photo.fill", String(s.dropFirst("📷 ".count))) }
         switch s {
         case "📄 File":              return ("doc.fill", "File")
         case "GIF":                  return ("sparkles", "GIF")
@@ -1303,23 +1307,26 @@ struct ChatRow: View, Equatable {
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         let c = conv.lastMessageCipher
-        guard c.hasPrefix("enc") || c == "📷 Photo" || c.hasPrefix("🎤 Voice message") || c.hasPrefix("🎥 Video") else { return "" }
+        guard c.hasPrefix("enc") || c.hasPrefix("📷") || c.hasPrefix("🎤 Voice message") || c.hasPrefix("🎥") else { return "" }
         let n = conv.names[conv.lastSender] ?? "Someone"
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }
     private var unread: Int { conv.isBlockedByMe(me) ? 0 : conv.unread(me) }   // silent block: no badge
     private var muted: Bool { conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000) }
 
-    // The last message is a photo/video we can thumbnail (and not a frozen blocked-chat row).
+    // The last message is media we can thumbnail (ANY 📷/🎥 marker — single, album, or multi-video —
+    // and not a frozen blocked-chat row). 📹 call markers are unaffected.
     private var isPhotoPreview: Bool {
         !conv.leaksBlocked(me)
-            && (conv.lastMessageCipher == "📷 Photo" || conv.lastMessageCipher.hasPrefix("🎥 Video"))
+            && (conv.lastMessageCipher.hasPrefix("📷") || conv.lastMessageCipher.hasPrefix("🎥"))
             && (conv.lastImageUrl?.isEmpty == false)
     }
-    // "Photo" or "Video · 0:12" next to the little thumbnail.
+    // "Photo" / "Photos" / "Video · 0:12" / "2 Videos" next to the little thumbnail (emoji stripped).
     private var photoPreviewLabel: String {
         let c = conv.lastMessageCipher
-        return c.hasPrefix("🎥 Video") ? "Video" + String(c.dropFirst("🎥 Video".count)) : "Photo"
+        if c.hasPrefix("🎥 ") { return String(c.dropFirst("🎥 ".count)) }
+        if c.hasPrefix("📷 ") { return String(c.dropFirst("📷 ".count)) }
+        return "Photo"
     }
     // Preview area, in priority order: blocked freeze → live typing → unsent draft →
     // photo thumbnail → media/call badge → say-hello → decrypted text.

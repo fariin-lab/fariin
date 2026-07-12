@@ -559,8 +559,10 @@ private struct RecentThumb: View {
                             Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                         }
                     }
-                    .frame(width: 40, height: 40)          // bigger hit target than the visible circle
-                    .contentShape(Circle())
+                    // Big invisible hit area (whole top-trailing corner, ~52pt square incl. corners) —
+                    // the visible circle stays 26pt. The 40pt Circle contentShape was too small to grab.
+                    .frame(width: 52, height: 52, alignment: .center)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

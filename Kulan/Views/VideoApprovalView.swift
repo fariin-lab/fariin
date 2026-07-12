@@ -148,14 +148,16 @@ struct VideoApprovalView: View {
                 if trimEnd > trimStart {
                     // Visual stays a thin 3pt line; the TOUCH TARGET is a 32pt-wide invisible strip
                     // around it (contentShape), so it's easy to grab without changing the look.
-                    let minX = startX + handleW / 2 + 1          // inside the left handle
-                    let maxX = endX - handleW / 2 - 4            // inside the right handle
+                    // Clamp against the handles' DRAWN edges (they're clamped to the strip bounds, so at
+                    // the very start/end the ideal-position math put the line INSIDE the handle).
+                    let leftHandleInner = max(0, startX - handleW / 2) + handleW + 3.5   // right edge of left grip
+                    let rightHandleInner = min(W - handleW, endX - handleW / 2) - 3.5    // left edge of right grip
                     Capsule().fill(.white)
                         .frame(width: 3, height: stripHeight + 8)
                         .shadow(color: .black.opacity(0.4), radius: 1.5)
                         .frame(width: 32, height: stripHeight + 16)   // big invisible hit area
                         .contentShape(Rectangle())
-                        .offset(x: min(max(minX, phX), max(minX, maxX)) - 16)
+                        .offset(x: min(max(leftHandleInner, phX), max(leftHandleInner, rightHandleInner)) - 16)
                         .gesture(playheadDrag(width: W))
                 }
                 // Rounded trim handles.
