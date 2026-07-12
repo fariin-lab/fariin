@@ -26,6 +26,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onReachedTop: () -> Void               // near-top -> page older
     var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
     var composerBarHeight: CGFloat = 0         // the floating composer bar's height (the ONLY SwiftUI-fed inset)
+    var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
@@ -44,6 +45,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.setComposerBarHeight(composerBarHeight)
+        vc.onTopInset = onTopInset
         vc.setLoadingOlder(loadingOlder)
         vc.apply(rowIds: rowIds)
         if let target = scrollTarget {
@@ -525,6 +527,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateBottomInset()   // safe-area values are valid here — keeps the bottom inset exact
+        // Report the GEOMETRIC nav-bar overlap (view.safeAreaInsets.top — the same reliable source the
+        // insets use; the SwiftUI readers reported 0 during transitions, which put the floating date
+        // pill in the status bar). Async so the SwiftUI state write never lands mid-layout.
+        let top = view.safeAreaInsets.top
+        if abs(top - lastReportedTop) > 0.5 {
+            lastReportedTop = top
+            DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
+        }
         // Keep the bottom edge-effect off (UIKit can reset it) — its tall gradient bled into the chat.
         if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
             collectionView.bottomEdgeEffect.isHidden = true
@@ -543,6 +553,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // (fed once from a reader ON the bar itself) and the live keyboard overlap (observed directly —
     // Signal's model). Everything else (nav-bar top, home indicator) comes from real geometry via the
     // safe area, so it can never desync. Keeps the newest message pinned when the bottom inset grows.
+    var onTopInset: ((CGFloat) -> Void)?      // ThreadView positions the date pill / pinned bar with this
+    private var lastReportedTop: CGFloat = -1
     private var composerBarH: CGFloat = 0
     private var keyboardOverlap: CGFloat = 0
     func setComposerBarHeight(_ h: CGFloat) {

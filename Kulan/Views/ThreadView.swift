@@ -92,7 +92,7 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
-    @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → positions the pinned-bar overlay (layout only)
+    @State private var navBarHeight: CGFloat = 100  // GEOMETRIC nav overlap (fed by the list controller); sane default pre-first-report
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
     @State private var floatingDateFade: DispatchWorkItem?
@@ -214,16 +214,6 @@ struct ThreadView: View {
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
-            // Nav-bar height → the list's TOP inset. This reader ignores the safe area so it reports the
-            // true top inset (status bar + nav bar).
-            .background {
-                GeometryReader { geo in
-                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
-                        navBarHeight = v
-                    }
-                }
-                .ignoresSafeArea()
-            }
     }
 
     // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
@@ -1058,6 +1048,7 @@ struct ThreadView: View {
             onReachedTop: { repo.loadOlder() },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // the only SwiftUI-fed inset; nav/home/keyboard are UIKit-geometric
+            onTopInset: { navBarHeight = $0 },      // geometric nav overlap → date pill / pinned bar position
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             topVisibleId: $topVisibleId
