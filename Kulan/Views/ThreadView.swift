@@ -199,6 +199,11 @@ struct ThreadView: View {
                     // as they scroll under the composer, matching the header. Extends into the home-indicator
                     // region so the frost reaches the screen's bottom edge.
                     .background(.bar, ignoresSafeAreaEdges: .bottom)
+                    // Jump-to-bottom arrow rides ABOVE the composer bar (and with the keyboard), never under
+                    // it — anchoring it to the full-bleed list put it at the raw screen bottom, hidden.
+                    .overlay(alignment: .topTrailing) {
+                        jumpToBottomButton.offset(y: -52)   // 40pt button + 12pt gap above the bar
+                    }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
@@ -284,44 +289,8 @@ struct ThreadView: View {
                     proxy.scrollTo("BOTTOM", anchor: .bottom)
                 }
             }
-            // Floating jump-to-bottom button (our design) — appears when scrolled up,
-            // with a count of messages that arrived while away.
-            .overlay(alignment: .bottomTrailing) {
-                if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
-                    Button {
-                        // Two-stage (Signal): if there are unread messages I haven't reached yet, jump
-                        // to the FIRST unread; otherwise glide to the newest message.
-                        if let unread = firstUnreadId, repo.items.contains(where: { $0.id == unread }) {
-                            nativeScrollTarget = unread
-                            firstUnreadId = nil   // consumed → next press goes to the bottom
-                        } else {
-                            nativeScrollTarget = "BOTTOM"
-                            newWhileAway = 0
-                        }
-                    } label: {
-                        Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold))
-                            // Explicit per-mode color + a soft counter-shadow so the glyph stays
-                            // readable in dark mode AND over a bright wallpaper (was a washed-out
-                            // .primary that vanished on the light glass).
-                            .foregroundStyle(dark ? .white : .black)
-                            .shadow(color: (dark ? Color.black : Color.white).opacity(0.35), radius: 2)
-                            .frame(width: 40, height: 40)
-                            .liquidGlass(Circle(), interactive: true)
-                            .overlay(alignment: .top) {
-                                if newWhileAway > 0 {
-                                    Text("\(newWhileAway)").font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
-                                        .background(Color.accentColor, in: Capsule())
-                                        .offset(y: -9)
-                                }
-                            }
-                    }
-                    .padding(.trailing, 16).padding(.bottom, 10)
-                    .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isAtBottom)   // scroll button in/out
+            // (Jump-to-bottom button moved: it's anchored ABOVE the composer bar in scrollStack — the list
+            // is full-bleed now, so a list-anchored overlay landed at the raw screen bottom UNDER the bar.)
             // Float the composer OVER the messages (iOS 26 native via safeAreaBar):
             // the glass dims/blurs the messages scrolling under it like iMessage;
             // the scroll content auto-insets so the last message never hides.
@@ -342,6 +311,44 @@ struct ThreadView: View {
                         .allowsHitTesting(false)
                 }
             }
+    }
+
+    // Floating jump-to-bottom button — appears when scrolled up, with a count of messages that arrived
+    // while away. Anchored above the composer bar (see scrollStack).
+    @ViewBuilder private var jumpToBottomButton: some View {
+        if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
+            Button {
+                // Two-stage (Signal): if there are unread messages I haven't reached yet, jump
+                // to the FIRST unread; otherwise glide to the newest message.
+                if let unread = firstUnreadId, repo.items.contains(where: { $0.id == unread }) {
+                    nativeScrollTarget = unread
+                    firstUnreadId = nil   // consumed → next press goes to the bottom
+                } else {
+                    nativeScrollTarget = "BOTTOM"
+                    newWhileAway = 0
+                }
+            } label: {
+                Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold))
+                    // Explicit per-mode color + a soft counter-shadow so the glyph stays readable in
+                    // dark mode AND over a bright wallpaper.
+                    .foregroundStyle(dark ? .white : .black)
+                    .shadow(color: (dark ? Color.black : Color.white).opacity(0.35), radius: 2)
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(Circle(), interactive: true)
+                    .overlay(alignment: .top) {
+                        if newWhileAway > 0 {
+                            Text("\(newWhileAway)").font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.accentColor, in: Capsule())
+                                .offset(y: -9)
+                        }
+                    }
+            }
+            .padding(.trailing, 16)
+            .transition(.scale.combined(with: .opacity))
+            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isAtBottom)
+        }
     }
 
     // The bottom bar (composer / selection / blocked etc.), extracted so scrollStack can apply it OUTSIDE
