@@ -124,7 +124,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         ])
 
         // Off-screen sizer, in the hierarchy (0-alpha) so it inherits traits for accurate measurement.
+        // CRITICAL: it must NOT reserve safe area. It's a child of this controller, and once the list runs
+        // under the nav bar (ThreadView's .ignoresSafeArea(.top)), this controller's view gains a top
+        // safe-area inset — a plain UIHostingController would ADD that inset to every measured row height,
+        // inflating the gap under every bubble. safeAreaRegions = [] measures the row content ONLY.
         addChild(sizer)
+        if #available(iOS 16.4, *) { sizer.safeAreaRegions = [] }
         sizer.view.alpha = 0
         sizer.view.isUserInteractionEnabled = false
         sizer.view.frame = .zero
