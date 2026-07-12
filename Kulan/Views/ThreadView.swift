@@ -1058,12 +1058,30 @@ struct ThreadView: View {
             }
     }
 
+    // Per-row CONTENT signature (what a bubble actually renders): text, edited, send state, reactions,
+    // read tick, pinned, album count. The native list reconfigures a visible row ONLY when its signature
+    // changes — so the constant presence/typing/read re-renders of ThreadView's body don't reconfigure
+    // (re-render) every visible bubble = no flashing.
+    private var rowSignatures: [String: String] {
+        let readCutoff = repo.otherLastReadMillis
+        let pins = repo.pinnedMessageIds
+        var out: [String: String] = [:]
+        out.reserveCapacity(repo.items.count)
+        for m in repo.items {
+            let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
+            let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
+            out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)"
+        }
+        return out
+    }
+
     // UIKit (Signal-style) message list. Reuses the SAME rowView, so every bubble feature is identical.
     // Jumps (reply/search) route through nativeScrollTarget; read receipts + jump-button count come from
     // the shared onChange(of: repo.items.count) handler on the container.
     private var nativeList: some View {
         NativeMessageList(
             rowIds: repo.items.map { $0.rowId },
+            rowSignatures: rowSignatures,   // per-row content signature → list reconfigures only changed rows
             row: { id in
                 guard let idx = repo.items.firstIndex(where: { $0.rowId == id }) else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in

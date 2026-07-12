@@ -22,6 +22,7 @@ import UIKit
 //      affect the open.
 struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in order (Message.rowId)
+    var rowSignatures: [String: String] = [:]  // per-row CONTENT signature → same-ids apply reconfigures ONLY changed rows
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
     var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
@@ -47,6 +48,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setComposerBarHeight(composerBarHeight)
         vc.onTopInset = onTopInset
         vc.setLoadingOlder(loadingOlder)
+        vc.rowSignatures = rowSignatures
         vc.apply(rowIds: rowIds)
         if let target = scrollTarget {
             vc.scrollTo(id: target)
@@ -95,6 +97,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
+    var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
+    private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
     private var lastStableOffset: CGFloat = 0 // last user/our-pin offset → screenshot-capture recovery
 
@@ -288,13 +292,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     // Re-measure + reconfigure the on-screen rows (single sizer authority, >2pt tolerance), then relayout
     // once if any height actually changed — position preserved (pin bottom / top anchor).
-    private func refreshVisible() {
+    private func refreshVisible(_ subset: [String]? = nil) {
         let width = collectionView.bounds.width
         let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-        guard !visible.isEmpty else { return }
+        // Reconfigure the requested subset (rows whose content changed) intersected with what's on screen;
+        // default (settle flush) = all visible.
+        let target = (subset.map { s in s.filter(Set(visible).contains) }) ?? visible
+        guard !target.isEmpty else { return }
         var heightChanged = false
         if width > 0 {
-            for id in visible {
+            for id in target {
                 let h = measure(id, width: width)
                 if let old = heights[id], abs(old - h) <= 2 { continue }
                 heights[id] = h
@@ -302,7 +309,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             }
         }
         var snapshot = dataSource.snapshot()
-        snapshot.reconfigureItems(visible)
+        snapshot.reconfigureItems(target)
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             if heightChanged { self?.reconcile() }
         }
@@ -324,9 +331,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
                 needsRefreshOnSettle = true
                 return
             }
-            refreshVisible()
+            // Reconfigure ONLY the visible rows whose CONTENT signature changed since the last apply —
+            // NOT every visible cell on every SwiftUI re-render. ThreadView's body re-runs constantly on
+            // presence/typing/read/topVisibleId churn with the SAME row content; reconfiguring all visible
+            // cells each time re-rendered every bubble = the flashing. If nothing changed, do nothing.
+            let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+            let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }
+            lastRowSigs = rowSignatures
+            guard !changed.isEmpty else { return }
+            refreshVisible(changed)
             return
         }
+        lastRowSigs = rowSignatures   // ids changed (append/prepend/trim): reseed signatures for the new set
 
         let wasAtBottom = computeAtBottom()
         // A top-prepend (load older) = the new list ENDS WITH the entire old list. Anchor an on-screen row
