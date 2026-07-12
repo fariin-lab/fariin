@@ -228,13 +228,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let width = collectionView.bounds.width
 
         guard ids != currentIds else {
-            // Same rows, SwiftUI state changed (reaction / edit / read tick): refresh only on-screen cells.
-            // Any height change from that lands through reportHeight → reconcile, so we don't measure here.
+            // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick):
+            // RE-MEASURE the on-screen rows NOW so a change that grows the cell (a reaction badge, media
+            // finishing load) updates the exact row height immediately — the next bubble can't overlap.
+            // (Relying only on the async reportHeight left a window where the taller content overflowed
+            // its old frame = the overlap bug.) A row whose height is unchanged (e.g. a read tick) costs
+            // one cheap sizeThatFits and triggers no relayout.
             let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
             guard !visible.isEmpty else { return }
+            var heightChanged = false
+            if width > 0 {
+                for id in visible {
+                    let h = measure(id, width: width)
+                    if let old = heights[id], abs(old - h) <= 0.5 { continue }
+                    heights[id] = h
+                    heightChanged = true
+                }
+            }
             var snapshot = dataSource.snapshot()
             snapshot.reconfigureItems(visible)
-            dataSource.apply(snapshot, animatingDifferences: false)
+            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+                if heightChanged { self?.reconcile() }   // grow/shrink rows to exact heights, keep position
+            }
             return
         }
 
@@ -338,8 +353,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         var snap = dataSource.snapshot()
         let present = ids.filter { snap.itemIdentifiers.contains($0) }
         guard !present.isEmpty else { return }
+        // Re-measure too (not just re-flow text): a freshly sent image/video/album can land before its
+        // exact box height is settled, so re-measure at the final width and relayout if it changed —
+        // otherwise the next bubble overlaps the media.
+        var heightChanged = false
+        if collectionView.bounds.width > 0 {
+            for id in present {
+                let h = measure(id, width: collectionView.bounds.width)
+                if let old = heights[id], abs(old - h) <= 0.5 { continue }
+                heights[id] = h
+                heightChanged = true
+            }
+        }
         snap.reconfigureItems(present)
-        dataSource.apply(snap, animatingDifferences: false)
+        dataSource.apply(snap, animatingDifferences: false) { [weak self] in
+            if heightChanged { self?.reconcile() }
+        }
     }
 
     // The first open: measure everything at the real width, place exact frames, land at the bottom, reveal.
