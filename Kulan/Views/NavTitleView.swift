@@ -93,25 +93,16 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // default, exactly like the list. We only install the titleView (the native way to put an
         // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            // Signal's EXACT mechanism (OWSNavigationBar.swift): do NOT call
-            // configureWithDefaultBackground — that RE-ADDS the shadow hairline (the header "border").
-            // Instead set the blur background effect directly and `shadowColor = nil` to kill the
-            // hairline, applied to ALL FOUR slots (incl. compactScrollEdgeAppearance) so no line shows
-            // in any scroll state. Blur = messages stay visible through the header.
-            guard vc.navigationItem.standardAppearance?.shadowColor != nil
-                    || vc.navigationItem.standardAppearance == nil else { return }
+            // EXACT restore of the known-good "always-on native blur" (commit 7af2789 — the version the
+            // user confirmed was right, "we used it before"): the real system liquid-glass blur on ALL
+            // states so the chat shows through / fades softly UNDER the header. No shadow-clearing, no
+            // transparent override (both of which I wrongly added later and broke it).
+            guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
             let appearance = UINavigationBarAppearance()
-            // Signal's EXACT header (OWSNavigationBar `.blur`, verified from source): a plain translucent
-            // UIBlurEffect(.regular) as backgroundEffect on ALL FOUR slots (so the bar never flips to an
-            // opaque/edge state when scrolled), shadowColor = nil (no hairline). The `.regular` blur frosts
-            // the messages that scroll UNDER the header (now that the list runs full-bleed) — the "bit
-            // blurry like Signal" look — without the heavy grey band of the material styles I tried.
-            appearance.backgroundEffect = UIBlurEffect(style: .regular)
-            appearance.shadowColor = nil
+            appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
             vc.navigationItem.standardAppearance = appearance
             vc.navigationItem.scrollEdgeAppearance = appearance
             vc.navigationItem.compactAppearance = appearance
-            vc.navigationItem.compactScrollEdgeAppearance = appearance
         }
 
         private func assertTitleView() {

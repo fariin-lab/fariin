@@ -25,8 +25,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
     var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
-    var topInset: CGFloat = 0                   // nav-bar height (fed from SwiftUI): content scrolls UNDER the header
-    var bottomInset: CGFloat = 0               // composer(+keyboard) height (fed from SwiftUI): content scrolls UNDER it
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
@@ -45,7 +43,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.setLoadingOlder(loadingOlder)
-        vc.applyBarInsets(top: topInset, bottom: bottomInset)
         vc.apply(rowIds: rowIds)
         if let target = scrollTarget {
             vc.scrollTo(id: target)
@@ -106,21 +103,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         collectionView.alpha = 0   // invisible until the first render is final — never shows a mid-measure frame
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
-        // The view is edge-to-edge UNDER the frosted nav bar + composer (ThreadView applies
-        // .ignoresSafeArea). We drive the content insets MANUALLY from the bar heights SwiftUI feeds us
-        // (topInset / bottomInset) — exactly like Signal's updateContentInsets — so .never (not .always):
-        // adjustedContentInset == our contentInset. This is what makes messages scroll softly UNDER the
-        // bars (the borderless "before"/build-270 look) instead of stopping at a hard edge = the border.
-        collectionView.contentInsetAdjustmentBehavior = .never
-        // THE borderless mechanism (this is what build 270's SwiftUI ScrollView did automatically and I
-        // wrongly turned off): the SOFT scroll-edge-effect progressively blurs/fades the message content
-        // itself as it slides under the header + composer — a gradient, NOT a hard band. This is the
-        // "messages go a bit blurry under the header" look; the bars stay subtle and the fade does the work.
+        // .always so SwiftUI's safe-area insets (nav bar on top, floating composer on the bottom) become
+        // the collection view's adjustedContentInset — the last message clears the composer and the
+        // bottom-scroll lands exactly above it.
+        collectionView.contentInsetAdjustmentBehavior = .always
+        // Small gap above the composer (Signal's conversation bottom inset) so the LAST message — and
+        // especially its reaction badge, which hangs below the bubble — isn't jammed against / clipped
+        // by the floating composer. This adds to the safe-area (composer height) inset.
+        collectionView.contentInset.bottom = 12
+        // Turn the collection view's OWN scroll-edge effect fully OFF — the frosted nav bar (native
+        // blur) and the frosted composer (safeAreaBar) already do the edge fade / show content through.
+        // The collection view's extra edge effect was stacking a second visible band on top of them.
         if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = false
-            collectionView.topEdgeEffect.style = .soft
-            collectionView.bottomEdgeEffect.isHidden = false
-            collectionView.bottomEdgeEffect.style = .soft
+            collectionView.topEdgeEffect.isHidden = true
+            collectionView.bottomEdgeEffect.isHidden = true
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -401,11 +397,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Re-assert the SOFT edge-fade every layout (UIKit can reset it) — the gradient blur that softly
-        // fades messages under the header + composer (build 270's look), no band.
+        // Re-assert the hidden edge effects every layout (UIKit can reset them).
         if #available(iOS 26.0, *) {
-            if collectionView.topEdgeEffect.style != .soft { collectionView.topEdgeEffect.style = .soft }
-            if collectionView.bottomEdgeEffect.style != .soft { collectionView.bottomEdgeEffect.style = .soft }
+            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
+            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
         }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
@@ -415,26 +410,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         guard !sendAnimating, !pendingBottomOnOpen else { return }
         if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
         else { clampOffsetIfBeyondContent() }
-    }
-
-    // Bar heights fed from SwiftUI (nav bar on top, floating composer + keyboard on the bottom). We set
-    // them as the collection view's content inset so the first/last message clears the bars while the
-    // rows in between scroll UNDER the frosted bars (the borderless look). Signal does the same in
-    // updateContentInsets(). Fires on every composer/keyboard resize, so it must keep the bottom pinned.
-    private var barTop: CGFloat = -1
-    private var barBottom: CGFloat = -1
-    func applyBarInsets(top: CGFloat, bottom: CGFloat) {
-        guard isViewLoaded else { return }
-        // Small gap (Signal's bottom inset) so the last bubble + its reaction badge, which hangs below
-        // the bubble, aren't jammed against / clipped by the floating composer.
-        let newBottom = bottom + 12
-        guard abs(barTop - top) > 0.5 || abs(barBottom - newBottom) > 0.5 else { return }
-        let wasPinned = didInitialScroll && computeAtBottom()   // keyboard/composer grew → stay at newest
-        barTop = top
-        barBottom = newBottom
-        collectionView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: newBottom, right: 0)
-        collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
-        if wasPinned { UIView.performWithoutAnimation { pinBottom() } }
     }
 
     private func pinBottom(animated: Bool = false) {
