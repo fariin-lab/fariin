@@ -15,7 +15,13 @@ struct ChatImageEditor: View {
     var editOnly: Bool = false
     var startDrawing: Bool = false
     var onReturn: ((UIImage) -> Void)? = nil
+    // Presented INLINE (fade overlay, e.g. the multi pager's Pen) → close via onClose; dismiss() would
+    // pop the PRESENTING screen instead. Mirrors ChatCropView's inline mode.
+    var inline: Bool = false
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+
+    private func close() { if inline { onClose?() } else { dismiss() } }
 
     @State private var viewOnce = false   // Signal-style: recipient can open the photo exactly once
     @State private var penHue = 0.0       // palette slider (0 = white end)
@@ -91,7 +97,7 @@ struct ChatImageEditor: View {
                         drawing = PKDrawing()
                         isDrawing = false
                     } else {
-                        dismiss()
+                        close()   // inline overlay → onClose; presented cover → dismiss
                     }
                 } label: {
                     Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
@@ -341,7 +347,7 @@ struct ChatImageEditor: View {
     // Edit-only: hand the flattened (cropped + drawn) image back to the multi-image screen.
     @MainActor private func returnEdited() {
         onReturn?(UIImage(data: flatten()) ?? edited)
-        dismiss()
+        close()   // inline overlay → onClose; presented cover → dismiss
     }
 
     @MainActor private func flatten() -> Data {

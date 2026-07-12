@@ -56,6 +56,7 @@ struct MediaApprovalView: View {
     @State private var strips: [UUID: [UIImage]] = [:]   // filmstrip thumbs
     @State private var scrubTime: Double?                // live seek while dragging a handle
     @State private var playheads: [UUID: Double] = [:]   // live playback position per video → scrubber
+    @State private var videoPlaying: [UUID: Bool] = [:]  // per-video play state — PAUSED by default (single-editor parity)
 
     private let stripHeight: CGFloat = 40   // IDENTICAL to the single video editor (shared VideoTrimStrip)
     private let handleW: CGFloat = 12
@@ -82,19 +83,32 @@ struct MediaApprovalView: View {
             DragGesture(minimumDistance: 18)
                 .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
         )
+        // Swiping to another page pauses everything (single-editor parity: a video page you arrive at
+        // is PAUSED with the Play button showing, exactly like opening the single editor).
+        .onChange(of: page) { _, _ in videoPlaying = [:] }
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
-        // Per-IMAGE editing (same tools as the single-photo editor); edits replace the page in place.
-        .fullScreenCover(isPresented: $editCrop) {
-            if case .image(let id, let ui)? = current {
-                ChatCropView(image: ui) { cropped in replace(id, with: .image(id, cropped)) }
+        // Per-IMAGE editing (the same tools as the single-photo editor), presented INLINE with the SAME
+        // 0.28s cross-fade the single editor uses — they were fullScreenCovers (slide-up modals), which
+        // made Crop/Pen feel different between single and multi editing.
+        .overlay { cropPenOverlays }
+    }
+
+    // Inline Crop / Pen overlays (identical transition to ChatImageEditor's own cropOverlay).
+    @ViewBuilder private var cropPenOverlays: some View {
+        if editCrop, case .image(let id, let ui)? = current {
+            ChatCropView(image: ui, inline: true,
+                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { editCrop = false } }) { cropped in
+                replace(id, with: .image(id, cropped))
             }
+            .transition(.opacity)
         }
-        .fullScreenCover(isPresented: $editPen) {
-            if case .image(let id, let ui)? = current {
-                ChatImageEditor(source: ui, editOnly: true, startDrawing: true,
-                                onReturn: { edited in replace(id, with: .image(id, edited)) })
-            }
+        if editPen, case .image(let id, let ui)? = current {
+            ChatImageEditor(source: ui, editOnly: true, startDrawing: true,
+                            onReturn: { edited in replace(id, with: .image(id, edited)) },
+                            inline: true,
+                            onClose: { withAnimation(.easeInOut(duration: 0.28)) { editPen = false } })
+                .transition(.opacity)
         }
     }
 
@@ -107,18 +121,29 @@ struct MediaApprovalView: View {
                           onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
                 .ignoresSafeArea()
         case .video(let id, let url, _, let duration):
-            // Loops within the trimmed range; plays only while ITS page is showing, PAUSES while a trim
-            // handle / the playhead is being dragged (scrubTime non-nil), and the white playhead tracks
-            // the player's real time — identical behavior to the single video editor (shared trimmer).
+            // EXACT single-video-editor behavior (user spec): starts PAUSED with the same big Play
+            // button, tap toggles play/pause (or closes the keyboard first), pauses while a trim handle /
+            // the playhead is dragged, playhead tracks the player's real time — the shared trimmer +
+            // identical playback model. Loops within the trimmed range; only ITS page ever plays.
             PagedTrimPlayer(url: url,
-                            playing: page == index && !exporting && scrubTime == nil,
+                            playing: page == index && !exporting && scrubTime == nil && (videoPlaying[id] ?? false),
                             start: trimStart[id] ?? 0,
                             end: max((trimStart[id] ?? 0) + 0.1, trimEnd[id] ?? duration),
                             scrubTime: page == index ? scrubTime : nil,
                             onTime: { t in if page == index, scrubTime == nil { playheads[id] = t } })
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
-                .onTapGesture { captionFocused = false }
+                .onTapGesture {
+                    if captionFocused { captionFocused = false }
+                    else { videoPlaying[id] = !(videoPlaying[id] ?? false) }
+                }
+                .overlay {
+                    if !(videoPlaying[id] ?? false) && scrubTime == nil {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
+                            .allowsHitTesting(false)
+                    }
+                }
                 .task(id: id) { await loadVideoMeta(id: id, url: url, duration: duration) }
         }
     }
@@ -166,8 +191,9 @@ struct MediaApprovalView: View {
                 HStack(spacing: 10) {
                     // Image tools only make sense on an image page; HD applies to the whole batch.
                     if current?.isVideo == false {
-                        toolButton("crop") { editCrop = true }
-                        toolButton("scribble") { editPen = true }
+                        // Same 0.28s cross-fade IN as the single editor's crop/pen (not a modal slide).
+                        toolButton("crop") { withAnimation(.easeInOut(duration: 0.28)) { editCrop = true } }
+                        toolButton("scribble") { withAnimation(.easeInOut(duration: 0.28)) { editPen = true } }
                     }
                     toolButton("", active: hd, label: "HD") { hd.toggle() }
                     rail
@@ -278,9 +304,9 @@ struct MediaApprovalView: View {
             trimEnd: Binding(get: { trimEnd[id] ?? dur }, set: { trimEnd[id] = $0 }),
             playhead: Binding(get: { playheads[id] ?? (trimStart[id] ?? 0) }, set: { playheads[id] = $0 }),
             scrubTime: $scrubTime,
-            // The pager has no Play button — playback is derived (current page + not scrubbing), so the
-            // strip's pause-on-drag is honored via scrubTime and this setter is a no-op.
-            playing: Binding(get: { scrubTime == nil }, set: { _ in }),
+            // Real play state (single-editor parity): the strip pauses the video on any drag, and it
+            // STAYS paused until the user taps Play — exactly like the single editor.
+            playing: Binding(get: { videoPlaying[id] ?? false }, set: { videoPlaying[id] = $0 }),
             draggingPlayhead: .constant(false),
             stripHeight: stripHeight, handleW: handleW, minDuration: minDuration)
     }
