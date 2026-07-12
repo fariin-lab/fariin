@@ -88,6 +88,7 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
+    @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → positions the pinned-bar overlay below the header (layout only, not scroll)
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
     @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
@@ -164,8 +165,32 @@ struct ThreadView: View {
     }
 
     @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
-            VStack(spacing: 0) {
-            topPinArea(proxy)
+            // Signal-style: the message list runs edge-to-edge UNDER the nav bar so the native iOS 26
+            // blur frosts the messages scrolling beneath it (seamless, no band). `.ignoresSafeArea(.top)`
+            // lets the list extend under the header; the list's own inset logic (unchanged) still clears
+            // the bars. The pinned-message bar floats as a top overlay, positioned below the header.
+            // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
+            // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
+            messagesLayer(proxy)
+            .ignoresSafeArea(.container, edges: .top)
+            .overlay(alignment: .top) {
+                topPinArea(proxy).padding(.top, navBarHeight)
+            }
+            // Per-chat wallpaper behind the messages (extends under the bars).
+            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
+            // Measure the nav-bar height (reader ignores the safe area so it reports the true top inset).
+            .background {
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
+                        navBarHeight = v
+                    }
+                }
+                .ignoresSafeArea()
+            }
+    }
+
+    // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
+    @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
@@ -310,10 +335,6 @@ struct ThreadView: View {
                 }
                 .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
             }
-            }
-            // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
-            // plain app background, so chats without a wallpaper look exactly as before.
-            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
     }
 
     // Split into several layers so each modifier chain stays under the type-checker limit.
