@@ -6,6 +6,12 @@ import SwiftUI
 struct GoToMessage { let cid: String; let messageId: String }
 extension Notification.Name { static let goToMessage = Notification.Name("goToMessage") }
 
+// Process-lifetime cache of each conversation's gallery content, kept OUTSIDE the view so it survives
+// every open/close of "See All Media" — Signal's stability trick (its gallery model is retained and only
+// loaded once; reopen renders the cached sections synchronously with no spinner). @MainActor so the
+// SwiftUI views that read/write it stay data-race free.
+@MainActor enum GalleryCache { static var store: [String: [Message]] = [:] }
+
 // Full-screen shared-content gallery (Telegram-style), PUSHED (not a sheet). Three tabs — Media,
 // Audio, Links — with a filter menu on Media/Audio, long-press context menus, and a selection mode
 // with a bottom Share / count / Delete toolbar. Links have no filter and no selection.
@@ -64,7 +70,17 @@ struct MediaGalleryView: View {
             .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
             .toolbar { toolbar }
             .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
-            .task { if !loaded { all = await ChatService.galleryContent(cid); loaded = true } }
+            .task {
+                // STABLE like Signal (whose gallery is backed by a persistent store, so reopen is instant):
+                // render the cached list synchronously first — no full-screen spinner on reopen — then
+                // refresh in the background and update the cache. The spinner shows only on the very first
+                // load, when there's nothing cached yet.
+                if let cached = GalleryCache.store[cid] { all = cached; loaded = true }
+                let fresh = await ChatService.galleryContent(cid)
+                all = fresh
+                GalleryCache.store[cid] = fresh
+                loaded = true
+            }
             .fullScreenCover(item: $viewerImage) {
                 ImageViewerView(message: $0, in: mediaItems.filter { $0.isImage && !$0.isGif }, cid: cid)
             }

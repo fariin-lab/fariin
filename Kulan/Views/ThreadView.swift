@@ -1308,7 +1308,9 @@ struct ThreadView: View {
             // bar in the recents strip takes its place).
             if !recentsHasSelection {
                 HStack(spacing: 12) {
-                    attachTile("photo.on.rectangle", "Photos") { showLibrary = true }
+                    // "Photos" removed — the recents grid above already provides the photo library.
+                    // "Contacts" tile is added when the send-contact feature (picker + contact-card message)
+                    // is built as a focused, tested piece.
                     attachTile("doc", "Files") { showFileImporter = true }
                     attachTile("sparkles", "GIF") { showGifPicker = true }
                     attachTile("chart.bar.xaxis", "Poll") { showPollSoon = true }
@@ -2092,8 +2094,12 @@ struct ThreadView: View {
             .liquidGlass(Capsule(), interactive: true)
             Spacer()
             if !searchMatches.isEmpty || !searchQuery.isEmpty {
+                // Same rounded glass pill as the up/down arrow nav (same height / corner / background),
+                // text centered. It's a status label, so the glass is non-interactive; search logic unchanged.
                 Text(searchMatches.isEmpty ? "No results" : "\(searchIndex + 1) of \(searchMatches.count)")
                     .font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.horizontal, 18).frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: false)
             }
         }
         .padding(.horizontal, 16).padding(.bottom, 6)
@@ -2635,11 +2641,11 @@ struct ThreadView: View {
             .liquidGlass(Capsule(), interactive: true)
             .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
             Button { sendRecording() } label: {
-                // Real Liquid Glass send (was a solid white filled circle); blue arrow glyph.
+                // BLUE send button (white arrow on blue Liquid Glass), matching the normal composer send.
                 Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color(hex: 0x3DA1FD))
+                    .foregroundStyle(.white)
                     .frame(width: 40, height: 40)   // 40px (matches the trash button; user request)
-                    .liquidGlass(Circle(), interactive: true)
+                    .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(dark))
                     .contentShape(Circle())
             }
         }
@@ -3123,9 +3129,19 @@ struct MessageBubble: View, Equatable {
                     // blur + spring. No custom overlay. Reactions live in the "React…" item (opens the
                     // emoji picker) since Apple gives no public API to attach a reaction bar to it.
                     .contextMenu {
+                        // Order (user spec): Reply · React · Edit · Pin · Forward · Delete, then Select
+                        // below a divider. Copy/Save/Info stay as context-specific items in place.
                         Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                         if message.sendState == nil {   // can't react until the message is on the server
                             Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
+                        }
+                        if isMe && !message.isImage && !message.isAudio && !message.isCall && message.sendState == nil {
+                            Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
+                        }
+                        if canPin {
+                            Button { onPin(message) } label: {
+                                Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
+                            }
                         }
                         if !message.isCall {
                             Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
@@ -3136,17 +3152,8 @@ struct MessageBubble: View, Equatable {
                         if message.isImage {
                             Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
                         }
-                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                         if isGroup && isMe && message.sendState == nil {
                             Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
-                        }
-                        if canPin {
-                            Button { onPin(message) } label: {
-                                Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
-                            }
-                        }
-                        if isMe && !message.isImage && !message.isAudio && !message.isCall && message.sendState == nil {
-                            Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
                         }
                         Divider()
                         if isMe {
@@ -3154,6 +3161,8 @@ struct MessageBubble: View, Equatable {
                         } else {
                             Button(role: .destructive) { onReport(message) } label: { Label("Report", systemImage: "flag") }
                         }
+                        Divider()
+                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                     }
                     // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
                     .highPriorityGesture(TapGesture(count: 2).onEnded {

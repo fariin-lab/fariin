@@ -45,10 +45,14 @@ struct VideoApprovalView: View {
             // top bar + trim strip + caption, reserved by safeAreaInset below) instead of filling the
             // whole screen behind them — fully visible / zoomed-out, letterboxed on black, rounded
             // corners. (Was .ignoresSafeArea() → edge-to-edge full screen.)
-            // The white playhead line does NOT auto-run with playback (user request) — it only moves
-            // when the user drags it. So onTime is ignored for the playhead.
+            // The white playhead line tracks the player's REAL current time during playback (Bug 1/2 fix):
+            // the periodic time observer reports the position every 0.05s and we write it to `playhead`,
+            // so the line glides frame-by-frame in sync with the video instead of sitting frozen near the
+            // left handle. While the user is dragging a handle/the playhead, `scrubTime` owns the position,
+            // so we ignore player time then (no fight between the seek-preview and the observer).
             TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
-                               scrubTime: scrubTime)
+                               scrubTime: scrubTime,
+                               onTime: { t in if scrubTime == nil { playhead = t } })
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -11,6 +11,7 @@ struct AddToGroupView: View {
     private var me: String { AuthService.shared.uid ?? "" }
     @State private var working: String? = nil   // cid currently being added
     @State private var notice: String?
+    @State private var pendingGroup: Conversation?   // group awaiting the native "Add New Member" confirm
 
     // Every group I'm a member of, alphabetical.
     private var myGroups: [Conversation] {
@@ -43,6 +44,17 @@ struct AddToGroupView: View {
             .alert("Add to a Group", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
                 Button("OK") { dismiss() }
             } message: { Text(notice ?? "") }
+            // Native bottom action sheet (image-2 look), attached at the top level so it never anchors to a
+            // row and adapts into a popover. Replaces the manual UIAlertController that rendered as a bubble.
+            .confirmationDialog("Add New Member",
+                isPresented: Binding(get: { pendingGroup != nil }, set: { if !$0 { pendingGroup = nil } }),
+                titleVisibility: .visible,
+                presenting: pendingGroup) { g in
+                    Button("Add to Group") { add(to: g) }
+                    Button("Cancel", role: .cancel) { }
+                } message: { g in
+                    Text("Add \"\(contactName)\" to \"\(g.displayName(me))\"?")
+                }
         }
     }
 
@@ -50,8 +62,7 @@ struct AddToGroupView: View {
         let already = g.users.contains(contactUid)
         Button {
             guard !already, working == nil else { return }
-            confirmAdd(g)   // native UIKit action sheet (bottom, with Cancel) — SwiftUI's
-                            // confirmationDialog rendered as a Cancel-less popover here.
+            pendingGroup = g   // → native .confirmationDialog (bottom action sheet, with Cancel)
         } label: {
             HStack(spacing: 12) {
                 AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 44)
