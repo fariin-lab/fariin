@@ -89,7 +89,8 @@ struct ThreadView: View {
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
     @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → list TOP inset + positions the pinned-bar overlay
-    @State private var composerBottomInset: CGFloat = 0   // measured composer(+keyboard) height → list BOTTOM inset
+    @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
+    @State private var composerBottomInset: CGFloat = 0  // home-indicator at rest / keyboard height when open (below the bar)
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
     @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
@@ -173,16 +174,29 @@ struct ThreadView: View {
             // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
             messagesLayer(proxy)
-            // Full-bleed UNDER both bars (Signal): messages scroll beneath the header AND the composer, so
-            // the native blur frosts them with no band. The bar heights are fed back as the list's manual
-            // content insets (topInset/bottomInset) so the first/last message still clears the bars.
+            // Full-bleed UNDER both bars AND the keyboard (Signal): the list's FRAME never changes — the
+            // keyboard/composer are handled purely via the manual content insets fed below. (Ignoring only
+            // the container let the frame shrink with the keyboard while insets also moved = the broken
+            // keyboard layout.) Messages scroll beneath the blur bars, so no band.
             .ignoresSafeArea(.container, edges: [.top, .bottom])
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .overlay(alignment: .top) {
                 topPinArea(proxy).padding(.top, navBarHeight)
             }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
-            // scroll under it. Its height is measured below and fed to the list as the bottom inset.
-            .floatingBottomBar { bottomBarContent }
+            // scroll under it. Its OWN height is measured HERE (a reader outside the bar reports only the
+            // home-indicator/keyboard, NOT the bar — that mistake left the list's bottom inset ~46pt so the
+            // last messages sat behind the composer).
+            .floatingBottomBar {
+                bottomBarContent
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
+                                composerBarHeight = h
+                            }
+                        }
+                    }
+            }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
             // Nav-bar height → the list's TOP inset. This reader ignores the safe area so it reports the
@@ -195,8 +209,9 @@ struct ThreadView: View {
                 }
                 .ignoresSafeArea()
             }
-            // Composer(+keyboard) height → the list's BOTTOM inset. This reader RESPECTS the safe area, so
-            // its bottom inset IS the composer bar height (and it grows with the keyboard via safeAreaBar).
+            // Home-indicator at rest / keyboard height when open (this reader sits OUTSIDE the composer
+            // bar, so the bar itself is NOT in this value — it's added separately above). The list's
+            // bottom inset = composerBarHeight + this.
             .background {
                 GeometryReader { geo in
                     Color.clear.onChange(of: geo.safeAreaInsets.bottom, initial: true) { _, v in
@@ -1024,7 +1039,7 @@ struct ThreadView: View {
             onReachedTop: { repo.loadOlder() },
             loadingOlder: repo.loadingOlder,
             topInset: navBarHeight,
-            bottomInset: composerBottomInset,
+            bottomInset: composerBarHeight + composerBottomInset,   // bar + (home indicator | keyboard)
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             topVisibleId: $topVisibleId

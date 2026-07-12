@@ -216,7 +216,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             return
         }
         guard didReveal else { return }   // never reconcile during the open — the pre-measure owns it
-        heights[id] = hh
+        // The rendered report is only a SIGNAL that something changed — the SIZER is the single height
+        // authority. (Adopting the rendered value here while the same-ids path adopts the sizer value
+        // made two authorities fight: any row where they disagreed >2pt reconciled back and forth
+        // forever, invalidating the layout mid-scroll = overlapping bubbles.) Re-measure with the sizer;
+        // adopt only a real change.
+        let w = collectionView.bounds.width
+        guard w > 0 else { return }
+        let sized = measure(id, width: w)
+        guard let cached = heights[id], abs(cached - sized) > 2 else { return }
+        heights[id] = sized
         DispatchQueue.main.async { [weak self] in self?.reconcile() }
     }
 
@@ -246,11 +255,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             // one cheap sizeThatFits and triggers no relayout.
             let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
             guard !visible.isEmpty else { return }
+            // NEVER re-measure mid-scroll: ThreadView state churns while scrolling (topVisibleId etc.), and
+            // invalidating the layout during a scroll positions cells from two different generations =
+            // the overlapping-bubbles bug. A real height change during scroll still lands via reportHeight.
+            let scrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
             var heightChanged = false
-            if width > 0 {
+            if width > 0, !scrolling {
                 for id in visible {
                     let h = measure(id, width: width)
-                    if let old = heights[id], abs(old - h) <= 0.5 { continue }
+                    // Same >2pt threshold as reportHeight (ONE tolerance for both paths — the 0.5 here vs
+                    // 2 there disagreement caused an endless reconcile ping-pong between the two).
+                    if let old = heights[id], abs(old - h) <= 2 { continue }
                     heights[id] = h
                     heightChanged = true
                 }
@@ -370,7 +385,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         if collectionView.bounds.width > 0 {
             for id in present {
                 let h = measure(id, width: collectionView.bounds.width)
-                if let old = heights[id], abs(old - h) <= 0.5 { continue }
+                if let old = heights[id], abs(old - h) <= 2 { continue }   // same tolerance as everywhere
                 heights[id] = h
                 heightChanged = true
             }
