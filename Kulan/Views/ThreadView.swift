@@ -166,10 +166,33 @@ struct ThreadView: View {
     }
 
     @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
-            // NO VStack: a VStack pins the list BELOW the nav bar, so ignoresSafeArea(.top) on the list is a
-            // no-op and content never reaches under the header (= the top band). The list is now the base
-            // layer running full-bleed under the header (Signal pins its collection view to the superview
-            // top); the pinned-message bar floats as a top overlay below.
+            // NO VStack: it pinned the list BELOW the nav bar (ignoresSafeArea(.top) became a no-op = the
+            // top band). The list is the base layer running full-bleed under the header (Signal pins its
+            // collection view to the superview top); the pinned bar floats as a top overlay. The heavy
+            // modifier chain lives in messagesLayer() so the type-checker keeps the boundary the VStack gave.
+            messagesLayer(proxy)
+            // Pinned-message bar floats at the top, BELOW the nav bar (padded by its measured height).
+            // When there are no pins topPinArea is empty, so nothing shows.
+            .overlay(alignment: .top) {
+                topPinArea(proxy).padding(.top, barInsetTop)
+            }
+            // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
+            // plain app background, so chats without a wallpaper look exactly as before.
+            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
+            // Measure the nav-bar height. This reader IGNORES the safe area, so it spans under the header
+            // and reports the true top inset (the nav-bar height) — fed to the list so content scrolls under.
+            .background {
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
+                        barInsetTop = v
+                    }
+                }
+                .ignoresSafeArea()
+            }
+    }
+
+    // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
+    @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
@@ -313,26 +336,6 @@ struct ThreadView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
-            }
-            // Pinned-message bar floats at the top, BELOW the nav bar (padded by its measured height).
-            // The list runs full-bleed under the header, so messages scroll under the frosted bar and the
-            // soft edge-fade blurs them. When there are no pins topPinArea is empty, so nothing shows.
-            .overlay(alignment: .top) {
-                topPinArea(proxy).padding(.top, barInsetTop)
-            }
-            // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
-            // plain app background, so chats without a wallpaper look exactly as before.
-            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
-            // Measure the nav-bar height. This reader IGNORES the safe area, so it spans under the header
-            // and reports the true top inset (the nav-bar height) — which we feed to the list so content
-            // scrolls under the frosted header instead of stopping at a hard line.
-            .background {
-                GeometryReader { geo in
-                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
-                        barInsetTop = v
-                    }
-                }
-                .ignoresSafeArea()
             }
     }
 
