@@ -1353,6 +1353,9 @@ struct ChatRow: View, Equatable {
                        iconTint: voiceUnplayed ? Theme.accent(dark) : nil)
         } else if decodedLast.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
+        } else if decodedLast.hasPrefix(Message.contactMarker) {
+            // Shared-contact card → native icon + "Contact", never the raw marker text.
+            previewRow("person.crop.circle.fill", lastSenderPrefix + "Contact")
         } else {
             Text(lastSenderPrefix + decodedLast)
                 .font(.system(size: 14, weight: unread > 0 ? .medium : .regular))

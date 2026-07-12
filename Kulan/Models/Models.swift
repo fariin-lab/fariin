@@ -492,3 +492,29 @@ private func boolMap(_ any: Any?) -> [String: Bool] {
     guard let m = any as? [String: Any] else { return [:] }
     return m.compactMapValues { $0 as? Bool }
 }
+
+// MARK: - Shared contact card (rides the encrypted text pipeline as a marker — no new message fields)
+
+struct SharedContactCard {
+    let uid: String
+    let name: String
+    let photo: String?
+}
+
+extension Message {
+    static let contactMarker = "kulan-contact:"
+    /// Marker format: "kulan-contact:<uid>|<photoURL-or-empty>|<name>" (name last — it may contain "|"-free
+    /// arbitrary text; uid/photo never contain "|"). Returns nil for normal messages.
+    var contactCard: SharedContactCard? {
+        guard text.hasPrefix(Self.contactMarker) else { return nil }
+        let body = text.dropFirst(Self.contactMarker.count)
+        let parts = body.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, !parts[0].isEmpty, !parts[2].isEmpty else { return nil }
+        return SharedContactCard(uid: String(parts[0]),
+                                 name: String(parts[2]),
+                                 photo: parts[1].isEmpty ? nil : String(parts[1]))
+    }
+    static func contactMarkerText(uid: String, name: String, photo: String?) -> String {
+        "\(contactMarker)\(uid)|\(photo ?? "")|\(name)"
+    }
+}

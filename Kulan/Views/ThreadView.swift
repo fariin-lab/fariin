@@ -70,7 +70,8 @@ struct ThreadView: View {
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
-    @State private var comingSoon: ComingSoonWrap?   // Contacts / Location tiles → "coming soon" sheet
+    @State private var comingSoon: ComingSoonWrap?   // Location tile → "coming soon" sheet
+    @State private var showContactShare = false      // Contacts tile → share-contact picker
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
@@ -495,6 +496,23 @@ struct ThreadView: View {
                 .presentationBackground(Color(.systemBackground))
         }
         .sheet(item: $comingSoon) { c in comingSoonSheet(c).presentationDetents([.fraction(0.6)]) }
+        // Share Contact picker: each selected contact ships as its own encrypted contact-card message,
+        // then the optional caption as a follow-up text.
+        .sheet(isPresented: $showContactShare) {
+            ContactShareSheet { picked, cap in
+                Task {
+                    for c in picked {
+                        try? await ChatService.sendText(
+                            cid: cid,
+                            text: Message.contactMarkerText(uid: c.uid, name: c.name, photo: c.photo),
+                            group: isGroup ? groupMembers : nil)
+                    }
+                    if !cap.isEmpty {
+                        try? await ChatService.sendText(cid: cid, text: cap, group: isGroup ? groupMembers : nil)
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
                 Task {
@@ -919,6 +937,10 @@ struct ThreadView: View {
                 onCancelSending: { m in
                     // Discard the pending optimistic send (media still uploading — not on the server yet).
                     if let clientId = m.clientId { repo.removePending(clientId: clientId) }
+                },
+                onTapContact: { uid in
+                    // "message" on a shared-contact card → open (or create) the chat with that user.
+                    AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
                 },
                 onTapImage: { viewerImage = $0 },
                 onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
@@ -1364,7 +1386,7 @@ struct ThreadView: View {
                     // Contacts + Location show the coming-soon sheet until their features are built.
                     attachTile("sparkles", "GIF") { showGifPicker = true }
                     attachTile("doc", "Files") { showFileImporter = true }
-                    attachTile("person.crop.circle", "Contacts") { comingSoon = ComingSoonWrap(icon: "person.crop.circle", title: "Contacts") }
+                    attachTile("person.crop.circle", "Contacts") { showContactShare = true }
                     attachTile("location", "Location") { comingSoon = ComingSoonWrap(icon: "location", title: "Location") }
                 }
                 .padding(.vertical, 12)
@@ -2872,6 +2894,7 @@ struct MessageBubble: View, Equatable {
     var onReply: (Message) -> Void = { _ in }
     var onDelete: (Message) -> Void = { _ in }
     var onCancelSending: (Message) -> Void = { _ in }   // media still uploading → discard the pending send
+    var onTapContact: (String) -> Void = { _ in }       // shared-contact card "message" → open a chat with uid
     var onTapImage: (Message) -> Void = { _ in }
     var onTapAlbum: (_ gallery: [Message], _ startId: String) -> Void = { _, _ in }
     var onTapVideo: (Message) -> Void = { _ in }
@@ -3555,6 +3578,31 @@ struct MessageBubble: View, Equatable {
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
+        } else if let card = message.contactCard {
+            // SHARED CONTACT card (user design): avatar + name + chevron, time+ticks, and a full-width
+            // "message" pill that opens a chat with that contact. Rides the normal encrypted text
+            // pipeline (a "kulan-contact:" marker), so no new message fields / rules changes.
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    AvatarView(name: card.name, photoUrl: card.photo, size: 44)
+                    Text(card.name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold)).opacity(0.7)
+                }
+                HStack { Spacer(); metaRow }
+                Text("message")
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(maxWidth: .infinity).frame(height: 40)
+                    .background((isMe ? Color.white.opacity(0.22) : Color.primary.opacity(0.08)), in: Capsule())
+                    .contentShape(Capsule())
+                    .onTapGesture { onTapContact(card.uid) }
+            }
+            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+            .padding(12)
+            .frame(width: maxBubbleWidth)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote   // hugs its own content now (no maxWidth:.infinity) → the bubble never balloons
