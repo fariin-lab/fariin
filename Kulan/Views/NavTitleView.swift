@@ -93,23 +93,21 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // default, exactly like the list. We only install the titleView (the native way to put an
         // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            // FULLY TRANSPARENT nav bar — no material band, no separator. In dark mode the system
-            // material band (systemChromeMaterial) is lighter than the pure-black chat, so its bottom
-            // edge read as a hard "border" the user kept seeing. A transparent background removes the
-            // band entirely: the chat scrolls seamlessly under the bar (Telegram/Signal), and the
-            // glass back/avatar/name/call buttons stay legible on their own. Same in every state so no
-            // border ever appears at the top edge.
+            // NATIVE frosted nav bar (the "before"/VIIZET look): the system blur material shows behind
+            // the header and the chat fades softly UNDER it — with NO hard separator line
+            // (shadowColor = .clear). Transparent (my earlier fix) removed the frosted band entirely,
+            // which is NOT what the user wants. This is the native blur, minus the hairline. Applied to
+            // every state so it's consistent and never draws a border.
             let a = UINavigationBarAppearance()
-            a.configureWithTransparentBackground()
-            a.backgroundColor = .clear
+            a.configureWithDefaultBackground()
             a.shadowColor = .clear
-            if vc.navigationItem.standardAppearance?.backgroundEffect != nil || vc.navigationItem.standardAppearance == nil {
+            if vc.navigationItem.standardAppearance?.shadowColor != .clear || vc.navigationItem.standardAppearance == nil {
                 vc.navigationItem.standardAppearance = a
             }
-            if vc.navigationItem.scrollEdgeAppearance?.backgroundEffect != nil || vc.navigationItem.scrollEdgeAppearance == nil {
+            if vc.navigationItem.scrollEdgeAppearance?.shadowColor != .clear || vc.navigationItem.scrollEdgeAppearance == nil {
                 vc.navigationItem.scrollEdgeAppearance = a
             }
-            if vc.navigationItem.compactAppearance?.backgroundEffect != nil || vc.navigationItem.compactAppearance == nil {
+            if vc.navigationItem.compactAppearance?.shadowColor != .clear || vc.navigationItem.compactAppearance == nil {
                 vc.navigationItem.compactAppearance = a
             }
         }
