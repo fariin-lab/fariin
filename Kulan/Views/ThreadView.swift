@@ -88,6 +88,8 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
+    @State private var barInsetTop: CGFloat = 0    // nav-bar height → fed to the list so content scrolls UNDER the header
+    @State private var barInsetBottom: CGFloat = 0 // composer(+keyboard) height → content scrolls UNDER the composer
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
     @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
@@ -314,6 +316,17 @@ struct ThreadView: View {
             // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
             // plain app background, so chats without a wallpaper look exactly as before.
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
+            // Measure the nav-bar height. This reader IGNORES the safe area, so it spans under the header
+            // and reports the true top inset (the nav-bar height) — which we feed to the list so content
+            // scrolls under the frosted header instead of stopping at a hard line.
+            .background {
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
+                        barInsetTop = v
+                    }
+                }
+                .ignoresSafeArea()
+            }
     }
 
     // Split into several layers so each modifier chain stays under the type-checker limit.
@@ -920,6 +933,17 @@ struct ThreadView: View {
             // big scrollStack chain) so the type-checker isn't overloaded.
             .overlay(alignment: .top) { floatingDateHeader }
             .onChange(of: topVisibleId) { _, _ in bumpFloatingDate() }
+            // Measure the floating composer's height (grows with the keyboard, via safeAreaBar) here —
+            // this view still RESPECTS the safe area, so its bottom inset IS the composer/keyboard height.
+            // We feed it to the list (which ignores the safe area) so the last message clears the composer
+            // while the rest scrolls under it. A separate layer (never the ignoring list) so it stays true.
+            .background {
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.safeAreaInsets.bottom, initial: true) { _, v in
+                        barInsetBottom = v
+                    }
+                }
+            }
     }
 
     private func bumpFloatingDate() {
@@ -981,10 +1005,16 @@ struct ThreadView: View {
             },
             onReachedTop: { repo.loadOlder() },
             loadingOlder: repo.loadingOlder,
+            topInset: barInsetTop,
+            bottomInset: barInsetBottom,
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             topVisibleId: $topVisibleId
         )
+        // Extend the list edge-to-edge UNDER the frosted nav bar + composer (build-270 / Signal behaviour
+        // a SwiftUI ScrollView did for free; a UIKit representable does NOT). The insets fed above keep
+        // the first/last message clear, while the rows in between scroll softly under the bars = no border.
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
     }
 
     // Signal-style floating date header: a pill centered at the top of the list that stays visible while

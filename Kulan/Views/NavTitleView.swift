@@ -93,16 +93,20 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // default, exactly like the list. We only install the titleView (the native way to put an
         // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            // EXACT restore of the known-good "always-on native blur" (commit 7af2789 — the version the
-            // user confirmed was right, "we used it before"): the real system liquid-glass blur on ALL
-            // states so the chat shows through / fades softly UNDER the header. No shadow-clearing, no
-            // transparent override (both of which I wrongly added later and broke it).
-            guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
+            // Signal's EXACT mechanism (OWSNavigationBar.swift): do NOT call
+            // configureWithDefaultBackground — that RE-ADDS the shadow hairline (the header "border").
+            // Instead set the blur background effect directly and `shadowColor = nil` to kill the
+            // hairline, applied to ALL FOUR slots (incl. compactScrollEdgeAppearance) so no line shows
+            // in any scroll state. Blur = messages stay visible through the header.
+            guard vc.navigationItem.standardAppearance?.shadowColor != nil
+                    || vc.navigationItem.standardAppearance == nil else { return }
             let appearance = UINavigationBarAppearance()
-            appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
+            appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
+            appearance.shadowColor = nil   // <-- kills the hairline separator (Signal's fix)
             vc.navigationItem.standardAppearance = appearance
             vc.navigationItem.scrollEdgeAppearance = appearance
             vc.navigationItem.compactAppearance = appearance
+            vc.navigationItem.compactScrollEdgeAppearance = appearance
         }
 
         private func assertTitleView() {
