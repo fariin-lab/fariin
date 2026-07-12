@@ -117,58 +117,55 @@ struct MediaApprovalView: View {
     // 9:16 or taller → long-portrait presentation (rounded corners on the media itself). Shared by the
     // image AND video pages so both match; standard ratios keep the untouched full-bleed path.
     private func isTall(_ s: CGSize) -> Bool { s.width > 0 && s.height >= s.width * (16.0 / 9.0) - 1 }
-    private func fittedSize(_ media: CGSize, in area: CGSize) -> CGSize {
-        guard media.width > 0, media.height > 0 else { return area }
-        let k = min(area.width / media.width, area.height / media.height)
-        return CGSize(width: media.width * k, height: media.height * k)
-    }
 
     @ViewBuilder private func pageView(_ item: ApprovalMedia, index: Int) -> some View {
         switch item {
         case .image(_, let ui):
+            // IDENTICAL structure to the single editor + the video (aspectRatio(.fit) + clipShape): tall
+            // (9:16+) images fit fully with rounded corners on the image itself; standard ratios stay
+            // full-bleed. ZoomImageView keeps normal pinch-zoom in both cases.
+            let img = ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
+                                    onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
             if isTall(ui.size) {
-                // LONG PORTRAIT (9:16+): fully-visible fitted image with ROUNDED CORNERS on the image
-                // itself — identical treatment to the single editor and the tall-video page. Pinch zoom
-                // works normally inside (ZoomImageView); standard ratios keep the full-bleed path.
-                GeometryReader { geo in
-                    let fit = fittedSize(ui.size, in: geo.size)
-                    ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
-                                  onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                        .frame(width: fit.width, height: fit.height)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .frame(width: geo.size.width, height: geo.size.height)
-                }
-                .ignoresSafeArea()
+                img.aspectRatio(ui.size.width / ui.size.height, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
-                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                    .ignoresSafeArea()
+                img.ignoresSafeArea()
             }
-        case .video(let id, let url, _, let duration):
-            // EXACT single-video-editor behavior (user spec): starts PAUSED with the same big Play
-            // button, tap toggles play/pause (or closes the keyboard first), pauses while a trim handle /
-            // the playhead is dragged, playhead tracks the player's real time — the shared trimmer +
-            // identical playback model. Loops within the trimmed range; only ITS page ever plays.
-            PagedTrimPlayer(url: url,
+        case .video(let id, let url, let thumb, let duration):
+            // EXACT single-video-editor behavior: starts PAUSED with the big Play button, tap toggles,
+            // pauses while trimming/scrubbing, playhead tracks real time. Tall (9:16+) videos fit with
+            // rounded corners on the video (same aspectRatio(.fit) + clipShape as everything else — the
+            // poster thumb carries the video's aspect); standard ratios stay full-bleed.
+            let player = PagedTrimPlayer(url: url,
                             playing: page == index && !exporting && scrubTime == nil && (videoPlaying[id] ?? false),
                             start: trimStart[id] ?? 0,
                             end: max((trimStart[id] ?? 0) + 0.1, trimEnd[id] ?? duration),
                             scrubTime: page == index ? scrubTime : nil,
                             onTime: { t in if page == index, scrubTime == nil { playheads[id] = t } })
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if captionFocused { captionFocused = false }
-                    else { videoPlaying[id] = !(videoPlaying[id] ?? false) }
+            Group {
+                if let t = thumb, isTall(t.size) {
+                    player.aspectRatio(t.size.width / t.size.height, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    player.ignoresSafeArea()
                 }
-                .overlay {
-                    if !(videoPlaying[id] ?? false) && scrubTime == nil {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
-                            .allowsHitTesting(false)
-                    }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if captionFocused { captionFocused = false }
+                else { videoPlaying[id] = !(videoPlaying[id] ?? false) }
+            }
+            .overlay {
+                if !(videoPlaying[id] ?? false) && scrubTime == nil {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
+                        .allowsHitTesting(false)
                 }
-                .task(id: id) { await loadVideoMeta(id: id, url: url, duration: duration) }
+            }
+            .task(id: id) { await loadVideoMeta(id: id, url: url, duration: duration) }
         }
     }
 
