@@ -57,6 +57,13 @@ struct MediaApprovalView: View {
     @State private var scrubTime: Double?                // live seek while dragging a handle
     @State private var playheads: [UUID: Double] = [:]   // live playback position per video → scrubber
     @State private var videoPlaying: [UUID: Bool] = [:]  // per-video play state — PAUSED by default (single-editor parity)
+    // Pinch-zoom + pan for the CURRENT video page (same mechanism as the single video editor). Resets on
+    // page change. Images zoom via ZoomImageView already; this brings video zoom to parity in the pager.
+    @State private var vZoom: CGFloat = 1
+    @GestureState private var vPinch: CGFloat = 1
+    @State private var vPan: CGSize = .zero
+    @GestureState private var vDrag: CGSize = .zero
+    private var vZoomed: Bool { max(1, vZoom * vPinch) > 1.01 }
 
     private let stripHeight: CGFloat = 40   // IDENTICAL to the single video editor (shared VideoTrimStrip)
     private let handleW: CGFloat = 12
@@ -83,9 +90,9 @@ struct MediaApprovalView: View {
             DragGesture(minimumDistance: 18)
                 .onChanged { g in if captionFocused, g.translation.height > 24 { captionFocused = false } }
         )
-        // Swiping to another page pauses everything (single-editor parity: a video page you arrive at
-        // is PAUSED with the Play button showing, exactly like opening the single editor).
-        .onChange(of: page) { _, _ in videoPlaying = [:] }
+        // Swiping to another page pauses everything (single-editor parity) and resets the video zoom/pan
+        // so each page opens fit (zoomed out), never carrying the previous page's zoom.
+        .onChange(of: page) { _, _ in videoPlaying = [:]; vZoom = 1; vPan = .zero }
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
         // Per-IMAGE editing (the same tools as the single-photo editor), presented INLINE with the SAME
@@ -153,13 +160,31 @@ struct MediaApprovalView: View {
                     player.ignoresSafeArea()
                 }
             }
+            // Pinch-zoom + pan for THIS video, only while it's the current page — the SAME mechanism as
+            // the single video editor. When zoomed in, a high-priority drag pans (so it beats the TabView
+            // paging); at fit, horizontal swipes page normally.
+            .scaleEffect(page == index ? max(1, vZoom * vPinch) : 1)
+            .offset(x: page == index ? vPan.width + vDrag.width : 0,
+                    y: page == index ? vPan.height + vDrag.height : 0)
+            .gesture(
+                MagnificationGesture()
+                    .updating($vPinch) { v, s, _ in s = v }
+                    .onEnded { v in vZoom = min(4, max(1, vZoom * v)); if vZoom <= 1 { vPan = .zero } }
+            )
+            .highPriorityGesture(
+                vZoomed ? DragGesture().updating($vDrag) { v, s, _ in s = v.translation }
+                    .onEnded { v in vPan.width += v.translation.width; vPan.height += v.translation.height } : nil
+            )
             .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                withAnimation(.easeInOut(duration: 0.2)) { vZoom = vZoom > 1 ? 1 : 2; if vZoom <= 1 { vPan = .zero } }
+            }
             .onTapGesture {
                 if captionFocused { captionFocused = false }
                 else { videoPlaying[id] = !(videoPlaying[id] ?? false) }
             }
             .overlay {
-                if !(videoPlaying[id] ?? false) && scrubTime == nil {
+                if !(videoPlaying[id] ?? false) && scrubTime == nil && !vZoomed {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
                         .allowsHitTesting(false)
