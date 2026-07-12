@@ -6,7 +6,7 @@ import Photos
 // Direction-locked pan (Signal's DirectionalPanGestureRecognizer, AGPL-3.0). Kulan-local copy so the
 // app target can use it (the StoryUI package has its own). Only begins in the allowed direction.
 final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
-    enum Dir { case up, down, left, right }
+    enum Dir { case up, down, left, right, vertical }   // .vertical = Signal's dismiss config (up AND down engage)
     let dir: Dir
     init(direction: Dir, target: AnyObject, action: Selector) {
         self.dir = direction
@@ -24,6 +24,7 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let dx = loc.x - prev.x
             let ok: Bool = {
                 if abs(dy) > abs(dx) {
+                    if dir == .vertical { return true }   // Signal: any predominantly-vertical move engages
                     if dir == .up, dy < 0 { return true }
                     if dir == .down, dy > 0 { return true }
                 } else {
@@ -39,7 +40,7 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let v = velocity(in: view)
             switch dir {
             case .left, .right: if abs(v.y) > abs(v.x) { state = .cancelled }
-            case .up, .down: if abs(v.x) > abs(v.y) { state = .cancelled }
+            case .up, .down, .vertical: if abs(v.x) > abs(v.y) { state = .cancelled }
             }
         }
     }
@@ -69,17 +70,14 @@ struct ImageViewerView: View {
         _current = State(initialValue: message.id)
     }
 
-    @State private var dim: Double = 1
     @State private var chromeHidden = false     // single-tap toggles header + toolbar (Apple Photos)
     @State private var saved = false
     @State private var saveError = false
     @State private var confirmDelete = false
     @State private var shareItems: [Any]?
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
-    @State private var dismissDrag: CGSize = .zero        // drag-to-close: the image layer's offset
-    @State private var dismissProgress: Double = 0
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
-    @State private var dismissEngaged = false            // vertical drag locked in → no horizontal drift
+    @State private var dismissing = false                 // Signal dismiss in flight → live content hidden ONCE
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
     private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
@@ -91,11 +89,11 @@ struct ImageViewerView: View {
         return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? ""
     }
     private var dateLine: String { message.createdAt.formatted(date: .numeric, time: .shortened) }
-    private var chromeVisible: Bool { !chromeHidden && dim > 0.85 }
+    private var chromeVisible: Bool { !chromeHidden && !dismissing }
 
     var body: some View {
         ZStack {
-            Color.black.opacity(dim).ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
             // Horizontal paging between photos; each page zooms/dismisses independently. EVERY page is
             // pinned to the exact full screen size (GeometryReader) so a portrait (9:16) and a landscape
@@ -126,48 +124,11 @@ struct ImageViewerView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
             .ignoresSafeArea()
-            // Drag-to-close, Apple-native (Photos): ONLY the image layer moves 1:1 with the finger and
-            // shrinks slightly; the chrome stays put; the backdrop fades. Vertical-dominant drags only
-            // (horizontal falls through to the TabView pager), and only when the photo is NOT zoomed in.
-            .offset(dismissDrag)
-            .scaleEffect(1 - dismissProgress * 0.12)
-            // Apple Photos drag-to-close: the image moves DOWN ONLY (horizontal is LOCKED to 0 — no
-            // left/right drift), shrinks slightly, backdrop fades. Once a clearly-vertical drag starts
-            // it LOCKS into dismiss mode for the rest of the gesture, so a diagonal finger can't drift
-            // sideways or hand off to the pager. A clearly-horizontal swipe never engages → the pager
-            // still pages between photos.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10)
-                    .onChanged { g in
-                        guard pageZoom <= 1.02 else { return }                 // zoomed → scroll view pans
-                        if !dismissEngaged {
-                            guard g.translation.height > 8,
-                                  g.translation.height > abs(g.translation.width) * 1.5 else { return }
-                            dismissEngaged = true
-                        }
-                        let dy = max(0, g.translation.height)
-                        dismissDrag = CGSize(width: 0, height: dy)             // VERTICAL ONLY
-                        dismissProgress = min(1, dy / UIScreen.main.bounds.height)
-                        dim = 1 - dismissProgress * 0.85
-                    }
-                    .onEnded { g in
-                        let engaged = dismissEngaged
-                        dismissEngaged = false
-                        guard engaged else { return }
-                        if g.velocity.height > 700 || dismissProgress > 0.18 {
-                            dismiss()
-                        } else {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                                dismissDrag = .zero; dismissProgress = 0; dim = 1
-                            }
-                        }
-                    }
-            )
             // Signal's gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
             // so swiping to the next photo is instant instead of showing a spinner.
             .onChange(of: current) { _, _ in
                 prefetchNeighbors()
-                pageZoom = 1; dismissDrag = .zero; dismissProgress = 0; dim = 1; dismissEngaged = false   // fresh page
+                pageZoom = 1   // fresh page
             }
             .task { prefetchNeighbors() }
 
@@ -180,6 +141,23 @@ struct ImageViewerView: View {
             .allowsHitTesting(chromeVisible)
             .animation(.easeInOut(duration: 0.25), value: chromeVisible)
         }
+        // SIGNAL'S EXACT INTERACTIVE DISMISS (SignalMediaDismiss.swift): one UIKit vertical pan on the
+        // presented root; on begin this live content hides ONCE and a lightweight image copy moves 1:1
+        // with the finger (constant 0.8 scale cock, direct backdrop alpha, finish-on-any-progress,
+        // 0.25s critically-damped spring). Replaces the old per-frame SwiftUI drag entirely.
+        .opacity(dismissing ? 0 : 1)
+        .overlay {
+            SignalDismissHost(
+                canBegin: { pageZoom <= 1.02 },
+                media: {
+                    guard let img = loaded[current] else { return nil }
+                    return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
+                },
+                onHideContent: { dismissing = $0 },
+                onDismiss: { dismiss() })
+        }
+        // Transparent presentation so the fading backdrop reveals the CONVERSATION behind (Signal).
+        .presentationBackground(.clear)
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }

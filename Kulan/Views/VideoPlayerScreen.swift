@@ -27,8 +27,7 @@ struct VideoPlayerScreen: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var hideWork: DispatchWorkItem?
-    @State private var drag: CGSize = .zero        // drag-to-dismiss offset (follows the finger)
-    @State private var dragProgress: Double = 0
+    @State private var dismissing = false          // Signal dismiss in flight → live content hidden ONCE
     // Pinch-zoom + pan (Signal hosts video in the same zoomable view as photos).
     @State private var zoom: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
@@ -43,7 +42,7 @@ struct VideoPlayerScreen: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(1 - dragProgress * 0.85).ignoresSafeArea()
+            Color.black.ignoresSafeArea()
             if let player {
                 PlayerLayerView(player: player)
                     .scaleEffect(max(1, zoom * pinch))
@@ -92,37 +91,41 @@ struct VideoPlayerScreen: View {
                 ProgressView().tint(.white).scaleEffect(1.4)
             }
         }
-        // The whole viewer follows the finger down to dismiss + shrinks gently.
-        .scaleEffect(1 - dragProgress * 0.12)
-        .offset(drag)
         .overlay(alignment: .top) { if showChrome { topBar } }
         .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
         .animation(.easeInOut(duration: 0.25), value: showChrome)
         .animation(.easeInOut(duration: 0.2), value: isPlaying)
-        // ONE drag: when zoomed in it PANS the video; at fit it's the drag-down-to-dismiss (1:1 finger
-        // follow, commit on flick / past 18%, else spring back).
+        // Zoomed-in pan (the dismiss drag is now the shared Signal pan below, images + videos identical).
         .simultaneousGesture(
             DragGesture(minimumDistance: 8)
                 .updating($panDrag) { v, s, _ in if zoomed { s = v.translation } }
-                .onChanged { g in
-                    guard !zoomed, !scrubbing, g.translation.height > 0,
-                          abs(g.translation.height) > abs(g.translation.width) else { return }
-                    drag = g.translation
-                    dragProgress = min(1, g.translation.height / UIScreen.main.bounds.height)
-                }
                 .onEnded { g in
-                    if zoomed {
-                        pan.width += g.translation.width; pan.height += g.translation.height
-                        return
-                    }
-                    guard dragProgress > 0 else { return }
-                    if g.velocity.height > 700 || g.translation.height > UIScreen.main.bounds.height * 0.18 {
-                        dismiss()
-                    } else {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 1)) { drag = .zero; dragProgress = 0 }
-                    }
+                    if zoomed { pan.width += g.translation.width; pan.height += g.translation.height }
                 }
         )
+        // SIGNAL'S EXACT INTERACTIVE DISMISS — the SAME code path as the image viewer
+        // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight snapshot copy locked 1:1 to
+        // the finger, constant 0.8 scale, direct backdrop alpha, finish-on-any-progress, 0.25s spring.
+        .opacity(dismissing ? 0 : 1)
+        .overlay {
+            SignalDismissHost(
+                canBegin: { !zoomed && !scrubbing },
+                media: {
+                    // The video's fitted rect from its stored dimensions (fallback: full screen).
+                    let bounds = UIScreen.main.bounds
+                    var size = bounds.size
+                    if let w = message.width, let h = message.height, w > 0, h > 0 {
+                        size = CGSize(width: w, height: h)
+                    }
+                    return (mediaFitRect(size, in: bounds), nil)   // nil image → live region snapshot
+                },
+                onHideContent: { hidden in
+                    if hidden { player?.pause() }   // freeze playback the moment the copy takes over
+                    dismissing = hidden
+                },
+                onDismiss: { dismiss() })
+        }
+        .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind (Signal)
         .statusBarHidden(true)
         .task { await load() }
         .onDisappear { cleanup() }
