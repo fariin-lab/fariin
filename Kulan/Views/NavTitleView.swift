@@ -93,23 +93,16 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // default, exactly like the list. We only install the titleView (the native way to put an
         // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            // NATIVE frosted nav bar (the "before"/VIIZET look): the system blur material shows behind
-            // the header and the chat fades softly UNDER it — with NO hard separator line
-            // (shadowColor = .clear). Transparent (my earlier fix) removed the frosted band entirely,
-            // which is NOT what the user wants. This is the native blur, minus the hairline. Applied to
-            // every state so it's consistent and never draws a border.
-            let a = UINavigationBarAppearance()
-            a.configureWithDefaultBackground()
-            a.shadowColor = .clear
-            if vc.navigationItem.standardAppearance?.shadowColor != .clear || vc.navigationItem.standardAppearance == nil {
-                vc.navigationItem.standardAppearance = a
-            }
-            if vc.navigationItem.scrollEdgeAppearance?.shadowColor != .clear || vc.navigationItem.scrollEdgeAppearance == nil {
-                vc.navigationItem.scrollEdgeAppearance = a
-            }
-            if vc.navigationItem.compactAppearance?.shadowColor != .clear || vc.navigationItem.compactAppearance == nil {
-                vc.navigationItem.compactAppearance = a
-            }
+            // EXACT restore of the known-good "always-on native blur" (commit 7af2789 — the version the
+            // user confirmed was right, "we used it before"): the real system liquid-glass blur on ALL
+            // states so the chat shows through / fades softly UNDER the header. No shadow-clearing, no
+            // transparent override (both of which I wrongly added later and broke it).
+            guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
+            let appearance = UINavigationBarAppearance()
+            appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
+            vc.navigationItem.standardAppearance = appearance
+            vc.navigationItem.scrollEdgeAppearance = appearance
+            vc.navigationItem.compactAppearance = appearance
         }
 
         private func assertTitleView() {

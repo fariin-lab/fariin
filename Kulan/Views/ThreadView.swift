@@ -938,10 +938,6 @@ struct ThreadView: View {
     // is gone along with the Settings toggle.
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         nativeList
-            // Kill the iOS 26 scroll-edge divider lines (the faint border under the header + above the
-            // composer that the old chat didn't have) at the SwiftUI hosting layer too — belt-and-
-            // suspenders with the UIKit topEdgeEffect/bottomEdgeEffect hiding.
-            .modifier(HideScrollEdgeEffects())
             .contentShape(Rectangle())
             // Tap anywhere on the conversation → dismiss the keyboard (iMessage/Signal). This gesture
             // lived on the deleted SwiftUI fallback list; simultaneous so bubble taps still work.
@@ -2695,17 +2691,6 @@ struct ThreadView: View {
 // Conditional hero anchor: marks a bubble photo as the zoom-transition source when a namespace is set.
 // Hides the iOS 26 automatic scroll-edge effect (the hard divider line at the top/bottom of scrollable
 // content where it meets bars). No-op before iOS 26.
-// SOFT scroll edges (blur fade, NO hard divider line) — the same fix the Chats list uses.
-struct HideScrollEdgeEffects: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.scrollEdgeEffectStyle(.soft, for: .all)
-        } else {
-            content
-        }
-    }
-}
-
 struct HeroSource: ViewModifier {
     var ns: Namespace.ID?
     var id: String
