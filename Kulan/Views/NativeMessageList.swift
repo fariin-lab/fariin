@@ -93,6 +93,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var pendingBottomOnOpen = false   // brief open window: keep pinned to bottom
     private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
+    private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
 
     override func viewDidLoad() {
@@ -224,6 +225,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             return
         }
         guard didReveal else { return }   // never reconcile during the open — the pre-measure owns it
+        // Land-when-safe: a rendered-height signal that arrives mid-scroll/animation is coalesced and
+        // handled on settle — reconciling now would invalidate the layout under a live scroll (overlap).
+        if isInMotion { needsRefreshOnSettle = true; return }
         // The rendered report is only a SIGNAL that something changed — the SIZER is the single height
         // authority. (Adopting the rendered value here while the same-ids path adopts the sizer value
         // made two authorities fight: any row where they disagreed >2pt reconciled back and forth
@@ -249,40 +253,60 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         else if let anchor { restore(anchor) }
     }
 
+    // MARK: - Land-when-safe (Signal's canLandLoad)
+
+    // The list is "in motion" while the user scrolls or an insert animation runs — content updates must
+    // never land during this (they invalidate the layout mid-scroll → overlap/jumps).
+    private var isInMotion: Bool {
+        collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating || sendAnimating
+    }
+
+    // Flush the coalesced refresh once the list settles.
+    private func settleFlush() {
+        guard needsRefreshOnSettle, !isInMotion else { return }
+        needsRefreshOnSettle = false
+        refreshVisible()
+    }
+
+    // Re-measure + reconfigure the on-screen rows (single sizer authority, >2pt tolerance), then relayout
+    // once if any height actually changed — position preserved (pin bottom / top anchor).
+    private func refreshVisible() {
+        let width = collectionView.bounds.width
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        guard !visible.isEmpty else { return }
+        var heightChanged = false
+        if width > 0 {
+            for id in visible {
+                let h = measure(id, width: width)
+                if let old = heights[id], abs(old - h) <= 2 { continue }
+                heights[id] = h
+                heightChanged = true
+            }
+        }
+        var snapshot = dataSource.snapshot()
+        snapshot.reconfigureItems(visible)
+        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+            if heightChanged { self?.reconcile() }
+        }
+    }
+
     // MARK: - Apply
 
     func apply(rowIds ids: [String]) {
         let width = collectionView.bounds.width
 
         guard ids != currentIds else {
-            // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick):
-            // RE-MEASURE the on-screen rows NOW so a change that grows the cell (a reaction badge, media
-            // finishing load) updates the exact row height immediately — the next bubble can't overlap.
-            // (Relying only on the async reportHeight left a window where the taller content overflowed
-            // its old frame = the overlap bug.) A row whose height is unchanged (e.g. a read tick) costs
-            // one cheap sizeThatFits and triggers no relayout.
-            let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-            guard !visible.isEmpty else { return }
-            // NEVER re-measure mid-scroll: ThreadView state churns while scrolling (topVisibleId etc.), and
-            // invalidating the layout during a scroll positions cells from two different generations =
-            // the overlapping-bubbles bug. A real height change during scroll still lands via reportHeight.
-            let scrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-            var heightChanged = false
-            if width > 0, !scrolling {
-                for id in visible {
-                    let h = measure(id, width: width)
-                    // Same >2pt threshold as reportHeight (ONE tolerance for both paths — the 0.5 here vs
-                    // 2 there disagreement caused an endless reconcile ping-pong between the two).
-                    if let old = heights[id], abs(old - h) <= 2 { continue }
-                    heights[id] = h
-                    heightChanged = true
-                }
+            // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick).
+            // SIGNAL'S "LAND WHEN SAFE" GATE (CVLoadCoordinator.canLandLoad): NOTHING lands while the list
+            // is in motion — no reconfigure, no re-measure, no relayout during dragging/deceleration or the
+            // send animation. Landing an update mid-motion positions cells from two layout generations =
+            // the overlapping-bubbles-while-scrolling bug. The request is coalesced (.lastOnly — the ids
+            // are unchanged, only content) and flushed once the list settles (scroll end / animation end).
+            if isInMotion {
+                needsRefreshOnSettle = true
+                return
             }
-            var snapshot = dataSource.snapshot()
-            snapshot.reconfigureItems(visible)
-            dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-                if heightChanged { self?.reconcile() }   // grow/shrink rows to exact heights, keep position
-            }
+            refreshVisible()
             return
         }
 
@@ -352,9 +376,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
                 UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.72, initialSpringVelocity: 0.6,
                                options: [.allowUserInteraction]) {
                     cell.transform = .identity
-                } completion: { _ in self.sendAnimating = false }
+                } completion: { _ in self.sendAnimating = false; self.settleFlush() }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.sendAnimating = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.sendAnimating = false
+                self?.settleFlush()
+            }
         } else {
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
@@ -570,7 +597,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         return bottomEdge >= collectionView.contentSize.height - 44
     }
 
-    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { sendAnimating = false }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { sendAnimating = false; settleFlush() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { settleFlush() }   // finger up, no fling → settled now
+    }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleFlush() }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let atBottom = computeAtBottom()
