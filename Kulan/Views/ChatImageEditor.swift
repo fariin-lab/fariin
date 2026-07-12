@@ -171,6 +171,17 @@ struct ChatImageEditor: View {
                               inkType: isHighlighter ? .marker : .pen,
                               penWidth: penWidth)
                     .frame(width: area.width, height: area.height)
+            } else if isTallMedia {
+                // LONG PORTRAIT (9:16 or taller, user spec): zoomed out to fully fit (unchanged) with
+                // ROUNDED CORNERS on the IMAGE ITSELF — the zoom view is sized to the fitted image rect
+                // and clipped, so the corners hug the photo, never the full-screen container. Pinch zoom
+                // works normally inside (min = fit; zooming in fills the rounded box).
+                let fit = Self.fittedSize(for: edited.size, in: area)
+                ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
+                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                    .frame(width: fit.width, height: fit.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .frame(width: area.width, height: area.height)   // centered in the canvas
             } else {
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
                               onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
@@ -180,6 +191,16 @@ struct ChatImageEditor: View {
         // Full-screen canvas like the multi-image editor: centered, no rounded card, chrome floats over.
         .frame(width: area.width, height: area.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // 9:16 or taller → the long-portrait presentation (rounded, fully visible). Standard ratios unchanged.
+    private var isTallMedia: Bool {
+        edited.size.width > 0 && edited.size.height >= edited.size.width * (16.0 / 9.0) - 1
+    }
+    private static func fittedSize(for img: CGSize, in area: CGSize) -> CGSize {
+        guard img.width > 0, img.height > 0 else { return area }
+        let s = min(area.width / img.width, area.height / img.height)
+        return CGSize(width: img.width * s, height: img.height * s)
     }
 
     // Composite the current strokes INTO the image (at the exact rect they were drawn in) and clear

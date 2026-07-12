@@ -23,6 +23,7 @@ struct VideoApprovalView: View {
     @GestureState private var drag: CGSize = .zero
 
     // Trim state
+    @State private var videoSize: CGSize = .zero   // natural (rotation-corrected) size → tall-video rounding
     @State private var duration: Double = 0
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
@@ -37,6 +38,8 @@ struct VideoApprovalView: View {
     private let minDuration: Double = 1   // keep at least ~1s
 
     private var trimmed: Bool { duration > 0 && (trimStart > 0.05 || trimEnd < duration - 0.05) }
+    // 9:16 or taller → long-portrait presentation (rounded corners on the video itself).
+    private var isTallVideo: Bool { videoSize.width > 0 && videoSize.height >= videoSize.width * (16.0 / 9.0) - 1 }
 
     var body: some View {
         ZStack {
@@ -50,9 +53,19 @@ struct VideoApprovalView: View {
             // so the line glides frame-by-frame in sync with the video instead of sitting frozen near the
             // left handle. While the user is dragging a handle/the playhead, `scrubTime` owns the position,
             // so we ignore player time then (no fight between the seek-preview and the observer).
-            TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
-                               scrubTime: scrubTime,
-                               onTime: { t in if scrubTime == nil { playhead = t } })
+            Group {
+                let base = TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
+                                              scrubTime: scrubTime,
+                                              onTime: { t in if scrubTime == nil { playhead = t } })
+                if isTallVideo {
+                    // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
+                    // ROUNDED CORNERS hug the video itself — standard ratios keep the untouched chain.
+                    base.aspectRatio(videoSize.width / videoSize.height, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                } else {
+                    base
+                }
+            }
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -158,6 +171,14 @@ struct VideoApprovalView: View {
         let asset = AVURLAsset(url: url)
         let dur = (try? await asset.load(.duration).seconds) ?? 0
         guard dur > 0 else { return }
+        // Natural (rotation-corrected) size → drives the long-portrait rounded presentation.
+        if let track = try? await asset.loadTracks(withMediaType: .video).first,
+           let sz = try? await track.load(.naturalSize),
+           let tf = try? await track.load(.preferredTransform) {
+            let r = CGRect(origin: .zero, size: sz).applying(tf)
+            let natural = CGSize(width: abs(r.width), height: abs(r.height))
+            await MainActor.run { videoSize = natural }
+        }
         await MainActor.run { duration = dur; trimEnd = dur }
 
         let gen = AVAssetImageGenerator(asset: asset)
