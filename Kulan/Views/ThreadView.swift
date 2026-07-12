@@ -509,20 +509,15 @@ struct ThreadView: View {
                 }
             }
         }
-        // Share Contact picker: each selected contact ships as its own encrypted contact-card message,
-        // then the optional caption as a follow-up text.
+        // Share Contact picker: tap a contact → native Send/Cancel confirm → ONE encrypted contact-card
+        // message (no caption for contacts — user spec).
         .sheet(isPresented: $showContactShare) {
-            ContactShareSheet { picked, cap in
+            ContactShareSheet { c in
                 Task {
-                    for c in picked {
-                        try? await ChatService.sendText(
-                            cid: cid,
-                            text: Message.contactMarkerText(uid: c.uid, name: c.name, photo: c.photo),
-                            group: isGroup ? groupMembers : nil)
-                    }
-                    if !cap.isEmpty {
-                        try? await ChatService.sendText(cid: cid, text: cap, group: isGroup ? groupMembers : nil)
-                    }
+                    try? await ChatService.sendText(
+                        cid: cid,
+                        text: Message.contactMarkerText(uid: c.uid, name: c.name, photo: c.photo),
+                        group: isGroup ? groupMembers : nil)
                 }
             }
         }
