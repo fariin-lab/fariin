@@ -88,9 +88,8 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
-    @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → list TOP inset + positions the pinned-bar overlay
+    @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → positions the pinned-bar overlay (layout only)
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
-    @State private var composerBottomInset: CGFloat = 0  // home-indicator at rest / keyboard height when open (below the bar)
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
     @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
@@ -208,16 +207,6 @@ struct ThreadView: View {
                     }
                 }
                 .ignoresSafeArea()
-            }
-            // Home-indicator at rest / keyboard height when open (this reader sits OUTSIDE the composer
-            // bar, so the bar itself is NOT in this value — it's added separately above). The list's
-            // bottom inset = composerBarHeight + this.
-            .background {
-                GeometryReader { geo in
-                    Color.clear.onChange(of: geo.safeAreaInsets.bottom, initial: true) { _, v in
-                        composerBottomInset = v
-                    }
-                }
             }
     }
 
@@ -1038,8 +1027,7 @@ struct ThreadView: View {
             },
             onReachedTop: { repo.loadOlder() },
             loadingOlder: repo.loadingOlder,
-            topInset: navBarHeight,
-            bottomInset: composerBarHeight + composerBottomInset,   // bar + (home indicator | keyboard)
+            composerBarHeight: composerBarHeight,   // the only SwiftUI-fed inset; nav/home/keyboard are UIKit-geometric
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             topVisibleId: $topVisibleId

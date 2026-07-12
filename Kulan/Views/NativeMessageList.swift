@@ -25,8 +25,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
     var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
-    var topInset: CGFloat = 0                   // nav-bar height (fed from SwiftUI) — list runs UNDER the header
-    var bottomInset: CGFloat = 0               // composer(+keyboard) height — list runs UNDER the composer
+    var composerBarHeight: CGFloat = 0         // the floating composer bar's height (the ONLY SwiftUI-fed inset)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
@@ -44,7 +43,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
-        vc.setBarInsets(top: topInset, bottom: bottomInset)
+        vc.setComposerBarHeight(composerBarHeight)
         vc.setLoadingOlder(loadingOlder)
         vc.apply(rowIds: rowIds)
         if let target = scrollTarget {
@@ -111,13 +110,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // .always so SwiftUI's safe-area insets (nav bar on top, floating composer on the bottom) become
         // the collection view's adjustedContentInset — the last message clears the composer and the
         // bottom-scroll lands exactly above it.
-        // Signal's model: the collection view is full-bleed UNDER the header + composer (ThreadView applies
-        // .ignoresSafeArea), and the bar heights are fed back as MANUAL content insets (setBarInsets) —
-        // so `.never` (not `.always`): adjustedContentInset == our contentInset. The values match what the
-        // safe area gave before (nav-bar top, composer+keyboard bottom), so every scroll/send method that
-        // reads adjustedContentInset behaves identically; only the frame now extends under the bars, which
-        // is what makes messages frost UNDER the blur bars with no band.
-        collectionView.contentInsetAdjustmentBehavior = .never
+        // GEOMETRIC insets (.always): the view is full-bleed under the nav bar + home area (ThreadView
+        // applies .ignoresSafeArea), and UIKit derives the top/home overlap from real geometry — a value
+        // that can NOT desync (this is what made the top rock-solid in 299-301). The parts UIKit can't
+        // know — the SwiftUI composer bar's height and the keyboard — are added as contentInset.bottom by
+        // updateBottomInset() (bar height fed from SwiftUI; keyboard observed directly, Signal's model).
+        // The earlier fully-manual .never + SwiftUI GeometryReader insets desynced during keyboard
+        // transitions (readers reporting late/0 → top inset 0 → bubbles under the header).
+        collectionView.contentInsetAdjustmentBehavior = .always
         // TOP edge-effect stays at the iOS 26 default: content scrolls UNDER the nav bar so its soft fade
         // is hidden behind the header (seamless top). BOTTOM edge-effect is turned OFF: content stops just
         // ABOVE the floating composer (it does not scroll under it), so the default bottom fade renders as
@@ -155,6 +155,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             topSpinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             topSpinner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
         ])
+
+        // Keyboard handled HERE, UIKit-native (the view's frame never changes — ThreadView ignores the
+        // keyboard safe area): observe the real keyboard frame and fold its overlap into the bottom inset.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange(_:)),
+                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
 
         buildDataSource()
     }
@@ -514,6 +519,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        updateBottomInset()   // safe-area values are valid here — keeps the bottom inset exact
         // Keep the BOTTOM edge-effect off (UIKit can reset it) so no fade/band shows above the composer.
         if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
             collectionView.bottomEdgeEffect.isHidden = true
@@ -528,21 +534,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         else { clampOffsetIfBeyondContent() }
     }
 
-    // Bar heights fed from SwiftUI (nav bar on top, floating composer + keyboard on the bottom) become the
-    // collection view's MANUAL content inset (Signal's updateContentInsets): the first/last message clears
-    // the bars while the rows between scroll UNDER them. Fires on every composer/keyboard resize, so it
-    // keeps the newest message pinned when the bottom inset grows (keyboard opening).
-    private var barTop: CGFloat = -1
-    private var barBottom: CGFloat = -1
-    func setBarInsets(top: CGFloat, bottom: CGFloat) {
+    // The two insets UIKit's geometric .always adjustment can't know: the SwiftUI composer bar's height
+    // (fed once from a reader ON the bar itself) and the live keyboard overlap (observed directly —
+    // Signal's model). Everything else (nav-bar top, home indicator) comes from real geometry via the
+    // safe area, so it can never desync. Keeps the newest message pinned when the bottom inset grows.
+    private var composerBarH: CGFloat = 0
+    private var keyboardOverlap: CGFloat = 0
+    func setComposerBarHeight(_ h: CGFloat) {
+        guard abs(h - composerBarH) > 0.5 else { return }
+        composerBarH = h
+        updateBottomInset()
+    }
+
+    @objc private func keyboardFrameWillChange(_ note: Notification) {
+        guard let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+              let window = view.window else { return }
+        let kbInView = view.convert(end, from: window.coordinateSpace)
+        keyboardOverlap = max(0, view.bounds.maxY - kbInView.minY)   // 0 when hidden (frame moves offscreen)
+        updateBottomInset()
+    }
+
+    private func updateBottomInset() {
         guard isViewLoaded else { return }
-        let newBottom = bottom + 12   // Signal's small bottom gap so the last bubble + reaction badge clear
-        guard abs(barTop - top) > 0.5 || abs(barBottom - newBottom) > 0.5 else { return }
+        // .always already adds the geometric home-indicator overlap; the keyboard replaces it when up.
+        let keyboardExtra = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
+        let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
+        guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
         let stayAtBottom = didInitialScroll && computeAtBottom()
-        barTop = top
-        barBottom = newBottom
-        collectionView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: newBottom, right: 0)
-        collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
+        collectionView.contentInset.bottom = newBottom
+        collectionView.verticalScrollIndicatorInsets.bottom = composerBarH + keyboardExtra
         if stayAtBottom { UIView.performWithoutAnimation { pinBottom() } }
     }
 
