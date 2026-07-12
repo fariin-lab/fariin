@@ -70,8 +70,9 @@ struct ThreadView: View {
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
-    @State private var comingSoon: ComingSoonWrap?   // Location tile → "coming soon" sheet
+    @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     @State private var showContactShare = false      // Contacts tile → share-contact picker
+    @State private var showLocationShare = false     // Location tile → Select Location map
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
@@ -496,6 +497,18 @@ struct ThreadView: View {
                 .presentationBackground(Color(.systemBackground))
         }
         .sheet(item: $comingSoon) { c in comingSoonSheet(c).presentationDetents([.fraction(0.6)]) }
+        // "Select Location" map (user design): permission → GPS/pan/search → Send Location outputs the
+        // coordinates, delivered as an encrypted location-card message.
+        .sheet(isPresented: $showLocationShare) {
+            LocationPickerSheet { lat, lon, label in
+                Task {
+                    try? await ChatService.sendText(
+                        cid: cid,
+                        text: Message.locationMarkerText(lat: lat, lon: lon, label: label),
+                        group: isGroup ? groupMembers : nil)
+                }
+            }
+        }
         // Share Contact picker: each selected contact ships as its own encrypted contact-card message,
         // then the optional caption as a follow-up text.
         .sheet(isPresented: $showContactShare) {
@@ -1387,7 +1400,7 @@ struct ThreadView: View {
                     attachTile("sparkles", "GIF") { showGifPicker = true }
                     attachTile("doc", "Files") { showFileImporter = true }
                     attachTile("person.crop.circle", "Contacts") { showContactShare = true }
-                    attachTile("location", "Location") { comingSoon = ComingSoonWrap(icon: "location", title: "Location") }
+                    attachTile("location", "Location") { showLocationShare = true }
                 }
                 .padding(.vertical, 12)
             }
@@ -3577,6 +3590,35 @@ struct MessageBubble: View, Equatable {
                 .frame(width: box.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            }
+        } else if let loc = message.locationCard {
+            // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 34))
+                        .foregroundStyle(.red, isMe ? Color.white : Color.primary.opacity(0.9))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(loc.label ?? "Location").font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                        Text(String(format: "%.5f, %.5f", loc.lat, loc.lon))
+                            .font(.caption).opacity(0.8)
+                    }
+                    Spacer(minLength: 6)
+                    Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).opacity(0.7)
+                }
+                HStack { Spacer(); metaRow }
+            }
+            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+            .padding(12)
+            .frame(width: maxBubbleWidth * 0.85)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                let q = (loc.label ?? "Shared Location").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
+                if let u = URL(string: "http://maps.apple.com/?ll=\(loc.lat),\(loc.lon)&q=\(q)") {
+                    UIApplication.shared.open(u)
+                }
             }
         } else if let card = message.contactCard {
             // SHARED CONTACT card (user design): avatar + name + chevron, time+ticks, and a full-width

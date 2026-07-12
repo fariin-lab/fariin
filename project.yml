@@ -53,6 +53,7 @@ targets:
         NSCameraUsageDescription: "Kulan needs camera access so you can take photos in chats."
         NSMicrophoneUsageDescription: "Kulan needs microphone access so you can send voice messages."
         NSFaceIDUsageDescription: "Kulan uses Face ID to unlock the app."
+        NSLocationWhenInUseUsageDescription: "Kulan needs your location so you can share it in chats."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         CFBundleURLTypes:

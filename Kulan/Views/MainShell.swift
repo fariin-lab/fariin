@@ -1356,6 +1356,8 @@ struct ChatRow: View, Equatable {
         } else if decodedLast.hasPrefix(Message.contactMarker) {
             // Shared-contact card → native icon + "Contact", never the raw marker text.
             previewRow("person.crop.circle.fill", lastSenderPrefix + "Contact")
+        } else if decodedLast.hasPrefix(Message.locationMarker) {
+            previewRow("mappin.circle.fill", lastSenderPrefix + "Location")
         } else {
             Text(lastSenderPrefix + decodedLast)
                 .font(.system(size: 14, weight: unread > 0 ? .medium : .regular))

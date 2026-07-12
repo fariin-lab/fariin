@@ -518,3 +518,27 @@ extension Message {
         "\(contactMarker)\(uid)|\(photo ?? "")|\(name)"
     }
 }
+
+// MARK: - Shared location (same encrypted-text marker transport as contact cards)
+
+struct SharedLocationCard {
+    let lat: Double
+    let lon: Double
+    let label: String?
+}
+
+extension Message {
+    static let locationMarker = "kulan-location:"
+    /// "kulan-location:<lat>|<lon>|<label-or-empty>"
+    var locationCard: SharedLocationCard? {
+        guard text.hasPrefix(Self.locationMarker) else { return nil }
+        let parts = text.dropFirst(Self.locationMarker.count)
+            .split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count >= 2, let lat = Double(parts[0]), let lon = Double(parts[1]) else { return nil }
+        let label = parts.count == 3 && !parts[2].isEmpty ? String(parts[2]) : nil
+        return SharedLocationCard(lat: lat, lon: lon, label: label)
+    }
+    static func locationMarkerText(lat: Double, lon: Double, label: String?) -> String {
+        "\(locationMarker)\(lat)|\(lon)|\(label ?? "")"
+    }
+}
