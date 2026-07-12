@@ -101,13 +101,13 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             guard vc.navigationItem.standardAppearance?.shadowColor != nil
                     || vc.navigationItem.standardAppearance == nil else { return }
             let appearance = UINavigationBarAppearance()
-            // Build 270's EXACT header (the borderless one): the native iOS 26 default glass. The soft
-            // scroll-edge-fade on the message list (NativeMessageList) — NOT a heavy bar material — is
-            // what makes the messages blur softly under the header with no band. A heavier backgroundEffect
-            // (systemThinMaterial/Chrome) drew a hard grey rectangle = the band. Keep the bar subtle and
-            // let the list's edge-fade do the work, like the SwiftUI ScrollView did automatically.
-            appearance.configureWithDefaultBackground()
-            appearance.shadowColor = nil   // no hairline separator
+            // Signal's EXACT header (OWSNavigationBar `.blur`, verified from source): a plain translucent
+            // UIBlurEffect(.regular) as backgroundEffect on ALL FOUR slots (so the bar never flips to an
+            // opaque/edge state when scrolled), shadowColor = nil (no hairline). The `.regular` blur frosts
+            // the messages that scroll UNDER the header (now that the list runs full-bleed) — the "bit
+            // blurry like Signal" look — without the heavy grey band of the material styles I tried.
+            appearance.backgroundEffect = UIBlurEffect(style: .regular)
+            appearance.shadowColor = nil
             vc.navigationItem.standardAppearance = appearance
             vc.navigationItem.scrollEdgeAppearance = appearance
             vc.navigationItem.compactAppearance = appearance

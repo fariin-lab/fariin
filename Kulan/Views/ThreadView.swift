@@ -166,8 +166,10 @@ struct ThreadView: View {
     }
 
     @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
-            VStack(spacing: 0) {
-            topPinArea(proxy)
+            // NO VStack: a VStack pins the list BELOW the nav bar, so ignoresSafeArea(.top) on the list is a
+            // no-op and content never reaches under the header (= the top band). The list is now the base
+            // layer running full-bleed under the header (Signal pins its collection view to the superview
+            // top); the pinned-message bar floats as a top overlay below.
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
             // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
@@ -312,6 +314,11 @@ struct ThreadView: View {
                 }
                 .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
             }
+            // Pinned-message bar floats at the top, BELOW the nav bar (padded by its measured height).
+            // The list runs full-bleed under the header, so messages scroll under the frosted bar and the
+            // soft edge-fade blurs them. When there are no pins topPinArea is empty, so nothing shows.
+            .overlay(alignment: .top) {
+                topPinArea(proxy).padding(.top, barInsetTop)
             }
             // Per-chat wallpaper (local, WhatsApp-style) behind the messages. `.none` renders the
             // plain app background, so chats without a wallpaper look exactly as before.
