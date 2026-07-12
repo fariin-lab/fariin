@@ -288,6 +288,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
     var onDismiss: () -> Void
     var allowsDismissPan: Bool = true   // false in the media editor: zoom only, no drag-to-close
     var onZoom: (CGFloat) -> Void = { _ in }   // reports live zoom scale so the container can gate drag-dismiss
+    var cornerRadius: CGFloat = 0       // >0 rounds the IMAGE itself (tall media), scaled to stay visually constant
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
@@ -297,6 +298,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
         vc.onDismiss = onDismiss
         vc.allowsDismissPan = allowsDismissPan
         vc.onZoom = onZoom
+        vc.mediaCornerRadius = cornerRadius
         return vc
     }
     func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {
@@ -304,6 +306,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
             uiViewController.image = image
             uiViewController.reloadImage()
         }
+        uiViewController.setCornerRadius(cornerRadius)
     }
 }
 
@@ -317,6 +320,14 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
 
     private var scrollView: ZoomableMediaView!
     private var imageView: UIImageView!
+    var mediaCornerRadius: CGFloat = 0
+
+    func setCornerRadius(_ r: CGFloat) {
+        guard r != mediaCornerRadius else { return }
+        mediaCornerRadius = r
+        scrollView?.mediaCornerRadius = r
+        scrollView?.updateZoomScaleForLayout()
+    }
 
     // Editor swaps the image (filter/crop applied) — refresh in place, keeping the zoom view.
     func reloadImage() {
@@ -339,6 +350,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         imageView.layer.magnificationFilter = .trilinear
 
         scrollView = ZoomableMediaView(mediaView: imageView, onSingleTap: { [weak self] in self?.onSingleTap?() })
+        scrollView.mediaCornerRadius = mediaCornerRadius
         scrollView.delegate = self
         view.addSubview(scrollView)
         scrollView.frame = view.bounds
@@ -430,6 +442,7 @@ final class ZoomableMediaView: UIScrollView {
     private var leadingC: NSLayoutConstraint!
     private var trailingC: NSLayoutConstraint!
     private var lastSafeAreaSize: CGSize = .zero
+    var mediaCornerRadius: CGFloat = 0   // rounds the mediaView; kept visually constant (divided by minScale)
 
     init(mediaView: UIView, onSingleTap: @escaping () -> Void = {}) {
         self.mediaView = mediaView
@@ -497,6 +510,15 @@ final class ZoomableMediaView: UIScrollView {
         let maxScale = minScale * 8
         minimumZoomScale = minScale
         maximumZoomScale = maxScale
+        // Round the media itself. The mediaView is at its FULL pixel size (the scroll view scales it by
+        // zoomScale), so to show a constant ~cornerRadius pt at the fitted (min) zoom, the layer radius
+        // must be divided by minScale. Corners grow when zoomed in — but they're off-screen by then.
+        if mediaCornerRadius > 0, minScale > 0 {
+            mediaView.layer.cornerRadius = mediaCornerRadius / minScale
+            mediaView.layer.masksToBounds = true
+        } else {
+            mediaView.layer.cornerRadius = 0
+        }
         if zoomScale < minScale { zoomScale = minScale }
         else if zoomScale > maxScale { zoomScale = maxScale }
 

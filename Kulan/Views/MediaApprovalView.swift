@@ -128,18 +128,13 @@ struct MediaApprovalView: View {
     @ViewBuilder private func pageView(_ item: ApprovalMedia, index: Int) -> some View {
         switch item {
         case .image(_, let ui):
-            // IDENTICAL structure to the single editor + the video (aspectRatio(.fit) + clipShape): tall
-            // (9:16+) images fit fully with rounded corners on the image itself; standard ratios stay
-            // full-bleed. ZoomImageView keeps normal pinch-zoom in both cases.
-            let img = ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
-                                    onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-            if isTall(ui.size) {
-                img.aspectRatio(ui.size.width / ui.size.height, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                img.ignoresSafeArea()
-            }
+            // IDENTICAL frame system to the SINGLE image editor: one full-screen ZoomImageView with
+            // screen-centered pinch zoom; tall (9:16+) images get rounded corners on the image itself via
+            // cornerRadius. Normal ratios: cornerRadius 0 → unchanged full-screen.
+            ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
+                          onDim: { _ in }, onDismiss: {}, allowsDismissPan: false,
+                          cornerRadius: isTall(ui.size) ? 22 : 0)
+                .ignoresSafeArea()
         case .video(let id, let url, let thumb, let duration):
             // EXACT single-video-editor behavior: starts PAUSED with the big Play button, tap toggles,
             // pauses while trimming/scrubbing, playhead tracks real time. Tall (9:16+) videos fit with

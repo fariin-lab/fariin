@@ -171,21 +171,14 @@ struct ChatImageEditor: View {
                               inkType: isHighlighter ? .marker : .pen,
                               penWidth: penWidth)
                     .frame(width: area.width, height: area.height)
-            } else if isTallMedia {
-                // LONG PORTRAIT (9:16+): EXACTLY like the single VIDEO editor — the media aspect-FITS the
-                // area ABOVE the bottom toolbar/caption (reserved via .padding(.bottom, bottomChromeH), the
-                // video's safeAreaInset equivalent), centered with black margins, rounded corners on the
-                // image itself, chrome sitting over BLACK (not the photo → no peach tint). Pinch zoom fills
-                // the screen naturally (ZoomImageView); default is zoomed-out-to-fit.
-                ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
-                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
-                    .aspectRatio(edited.size.width / edited.size.height, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .padding(.bottom, bottomChromeH)                 // reserve the toolbar area (video parity)
-                    .frame(width: area.width, height: area.height)
             } else {
+                // ONE frame system for ALL images (single + multi, tall + normal): a full-screen
+                // ZoomImageView. Pinch zoom is screen-centered and natural (the scroll view is full
+                // screen); tall (9:16+) images get rounded corners on the IMAGE itself via cornerRadius
+                // (kept visually constant across zoom). Normal ratios: cornerRadius 0 → unchanged.
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
-                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false,
+                              cornerRadius: isTallMedia ? 22 : 0)
                     .frame(width: area.width, height: area.height)
             }
         }
