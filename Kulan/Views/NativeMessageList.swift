@@ -111,9 +111,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // especially its reaction badge, which hangs below the bubble — isn't jammed against / clipped
         // by the floating composer. This adds to the safe-area (composer height) inset.
         collectionView.contentInset.bottom = 12
-        // Build 282: leave the collection view's scroll-edge effect at the iOS 26 DEFAULT (soft fade) —
-        // with no frosted bars over it (default nav + safeAreaInset composer), the default fade is what
-        // gives the borderless top/bottom. Build 291 forced it OFF, which is why it looked banded.
+        // TOP edge-effect stays at the iOS 26 default: content scrolls UNDER the nav bar so its soft fade
+        // is hidden behind the header (seamless top). BOTTOM edge-effect is turned OFF: content stops just
+        // ABOVE the floating composer (it does not scroll under it), so the default bottom fade renders as
+        // a visible band there — the "bottom border". Hiding it lets content end cleanly above the
+        // transparent composer with no band.
+        if #available(iOS 26.0, *) {
+            collectionView.bottomEdgeEffect.isHidden = true
+        }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -445,7 +450,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // (Build 282: no edge-effect override — the iOS 26 default soft fade stands.)
+        // Keep the BOTTOM edge-effect off (UIKit can reset it) so no fade/band shows above the composer.
+        if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
+            collectionView.bottomEdgeEffect.isHidden = true
+        }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
             else { scheduleEmptyReveal() }
