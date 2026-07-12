@@ -96,7 +96,7 @@ struct GroupCallView: View {
     // this lets you move the call to AirPods/Bluetooth/earpiece through the system sheet.
     private var routeCtrl: some View {
         ZStack {
-            Image(systemName: "speaker.wave.2.fill").font(.title3).foregroundStyle(.white)
+            Image(systemName: "speaker.wave.2.fill").font(.title3).foregroundStyle(.primary)
                 .frame(width: 54, height: 54)
                 .liquidGlass(Circle(), interactive: true)
             AudioRoutePicker().frame(width: 54, height: 54).clipShape(Circle())

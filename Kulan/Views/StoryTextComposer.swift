@@ -125,7 +125,7 @@ struct StoryTextComposer: View {
     private func circle(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .liquidGlass(Circle())                      // non-interactive glass: its touch-tracking was
             .contentShape(Circle())                     // intermittently eating the Button tap ("sometimes works")

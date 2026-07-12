@@ -69,14 +69,14 @@ struct ScanQRView: View {
             VStack {
                 HStack {
                     Button { dismiss() } label: {
-                        Image(systemName: "xmark").font(.title3.weight(.semibold)).foregroundStyle(.white)
+                        Image(systemName: "xmark").font(.title3.weight(.semibold)).foregroundStyle(.primary)
                             .padding(12).liquidGlass(Circle(), interactive: true)
                     }
                     Spacer()
                 }
                 Spacer()
                 Text(notFound ? "No Kulan user found" : "Point at a Kulan QR code")
-                    .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.primary)
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .liquidGlass(Capsule())
                     .padding(.bottom, 40)

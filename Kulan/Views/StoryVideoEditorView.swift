@@ -73,21 +73,21 @@ struct StoryVideoEditorView: View {
                     HStack {
                         Button { dismiss() } label: {
                             Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.primary)
                                 .shadow(color: .black.opacity(0.35), radius: 2)
                                 .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
                         }
                         Spacer()
                         if duration > Double(Limits.storyVideoSeconds) + 0.5 {
                             Text("First \(Limits.storyVideoSeconds)s will be shared")
-                                .font(.footnote.weight(.medium)).foregroundStyle(.white)
+                                .font(.footnote.weight(.medium)).foregroundStyle(.primary)
                                 .padding(.horizontal, 12).frame(height: 32)
                                 .liquidGlass(Capsule())
                         }
                         Button { muted.toggle(); player.isMuted = muted } label: {
                             Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.primary)
                                 .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
                         }
                     }

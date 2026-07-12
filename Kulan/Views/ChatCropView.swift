@@ -148,7 +148,7 @@ struct ChatCropView: View {
     private var topBar: some View {
         HStack {
             Button { close() } label: {
-                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .liquidGlass(Circle(), interactive: true)   // real native Liquid Glass
                     .contentShape(Circle())

@@ -203,7 +203,7 @@ struct ImageViewerView: View {
                 Text(senderName).font(.subheadline.weight(.semibold))
                 Text(dateLine).font(.caption2)
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 16).padding(.vertical, 7)
             .liquidGlass(Capsule(), interactive: false)
             Spacer()
@@ -211,7 +211,7 @@ struct ImageViewerView: View {
                 Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
             } label: {
-                Image(systemName: "ellipsis").font(.title3.weight(.semibold)).foregroundStyle(.white)
+                Image(systemName: "ellipsis").font(.title3.weight(.semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
             }
         }
@@ -249,7 +249,7 @@ struct ImageViewerView: View {
 
     private func glassButton(_ icon: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Image(systemName: icon).font(.title3.weight(.semibold)).foregroundStyle(.primary)
                 .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
         }
     }

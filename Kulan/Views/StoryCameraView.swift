@@ -183,7 +183,7 @@ struct StoryCameraView: View {
                     PhotosPicker(selection: $libraryItem, matching: .images) { circleIcon("photo.on.rectangle") }
                     Spacer()
                     Button { onTextMode() } label: {
-                        Text("Aa").font(.system(size: 18, weight: .heavy)).foregroundStyle(.white)
+                        Text("Aa").font(.system(size: 18, weight: .heavy)).foregroundStyle(.primary)
                             .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
                     }
                     Spacer()
@@ -210,7 +210,7 @@ struct StoryCameraView: View {
     private func circleIcon(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .liquidGlass(Circle(), interactive: true)
     }

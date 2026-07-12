@@ -207,7 +207,7 @@ struct StoryEditorView: View {
                     HStack {
                         Button { dismiss() } label: {
                             Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)   // always white; glass + shadow carry contrast
+                                .foregroundStyle(.primary)   // always white; glass + shadow carry contrast
                                 .shadow(color: .black.opacity(0.35), radius: 2)
                                 .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
                         }

@@ -63,7 +63,7 @@ struct VideoPlayerScreen: View {
                     .onTapGesture { togglePlay(); showChromeBriefly() }
                 if !isPlaying && !zoomed {   // center play button (glass) when paused / at end
                     Button { togglePlay() } label: {
-                        Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.white)
+                        Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.primary)
                             .frame(width: 74, height: 74)
                             .liquidGlass(Circle(), interactive: true)
                     }
@@ -129,7 +129,7 @@ struct VideoPlayerScreen: View {
     }
 
     private func skipBadge(_ icon: String) -> some View {
-        Image(systemName: icon).font(.system(size: 26, weight: .medium)).foregroundStyle(.white)
+        Image(systemName: icon).font(.system(size: 26, weight: .medium)).foregroundStyle(.primary)
             .frame(width: 66, height: 66)
             .liquidGlass(Circle(), interactive: false)
     }
@@ -138,7 +138,7 @@ struct VideoPlayerScreen: View {
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 40, height: 40)
                     .liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())

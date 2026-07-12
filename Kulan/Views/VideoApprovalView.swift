@@ -87,19 +87,19 @@ struct VideoApprovalView: View {
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
             }
             .buttonStyle(.plain)
             Spacer()
             if trimmed {
-                Text(trimLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Text(trimLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary)
                     .padding(.horizontal, 12).frame(height: 32).liquidGlass(Capsule(), interactive: false)
             }
             // HD toggle (top-right) — 1080p when on, else 720p (matches the photo editor's HD).
             Button { hd.toggle() } label: {
                 Text("HD").font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .white)
+                    .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -131,7 +131,7 @@ struct VideoApprovalView: View {
             TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
                       axis: .vertical)
                 .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls (Signal)
-                .foregroundStyle(.white).focused($captionFocused)
+                .foregroundStyle(.primary).focused($captionFocused)
                 .padding(.horizontal, 16).padding(.vertical, 9).frame(minHeight: 40)
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
             Button { send() } label: {

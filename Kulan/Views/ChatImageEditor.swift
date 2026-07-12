@@ -94,7 +94,7 @@ struct ChatImageEditor: View {
                         dismiss()
                     }
                 } label: {
-                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                         .frame(width: 44, height: 44)
                         .liquidGlass(Circle(), interactive: true)
                         .contentShape(Circle())
@@ -103,7 +103,7 @@ struct ChatImageEditor: View {
                 Spacer()
                 if isDrawing {
                     Button { bakeDrawing(); isDrawing = false } label: {
-                        Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                        Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
                             .padding(.horizontal, 18).frame(height: 44)
                             .liquidGlass(Capsule(), interactive: true)
                     }
@@ -222,7 +222,7 @@ struct ChatImageEditor: View {
                 // Edit-only (opened straight into pen from the multi-image screen): finishing the drawing
                 // returns the photo immediately — no extra editor page in between.
                 Button { if editOnly { returnEdited() } else { bakeDrawing(); isDrawing = false } } label: {
-                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                         .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -234,7 +234,7 @@ struct ChatImageEditor: View {
     private func penTool(_ icon: String, active: Bool = false, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 17, weight: .medium))
-                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
                 .frame(width: 44, height: 44)
                 .liquidGlass(Circle(), interactive: true).contentShape(Circle())
         }
@@ -293,7 +293,7 @@ struct ChatImageEditor: View {
                     } label: {
                         Image(systemName: viewOnce ? "1.circle.fill" : "1.circle")
                             .font(.system(size: 20))
-                            .foregroundStyle(viewOnce ? Color(hex: 0x3DA1FD) : .white)
+                            .foregroundStyle(viewOnce ? Color(hex: 0x3DA1FD) : .primary)
                             .frame(width: 40, height: 40)   // matches the 40px bar; bottom-aligned
                             .contentShape(Rectangle())
                     }
@@ -324,7 +324,7 @@ struct ChatImageEditor: View {
                     Image(systemName: icon).font(.system(size: 16, weight: .medium))
                 }
             }
-            .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+            .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
             .frame(width: 40, height: 40)
             .liquidGlass(Circle(), interactive: true)
             .contentShape(Circle())

@@ -128,7 +128,7 @@ struct MediaApprovalView: View {
     private var topBar: some View {
         HStack {
             Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())
@@ -146,7 +146,7 @@ struct MediaApprovalView: View {
                 if let label { Text(label).font(.system(size: 13, weight: .bold)) }
                 else { Image(systemName: icon).font(.system(size: 17, weight: .medium)) }
             }
-            .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+            .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
             .frame(width: 44, height: 44)
             .liquidGlass(Circle(), interactive: true)
             .contentShape(Circle())
@@ -180,7 +180,7 @@ struct MediaApprovalView: View {
                           prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
                           axis: .vertical)
                     .lineLimit(1...7)
-                    .foregroundStyle(.white).focused($captionFocused)
+                    .foregroundStyle(.primary).focused($captionFocused)
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .frame(minHeight: 40)
                     .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
