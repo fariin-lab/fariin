@@ -48,7 +48,9 @@ struct SignalDismissHost: UIViewRepresentable {
         private var container: UIView?
         private var fromFrame: CGRect = .zero
         private var active = false
-        private static let distanceToCompletion: CGFloat = 88   // Signal's exact threshold
+        private static let distanceToCompletion: CGFloat = 88    // visual scrub (scale/alpha) reference
+        private static let completionDistance: CGFloat = 160     // drag past this ↓ → dismiss (else recover)
+        private static let completionVelocity: CGFloat = 800     // ...or a downward flick faster than this
 
         init(_ p: SignalDismissHost) { parent = p }
 
@@ -122,8 +124,17 @@ struct SignalDismissHost: UIViewRepresentable {
             case .ended:
                 guard active else { return }
                 let o = g.translation(in: root)
-                // Signal: finish if percentComplete > 0 — any real progress dismisses, no velocity gate.
-                if hypot(o.x, o.y) > 0.5 { finish() } else { cancel() }
+                let v = g.velocity(in: root)
+                // Signal's completion decision (shouldCompleteTransition): finish ONLY if the media was
+                // dragged past the dismiss threshold OR flung downward fast; otherwise CANCEL and spring
+                // it back to exactly where it came from. This is what lets you drag down, change your
+                // mind, drag back up, and fully recover — the net downward offset is what counts, so
+                // dragging back above the threshold cancels.
+                if o.y > Self.completionDistance || v.y > Self.completionVelocity {
+                    finish(offset: o)
+                } else {
+                    cancel()
+                }
 
             case .cancelled, .failed:
                 guard active else { return }
@@ -133,15 +144,17 @@ struct SignalDismissHost: UIViewRepresentable {
             }
         }
 
-        // Signal's final spring (0.25s, damping 1) toward the no-destination fallback frame:
-        // fromFrame shifted down by its own height; shadow off, backdrop out — then complete (dismiss).
-        private func finish() {
+        // Dismiss (0.25s, damping 1): the backdrop is already clear past the threshold (the chat shows
+        // behind), so the copy fades out from RIGHT WHERE IT WAS RELEASED with a small continued drift +
+        // shrink — never the old full-height downward slide ("continues moving downward"). Then dismiss.
+        private func finish(offset o: CGPoint) {
             guard let c = container else { return }
             active = false
             UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
                            options: [.curveEaseInOut]) {
-                c.transform = .identity
-                c.frame = self.fromFrame.offsetBy(dx: 0, dy: self.fromFrame.height)
+                c.center = CGPoint(x: self.fromFrame.midX + o.x, y: self.fromFrame.midY + o.y + 40)
+                c.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+                c.alpha = 0
                 c.layer.shadowOpacity = 0
                 self.backdrop?.alpha = 0
             } completion: { _ in
