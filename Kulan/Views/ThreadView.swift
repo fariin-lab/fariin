@@ -794,7 +794,7 @@ struct ThreadView: View {
                     }
                     Text(msg.map { m in
                         m.isAlbum ? (m.text.isEmpty ? "\(m.album.count) Photos" : m.text)
-                        : (m.isGif ? "GIF" : (m.isImage ? "Photo" : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.text))))
+                        : (m.isGif ? "GIF" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.safeText))))
                     } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -925,9 +925,10 @@ struct ThreadView: View {
                 .padding(.vertical, 8)
         }
         if msg.id == firstUnreadId { unreadDivider }
-        if msg.isUnsupportedFeature {
-            // Sent by a newer app version this build can't render — a clearly system-styled notice
-            // (NOT a normal bubble) so it can't be mistaken for real content.
+        if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil {
+            // A reserved kulan-…: payload we can't render as a card — either a newer app version's
+            // feature OR a malformed known marker. Either way show the system notice, NEVER the raw
+            // marker text.
             unsupportedRow(msg).id(msg.id)
         } else if msg.isSystem {
             systemRow(msg).id(msg.id)
@@ -950,8 +951,12 @@ struct ThreadView: View {
                     // Discard the pending optimistic send (media still uploading — not on the server yet).
                     if let clientId = m.clientId { repo.removePending(clientId: clientId) }
                 },
-                onTapContact: { uid in
+                onTapContact: { uid, name, photo in
                     // "message" on a shared-contact card → open (or create) the chat with that user.
+                    guard uid != me else { return }           // your own card → no self-chat
+                    guard ChatService.convId(me, uid) != cid else { return }   // already in this chat
+                    AppRouter.shared.pendingChatName = name    // so a brand-new chat shows the name/photo,
+                    AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
                     AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
                 },
                 onTapImage: { viewerImage = $0 },
@@ -1489,9 +1494,14 @@ struct ThreadView: View {
     private func sendDocument(_ url: URL) async {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
+        // Check the size BEFORE materializing the whole file (attributes, not a full read).
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size > Limits.fileUploadBytes {
+            await MainActor.run { sendError = "File too large (max \(Limits.fileUploadBytes / (1024*1024)) MB)." }; return
+        }
         guard let data = try? Data(contentsOf: url) else { return }
-        guard data.count <= 25 * 1024 * 1024 else {
-            await MainActor.run { sendError = "File too large (max 25 MB)." }; return
+        guard data.count <= Limits.fileUploadBytes else {
+            await MainActor.run { sendError = "File too large (max \(Limits.fileUploadBytes / (1024*1024)) MB)." }; return
         }
         let name = url.lastPathComponent
         // Optimistic bubble FIRST (instant feedback) — the encrypt+upload then runs in the background and
@@ -1595,7 +1605,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         replyingTo = nil
         typingSent = false
@@ -2712,8 +2722,10 @@ struct ThreadView: View {
         guard holdStarted, !recordLocked else { return }   // locked = keep going, the bar owns it
         if cancelled || recordCancelArmed {
             cancelRecording()
-        } else if recorder.elapsed < 0.5 {
-            cancelRecording(); flashHoldHint()             // accidental tap → discard + "hold to record"
+        } else if recorder.elapsed < 1.0 {
+            // Match AudioRecorder.finish()'s 1.0s floor EXACTLY — a hold under 1s can't produce a note
+            // (finish returns nil), so treat it as an accidental tap here instead of "sending" nothing.
+            cancelRecording(); flashHoldHint()             // too short → discard + "hold to record"
         } else {
             sendRecording()
         }
@@ -2824,7 +2836,12 @@ struct ThreadView: View {
     }
 
     private func stopAndSendAudio() async {
-        guard let (data, dur, wf) = recorder.finish() else { return }
+        // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
+        // still tear down cleanly so the reply bar / recording UI never gets stuck.
+        guard let (data, dur, wf) = recorder.finish() else {
+            await MainActor.run { replyingTo = nil }
+            return
+        }
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
         // recording), then reconcile when the upload echoes back — no dead lag on release.
         let clientId = UUID().uuidString
@@ -2832,7 +2849,7 @@ struct ThreadView: View {
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? "📷 Photo" : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.text))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         await MainActor.run {
             repo.addPending(Message(localAudioData: data, duration: dur, waveform: wf,
@@ -2945,7 +2962,7 @@ struct MessageBubble: View, Equatable {
     var onReply: (Message) -> Void = { _ in }
     var onDelete: (Message) -> Void = { _ in }
     var onCancelSending: (Message) -> Void = { _ in }   // media still uploading → discard the pending send
-    var onTapContact: (String) -> Void = { _ in }       // shared-contact card "message" → open a chat with uid
+    var onTapContact: (_ uid: String, _ name: String, _ photo: String?) -> Void = { _, _, _ in }   // card "message" → open chat
     var onTapImage: (Message) -> Void = { _ in }
     var onTapAlbum: (_ gallery: [Message], _ startId: String) -> Void = { _, _ in }
     var onTapVideo: (Message) -> Void = { _ in }
@@ -3296,7 +3313,10 @@ struct MessageBubble: View, Equatable {
                         if message.sendState == nil {   // can't react until the message is on the server
                             Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
                         }
-                        if isMe && !message.isImage && !message.isAudio && !message.isCall && message.sendState == nil {
+                        // Edit: text messages only — NOT a contact/location card (its "text" is a marker;
+                        // editing would corrupt the card and expose the raw payload in the composer).
+                        if isMe && !message.isImage && !message.isAudio && !message.isCall
+                            && !message.isFeatureMarker && message.sendState == nil {
                             Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
                         }
                         if canPin {
@@ -3304,13 +3324,17 @@ struct MessageBubble: View, Equatable {
                                 Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
                             }
                         }
-                        if !message.text.isEmpty {
+                        // Copy: real text only — never a feature marker (contact/location card would put
+                        // the raw kulan-…: payload + uid/photo URL on the clipboard) and never view-once.
+                        if !message.text.isEmpty && !message.isFeatureMarker && !message.viewOnce {
                             Button { UIPasteboard.general.string = message.text } label: { Label("Copy", systemImage: "doc.on.doc") }
                         }
-                        if !message.isCall {
+                        // Forward: not calls, and NEVER a view-once photo (forwarding defeats view-once).
+                        if !message.isCall && !message.viewOnce {
                             Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
                         }
-                        if message.isImage {
+                        // Save Image: real photos only — NEVER a view-once photo (saving defeats view-once).
+                        if message.isImage && !message.viewOnce {
                             Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
                         }
                         if isGroup && isMe && message.sendState == nil {
@@ -3689,7 +3713,7 @@ struct MessageBubble: View, Equatable {
                     .frame(maxWidth: .infinity).frame(height: 40)
                     .background((isMe ? Color.white.opacity(0.22) : Color.primary.opacity(0.08)), in: Capsule())
                     .contentShape(Capsule())
-                    .onTapGesture { onTapContact(card.uid) }
+                    .onTapGesture { onTapContact(card.uid, card.name, card.photo) }
             }
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)

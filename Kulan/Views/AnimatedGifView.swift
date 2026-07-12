@@ -56,11 +56,18 @@ struct AnimatedGifView: UIViewRepresentable {
         if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
             Self.cache.setObject(img, forKey: url as NSString); v.image = img; return
         }
+        let requested = url
         URLSession.shared.dataTask(with: u) { data, _, _ in
             guard let data, let img = UIImage.animatedGif(data: data) else { return }
             GifBytesCache.store(data, url)   // persist raw bytes so it never re-downloads
             Self.cache.setObject(img, forKey: url as NSString)
-            DispatchQueue.main.async { v.image = img }
+            DispatchQueue.main.async {
+                // The view may have been REUSED for a different GIF while this download was in flight
+                // (bubble scroll / grid reuse) — only assign if it still wants THIS url, else the old
+                // GIF would overwrite the new one (the "wrong GIF flashes" bug).
+                guard coord.loadedURL == requested else { return }
+                v.image = img
+            }
         }.resume()
     }
 }

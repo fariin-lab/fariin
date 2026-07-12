@@ -408,16 +408,23 @@ struct MediaApprovalView: View {
                     ordered.append(.image(ui))
                 case .video(let id, let url, let poster, let duration):
                     let finalURL: URL
-                    if trimmed(id, duration: duration),
+                    var finalDuration = duration
+                    let didTrim = trimmed(id, duration: duration)
+                    if didTrim,
                        let out = await Self.exportTrimmed(url: url, start: trimStart[id] ?? 0, end: trimEnd[id] ?? duration) {
                         finalURL = out
+                        // The exported clip is only the KEPT range — its duration is trimEnd-trimStart,
+                        // NOT the original length (using the original miscalibrated the player scrubber).
+                        finalDuration = max(0.1, (trimEnd[id] ?? duration) - (trimStart[id] ?? 0))
                     } else {
                         finalURL = url
                     }
-                    // A poster for the grid: the loaded thumb, else the final clip's first frame.
+                    // A poster for the grid: the TRIMMED clip's first frame when trimmed (its real start
+                    // frame, not the original 0:00), else the loaded thumb.
                     var thumb = poster
+                    if didTrim { thumb = await Self.firstFrame(finalURL) ?? poster }
                     if thumb == nil { thumb = await Self.firstFrame(finalURL) }
-                    ordered.append(.video(url: finalURL, thumb: thumb ?? UIImage(), duration: duration))
+                    ordered.append(.video(url: finalURL, thumb: thumb ?? UIImage(), duration: finalDuration))
                 }
             }
             await MainActor.run {

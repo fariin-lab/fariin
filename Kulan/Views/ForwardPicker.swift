@@ -37,7 +37,7 @@ struct ForwardPicker: View {
         if message.isImage { return "📷 Photo" }
         if message.isVideo { return "🎥 Video" }
         if message.isAudio { return "🎤 Voice message" }
-        return message.text
+        return message.safeText   // never leak a raw kulan-…: marker (contact/location card)
     }
 
     var body: some View {

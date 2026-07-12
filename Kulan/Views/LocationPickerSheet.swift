@@ -48,9 +48,16 @@ struct LocationPickerSheet: View {
     @State private var query = ""
     @State private var results: [MKMapItem] = []
     @State private var selectedName: String?
+    @State private var userMovedMap = false   // the user actually panned the map to a spot
     @FocusState private var searchFocused: Bool
 
-    private var sendCoordinate: CLLocationCoordinate2D? { center ?? fetcher.location }
+    // Only a location the user actually CHOSE counts: a spot they panned to, a search result they
+    // picked, or a real GPS fix. Without this, `center` was set on the first automatic camera settle
+    // (even the default region when permission is denied), so Send shipped a bogus default location.
+    private var sendCoordinate: CLLocationCoordinate2D? {
+        if userMovedMap || selectedName != nil { return center }
+        return fetcher.location
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -62,6 +69,9 @@ struct LocationPickerSheet: View {
                 center = ctx.camera.centerCoordinate
                 if searchFocused == false && !results.isEmpty { results = [] }
             }
+            // A finger drag on the map = the user deliberately choosing a spot (enables Send even with
+            // no GPS / permission denied — they're pointing at a real place).
+            .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in userMovedMap = true })
             // Fixed center pin — pan the map to choose the spot (Telegram-style).
             .overlay {
                 Image(systemName: "mappin")

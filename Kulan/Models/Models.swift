@@ -552,10 +552,30 @@ extension Message {
     static let knownFeatureMarkers: [String] = [contactMarker, locationMarker]
 
     /// True when the text uses the reserved kulan-feature namespace with a feature this build doesn't
-    /// know — i.e. it was sent by a newer app version. Matched strictly (`^kulan-<letters>:`) so ordinary
-    /// text that merely contains "kulan-" is never affected.
+    /// know — i.e. it was sent by a newer app version. Matched strictly (`^kulan-<name>:`) so ordinary
+    /// text that merely contains "kulan-" is never affected. (Alphanumeric so future names like
+    /// `kulan-poll2:` / `kulan-livelocation:` are still caught.)
+    static let featureMarkerPattern = "^kulan-[a-z0-9]+:"
     var isUnsupportedFeature: Bool {
-        guard let r = text.range(of: "^kulan-[a-z]+:", options: .regularExpression) else { return false }
+        guard let r = text.range(of: Message.featureMarkerPattern, options: .regularExpression) else { return false }
         return !Message.knownFeatureMarkers.contains(String(text[r]))
+    }
+
+    /// True for ANY reserved feature marker (known or not), including a malformed one that failed to
+    /// parse into a card — used to keep the raw marker out of text surfaces.
+    var isFeatureMarker: Bool {
+        text.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil
+    }
+
+    /// A safe human-friendly label for surfaces that must NEVER show raw text/markers — reply quotes,
+    /// clipboard, forward/info headers. For ordinary messages it is just the text; for feature markers
+    /// it is a friendly noun (mirrors the chat-list preview). Media types keep their own snippet logic
+    /// elsewhere; this only rescues the marker-carrying text messages.
+    var safeText: String {
+        if contactCard != nil { return "Contact" }
+        if locationCard != nil { return "Location" }
+        if isUnsupportedFeature { return "Message from a newer version" }
+        if isFeatureMarker { return "Message" }   // malformed known marker → never leak the raw payload
+        return text
     }
 }
