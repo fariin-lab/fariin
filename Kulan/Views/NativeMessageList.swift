@@ -76,6 +76,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var currentIds: [String] = []
     private var heights: [String: CGFloat] = [:]   // rowId -> exact measured height (Signal's cellSize cache)
     private var measuredWidth: CGFloat = 0
+    private var hostWidth: CGFloat = 0             // final cell width, pinned into each hosted row's first layout
 
     // Off-screen SwiftUI sizer: hosts a row and returns its exact height for a given width (no display).
     // A child VC so it inherits our trait collection (Dynamic Type), matching the on-screen render.
@@ -164,8 +165,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private func buildDataSource() {
         reg = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
             let content = self?.coordinator.parent.row(id) ?? AnyView(EmptyView())
+            // PIN the row to the FINAL cell width on its very first layout pass. A freshly configured
+            // UIHostingConfiguration lays its SwiftUI out before the cell has its final frame, so Text
+            // computed line breaks at a transient narrower width and never re-wrapped — the "newest
+            // message wraps narrow with empty space until the next send re-renders it" bug. Proposing the
+            // known width up-front means the first wrap IS the final wrap.
+            let hostW = self?.hostWidth ?? 0
             cell.contentConfiguration = UIHostingConfiguration {
                 content
+                    .frame(width: hostW > 0 ? hostW : nil)
                     .background(GeometryReader { g in
                         Color.clear.preference(key: RowHeightKey.self, value: g.size.height)
                     })
@@ -457,7 +465,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         super.viewWillLayoutSubviews()
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
         stickBottom = didInitialScroll && !pendingBottomOnOpen && !sendAnimating && computeAtBottom()
-        // Width change (rotation / split view): every measured height is width-dependent — drop + re-measure.
+        // Keep the registration's width pin fresh: cells configured during this pass read hostWidth.
+        if collectionView.bounds.width > 0 { hostWidth = collectionView.bounds.width }
+        // Width change (rotation / split view): every measured height is width-dependent — drop + re-measure,
+        // and RECONFIGURE the on-screen cells so their hard width pin (.frame(width: hostWidth)) updates.
         let w = collectionView.bounds.width
         if w > 0, measuredWidth > 0, w != measuredWidth {
             heights.removeAll(keepingCapacity: true)
@@ -465,6 +476,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             measuredWidth = w
             layout.generation += 1
             layout.invalidateLayout()
+            let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+            if !visible.isEmpty {
+                var snap = dataSource.snapshot()
+                snap.reconfigureItems(visible)
+                dataSource.apply(snap, animatingDifferences: false)
+            }
         }
     }
 
