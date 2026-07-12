@@ -83,22 +83,19 @@ struct AddToGroupView: View {
     // Native UIKit action sheet — always a BOTTOM sheet with a Cancel on iPhone (unlike SwiftUI's
     // confirmationDialog, which rendered as a Cancel-less popover inside this sheet).
     private func confirmAdd(_ g: Conversation) {
-        let sheet = UIAlertController(
+        // A centered .alert (NOT .actionSheet): an action sheet presented from within a sheet adapts to
+        // an iPad-style popover on iPhone — a beak bubble with NO Cancel. An alert is always a centered
+        // modal with a guaranteed Cancel on every device (Apple's pattern for a yes/no confirmation).
+        let alert = UIAlertController(
             title: "Add New Member",
             message: "Add \"\(contactName)\" to \"\(g.displayName(me))\"?",
-            preferredStyle: .actionSheet)
-        sheet.addAction(UIAlertAction(title: "Add to Group", style: .default) { _ in add(to: g) })
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        // Find the top-most presented VC to present from.
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Add", style: .default) { _ in add(to: g) })
         var top = UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
         while let presented = top?.presentedViewController { top = presented }
-        // iPad popover anchor (harmless on iPhone, where it's a bottom sheet).
-        sheet.popoverPresentationController?.sourceView = top?.view
-        if let v = top?.view {
-            sheet.popoverPresentationController?.sourceRect = CGRect(x: v.bounds.midX, y: v.bounds.maxY - 60, width: 0, height: 0)
-        }
-        top?.present(sheet, animated: true)
+        top?.present(alert, animated: true)
     }
 
     private func add(to g: Conversation) {

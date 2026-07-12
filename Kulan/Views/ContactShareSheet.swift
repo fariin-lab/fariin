@@ -60,13 +60,14 @@ struct ContactShareSheet: View {
                     ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
                 }
             }
-            // Native bottom confirmation: Send / Cancel only (no caption for contacts — user spec).
-            .confirmationDialog("Send Contact",
+            // Centered .alert (NOT .confirmationDialog): a confirmation dialog presented from within a
+            // sheet adapts to an iPad-style popover on iPhone — a beak bubble with no Cancel. An alert
+            // is always a centered modal with a guaranteed Cancel (Apple's yes/no confirmation pattern).
+            .alert("Send Contact",
                 isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
-                titleVisibility: .visible,
                 presenting: pending) { c in
-                    Button("Send") { onSend(c); dismiss() }
                     Button("Cancel", role: .cancel) { }
+                    Button("Send") { onSend(c); dismiss() }
                 } message: { c in
                     Text("Send \"\(c.name)\"?")
                 }
