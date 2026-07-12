@@ -62,6 +62,32 @@ enum ChatColors {
     private(set) var version = 0
     @ObservationIgnored private var cache: [String: ChatColorSpec?] = [:]
 
+    // CUSTOM COLOR LIBRARY (same idea as the wallpaper library): every colour the user builds in the
+    // Custom Color editor is saved here permanently and shown as a reusable swatch in the picker —
+    // newest first, deduped, presets never enter it. Observed so the picker updates live.
+    private(set) var customColors: [ChatColorSpec]
+
+    private init() {
+        let stored = UserDefaults.standard.stringArray(forKey: "chatColor.customLibrary.v1") ?? []
+        customColors = stored.compactMap { ChatColorSpec(stored: $0) }
+    }
+
+    func addCustom(_ spec: ChatColorSpec) {
+        guard !ChatColors.presets.contains(spec),                    // presets aren't "custom"
+              !customColors.contains(spec) else { return }           // no duplicates
+        customColors.insert(spec, at: 0)
+        persistCustoms()
+    }
+
+    func removeCustom(_ spec: ChatColorSpec) {
+        customColors.removeAll { $0 == spec }
+        persistCustoms()
+    }
+
+    private func persistCustoms() {
+        UserDefaults.standard.set(customColors.map(\.stored), forKey: "chatColor.customLibrary.v1")
+    }
+
     func color(for cid: String) -> ChatColorSpec? {
         if let c = cache[cid] { return c }
         let spec = ChatColorSpec(stored: UserDefaults.standard.string(forKey: Self.key(cid)))

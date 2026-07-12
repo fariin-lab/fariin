@@ -25,6 +25,11 @@ struct VideoTrimStrip: View {
     var handleW: CGFloat = 12
     var minDuration: Double = 0.5
 
+    // Photos-app logic (user spec): the frame + handles are GREY while the video is untouched, and turn
+    // YELLOW only once the user has actually cut something (moved a handle off the ends).
+    private var isTrimmed: Bool { trimStart > 0.05 || trimEnd < duration - 0.05 }
+    private var frameColor: Color { isTrimmed ? .yellow : Color(.systemGray) }
+
     var body: some View {
         GeometryReader { geo in
             let W = geo.size.width
@@ -47,9 +52,10 @@ struct VideoTrimStrip: View {
                 }
                 .frame(width: W, height: stripHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                // Yellow selection frame (rounded to match the rounded handle caps).
-                RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
+                // Selection frame (rounded to match the handle caps): grey untouched → yellow once cut.
+                RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(frameColor, lineWidth: 3)
                     .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
+                    .animation(.easeInOut(duration: 0.2), value: isTrimmed)
                 // PLAYHEAD scrubber, clamped INSIDE the yellow frame against the handles' DRAWN edges.
                 let phX = CGFloat((min(max(playhead, trimStart), trimEnd)) / dur) * W
                 if trimEnd > trimStart {
@@ -74,11 +80,12 @@ struct VideoTrimStrip: View {
         .frame(height: stripHeight)
     }
 
-    // Fully-rounded yellow grip (premium/native look) with a darker notch in the middle.
+    // Fully-rounded grip (premium/native look) with a darker notch — grey untouched, yellow once cut.
     private var trimHandle: some View {
-        RoundedRectangle(cornerRadius: handleW / 2, style: .continuous).fill(Color.yellow)
+        RoundedRectangle(cornerRadius: handleW / 2, style: .continuous).fill(frameColor)
             .frame(width: handleW, height: stripHeight)
             .overlay(Capsule().fill(.black.opacity(0.55)).frame(width: 2.5, height: 18))
+            .animation(.easeInOut(duration: 0.2), value: isTrimmed)
     }
 
     // Drag the playhead: seek-only; the video stays PAUSED on release.

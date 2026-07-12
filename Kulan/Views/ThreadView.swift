@@ -43,6 +43,7 @@ struct ThreadView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
+    @State private var panelEditImage: EditImageWrap?   // picked FROM the attach sheet → editor OVER the sheet (X returns to it)
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
@@ -1294,9 +1295,10 @@ struct ThreadView: View {
                 },
                 onClose: { showAttachPanel = false },
                 onPickPhoto: { ui in
-                    showAttachPanel = false
-                    // Let the sheet finish dismissing before the editor cover presents.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { editImage = EditImageWrap(image: ui) }
+                    // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
+                    // editor and lands BACK on the sheet to pick another image (user request — closing
+                    // the sheet first meant X dumped you all the way to the chat).
+                    panelEditImage = EditImageWrap(image: ui)
                 },
                 onPickVideo: { url in
                     showAttachPanel = false
@@ -1368,6 +1370,15 @@ struct ThreadView: View {
                     attachTile("chart.bar.xaxis", "Poll") { showPollSoon = true }
                 }
                 .padding(.vertical, 12)
+            }
+        }
+        // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
+        // only the editor → straight back to the sheet to pick another image. Send delivers the photo
+        // AND closes the sheet, landing in the chat.
+        .fullScreenCover(item: $panelEditImage) { wrap in
+            ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
+                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                showAttachPanel = false
             }
         }
     }

@@ -281,9 +281,12 @@ struct ChatImageEditor: View {
                 // line + send) as the caption grows — it was floating UP with the first line.
                 HStack(alignment: .bottom, spacing: 8) {
                     if viewOnce {
+                        // Centered in the field — same vertical padding as the TextField line, so the
+                        // label sits dead-center in the capsule (it was riding low/off-center).
                         Text("View Once Media")
                             .foregroundStyle(Color(.systemGray3))
                             .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 9)
                     } else {
                         // Multi-line caption (Signal): 1 → ~7 lines, then scrolls.
                         TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),

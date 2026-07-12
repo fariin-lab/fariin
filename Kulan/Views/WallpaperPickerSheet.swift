@@ -101,7 +101,10 @@ struct WallpaperPickerSheet: View {
         .presentationDetents([.height(408)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
-            CustomColorView(cid: cid) { spec in chooseColor(spec) }   // live preview, not saved until Apply
+            CustomColorView(cid: cid) { spec in
+                colorStore.addCustom(spec)   // save into the reusable custom library (deduped)
+                chooseColor(spec)            // live preview, ACTIVE colour not saved until Apply
+            }
         }
         // Selecting a wallpaper OR a colour LIVE-PREVIEWS it on the chat behind, but nothing is SAVED
         // until Apply. Closing without Apply reverts both to the originals.
@@ -250,6 +253,17 @@ struct WallpaperPickerSheet: View {
                 HStack(spacing: 14) {
                     defaultColorCircle
                     ForEach(ChatColors.presets) { colorCircle($0) }
+                    // The user's CUSTOM color library: every colour ever built in the Custom Color
+                    // editor, saved permanently and reusable. Long-press → Delete (presets never are).
+                    ForEach(colorStore.customColors) { spec in
+                        colorCircle(spec)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    if selectedColor?.stored == spec.stored { chooseColor(nil) }
+                                    colorStore.removeCustom(spec)
+                                } label: { Label("Delete", systemImage: "trash") }
+                            }
+                    }
                     addColorButton
                 }
                 .padding(.horizontal, 20).padding(.vertical, 2)

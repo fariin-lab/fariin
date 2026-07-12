@@ -241,9 +241,13 @@ struct MediaApprovalView: View {
     }
 
     private var railScroll: some View {
+        // GeometryReader gives the rail's visible width; the content fills AT LEAST that width aligned
+        // TRAILING, so a short rail sits at the RIGHT edge (user request — the RTL trick didn't hold).
+        // Order stays first→last, left→right; overflow starts scrolled to the end (newest visible).
+        GeometryReader { geo in
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Array(items.enumerated()).reversed(), id: \.element.id) { i, item in
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                     ZStack(alignment: .topTrailing) {
                         ZStack(alignment: .bottomLeading) {
                             Group {
@@ -281,13 +285,13 @@ struct MediaApprovalView: View {
                         }
                     }
                     .id(item.id)                                      // scroll-to target (current page)
-                    .environment(\.layoutDirection, .leftToRight)     // re-flip the tile's own content
                 }
             }
             .padding(.top, 6)
+            .frame(minWidth: geo.size.width, alignment: .trailing)   // short rail hugs the RIGHT edge
         }
-        .environment(\.layoutDirection, .rightToLeft)   // container RTL: short content hugs the RIGHT edge
         .defaultScrollAnchor(.trailing)
+        }
         .frame(height: 60)
     }
 
