@@ -165,6 +165,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
+        // STALE-KEYBOARD-INSET guards: leaving the chat/app with the keyboard up can tear the keyboard
+        // down WITHOUT a frame-change notification reaching us — keyboardOverlap then stays ~340pt, the
+        // bottom inset stays inflated, and the user can scroll the conversation way past its end and it
+        // RESTS there ("no limit scroll", messages stuck at the top). Reset the overlap explicitly.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
+                                               name: UIResponder.keyboardDidHideNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
 
         buildDataSource()
     }
@@ -571,16 +579,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         updateBottomInset()
     }
 
+    // Keyboard fully gone (or the app backgrounded, which force-dismisses it): the overlap is 0 no
+    // matter what the last frame notification said.
+    @objc private func keyboardDidHide() {
+        guard keyboardOverlap != 0 else { return }
+        keyboardOverlap = 0
+        updateBottomInset()
+    }
+
     private func updateBottomInset() {
         guard isViewLoaded else { return }
         // .always already adds the geometric home-indicator overlap; the keyboard replaces it when up.
         let keyboardExtra = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
         let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
-        guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
+        let old = collectionView.contentInset.bottom
+        guard abs(old - newBottom) > 0.5 else { return }
         let stayAtBottom = didInitialScroll && computeAtBottom()
         collectionView.contentInset.bottom = newBottom
         collectionView.verticalScrollIndicatorInsets.bottom = composerBarH + keyboardExtra
         if stayAtBottom { UIView.performWithoutAnimation { pinBottom() } }
+        else if newBottom < old { clampOffsetIfBeyondContent() }   // inset SHRANK → never rest past the end
     }
 
     private func pinBottom(animated: Bool = false) {
