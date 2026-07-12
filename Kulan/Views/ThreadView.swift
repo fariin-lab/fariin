@@ -987,8 +987,10 @@ struct ThreadView: View {
     private func listContainer(_ proxy: ScrollViewProxy) -> some View {
         listBody(proxy)
             // Signal-style floating date header (top-centered, fades out when idle). Kept HERE (not in the
-            // big scrollStack chain) so the type-checker isn't overloaded.
-            .overlay(alignment: .top) { floatingDateHeader }
+            // big scrollStack chain) so the type-checker isn't overloaded. The list is FULL-BLEED under the
+            // nav bar now, so "top" = the raw screen top — pad by the measured nav-bar height so the pill
+            // floats just BELOW the header (it was riding up into the status bar next to the clock).
+            .overlay(alignment: .top) { floatingDateHeader.padding(.top, navBarHeight + 6) }
             .onChange(of: topVisibleId) { _, _ in bumpFloatingDate() }
     }
 

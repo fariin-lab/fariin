@@ -94,6 +94,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
+    private var lastStableOffset: CGFloat = 0 // last user/our-pin offset → screenshot-capture recovery
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -159,6 +160,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // keyboard safe area): observe the real keyboard frame and fold its overlap into the bottom inset.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange(_:)),
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
+        NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
+                                               name: UIApplication.userDidTakeScreenshotNotification, object: nil)
 
         buildDataSource()
     }
@@ -487,7 +491,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         collectionView.layoutIfNeeded()
         guard let ip = dataSource.indexPath(for: anchor.id),
               let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
-        collectionView.setContentOffset(CGPoint(x: 0, y: attr.frame.minY - anchor.distanceFromTop), animated: false)
+        let y = attr.frame.minY - anchor.distanceFromTop
+        lastStableOffset = y   // our intentional position → screenshot recovery target
+        collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
     }
 
     // MARK: - Bottom pinning
@@ -569,6 +575,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         guard collectionView.bounds.height > 0 else { return }
         let target = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
         let y = max(-collectionView.adjustedContentInset.top, target)
+        lastStableOffset = y   // our intentional position → screenshot recovery target
         if animated {
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
         } else if abs(collectionView.contentOffset.y - y) > 0.5 {
@@ -625,13 +632,39 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let atBottom = computeAtBottom()
         if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
-        // Fire load-older once when we cross into the top zone, not on every frame we sit there.
+        let userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
+        // Remember the last USER-intended offset (also kept fresh by pinBottom/restore). The iOS 26
+        // full-page screenshot capture scrolls the list programmatically — this is what we snap back to.
+        if userDriven { lastStableOffset = scrollView.contentOffset.y }
+        // Fire load-older once when we cross into the top zone — USER scrolls only. The system's
+        // full-page screenshot capture scrolls the list programmatically to the top, which used to
+        // page older messages in (prepend → content shift) and leave the chat "gone up" after the
+        // screenshot. A programmatic system scroll must never trigger paging.
         let nearTop = scrollView.contentOffset.y <= 72
-        if nearTop && !inTopZone { coordinator.parent.onReachedTop() }
+        if nearTop && !inTopZone && userDriven { coordinator.parent.onReachedTop() }
         inTopZone = nearTop
         // Topmost visible row → the floating date header (Signal's sticky date).
         let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
         if coordinator.parent.topVisibleId != top { coordinator.parent.topVisibleId = top }
+    }
+
+    // MARK: - Screenshot recovery
+
+    // iOS 26 full-page screenshots scroll the view programmatically to capture pages; if its own restore
+    // lands wrong (or our layout shifted meanwhile), the chat is left scrolled away. When the screenshot
+    // notification fires, snap back to the last position the USER (or our own pinning) put the list at.
+    @objc func screenshotTaken() {
+        guard didInitialScroll, !collectionView.isDragging, !collectionView.isTracking else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let target = self.lastStableOffset
+            guard abs(self.collectionView.contentOffset.y - target) > 4 else { return }
+            let maxY = max(-self.collectionView.adjustedContentInset.top,
+                           self.collectionView.contentSize.height - self.collectionView.bounds.height
+                               + self.collectionView.adjustedContentInset.bottom)
+            let y = min(max(-self.collectionView.adjustedContentInset.top, target), maxY)
+            self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+        }
     }
 }
 
