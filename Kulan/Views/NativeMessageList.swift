@@ -252,6 +252,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             && Array(currentIds.suffix(ids.count)) == ids
         let trimAnchor: (id: String, distanceFromTop: CGFloat)? = isTopTrim ? captureTopAnchor() : nil
         let appendedCount = ids.count - currentIds.count
+        let appendedIds = isAppend ? Array(ids.suffix(max(0, appendedCount))) : []
         // Prepend (load older): capture the content height + offset so we can keep the visible content
         // EXACTLY stable — after the older messages lay out, add their total height to the offset. The
         // reader never jumps and is never auto-scrolled; the new older messages simply sit above.
@@ -322,6 +323,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
                 }
             }
         }
+
+        // Re-flow the just-appended bubble(s) at their FINAL cell width. UIHostingConfiguration lays a
+        // freshly inserted cell's SwiftUI text out at the pre-final width and does NOT re-flow it until a
+        // later update — that's the "newest bubble wraps narrow until the next message" bug. Reconfiguring
+        // the appended rows one runloop later (after the exact frame is applied) forces the correct wrap
+        // now, without waiting for another message. Same-text → same height, so layout isn't disturbed.
+        if !appendedIds.isEmpty {
+            DispatchQueue.main.async { [weak self] in self?.reflowAppended(appendedIds) }
+        }
+    }
+
+    private func reflowAppended(_ ids: [String]) {
+        var snap = dataSource.snapshot()
+        let present = ids.filter { snap.itemIdentifiers.contains($0) }
+        guard !present.isEmpty else { return }
+        snap.reconfigureItems(present)
+        dataSource.apply(snap, animatingDifferences: false)
     }
 
     // The first open: measure everything at the real width, place exact frames, land at the bottom, reveal.
