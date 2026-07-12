@@ -921,6 +921,10 @@ struct ThreadView: View {
                     inputFocused = true   // replying = you're about to type → open the keyboard
                 },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
+                onCancelSending: { m in
+                    // Discard the pending optimistic send (media still uploading — not on the server yet).
+                    if let clientId = m.clientId { repo.removePending(clientId: clientId) }
+                },
                 onTapImage: { viewerImage = $0 },
                 onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
                 onTapVideo: { viewerVideo = $0 },
@@ -2856,6 +2860,7 @@ struct MessageBubble: View, Equatable {
     var avatarFor: (String) -> String? = { _ in nil }
     var onReply: (Message) -> Void = { _ in }
     var onDelete: (Message) -> Void = { _ in }
+    var onCancelSending: (Message) -> Void = { _ in }   // media still uploading → discard the pending send
     var onTapImage: (Message) -> Void = { _ in }
     var onTapAlbum: (_ gallery: [Message], _ startId: String) -> Void = { _, _ in }
     var onTapVideo: (Message) -> Void = { _ in }
@@ -3174,6 +3179,18 @@ struct MessageBubble: View, Equatable {
                     // blur + spring. No custom overlay. Reactions live in the "React…" item (opens the
                     // emoji picker) since Apple gives no public API to attach a reaction bar to it.
                     .contextMenu {
+                        // MEDIA STILL UPLOADING (user spec): the message isn't on the server yet, so the
+                        // normal actions don't apply — only Save / Cancel Sending / Select.
+                        if message.sendState == .sending && (message.isImage || message.isVideo || message.isAlbum || message.isGif) {
+                            if message.isImage || message.isAlbum {
+                                Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
+                            }
+                            Button(role: .destructive) { onCancelSending(message) } label: {
+                                Label("Cancel Sending", systemImage: "xmark.circle")
+                            }
+                            Divider()
+                            Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
+                        } else {
                         // Order (user spec): Reply · React · Edit · Pin · Forward · Delete, then Select
                         // below a divider. Copy/Save/Info stay as context-specific items in place.
                         Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
@@ -3208,6 +3225,7 @@ struct MessageBubble: View, Equatable {
                         }
                         Divider()
                         Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
+                        }   // end normal (non-sending) menu
                     }
                     // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
                     .highPriorityGesture(TapGesture(count: 2).onEnded {
