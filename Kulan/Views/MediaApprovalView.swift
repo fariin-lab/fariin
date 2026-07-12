@@ -107,13 +107,15 @@ struct MediaApprovalView: View {
                           onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
                 .ignoresSafeArea()
         case .video(let id, let url, _, let duration):
-            // Loops within the trimmed range; plays only while ITS page is showing.
-            // Playhead does NOT auto-run with playback (user request) — it only moves when dragged.
+            // Loops within the trimmed range; plays only while ITS page is showing, PAUSES while a trim
+            // handle / the playhead is being dragged (scrubTime non-nil), and the white playhead tracks
+            // the player's real time — identical behavior to the single video editor (shared trimmer).
             PagedTrimPlayer(url: url,
-                            playing: page == index && !exporting,
+                            playing: page == index && !exporting && scrubTime == nil,
                             start: trimStart[id] ?? 0,
                             end: max((trimStart[id] ?? 0) + 0.1, trimEnd[id] ?? duration),
-                            scrubTime: page == index ? scrubTime : nil)
+                            scrubTime: page == index ? scrubTime : nil,
+                            onTime: { t in if page == index, scrubTime == nil { playheads[id] = t } })
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { captionFocused = false }
@@ -249,82 +251,22 @@ struct MediaApprovalView: View {
 
     // MARK: - Video trim (per item)
 
+    // THE shared trimmer (VideoTrimStrip) — the SAME implementation as the single video editor, fed the
+    // pager's per-item state via bindings. Every trim behavior/fix lives once in VideoTrimStrip and works
+    // identically here: no auto-play on drag, playhead clamped inside the yellow frame, 32pt grab area.
     private func trimStrip(id: UUID, duration: Double, thumbs: [UIImage]) -> some View {
-        GeometryReader { geo in
-            let W = geo.size.width
-            let dur = max(0.01, duration)
-            let s = trimStart[id] ?? 0
-            let e = trimEnd[id] ?? dur
-            let startX = CGFloat(s / dur) * W
-            let endX = CGFloat(e / dur) * W
-            ZStack(alignment: .leading) {
-                // Thumbnails + dimmed ends share one rounded clip (rounded outer corners, not square).
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
-                        ForEach(thumbs.indices, id: \.self) { i in
-                            Image(uiImage: thumbs[i]).resizable().scaledToFill()
-                                .frame(width: W / CGFloat(thumbs.count), height: stripHeight).clipped()
-                        }
-                    }
-                    .frame(width: W, height: stripHeight)
-                    Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
-                    Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
-                }
-                .frame(width: W, height: stripHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
-                    .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
-                // Playhead scrubber (tracks playback, draggable to scrub) within the trimmed range.
-                let e = trimEnd[id] ?? dur
-                let ph = min(max(playheads[id] ?? s, s), e)
-                let phX = CGFloat(ph / dur) * W
-                if e > s {
-                    Capsule().fill(.white)
-                        .frame(width: 3, height: stripHeight + 8)
-                        .shadow(color: .black.opacity(0.4), radius: 1.5)
-                        .offset(x: min(max(0, phX - 1.5), W - 3))
-                        .gesture(playheadDrag(id: id, duration: dur, width: W))
-                }
-                trimHandle.offset(x: max(0, startX - handleW / 2))
-                    .gesture(handleDrag(id: id, duration: dur, isStart: true, width: W))
-                trimHandle.offset(x: min(W - handleW, endX - handleW / 2))
-                    .gesture(handleDrag(id: id, duration: dur, isStart: false, width: W))
-            }
-        }
-        .frame(height: stripHeight)
-    }
-
-    // Fully-rounded yellow grip (premium/native look).
-    private var trimHandle: some View {
-        RoundedRectangle(cornerRadius: handleW / 2, style: .continuous).fill(Color.yellow)
-            .frame(width: handleW, height: stripHeight)
-            .overlay(Capsule().fill(.black.opacity(0.55)).frame(width: 2.5, height: 16))
-    }
-
-    private func playheadDrag(id: UUID, duration: Double, width W: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { g in
-                let t = Double(min(max(0, g.location.x), W) / W) * duration
-                let s = trimStart[id] ?? 0, e = trimEnd[id] ?? duration
-                playheads[id] = min(max(t, s), e)
-                scrubTime = playheads[id]
-            }
-            .onEnded { _ in scrubTime = nil }
-    }
-
-    private func handleDrag(id: UUID, duration: Double, isStart: Bool, width W: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { g in
-                let t = Double(min(max(0, g.location.x), W) / W) * duration
-                if isStart {
-                    trimStart[id] = min(t, (trimEnd[id] ?? duration) - minDuration)
-                    scrubTime = trimStart[id]
-                } else {
-                    trimEnd[id] = max(t, (trimStart[id] ?? 0) + minDuration)
-                    scrubTime = trimEnd[id]
-                }
-            }
-            .onEnded { _ in scrubTime = nil }
+        let dur = max(0.01, duration)
+        return VideoTrimStrip(
+            duration: dur, thumbnails: thumbs,
+            trimStart: Binding(get: { trimStart[id] ?? 0 }, set: { trimStart[id] = $0 }),
+            trimEnd: Binding(get: { trimEnd[id] ?? dur }, set: { trimEnd[id] = $0 }),
+            playhead: Binding(get: { playheads[id] ?? (trimStart[id] ?? 0) }, set: { playheads[id] = $0 }),
+            scrubTime: $scrubTime,
+            // The pager has no Play button — playback is derived (current page + not scrubbing), so the
+            // strip's pause-on-drag is honored via scrubTime and this setter is a no-op.
+            playing: Binding(get: { scrubTime == nil }, set: { _ in }),
+            draggingPlayhead: .constant(false),
+            stripHeight: stripHeight, handleW: handleW, minDuration: minDuration)
     }
 
     private func loadVideoMeta(id: UUID, url: URL, duration: Double) async {

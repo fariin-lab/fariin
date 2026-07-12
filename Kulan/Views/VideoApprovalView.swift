@@ -115,101 +115,15 @@ struct VideoApprovalView: View {
         .padding(.bottom, 8)
     }
 
-    // Photos-style trim: filmstrip with a yellow selection frame + two draggable handles; outside dimmed.
+    // THE shared trimmer (VideoTrimStrip) — one implementation for the single editor AND the multi
+    // pager, so every trim fix lands everywhere at once.
     private var trimStrip: some View {
-        GeometryReader { geo in
-            let W = geo.size.width
-            let dur = max(0.01, duration)
-            let startX = CGFloat(trimStart / dur) * W
-            let endX = CGFloat(trimEnd / dur) * W
-            ZStack(alignment: .leading) {
-                // Thumbnails + the dimmed end sections share ONE rounded clip so the strip's outer
-                // corners (including the dimmed parts) are rounded, not square.
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
-                        ForEach(thumbnails.indices, id: \.self) { i in
-                            Image(uiImage: thumbnails[i]).resizable().scaledToFill()
-                                .frame(width: W / CGFloat(thumbnails.count), height: stripHeight).clipped()
-                        }
-                    }
-                    .frame(width: W, height: stripHeight)
-                    Rectangle().fill(.black.opacity(0.55)).frame(width: startX, height: stripHeight)
-                    Rectangle().fill(.black.opacity(0.55)).frame(width: max(0, W - endX), height: stripHeight).offset(x: endX)
-                }
-                .frame(width: W, height: stripHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                // Yellow selection frame (rounded to match the rounded handle caps).
-                RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.yellow, lineWidth: 3)
-                    .frame(width: max(0, endX - startX), height: stripHeight).offset(x: startX)
-                // PLAYHEAD scrubber: a white vertical line that tracks playback within the selection and
-                // can be dragged to scrub. Its X is clamped INSIDE the yellow selection frame (between the
-                // two handles' inner edges) so it can never sit on top of / overlap a trim handle.
-                let phX = CGFloat((min(max(playhead, trimStart), trimEnd)) / dur) * W
-                if trimEnd > trimStart {
-                    // Visual stays a thin 3pt line; the TOUCH TARGET is a 32pt-wide invisible strip
-                    // around it (contentShape), so it's easy to grab without changing the look.
-                    // Clamp against the handles' DRAWN edges (they're clamped to the strip bounds, so at
-                    // the very start/end the ideal-position math put the line INSIDE the handle).
-                    let leftHandleInner = max(0, startX - handleW / 2) + handleW + 3.5   // right edge of left grip
-                    let rightHandleInner = min(W - handleW, endX - handleW / 2) - 3.5    // left edge of right grip
-                    Capsule().fill(.white)
-                        .frame(width: 3, height: stripHeight + 8)
-                        .shadow(color: .black.opacity(0.4), radius: 1.5)
-                        .frame(width: 32, height: stripHeight + 16)   // big invisible hit area
-                        .contentShape(Rectangle())
-                        .offset(x: min(max(leftHandleInner, phX), max(leftHandleInner, rightHandleInner)) - 16)
-                        .gesture(playheadDrag(width: W))
-                }
-                // Rounded trim handles.
-                trimHandle.offset(x: max(0, startX - handleW / 2))
-                    .gesture(handleDrag(isStart: true, width: W))
-                trimHandle.offset(x: min(W - handleW, endX - handleW / 2))
-                    .gesture(handleDrag(isStart: false, width: W))
-            }
-            .coordinateSpace(name: "trim")
-        }
-        .frame(height: stripHeight)
-        .padding(.horizontal, 20)   // left/right margin so the strip + handles don't touch the edges
-    }
-
-    // Fully-rounded yellow grip (premium/native look) with a darker notch in the middle.
-    private var trimHandle: some View {
-        RoundedRectangle(cornerRadius: handleW / 2, style: .continuous).fill(Color.yellow)
-            .frame(width: handleW, height: stripHeight)
-            .overlay(Capsule().fill(.black.opacity(0.55)).frame(width: 2.5, height: 18))
-    }
-
-    // Drag the playhead to scrub: seek-only. The video stays PAUSED on release — playback only ever
-    // starts when the user explicitly taps Play (user spec).
-    private func playheadDrag(width W: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named("trim"))
-            .onChanged { g in
-                draggingPlayhead = true; playing = false
-                let dur = max(0.01, duration)
-                let t = Double(min(max(0, g.location.x), W) / W) * dur
-                playhead = min(max(t, trimStart), trimEnd)
-                scrubTime = playhead
-            }
-            .onEnded { _ in scrubTime = nil; draggingPlayhead = false }   // stays paused — no auto-play
-    }
-
-    // Drag a trim handle: adjusts only the trim range, previewing the boundary frame. Stays PAUSED on
-    // release (no auto-play). If the playhead falls outside the new range it jumps to the boundary.
-    private func handleDrag(isStart: Bool, width W: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named("trim"))
-            .onChanged { g in
-                playing = false
-                let dur = max(0.01, duration)
-                let t = Double(min(max(0, g.location.x), W) / W) * dur
-                if isStart {
-                    trimStart = min(t, trimEnd - minDuration); scrubTime = trimStart
-                    if playhead < trimStart { playhead = trimStart }   // playback position can't precede the start
-                } else {
-                    trimEnd = max(t, trimStart + minDuration); scrubTime = trimEnd
-                    if playhead > trimEnd { playhead = trimEnd }       // ...or exceed the end
-                }
-            }
-            .onEnded { _ in scrubTime = nil }   // stays paused — no auto-play
+        VideoTrimStrip(duration: duration, thumbnails: thumbnails,
+                       trimStart: $trimStart, trimEnd: $trimEnd,
+                       playhead: $playhead, scrubTime: $scrubTime,
+                       playing: $playing, draggingPlayhead: $draggingPlayhead,
+                       stripHeight: stripHeight, handleW: handleW, minDuration: minDuration)
+            .padding(.horizontal, 20)   // left/right margin so the strip + handles don't touch the edges
     }
 
     private var captionBar: some View {
