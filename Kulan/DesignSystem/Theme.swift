@@ -93,16 +93,12 @@ extension View {
         }
     }
 
-    /// Floats a bar at the bottom over the scroll content. iOS 26 `safeAreaBar` gives the NATIVE
-    /// frosted background — messages fade softly UNDER the composer with NO hard border line (the
-    /// "before"/VIIZET look the user wants). `safeAreaInset` fallback for older OSes.
-    @ViewBuilder
+    /// Build 282's borderless composer (user: "use 282"): a plain `safeAreaInset` float — the composer
+    /// shows its OWN glass pill with NO frosted bar behind it, so there's no bottom band. (safeAreaBar,
+    /// added in build 291, painted a frosted bar = the bottom border.) Content still insets above the
+    /// composer exactly as before — this changes only the look, not scroll/sending.
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
-        if #available(iOS 26.0, *) {
-            self.safeAreaBar(edge: .bottom, content: content)
-        } else {
-            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
-        }
+        self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
     }
 }
 

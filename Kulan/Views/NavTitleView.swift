@@ -93,16 +93,13 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         // default, exactly like the list. We only install the titleView (the native way to put an
         // avatar+name in the real nav bar); we never restyle the bar itself.
         private func applyBlurAppearance(to vc: UIViewController) {
-            // EXACT restore of the known-good "always-on native blur" (commit 7af2789 — the version the
-            // user confirmed was right, "we used it before"): the real system liquid-glass blur on ALL
-            // states so the chat shows through / fades softly UNDER the header. No shadow-clearing, no
-            // transparent override (both of which I wrongly added later and broke it).
-            guard vc.navigationItem.scrollEdgeAppearance?.backgroundEffect == nil else { return }
-            let appearance = UINavigationBarAppearance()
-            appearance.configureWithDefaultBackground()   // the real system liquid-glass blur
-            vc.navigationItem.standardAppearance = appearance
-            vc.navigationItem.scrollEdgeAppearance = appearance
-            vc.navigationItem.compactAppearance = appearance
+            // BUILD 282's borderless header (user: "use 282"): set NO custom nav appearance — clear every
+            // override so the bar inherits the system default, exactly like the Chats list. A custom
+            // appearance (configureWithDefaultBackground / any blur material) draws the grey band; the
+            // default does not. Header only — nothing here touches sending or scroll.
+            if vc.navigationItem.standardAppearance != nil { vc.navigationItem.standardAppearance = nil }
+            if vc.navigationItem.scrollEdgeAppearance != nil { vc.navigationItem.scrollEdgeAppearance = nil }
+            if vc.navigationItem.compactAppearance != nil { vc.navigationItem.compactAppearance = nil }
         }
 
         private func assertTitleView() {

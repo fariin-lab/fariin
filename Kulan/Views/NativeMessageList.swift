@@ -111,13 +111,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // especially its reaction badge, which hangs below the bubble — isn't jammed against / clipped
         // by the floating composer. This adds to the safe-area (composer height) inset.
         collectionView.contentInset.bottom = 12
-        // Turn the collection view's OWN scroll-edge effect fully OFF — the frosted nav bar (native
-        // blur) and the frosted composer (safeAreaBar) already do the edge fade / show content through.
-        // The collection view's extra edge effect was stacking a second visible band on top of them.
-        if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
-        }
+        // Build 282: leave the collection view's scroll-edge effect at the iOS 26 DEFAULT (soft fade) —
+        // with no frosted bars over it (default nav + safeAreaInset composer), the default fade is what
+        // gives the borderless top/bottom. Build 291 forced it OFF, which is why it looked banded.
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -397,11 +393,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Re-assert the hidden edge effects every layout (UIKit can reset them).
-        if #available(iOS 26.0, *) {
-            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
-            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
-        }
+        // (Build 282: no edge-effect override — the iOS 26 default soft fade stands.)
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
             else { scheduleEmptyReveal() }
