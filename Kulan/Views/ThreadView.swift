@@ -490,7 +490,13 @@ struct ThreadView: View {
                 Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
             }
         }
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = .medium }) { attachPanel.presentationDetents([.medium, .large], selection: $attachDetent) }   // opens half (≈2 rows), pull up for more / caption focus
+        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = .medium }) {
+            attachPanel
+                .presentationDetents([.medium, .large], selection: $attachDetent)   // opens half, pull up for more
+                // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
+                // sheet showed the chat blurring through, which read as a broken half-empty panel.
+                .presentationBackground(Color(.systemBackground))
+        }
         .sheet(isPresented: $showPollSoon) { pollSoonSheet.presentationDetents([.fraction(0.6)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in

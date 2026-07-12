@@ -3,6 +3,13 @@ import Photos
 import AVFoundation
 import UIKit
 
+// Process-lifetime cache of the Recents first page + album list, so reopening the attach sheet renders
+// the grid INSTANTLY (the fetch used to start from zero on every open = an empty sheet for seconds).
+@MainActor enum RecentsCache {
+    static var assets: [PHAsset] = []
+    static var albums: [AttachAlbum] = []
+}
+
 // Telegram/WhatsApp-style recents strip for the attach panel: the newest camera-roll
 // photos + videos, one tap to send. Asks for read access on first use; with Limited
 // access it simply shows whatever the user granted. Photos open the chat editor
@@ -52,7 +59,16 @@ struct AttachRecentsStrip: View {
             if !selectedIds.isEmpty { captionBar }
         }
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
-        .task { if status == .authorized || status == .limited { load(); loadAlbums() } }
+        .task {
+            guard status == .authorized || status == .limited else { return }
+            // STABLE open: render the cached first page + albums instantly (no empty flash), then
+            // refresh fresh underneath — the same pattern as the media gallery.
+            if assets.isEmpty, selectedAlbum == nil, !RecentsCache.assets.isEmpty {
+                assets = RecentsCache.assets
+                albums = RecentsCache.albums
+            }
+            load(); loadAlbums()
+        }
         .onChange(of: selectedIds.isEmpty) { _, empty in hasSelection = !empty }
     }
 
@@ -291,6 +307,8 @@ struct AttachRecentsStrip: View {
         }
         assets.append(contentsOf: out)
         loadedCount = end
+        // Cache the Recents first page so the NEXT sheet open renders instantly (no empty flash).
+        if selectedAlbum == nil, loadedCount <= pageSize { RecentsCache.assets = assets }
     }
 
     // Called as thumbnails appear: nearing the end of the loaded window → page in the next batch.
@@ -313,25 +331,36 @@ struct AttachRecentsStrip: View {
     }
 
     // Build the album list: Recents (whole library) + non-empty smart albums + user albums.
+    // OFF the main thread (PhotoKit fetches are thread-safe) and with fetchLimit-1 emptiness checks —
+    // the old version full-fetched EVERY album's assets just to count them, ON the main actor, which
+    // froze the sheet for seconds on big libraries (the "empty for the first seconds" bug).
     private func loadAlbums() {
-        var out: [AttachAlbum] = [AttachAlbum(id: "recents", title: "Recents", collection: nil, isAllRecents: true)]
-        let smart: [(PHAssetCollectionSubtype, String)] = [
-            (.smartAlbumFavorites, "Favorites"), (.smartAlbumVideos, "Videos"),
-            (.smartAlbumSelfPortraits, "Selfies"), (.smartAlbumLivePhotos, "Live Photos"),
-            (.smartAlbumPanoramas, "Panoramas"), (.smartAlbumScreenshots, "Screenshots"),
-        ]
-        for (subtype, name) in smart {
-            if let c = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil).firstObject,
-               PHAsset.fetchAssets(in: c, options: nil).count > 0 {
-                out.append(AttachAlbum(id: c.localIdentifier, title: name, collection: c, isAllRecents: false))
+        Task.detached(priority: .userInitiated) {
+            let one = PHFetchOptions()
+            one.fetchLimit = 1   // "is it non-empty?" — never materialize the whole album
+            var out: [AttachAlbum] = [AttachAlbum(id: "recents", title: "Recents", collection: nil, isAllRecents: true)]
+            let smart: [(PHAssetCollectionSubtype, String)] = [
+                (.smartAlbumFavorites, "Favorites"), (.smartAlbumVideos, "Videos"),
+                (.smartAlbumSelfPortraits, "Selfies"), (.smartAlbumLivePhotos, "Live Photos"),
+                (.smartAlbumPanoramas, "Panoramas"), (.smartAlbumScreenshots, "Screenshots"),
+            ]
+            for (subtype, name) in smart {
+                if let c = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil).firstObject,
+                   PHAsset.fetchAssets(in: c, options: one).count > 0 {
+                    out.append(AttachAlbum(id: c.localIdentifier, title: name, collection: c, isAllRecents: false))
+                }
+            }
+            PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil).enumerateObjects { c, _, _ in
+                if PHAsset.fetchAssets(in: c, options: one).count > 0 {
+                    out.append(AttachAlbum(id: c.localIdentifier, title: c.localizedTitle ?? "Album", collection: c, isAllRecents: false))
+                }
+            }
+            let built = out
+            await MainActor.run {
+                albums = built
+                RecentsCache.albums = built
             }
         }
-        PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil).enumerateObjects { c, _, _ in
-            if PHAsset.fetchAssets(in: c, options: nil).count > 0 {
-                out.append(AttachAlbum(id: c.localIdentifier, title: c.localizedTitle ?? "Album", collection: c, isAllRecents: false))
-            }
-        }
-        albums = out
     }
 
     // Tap routing (the checkbox owns selection, never conflicts):
