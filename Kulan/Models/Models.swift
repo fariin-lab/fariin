@@ -542,3 +542,20 @@ extension Message {
         "\(locationMarker)\(lat)|\(lon)|\(label ?? "")"
     }
 }
+
+// MARK: - Forward compatibility: structured feature payloads share the reserved "kulan-<feature>:"
+// namespace over the text pipeline. A build that does NOT recognize a given feature (e.g. a stable
+// version receiving a payload from a newer beta) renders it as a system "sent with a newer version"
+// notice instead of the raw marker text. When you add a NEW feature marker, add its prefix to
+// `knownFeatureMarkers` so THIS version keeps rendering it normally.
+extension Message {
+    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker]
+
+    /// True when the text uses the reserved kulan-feature namespace with a feature this build doesn't
+    /// know — i.e. it was sent by a newer app version. Matched strictly (`^kulan-<letters>:`) so ordinary
+    /// text that merely contains "kulan-" is never affected.
+    var isUnsupportedFeature: Bool {
+        guard let r = text.range(of: "^kulan-[a-z]+:", options: .regularExpression) else { return false }
+        return !Message.knownFeatureMarkers.contains(String(text[r]))
+    }
+}

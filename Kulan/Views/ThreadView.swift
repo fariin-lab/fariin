@@ -925,7 +925,11 @@ struct ThreadView: View {
                 .padding(.vertical, 8)
         }
         if msg.id == firstUnreadId { unreadDivider }
-        if msg.isSystem {
+        if msg.isUnsupportedFeature {
+            // Sent by a newer app version this build can't render — a clearly system-styled notice
+            // (NOT a normal bubble) so it can't be mistaken for real content.
+            unsupportedRow(msg).id(msg.id)
+        } else if msg.isSystem {
             systemRow(msg).id(msg.id)
         } else if msg.isCall {
             callRow(msg).padding(.top, 8).id(msg.id)
@@ -1837,6 +1841,27 @@ struct ThreadView: View {
 
     // Call record as a WhatsApp-style message bubble. Outgoing = right-aligned accent
     // bubble; incoming & missed = left-aligned received bubble. Inside: a circular call
+    // A newer-version feature this build can't render: a centered, system-notification-style card (icon +
+    // explanation) — deliberately distinct from any chat bubble so it can't be read as normal content.
+    private func unsupportedRow(_ m: Message) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.up.circle.fill").font(.system(size: 15))
+            Text("This message was sent using a newer version of the app. Update to the latest version to view it.")
+                .font(.system(size: 12, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.leading)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Theme.received(dark).opacity(0.7),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .frame(maxWidth: 300)
+        .frame(maxWidth: .infinity)   // centered in the thread
+        .padding(.vertical, 6)
+    }
+
     // Centered gray system event ("X added Y", "Z left", "renamed to…") — group only.
     private func systemRow(_ m: Message) -> some View {
         Text(m.text)
@@ -3246,8 +3271,9 @@ struct MessageBubble: View, Equatable {
                             Divider()
                             Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                         } else {
-                        // Order (user spec): Reply · React · Edit · Pin · Forward · Delete, then Select
-                        // below a divider. Copy/Save/Info stay as context-specific items in place.
+                        // Order (user spec): Reply · React… · Edit · Pin · Copy · Forward · Select, then
+                        // Delete/Report below a divider (Select sits ABOVE Delete, not after it).
+                        // Save Image / Info stay as context-specific items in place.
                         Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                         if message.sendState == nil {   // can't react until the message is on the server
                             Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
@@ -3260,11 +3286,11 @@ struct MessageBubble: View, Equatable {
                                 Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
                             }
                         }
-                        if !message.isCall {
-                            Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                        }
                         if !message.text.isEmpty {
                             Button { UIPasteboard.general.string = message.text } label: { Label("Copy", systemImage: "doc.on.doc") }
+                        }
+                        if !message.isCall {
+                            Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
                         }
                         if message.isImage {
                             Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
@@ -3272,14 +3298,13 @@ struct MessageBubble: View, Equatable {
                         if isGroup && isMe && message.sendState == nil {
                             Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
                         }
+                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                         Divider()
                         if isMe {
                             Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
                         } else {
                             Button(role: .destructive) { onReport(message) } label: { Label("Report", systemImage: "flag") }
                         }
-                        Divider()
-                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                         }   // end normal (non-sending) menu
                     }
                     // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).

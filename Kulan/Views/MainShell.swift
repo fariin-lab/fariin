@@ -1358,6 +1358,9 @@ struct ChatRow: View, Equatable {
             previewRow("person.crop.circle.fill", lastSenderPrefix + "Contact")
         } else if decodedLast.hasPrefix(Message.locationMarker) {
             previewRow("mappin.circle.fill", lastSenderPrefix + "Location")
+        } else if decodedLast.range(of: "^kulan-[a-z]+:", options: .regularExpression) != nil {
+            // A newer-version feature this build doesn't recognize → never show the raw marker.
+            previewRow("arrow.up.circle.fill", "Message from a newer version")
         } else {
             Text(lastSenderPrefix + decodedLast)
                 .font(.system(size: 14, weight: unread > 0 ? .medium : .regular))
