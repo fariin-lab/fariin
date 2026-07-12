@@ -111,12 +111,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // especially its reaction badge, which hangs below the bubble — isn't jammed against / clipped
         // by the floating composer. This adds to the safe-area (composer height) inset.
         collectionView.contentInset.bottom = 12
-        // iOS 26 draws HARD scroll-edge dividers where a UIKit scroll view meets the nav bar / composer
-        // bars — the "borders" that appeared once this list became the only list. Hide them: the chat
-        // header and composer are borderless glass, matching the app's native look.
+        // iOS 26 draws a HARD scroll-edge divider where the list meets the nav bar / composer — the
+        // "borders" the old chat never had. The Chats list already fixes this with the SOFT style (a
+        // blur fade, NO drawn line — user-confirmed). Copy that here: SOFT top AND bottom.
         if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
+            collectionView.topEdgeEffect.style = .soft
+            collectionView.bottomEdgeEffect.style = .soft
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -397,11 +397,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Re-assert the hidden scroll-edge effects every layout — SwiftUI/UIKit can reset them, which
-        // brought the top/bottom "border" bands back.
+        // Re-assert the SOFT scroll-edge style every layout — UIKit can reset it, bringing the hard
+        // "border" line back.
         if #available(iOS 26.0, *) {
-            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
-            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
+            if collectionView.topEdgeEffect.style != .soft { collectionView.topEdgeEffect.style = .soft }
+            if collectionView.bottomEdgeEffect.style != .soft { collectionView.bottomEdgeEffect.style = .soft }
         }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now

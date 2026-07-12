@@ -2695,10 +2695,11 @@ struct ThreadView: View {
 // Conditional hero anchor: marks a bubble photo as the zoom-transition source when a namespace is set.
 // Hides the iOS 26 automatic scroll-edge effect (the hard divider line at the top/bottom of scrollable
 // content where it meets bars). No-op before iOS 26.
+// SOFT scroll edges (blur fade, NO hard divider line) — the same fix the Chats list uses.
 struct HideScrollEdgeEffects: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.scrollEdgeEffectHidden(true, for: .all)
+            content.scrollEdgeEffectStyle(.soft, for: .all)
         } else {
             content
         }
