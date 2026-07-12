@@ -46,7 +46,7 @@ struct WallpaperPickerSheet: View {
         switch w {
         case .none:            return "none"
         case .gradient(let g): return g
-        case .photo:           return "photo"
+        case .photo(let id):   return "p-\(id)"
         }
     }
 
@@ -72,8 +72,12 @@ struct WallpaperPickerSheet: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         noneTile.id("none")
-                        ForEach(ChatWallpapers.all) { g in gradientTile(g).id(g.id) }
-                        if case .photo = selected { photosTile.id("photo") }
+                        ForEach(ChatWallpapers.all) { g in gradientTile(g).id(g.id) }   // built-ins: never deletable
+                        // The user's WALLPAPER LIBRARY: every gallery photo ever imported, newest first,
+                        // always shown (full history, not just the current one). Long-press → Delete.
+                        ForEach(store.libraryIds, id: \.self) { pid in
+                            libraryTile(pid).id("p-\(pid)")
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 4)
@@ -113,12 +117,50 @@ struct WallpaperPickerSheet: View {
                 if let data = try? await item.loadTransferable(type: Data.self),
                    let img = UIImage(data: data) {
                     await MainActor.run {
-                        store.savePhoto(img, for: cid)   // save the file so the tile can show it
-                        preview(.photo)                  // select (highlight) — NOT applied yet
+                        // Import into the persistent LIBRARY (dedup by content) and select the tile.
+                        // The new id differs from `original`, so hasPendingChange is true and the
+                        // Apply button ALWAYS appears — including when replacing an active photo
+                        // wallpaper with another photo (the old identity-less .photo compared equal
+                        // to itself, which is exactly why Apply used to vanish).
+                        if let id = store.addToLibrary(img) { preview(.photo(id)) }
+                        photoItem = nil   // reset so re-picking (even the same item) fires again
                     }
                 }
             }
         }
+    }
+
+    // A user-library photo tile: tap to live-preview + select; long-press → native Delete menu.
+    // Only library photos are deletable — built-in gradients have no menu at all.
+    private func libraryTile(_ pid: String) -> some View {
+        tile(isSelected: selected == .photo(pid)) {
+            Group {
+                if let img = store.libraryImage(pid) {
+                    Image(uiImage: img).resizable().scaledToFill()
+                } else {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.secondary.opacity(0.12))
+                }
+            }
+        } action: { preview(.photo(pid)) }
+        .contextMenu {
+            Button(role: .destructive) { deleteLibraryPhoto(pid) } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    // Remove a photo from the library. Only the library entry is deleted — if it was the live
+    // selection (or the active wallpaper), fall back cleanly so no chat points at a missing file.
+    private func deleteLibraryPhoto(_ pid: String) {
+        if original == .photo(pid) {
+            original = .none
+            store.set(.none, for: cid)     // active wallpaper used this photo → reset the ACTIVE only
+        }
+        if selected == .photo(pid) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = original }
+            store.set(original, for: cid)  // drop the live preview of the deleted photo
+        }
+        store.deleteFromLibrary(pid)       // history entry + file removed; other photos untouched
     }
 
     // Something non-default is picked / in use → offer Reset.
@@ -262,22 +304,6 @@ struct WallpaperPickerSheet: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom))
         } action: { preview(.gradient(g.id)) }
-    }
-
-    // Shown only when a custom photo is the current pick — displays it, selected; tap re-picks.
-    private var photosTile: some View {
-        PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
-            tileFrame(isSelected: true) {
-                Group {
-                    if let img = store.photo(for: cid) {
-                        Image(uiImage: img).resizable().scaledToFill()
-                    } else {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.secondary.opacity(0.12))
-                    }
-                }
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     // Common swatch frame + selection ring + spring pop.

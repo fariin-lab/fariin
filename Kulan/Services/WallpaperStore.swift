@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CryptoKit
 
 extension Notification.Name {
     // Posted with the cid as `object` when "Change Wallpaper" is tapped in a profile; the open
@@ -9,27 +10,33 @@ extension Notification.Name {
 
 // A per-chat wallpaper the user sets for THEMSELVES (like WhatsApp) — stored locally, never
 // synced to the other person and never uploaded. Three kinds: none (default app background),
-// one of the built-in gradients, or a custom photo saved to app storage.
+// one of the built-in gradients, or a photo from the user's LIBRARY (see WallpaperStore):
+// every gallery image ever applied is kept locally and reusable, so `.photo` carries the
+// library photo's ID — identity, not a per-chat singleton. (The old identity-less `.photo`
+// was the root of the "Apply button never reappears for a new photo" bug: a new pick compared
+// equal to the old one.)
 enum ChatWallpaper: Equatable {
     case none
     case gradient(String)   // gradient id (ChatWallpapers.all)
-    case photo              // custom photo, on disk keyed by cid
+    case photo(String)      // library photo id (WallpaperStore.libraryIds)
 
     // Compact string form for UserDefaults.
     var stored: String {
         switch self {
         case .none:            return "none"
         case .gradient(let g): return "g:\(g)"
-        case .photo:           return "photo"
+        case .photo(let id):   return "p:\(id)"
         }
     }
     init(stored: String?) {
         switch stored {
-        case "photo": self = .photo
+        case "photo": self = .photo(Self.legacyMarker)   // pre-library format → migrated in wallpaper(for:)
         case let s? where s.hasPrefix("g:"): self = .gradient(String(s.dropFirst(2)))
+        case let s? where s.hasPrefix("p:"): self = .photo(String(s.dropFirst(2)))
         default: self = .none
         }
     }
+    static let legacyMarker = "__legacy__"
 }
 
 // A built-in gradient wallpaper with light + dark palettes (so a chat looks right in either mode).
@@ -44,6 +51,7 @@ struct WallpaperGradient: Identifiable, Equatable {
 
 enum ChatWallpapers {
     // Kept subtle so message bubbles always read clearly on top (the top→bottom fall is gentle).
+    // BUILT-IN wallpapers: never deletable (they aren't part of the user library at all).
     static let all: [WallpaperGradient] = [
         .init(id: "sunset", name: "Sunset",
               light: [Color(hex: 0xFFE9C7), Color(hex: 0xFFC9AE), Color(hex: 0xF6AEC6)],
@@ -73,19 +81,47 @@ enum ChatWallpapers {
     static func gradient(_ id: String) -> WallpaperGradient? { all.first { $0.id == id } }
 }
 
+// Wallpaper management system (all LOCAL, nothing ever uploaded):
+//   • Per-chat ACTIVE wallpaper (UserDefaults "wallpaper.<cid>").
+//   • A persistent USER LIBRARY of every gallery photo ever imported — files in
+//     ApplicationSupport/Wallpapers/library/<id>.jpg + the ordered id list in UserDefaults.
+//     Applying a different wallpaper never deletes library photos; Reset only clears the ACTIVE
+//     wallpaper; only an explicit Delete (long-press) removes a library photo.
+//   • Deduplication: imports are hashed (SHA256 of the encoded JPEG) — re-importing the same image
+//     returns the existing library id instead of a duplicate tile.
+//   • Migration: the pre-library per-chat photo ("photo" + Wallpapers/<cid>.jpg) is imported into
+//     the library on first read, so nothing the user had disappears.
 // Observable so setting a wallpaper re-renders the open chat instantly (live preview in the picker).
-// The caches are observation-IGNORED (mutating them during a view-body read would trip "modifying
-// state during view update"); re-renders are driven by the observed `version` counter, which set()
-// bumps. A view that wants to react reads `version` before calling `wallpaper(for:)`.
+// Caches are observation-IGNORED; re-renders are driven by the observed `version` / `libraryIds`.
 @Observable final class WallpaperStore {
     static let shared = WallpaperStore()
     private(set) var version = 0
+    private(set) var libraryIds: [String]                       // user-imported photo ids, newest FIRST
     @ObservationIgnored private var cache: [String: ChatWallpaper] = [:]
-    @ObservationIgnored private var photoCache: [String: UIImage] = [:]
+    @ObservationIgnored private var imageCache: [String: UIImage] = [:]
+    @ObservationIgnored private var hashes: [String: String]   // photo id -> content hash (dedup)
+
+    private init() {
+        libraryIds = UserDefaults.standard.stringArray(forKey: "wallpaper.library.v1") ?? []
+        hashes = (UserDefaults.standard.dictionary(forKey: "wallpaper.libraryHashes.v1") as? [String: String]) ?? [:]
+    }
+
+    // MARK: - Active wallpaper (per chat)
 
     func wallpaper(for cid: String) -> ChatWallpaper {
         if let c = cache[cid] { return c }
-        let w = ChatWallpaper(stored: UserDefaults.standard.string(forKey: Self.key(cid)))
+        var w = ChatWallpaper(stored: UserDefaults.standard.string(forKey: Self.key(cid)))
+        // MIGRATION: legacy per-chat photo → import into the library, rewrite the stored value.
+        if case .photo(ChatWallpaper.legacyMarker) = w {
+            if let img = UIImage(contentsOfFile: Self.legacyPhotoURL(cid).path),
+               let id = addToLibrary(img) {
+                w = .photo(id)
+                UserDefaults.standard.set(w.stored, forKey: Self.key(cid))
+                try? FileManager.default.removeItem(at: Self.legacyPhotoURL(cid))
+            } else {
+                w = .none
+            }
+        }
         cache[cid] = w
         return w
     }
@@ -96,29 +132,65 @@ enum ChatWallpapers {
         version &+= 1                                           // observed → live re-render
     }
 
-    // Custom photo — saved to app storage, keyed by cid. Downscaled so we never hold a huge image.
-    @discardableResult
-    func savePhoto(_ image: UIImage, for cid: String) -> Bool {
-        let scaled = Self.downscale(image, maxDimension: 1600)
-        guard let data = scaled.jpegData(compressionQuality: 0.85) else { return false }
-        let url = Self.photoURL(cid)
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        do { try data.write(to: url, options: .atomic); photoCache[cid] = scaled; version &+= 1; return true }
-        catch { return false }
-    }
+    // MARK: - User photo library (persistent history; local only)
 
-    func photo(for cid: String) -> UIImage? {
-        if let c = photoCache[cid] { return c }
-        guard let img = UIImage(contentsOfFile: Self.photoURL(cid).path) else { return nil }
-        photoCache[cid] = img
+    func libraryImage(_ id: String) -> UIImage? {
+        if let c = imageCache[id] { return c }
+        guard let img = UIImage(contentsOfFile: Self.libraryURL(id).path) else { return nil }
+        imageCache[id] = img
         return img
     }
 
+    // Import a gallery photo into the library (downscaled JPEG). Content-hash dedup: importing the
+    // same image again returns the EXISTING id — no duplicate tiles, and the id (identity) is what
+    // makes "same photo re-applied" and "different photo picked" distinguishable.
+    @discardableResult
+    func addToLibrary(_ image: UIImage) -> String? {
+        let scaled = Self.downscale(image, maxDimension: 1600)
+        guard let data = scaled.jpegData(compressionQuality: 0.85) else { return nil }
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        if let existing = hashes.first(where: { $0.value == hash })?.key,
+           libraryIds.contains(existing) {
+            return existing                                      // duplicate import → reuse
+        }
+        let id = UUID().uuidString
+        let url = Self.libraryURL(id)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        do { try data.write(to: url, options: .atomic) } catch { return nil }
+        imageCache[id] = scaled
+        hashes[id] = hash
+        libraryIds.insert(id, at: 0)                             // newest first (observed → picker updates)
+        persistLibrary()
+        return id
+    }
+
+    // Delete a USER-IMPORTED wallpaper from the library (built-ins are not in the library and can
+    // never be deleted). Chats still pointing at it fall back gracefully to the default background.
+    func deleteFromLibrary(_ id: String) {
+        libraryIds.removeAll { $0 == id }
+        hashes.removeValue(forKey: id)
+        imageCache.removeValue(forKey: id)
+        try? FileManager.default.removeItem(at: Self.libraryURL(id))
+        persistLibrary()
+        version &+= 1
+    }
+
+    private func persistLibrary() {
+        UserDefaults.standard.set(libraryIds, forKey: "wallpaper.library.v1")
+        UserDefaults.standard.set(hashes, forKey: "wallpaper.libraryHashes.v1")
+    }
+
+    // MARK: - Paths / helpers
+
     private static func key(_ cid: String) -> String { "wallpaper.\(cid)" }
-    private static func photoURL(_ cid: String) -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        // sanitise cid (cids are safe already, but be defensive about slashes)
+    private static var base: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    }
+    private static func libraryURL(_ id: String) -> URL {
+        base.appendingPathComponent("Wallpapers/library/\(id).jpg")
+    }
+    private static func legacyPhotoURL(_ cid: String) -> URL {
         let safe = cid.replacingOccurrences(of: "/", with: "_")
         return base.appendingPathComponent("Wallpapers/\(safe).jpg")
     }
@@ -155,8 +227,8 @@ struct ChatWallpaperBackground: View {
             } else {
                 Theme.bg(dark)
             }
-        case .photo:
-            if let img = store.photo(for: cid) {
+        case .photo(let id):
+            if let img = store.libraryImage(id) {
                 // Color.clear is the layout-defining view (size-neutral, fills like the .none color
                 // case) and the photo rides as a CLIPPED overlay. A bare scaledToFill Image re-flows
                 // when the container height changes (keyboard open/close), which nudged the composer;
@@ -166,7 +238,7 @@ struct ChatWallpaperBackground: View {
                     .clipped()
                     .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
             } else {
-                Theme.bg(dark)   // photo missing (never saved / cleared) → fall back gracefully
+                Theme.bg(dark)   // photo deleted from the library → fall back gracefully
             }
         }
     }
