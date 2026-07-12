@@ -25,6 +25,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
     var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
+    var topInset: CGFloat = 0                   // nav-bar height (fed from SwiftUI) — list runs UNDER the header
+    var bottomInset: CGFloat = 0               // composer(+keyboard) height — list runs UNDER the composer
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
@@ -42,6 +44,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        vc.setBarInsets(top: topInset, bottom: bottomInset)
         vc.setLoadingOlder(loadingOlder)
         vc.apply(rowIds: rowIds)
         if let target = scrollTarget {
@@ -106,11 +109,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // .always so SwiftUI's safe-area insets (nav bar on top, floating composer on the bottom) become
         // the collection view's adjustedContentInset — the last message clears the composer and the
         // bottom-scroll lands exactly above it.
-        collectionView.contentInsetAdjustmentBehavior = .always
-        // Small gap above the composer (Signal's conversation bottom inset) so the LAST message — and
-        // especially its reaction badge, which hangs below the bubble — isn't jammed against / clipped
-        // by the floating composer. This adds to the safe-area (composer height) inset.
-        collectionView.contentInset.bottom = 12
+        // Signal's model: the collection view is full-bleed UNDER the header + composer (ThreadView applies
+        // .ignoresSafeArea), and the bar heights are fed back as MANUAL content insets (setBarInsets) —
+        // so `.never` (not `.always`): adjustedContentInset == our contentInset. The values match what the
+        // safe area gave before (nav-bar top, composer+keyboard bottom), so every scroll/send method that
+        // reads adjustedContentInset behaves identically; only the frame now extends under the bars, which
+        // is what makes messages frost UNDER the blur bars with no band.
+        collectionView.contentInsetAdjustmentBehavior = .never
         // TOP edge-effect stays at the iOS 26 default: content scrolls UNDER the nav bar so its soft fade
         // is hidden behind the header (seamless top). BOTTOM edge-effect is turned OFF: content stops just
         // ABOVE the floating composer (it does not scroll under it), so the default bottom fade renders as
@@ -462,6 +467,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         guard !sendAnimating, !pendingBottomOnOpen else { return }
         if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
         else { clampOffsetIfBeyondContent() }
+    }
+
+    // Bar heights fed from SwiftUI (nav bar on top, floating composer + keyboard on the bottom) become the
+    // collection view's MANUAL content inset (Signal's updateContentInsets): the first/last message clears
+    // the bars while the rows between scroll UNDER them. Fires on every composer/keyboard resize, so it
+    // keeps the newest message pinned when the bottom inset grows (keyboard opening).
+    private var barTop: CGFloat = -1
+    private var barBottom: CGFloat = -1
+    func setBarInsets(top: CGFloat, bottom: CGFloat) {
+        guard isViewLoaded else { return }
+        let newBottom = bottom + 12   // Signal's small bottom gap so the last bubble + reaction badge clear
+        guard abs(barTop - top) > 0.5 || abs(barBottom - newBottom) > 0.5 else { return }
+        let stayAtBottom = didInitialScroll && computeAtBottom()
+        barTop = top
+        barBottom = newBottom
+        collectionView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: newBottom, right: 0)
+        collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
+        if stayAtBottom { UIView.performWithoutAnimation { pinBottom() } }
     }
 
     private func pinBottom(animated: Bool = false) {

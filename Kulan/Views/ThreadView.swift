@@ -88,7 +88,8 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
-    @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → positions the pinned-bar overlay below the header (layout only, not scroll)
+    @State private var navBarHeight: CGFloat = 0   // measured nav-bar height → list TOP inset + positions the pinned-bar overlay
+    @State private var composerBottomInset: CGFloat = 0   // measured composer(+keyboard) height → list BOTTOM inset
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
     @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
@@ -172,13 +173,20 @@ struct ThreadView: View {
             // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
             messagesLayer(proxy)
-            .ignoresSafeArea(.container, edges: .top)
+            // Full-bleed UNDER both bars (Signal): messages scroll beneath the header AND the composer, so
+            // the native blur frosts them with no band. The bar heights are fed back as the list's manual
+            // content insets (topInset/bottomInset) so the first/last message still clears the bars.
+            .ignoresSafeArea(.container, edges: [.top, .bottom])
             .overlay(alignment: .top) {
                 topPinArea(proxy).padding(.top, navBarHeight)
             }
+            // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
+            // scroll under it. Its height is measured below and fed to the list as the bottom inset.
+            .floatingBottomBar { bottomBarContent }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
-            // Measure the nav-bar height (reader ignores the safe area so it reports the true top inset).
+            // Nav-bar height → the list's TOP inset. This reader ignores the safe area so it reports the
+            // true top inset (status bar + nav bar).
             .background {
                 GeometryReader { geo in
                     Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
@@ -186,6 +194,15 @@ struct ThreadView: View {
                     }
                 }
                 .ignoresSafeArea()
+            }
+            // Composer(+keyboard) height → the list's BOTTOM inset. This reader RESPECTS the safe area, so
+            // its bottom inset IS the composer bar height (and it grows with the keyboard via safeAreaBar).
+            .background {
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.safeAreaInsets.bottom, initial: true) { _, v in
+                        composerBottomInset = v
+                    }
+                }
             }
     }
 
@@ -317,24 +334,28 @@ struct ThreadView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .floatingBottomBar {
-                Group {
-                    if selecting {
-                        selectionActionBar.transition(.opacity)
-                    } else if searchActive {
-                        searchNavBar.transition(.opacity)
-                    } else if notAMember {
-                        removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
-                    } else if cannotSendAnnouncement {
-                        announcementBar.transition(.opacity.combined(with: .move(edge: .bottom)))
-                    } else if repo.iBlocked {
-                        blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
-                    } else {
-                        composerArea.transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                }
-                .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
+    }
+
+    // The bottom bar (composer / selection / blocked etc.), extracted so scrollStack can apply it OUTSIDE
+    // the full-bleed list (the list runs under it via .ignoresSafeArea(.bottom); its height is fed back as
+    // the list's manual bottom inset). A native iOS 26 blur bar (safeAreaBar) that messages scroll under.
+    @ViewBuilder private var bottomBarContent: some View {
+        Group {
+            if selecting {
+                selectionActionBar.transition(.opacity)
+            } else if searchActive {
+                searchNavBar.transition(.opacity)
+            } else if notAMember {
+                removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if cannotSendAnnouncement {
+                announcementBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if repo.iBlocked {
+                blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else {
+                composerArea.transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+        }
+        .animation(.easeInOut(duration: 0.25), value: repo.iBlocked)
     }
 
     // Split into several layers so each modifier chain stays under the type-checker limit.
@@ -1002,6 +1023,8 @@ struct ThreadView: View {
             },
             onReachedTop: { repo.loadOlder() },
             loadingOlder: repo.loadingOlder,
+            topInset: navBarHeight,
+            bottomInset: composerBottomInset,
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             topVisibleId: $topVisibleId

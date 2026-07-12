@@ -93,14 +93,17 @@ extension View {
         }
     }
 
-    /// FLOATING composer (`safeAreaInset`, no bar background) — the composer's own glass pills float over
-    /// the wallpaper with NO frosted bar behind them, so there is no bottom band/border. `safeAreaBar`
-    /// (a full-width native blur bar) DID band, because the message list does not scroll under it the way
-    /// it scrolls under the system nav bar (the composer is not a system bar, so the under-bar trick that
-    /// fixed the header can't apply without re-feeding the composer inset — the change that broke sending
-    /// before). Transparent float = borderless and safe. scroll/sending untouched.
+    /// Signal-style composer: a native iOS 26 blur bar (`safeAreaBar`) that the message list scrolls
+    /// UNDER (ThreadView runs the list full-bleed with .ignoresSafeArea(.bottom) and feeds the composer
+    /// height back as the list's manual bottom inset). Because messages are always behind the blur, it
+    /// reads seamless with no band — exactly like the header. safeAreaInset fallback for older OSes.
+    @ViewBuilder
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
-        self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
+        if #available(iOS 26.0, *) {
+            self.safeAreaBar(edge: .bottom, content: content)
+        } else {
+            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
+        }
     }
 }
 
