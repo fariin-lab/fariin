@@ -46,6 +46,7 @@ struct ThreadView: View {
     @State private var panelEditImage: EditImageWrap?   // picked FROM the attach sheet → editor OVER the sheet (X returns to it)
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
+    struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
     struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
     struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video → approval page (caption)
@@ -69,7 +70,7 @@ struct ThreadView: View {
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
-    @State private var showPollSoon = false   // Poll tile → "coming soon" sheet
+    @State private var comingSoon: ComingSoonWrap?   // Contacts / Location tiles → "coming soon" sheet
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
@@ -503,7 +504,7 @@ struct ThreadView: View {
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
         }
-        .sheet(isPresented: $showPollSoon) { pollSoonSheet.presentationDetents([.fraction(0.6)]) }
+        .sheet(item: $comingSoon) { c in comingSoonSheet(c).presentationDetents([.fraction(0.6)]) }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
                 Task {
@@ -1368,9 +1369,12 @@ struct ThreadView: View {
                     // "Photos" removed — the recents grid above already provides the photo library.
                     // "Contacts" tile is added when the send-contact feature (picker + contact-card message)
                     // is built as a focused, tested piece.
-                    attachTile("doc", "Files") { showFileImporter = true }
+                    // Order (user spec): GIF · Files · Contacts · Location. GIF + Files are live;
+                    // Contacts + Location show the coming-soon sheet until their features are built.
                     attachTile("sparkles", "GIF") { showGifPicker = true }
-                    attachTile("chart.bar.xaxis", "Poll") { showPollSoon = true }
+                    attachTile("doc", "Files") { showFileImporter = true }
+                    attachTile("person.crop.circle", "Contacts") { comingSoon = ComingSoonWrap(icon: "person.crop.circle", title: "Contacts") }
+                    attachTile("location", "Location") { comingSoon = ComingSoonWrap(icon: "location", title: "Location") }
                 }
                 .padding(.vertical, 12)
             }
@@ -1387,12 +1391,11 @@ struct ThreadView: View {
     }
 
     // Polls aren't built yet — a small "coming soon" sheet at a 60% detent (user request).
-    private var pollSoonSheet: some View {
+    private func comingSoonSheet(_ c: ComingSoonWrap) -> some View {
         VStack(spacing: 14) {
-            Capsule().fill(.secondary.opacity(0.4)).frame(width: 38, height: 5).padding(.top, 8)
             Spacer()
-            Image(systemName: "chart.bar.xaxis").font(.system(size: 52, weight: .regular)).foregroundStyle(.secondary)
-            Text("Polls").font(.title2.weight(.bold))
+            Image(systemName: c.icon).font(.system(size: 52, weight: .regular)).foregroundStyle(.secondary)
+            Text(c.title).font(.title2.weight(.bold))
             Text("Coming soon.").font(.body).foregroundStyle(.secondary)
             Spacer()
         }
@@ -3030,7 +3033,7 @@ struct MessageBubble: View, Equatable {
         HStack(alignment: .bottom, spacing: 6) {
             bodyText
                 .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
-            if isLastInCluster { metaRow.padding(.bottom, 1) }   // time once per cluster
+            metaRow.padding(.bottom, 1)   // time on EVERY bubble (Signal/WhatsApp — user spec)
         }
     }
 
@@ -3412,7 +3415,7 @@ struct MessageBubble: View, Equatable {
                         HStack(alignment: .bottom, spacing: 6) {
                             Text(message.text).font(.system(size: 17))
                                 .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
-                            if isLastInCluster { metaRow.padding(.bottom, 1) }
+                            metaRow.padding(.bottom, 1)   // time on EVERY bubble
                         }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(width: imageDisplaySize.width, alignment: .leading)
@@ -3430,7 +3433,7 @@ struct MessageBubble: View, Equatable {
                     HStack(alignment: .bottom, spacing: 6) {
                         Text(message.text).font(.system(size: 17))   // same as a normal message (Signal never shrinks caption text)
                             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
-                        if isLastInCluster { metaRow.padding(.bottom, 1) }
+                        metaRow.padding(.bottom, 1)   // time on EVERY bubble
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
                 }
@@ -3463,7 +3466,7 @@ struct MessageBubble: View, Equatable {
                     .font(.system(size: 18, weight: .semibold))
                 Text(viewed ? "Viewed" : "Photo")
                     .font(.system(size: 15, weight: .medium)).italic(viewed)
-                if isMe && isLastInCluster { metaRow }
+                if isMe { metaRow }   // time on EVERY bubble
             }
             .foregroundStyle((isMe ? onMyBubble : (dark ? Color.white : .black)).opacity(viewed ? 0.6 : 1))
             .padding(.horizontal, 15).padding(.vertical, 11)
@@ -3551,7 +3554,7 @@ struct MessageBubble: View, Equatable {
                         HStack(alignment: .bottom, spacing: 6) {
                             Text(message.text).font(.system(size: 17))   // same as a normal message (Signal never shrinks caption text)
                                 .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
-                            if isLastInCluster { metaRow.padding(.bottom, 1) }
+                            metaRow.padding(.bottom, 1)   // time on EVERY bubble
                         }
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(width: box.width, alignment: .leading)
