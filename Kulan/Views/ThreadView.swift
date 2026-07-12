@@ -195,10 +195,11 @@ struct ThreadView: View {
                             }
                         }
                     }
-                    // NO material bar (user: the .bar rectangle read as a border). The bottom matches the
-                    // TOP's exact mechanism instead: system-default chrome + the collection view's native
-                    // iOS 26 soft scroll-edge effect, which progressively blurs the content itself as it
-                    // passes under the composer (re-enabled in NativeMessageList).
+                    // Native SUBTLE material, STRICTLY the composer's own bounds (Apple Messages style):
+                    // ultraThinMaterial is Apple's lightest system blur — messages frost gently only where
+                    // they pass directly under the bar. (The scroll-edge effect bled a tall blur gradient
+                    // far into the conversation; the heavier .bar material read as a solid band.)
+                    .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
                     // Jump-to-bottom arrow rides ABOVE the composer bar (and with the keyboard), never under
                     // it — anchoring it to the full-bleed list put it at the raw screen bottom, hidden.
                     .overlay(alignment: .topTrailing) {

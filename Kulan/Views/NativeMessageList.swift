@@ -118,10 +118,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // The earlier fully-manual .never + SwiftUI GeometryReader insets desynced during keyboard
         // transitions (readers reporting late/0 → top inset 0 → bubbles under the header).
         collectionView.contentInsetAdjustmentBehavior = .always
-        // BOTH edge-effects stay at the iOS 26 native default (soft progressive blur of the content
-        // itself). Content now scrolls UNDER the composer full-bleed, so the bottom edge blurs messages
-        // exactly the way the top does under the header — the SAME native mechanism, no material bar.
-        // (When content used to STOP above the composer, this fade read as a band — that's gone now.)
+        // TOP edge-effect: iOS 26 native default (soft fade under the system nav bar — correct there).
+        // BOTTOM edge-effect: OFF — its progressive blur spans a TALL gradient region tied to the big
+        // bottom inset, bleeding way up into the conversation (blurred bubbles far above the composer).
+        // The composer's frost is the bar's own bounded native material instead (ThreadView).
+        if #available(iOS 26.0, *) {
+            collectionView.bottomEdgeEffect.isHidden = true
+        }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -516,6 +519,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateBottomInset()   // safe-area values are valid here — keeps the bottom inset exact
+        // Keep the bottom edge-effect off (UIKit can reset it) — its tall gradient bled into the chat.
+        if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
+            collectionView.bottomEdgeEffect.isHidden = true
+        }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
             else { scheduleEmptyReveal() }
