@@ -2698,7 +2698,7 @@ struct ThreadView: View {
 struct HideScrollEdgeEffects: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.scrollEdgeEffectStyle(.hidden, for: .all)
+            content.scrollEdgeEffectHidden(true, for: .all)
         } else {
             content
         }
