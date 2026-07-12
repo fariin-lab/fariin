@@ -114,12 +114,36 @@ struct MediaApprovalView: View {
 
     // MARK: - Pages
 
+    // 9:16 or taller → long-portrait presentation (rounded corners on the media itself). Shared by the
+    // image AND video pages so both match; standard ratios keep the untouched full-bleed path.
+    private func isTall(_ s: CGSize) -> Bool { s.width > 0 && s.height >= s.width * (16.0 / 9.0) - 1 }
+    private func fittedSize(_ media: CGSize, in area: CGSize) -> CGSize {
+        guard media.width > 0, media.height > 0 else { return area }
+        let k = min(area.width / media.width, area.height / media.height)
+        return CGSize(width: media.width * k, height: media.height * k)
+    }
+
     @ViewBuilder private func pageView(_ item: ApprovalMedia, index: Int) -> some View {
         switch item {
         case .image(_, let ui):
-            ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
-                          onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+            if isTall(ui.size) {
+                // LONG PORTRAIT (9:16+): fully-visible fitted image with ROUNDED CORNERS on the image
+                // itself — identical treatment to the single editor and the tall-video page. Pinch zoom
+                // works normally inside (ZoomImageView); standard ratios keep the full-bleed path.
+                GeometryReader { geo in
+                    let fit = fittedSize(ui.size, in: geo.size)
+                    ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
+                                  onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                        .frame(width: fit.width, height: fit.height)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
                 .ignoresSafeArea()
+            } else {
+                ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
+                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false)
+                    .ignoresSafeArea()
+            }
         case .video(let id, let url, _, let duration):
             // EXACT single-video-editor behavior (user spec): starts PAUSED with the same big Play
             // button, tap toggles play/pause (or closes the keyboard first), pauses while a trim handle /
