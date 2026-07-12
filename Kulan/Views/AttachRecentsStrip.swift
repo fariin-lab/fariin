@@ -397,6 +397,11 @@ struct AttachRecentsStrip: View {
             selectedIds.remove(at: i)
             selectedAssets.removeValue(forKey: a.localIdentifier)
         } else {
+            // Cap at Limits.mediaPerMessage (32): warn instead of silently over-selecting.
+            guard selectedIds.count < Limits.mediaPerMessage else {
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                return
+            }
             selectedIds.append(a.localIdentifier)
             selectedAssets[a.localIdentifier] = a   // keep the asset itself — survives album switches
         }

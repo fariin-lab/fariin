@@ -201,10 +201,23 @@ struct MediaApprovalView: View {
     }
 
     // Ordered thumbnail rail: mixed types, current ring-highlighted, video thumbs duration-badged.
+    // RIGHT-ALIGNED (modern messengers): a short rail hugs the trailing edge next to the tools, and the
+    // current page's thumb is auto-scrolled into view — the RTL container + re-flipped tiles trick pins
+    // the content right even when it doesn't fill the width; item order stays first→last, left→right.
     private var rail: some View {
+        ScrollViewReader { proxy in
+            railScroll
+                .onChange(of: page) { _, p in
+                    guard items.indices.contains(p) else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(items[p].id, anchor: .center) }
+                }
+        }
+    }
+
+    private var railScroll: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                ForEach(Array(items.enumerated()).reversed(), id: \.element.id) { i, item in
                     ZStack(alignment: .topTrailing) {
                         ZStack(alignment: .bottomLeading) {
                             Group {
@@ -241,10 +254,13 @@ struct MediaApprovalView: View {
                             .offset(x: 6, y: -6)
                         }
                     }
+                    .id(item.id)                                      // scroll-to target (current page)
+                    .environment(\.layoutDirection, .leftToRight)     // re-flip the tile's own content
                 }
             }
             .padding(.top, 6)
         }
+        .environment(\.layoutDirection, .rightToLeft)   // container RTL: short content hugs the RIGHT edge
         .defaultScrollAnchor(.trailing)
         .frame(height: 60)
     }
