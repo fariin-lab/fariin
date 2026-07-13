@@ -113,6 +113,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
+    private var lastKnownDistanceFromBottom: CGFloat = 0 // continuity scalar, tracked on every scroll (reference)
+    private var scrollWorkTimer: Timer?                  // 0.1s debounce for pagination + isAtBottom writes
+    private var userScrolledSinceTimer = false           // the debounced work only pages on USER scrolls
     var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
@@ -308,6 +311,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         measuredWidth = width
     }
 
+    // Frame minY per row for an id order — exactly what ExactHeightLayout will produce (y-accumulated
+    // heights). Used to build the before/after maps of the scroll-continuity token.
+    private func frameMinY(for ids: [String]) -> [String: CGFloat] {
+        var out = [String: CGFloat](minimumCapacity: ids.count)
+        var y: CGFloat = 0
+        for id in ids {
+            out[id] = y
+            y += heights[id] ?? 44
+        }
+        return out
+    }
+
     // Late rendered-height report from a cell. During open we trust the synchronous pre-measure; after
     // reveal, a genuine change (a link-preview card fetching Open-Graph data) re-lays-out ONCE with the
     // reader's position preserved — nothing else can change a row height, so this fires rarely.
@@ -445,30 +460,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         lastRowSigs = rowSignatures   // ids changed (append/prepend/trim): reseed signatures for the new set
 
         let wasAtBottom = computeAtBottom()
-        // A top-prepend (load older) = the new list ENDS WITH the entire old list. Anchor an on-screen row
-        // and restore its position after the insert, so nothing lurches.
-        let isPrepend = !currentIds.isEmpty && ids.count > currentIds.count
-            && Array(ids.suffix(currentIds.count)) == currentIds
         // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
-        // A top-TRIM (the repo LRU-dropped the oldest window overflow) = the new list is a SUFFIX of the
-        // old. Anchor a visible row and restore it so the trim is invisible to the reader.
-        let isTopTrim = !currentIds.isEmpty && ids.count < currentIds.count
-            && Array(currentIds.suffix(ids.count)) == ids
-        let trimAnchor: (id: String, distanceFromTop: CGFloat)? = isTopTrim ? captureTopAnchor() : nil
+        let isPrepend = !currentIds.isEmpty && ids.count > currentIds.count
+            && Array(ids.suffix(currentIds.count)) == currentIds
         let appendedCount = ids.count - currentIds.count
         let appendedIds = isAppend ? Array(ids.suffix(max(0, appendedCount))) : []
-        // Prepend (load older): capture the content height + offset so we can keep the visible content
-        // EXACTLY stable — after the older messages lay out, add their total height to the offset. The
-        // reader never jumps and is never auto-scrolled; the new older messages simply sit above.
-        let prepend: (oldHeight: CGFloat, oldOffset: CGFloat)? = isPrepend
-            ? (collectionView.contentSize.height, collectionView.contentOffset.y) : nil
+
+        // SCROLL-CONTINUITY TOKEN (the reference model): before the update, snapshot every current row's
+        // frame-minY (frames are exactly y-accumulated heights) plus the visible ids. After the new
+        // heights are known, the anchor row's frame DELTA becomes a contentOffset adjustment that UIKit
+        // applies ATOMICALLY inside the batch update (targetContentOffset override on the layout) — one
+        // mechanism for prepend, top-trim, delete, and any mixed change; no post-completion offset fixing,
+        // so no frame ever renders at the stale offset.
+        let beforeY = frameMinY(for: currentIds)
+        let visibleBefore = collectionView.indexPathsForVisibleItems.sorted()
+            .compactMap { dataSource.itemIdentifier(for: $0) }
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         if ids.count < currentIds.count {   // rows left (trim/delete): drop their cached heights too
             let keep = Set(ids)
             heights = heights.filter { keep.contains($0.key) }
+        }
+        let afterY = frameMinY(for: ids)
+
+        // Anchor cascade (the reference order): visible rows first — bottom-most first when the reader is
+        // at the bottom, top-most first otherwise — then any row present in both windows.
+        var adjustment: CGFloat = 0
+        let candidates = (wasAtBottom ? visibleBefore.reversed() : visibleBefore) + ids
+        for id in candidates {
+            if let b = beforeY[id], let a = afterY[id] { adjustment = a - b; break }
         }
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -506,28 +528,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 self.settleFlush()
             }
         } else {
+            // Land the load with ATOMIC continuity: the anchor delta rides the batch update via the
+            // layout's targetContentOffset (see ExactHeightLayout) — covers prepend, top-trim, delete,
+            // and mixed changes in one mechanism. The completion only handles intents ON TOP of
+            // continuity: a jump target riding the load, or staying pinned at the bottom.
+            layout.pendingContentOffsetAdjustment = adjustment
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
-                if let p = prepend {
+                self.layout.pendingContentOffsetAdjustment = 0   // consumed (or not needed) — never goes stale
+                self.lastStableOffset = self.collectionView.contentOffset.y
+                if let target = scrollTarget, target != "BOTTOM",
+                   let ip = self.dataSource.indexPath(for: target) {
+                    // A jump RODE this load (reply/search into older history): land it POSITIONED on the
+                    // target — the scroll action is part of the load, nothing can stomp it.
                     self.collectionView.layoutIfNeeded()
-                    if let target = scrollTarget, target != "BOTTOM",
-                       let ip = self.dataSource.indexPath(for: target) {
-                        // A jump RODE this load (reply/search into older history): land the load already
-                        // POSITIONED on the target — the reference model (the scroll action is part of the
-                        // load). Restoring the pre-load offset and scrolling separately was a race that
-                        // stomped the jump.
-                        self.collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: false)
-                        self.lastStableOffset = self.collectionView.contentOffset.y
-                    } else {
-                        // Keep the reader's EXACT position: shift the offset down by the height the prepended
-                        // older messages added, so nothing on screen moves. No jump, no auto-scroll-down.
-                        let delta = self.collectionView.contentSize.height - p.oldHeight
-                        self.collectionView.setContentOffset(CGPoint(x: 0, y: p.oldOffset + delta), animated: false)
-                        if let target = scrollTarget { self.scrollTo(id: target) }
-                    }
-                } else if let anchor = trimAnchor {
-                    self.restore(anchor)                             // top-trim: keep the reader's place
-                    if let target = scrollTarget { self.scrollTo(id: target) }
+                    self.collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: false)
+                    self.lastStableOffset = self.collectionView.contentOffset.y
                 } else if wasAtBottom && !isPrepend {
                     // Stay pinned — but NEVER yank while the user is actively scrolling (a message arriving
                     // while the finger is down within the bottom zone used to snap the list = the random
@@ -536,7 +552,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                         || self.collectionView.isDecelerating
                     if userScrolling { self.needsPinOnSettle = true }
                     else { self.pinBottom() }
-                    if let target = scrollTarget, target != "BOTTOM" { self.scrollTo(id: target) }
+                    if let target = scrollTarget, target == "BOTTOM" { self.pinBottom(animated: true) }
                 } else if let target = scrollTarget {
                     self.scrollTo(id: target)
                 }
@@ -1006,10 +1022,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Scroll observation
 
+    // The reference at-rest math: "is the scroll view scrolled down as far as it can, at rest" — measured
+    // against the at-rest MAXIMUM offset, not against the content's bottom edge (their comment: the edge
+    // check is wrong when the content doesn't fill the viewport, e.g. a short chat with the keyboard down).
+    private var minContentOffsetY: CGFloat { -collectionView.adjustedContentInset.top }
+    private var maxContentOffsetY: CGFloat {
+        max(minContentOffsetY,
+            collectionView.contentSize.height + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
+    }
+    private var safeDistanceFromBottom: CGFloat { maxContentOffsetY - collectionView.contentOffset.y }
+
     private func computeAtBottom() -> Bool {
         guard collectionView.contentSize.height > 0 else { return true }
-        let bottomEdge = collectionView.contentOffset.y + collectionView.bounds.height - collectionView.adjustedContentInset.bottom
-        return bottomEdge >= collectionView.contentSize.height - 44
+        return safeDistanceFromBottom <= 44
     }
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { sendAnimating = false; settleFlush() }
@@ -1022,25 +1047,57 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state (the
         // isAtBottom flips would re-run the tree and land reconfigures mid-capture = overlap), fire nothing.
         if Date() < captureFreezeUntil { return }
-        let atBottom = computeAtBottom()
-        if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
+        // Constantly track the distance from the at-rest bottom (the reference continuity scalar).
+        if didReveal { lastKnownDistanceFromBottom = safeDistanceFromBottom }
         let userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
         // Remember the last USER-intended offset (also kept fresh by pinBottom/restore). The iOS 26
         // full-page screenshot capture scrolls the list programmatically — this is what we snap back to.
-        if userDriven { lastStableOffset = scrollView.contentOffset.y }
-        // Fire load-older once when we cross into the top zone — USER scrolls only. The system's
-        // full-page screenshot capture scrolls the list programmatically to the top, which used to
-        // page older messages in (prepend → content shift) and leave the chat "gone up" after the
-        // screenshot. A programmatic system scroll must never trigger paging.
-        let nearTop = scrollView.contentOffset.y <= 72
-        if nearTop && !inTopZone && userDriven { coordinator.parent.onReachedTop() }
-        inTopZone = nearTop
+        if userDriven {
+            lastStableOffset = scrollView.contentOffset.y
+            userScrolledSinceTimer = true
+        }
+        // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
+        // 0.1s one-shot timer on the COMMON runloop mode (fires during scrolling) — the reference model:
+        // scrollViewDidScroll itself stays cheap and never mutates state that re-enters layout inline.
+        scheduleScrollWorkTimer()
         // Topmost visible row → the floating date pill (UIKit, updated in place — NO SwiftUI write).
         // Only on real user scrolls, so the programmatic open/pin never flashes the pill.
         if userDriven {
             let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
             updateDatePill(topId: top)
         }
+    }
+
+    private func scheduleScrollWorkTimer() {
+        guard scrollWorkTimer == nil else { return }
+        let t = Timer(timeInterval: 0.1, repeats: false) { [weak self] _ in self?.scrollWorkTimerDidFire() }
+        scrollWorkTimer = t
+        RunLoop.main.add(t, forMode: .common)   // .common or it won't fire during scrolling
+    }
+
+    private func scrollWorkTimerDidFire() {
+        scrollWorkTimer?.invalidate()
+        scrollWorkTimer = nil
+        guard isViewLoaded, Date() >= captureFreezeUntil else { return }
+        // isAtBottom SwiftUI write, coalesced to ≤10/s: the composer's jump-button reacts promptly but the
+        // conversation tree no longer re-runs on every scroll tick near the bottom threshold.
+        let atBottom = computeAtBottom()
+        if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
+        // Load-older trigger — once per entry into the top zone, USER scrolls only (a programmatic/system
+        // scroll must never page history in).
+        let nearTop = collectionView.contentOffset.y <= 72
+        if nearTop && !inTopZone && userScrolledSinceTimer { coordinator.parent.onReachedTop() }
+        inTopZone = nearTop
+        userScrolledSinceTimer = false
+    }
+
+    // Status-bar tap: the default scroll-to-top animation swings PAST the top then bounces back — that
+    // overshoot can land a load-older prepend mid-animation, and the animation then overwrites the
+    // adjusted offset (continuity break + possible load loop — the reference documents exactly this).
+    // A plain animated setContentOffset has no overshoot.
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: true)
+        return false
     }
 
     // Show the day of the topmost visible row while scrolling; fade ~1.2s after it stops. Runs entirely in
@@ -1158,5 +1215,23 @@ final class ExactHeightLayout: UICollectionViewLayout {
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
         newBounds.width != layoutWidth
+    }
+
+    // ===== Scroll continuity (the reference model) =====
+    // When a load lands, the controller computes the anchor row's frame delta (before vs after the
+    // update) and parks it here. UIKit consults targetContentOffset(forProposedContentOffset:) DURING
+    // the batch update — answering with proposed + delta shifts the offset ATOMICALLY with the layout
+    // change, so no frame ever renders at the stale offset. (The old model corrected the offset in the
+    // apply COMPLETION — one frame late, which is a visible jump on every prepend/trim/delete.)
+    var pendingContentOffsetAdjustment: CGFloat = 0
+
+    override func targetContentOffset(forProposedContentOffset proposed: CGPoint) -> CGPoint {
+        guard pendingContentOffsetAdjustment != 0 else { return proposed }
+        return CGPoint(x: proposed.x, y: proposed.y + pendingContentOffsetAdjustment)
+    }
+
+    override func finalizeCollectionViewUpdates() {
+        pendingContentOffsetAdjustment = 0   // one-shot: consumed by the batch update that lands the load
+        super.finalizeCollectionViewUpdates()
     }
 }
