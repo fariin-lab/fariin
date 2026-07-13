@@ -141,6 +141,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
     private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
     private var needsReconcileOnSettle = false // a reconcile deferred mid-motion whose heights were pre-adopted
+    var initialScrollId: String?              // first-unread rowId → the FIRST open lands here (reference)
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
