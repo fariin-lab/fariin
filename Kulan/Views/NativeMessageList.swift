@@ -24,6 +24,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in order (Message.rowId)
     var rowSignatures: [String: String] = [:]  // per-row CONTENT signature → same-ids apply reconfigures ONLY changed rows
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
+    // UIKit bubble migration: for a message the native path fully supports (stage 1: plain 1:1 delivered
+    // text), ThreadView returns a resolved model and the row renders as a UIKit cell — no SwiftUI, no
+    // per-cell animation/re-measure during scroll. nil → the SwiftUI `row` is used (every other case).
+    var uikitBubble: (String) -> UIKitBubbleModel? = { _ in nil }
     var onReachedTop: () -> Void               // near-top -> page older
     var selecting: Bool = false                // selection mode — drives the selection-animation land gate
     // The reference's initial scroll position: when the conversation has unread messages, the FIRST open
@@ -63,6 +67,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.loadViewIfNeeded()
         vc.setComposerBarHeight(composerBarHeight)
         vc.setKeyboardOverlap(keyboardOverlapFromBar)
+        vc.uikitBubble = uikitBubble
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
@@ -224,6 +229,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // fought the scroll pan and jittered). Callbacks are fed from SwiftUI.
     var canSwipeReply: (String) -> Bool = { _ in false }
     var onSwipeReply: (String) -> Void = { _ in }
+    var uikitBubble: (String) -> UIKitBubbleModel? = { _ in nil }   // non-nil → native UIKit cell for this id
+    private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
     private var swipingId: String?
@@ -379,8 +386,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             .margins(.all, 0)
             cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
         }
+        // Native UIKit bubble registration (the migration path).
+        uikitReg = UICollectionView.CellRegistration<UIKitBubbleCell, String> { [weak self] cell, _, id in
+            if let m = self?.uikitBubble(id) { cell.configure(m) }
+        }
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] cv, ip, id in
-            cv.dequeueConfiguredReusableCell(using: self!.reg, for: ip, item: id)
+            guard let self else { return UICollectionViewCell() }
+            // ROUTER: native UIKit cell when the message is supported (plain 1:1 delivered text), else the
+            // SwiftUI hosting cell — so scrolling the common case is a rigid UIKit surface and no feature is lost.
+            if self.uikitBubble(id) != nil {
+                return cv.dequeueConfiguredReusableCell(using: self.uikitReg, for: ip, item: id)
+            }
+            return cv.dequeueConfiguredReusableCell(using: self.reg, for: ip, item: id)
         }
         // Install section 0 IMMEDIATELY (empty) so the very first layout pass never sees a section-less
         // data source — an empty new chat previously reached prepare() with zero sections and crashed.
@@ -394,6 +411,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Exact height of a row for the given width, measured off-screen. Deterministic for every bubble type
     // (heights come from stored dimensions / fixed frames), so this equals the on-screen render.
     private func measure(_ id: String, width: CGFloat) -> CGFloat {
+        // Native UIKit bubble: deterministic UIKit measurement (matches the cell's own layout exactly).
+        if let m = uikitBubble(id), width > 0 {
+            return UIKitBubbleView.sizes(m, width: width).cell.height
+        }
         // Measure EXACTLY as the cell renders: the cell wraps its content in `.frame(width: hostWidth)`,
         // so the sizer must apply the SAME explicit width frame — not just a sizeThatFits width proposal.
         // The two constraint mechanisms wrap Text differently in edge cases, and any disagreement made

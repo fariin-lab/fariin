@@ -1165,6 +1165,45 @@ struct ThreadView: View {
         return out
     }
 
+    // UIKit bubble migration (stage 1): resolve a NATIVE model for a message the UIKit path fully supports —
+    // plain 1:1 delivered text, default bubble color, no adornments. Any special case returns nil and the
+    // message keeps its SwiftUI cell, so no feature is lost while the surface is progressively migrated.
+    private func uikitBubbleModel(for rowId: String) -> UIKitBubbleModel? {
+        guard !isGroup, !selecting, chatColorSpec == nil,
+              let idx = repo.items.firstIndex(where: { $0.rowId == rowId }) else { return nil }
+        guard !shouldShowDate(at: idx) else { return nil }             // date-header rows render the pill in SwiftUI
+        let m = repo.items[idx]
+        guard m.id != highlightId, m.sendState == nil,                 // delivered only
+              m.replyTo == nil, m.reactions.isEmpty,
+              !m.isFeatureMarker, !m.viewOnce,
+              !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
+              m.mentions.isEmpty else { return nil }
+        let text = m.safeText
+        guard !text.isEmpty else { return nil }
+        // Links (OG preview card + tappable ranges) stay in SwiftUI for now; '@' may be a username/mention.
+        let lower = text.lowercased()
+        guard !lower.contains("http"), !lower.contains("www."), !text.contains("@") else { return nil }
+
+        let isMe = m.authorId == me
+        let first = isFirstInCluster(at: idx)
+        let last = isLastInCluster(at: idx)
+        let big: CGFloat = 18, small: CGFloat = 6
+        let radii: UIKitBubbleModel.Radii = isMe
+            ? .init(topLeading: big, topTrailing: first ? big : small, bottomLeading: big, bottomTrailing: last ? big : small)
+            : .init(topLeading: first ? big : small, topTrailing: big, bottomLeading: last ? big : small, bottomTrailing: big)
+        let tick: UIKitBubbleModel.Tick
+        if isMe {
+            let read = repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
+            let pref = (UserDefaults.standard.object(forKey: "readReceipts") as? Bool) ?? true
+            tick = (read && pref) ? .read : .sent
+        } else { tick = .none }
+
+        return UIKitBubbleModel(
+            isMe: isMe, text: text, edited: m.edited,
+            timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
+            tick: tick, radii: radii, topSpacing: first ? 14 : 2)
+    }
+
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
     // Jumps (reply/search) route through nativeScrollTarget; read receipts + jump-button count come from
     // the shared onChange(of: repo.items.count) handler on the container.
@@ -1187,6 +1226,8 @@ struct ThreadView: View {
                     }
                 }).padding(.horizontal, 12))
             },
+            // UIKit bubble migration (stage 1): plain 1:1 delivered text renders as a native UIKit cell.
+            uikitBubble: { id in uikitBubbleModel(for: id) },
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
             // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread
