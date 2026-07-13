@@ -317,6 +317,7 @@ final class CallService: NSObject {
     func toggleMute() {
         isMuted.toggle()
         localAudioTrack?.isEnabled = !isMuted
+        CallKitManager.shared.setMuted(isMuted)   // lock-screen/system UI stays in sync
     }
     // The user's EXPLICIT speaker choice. CallKit/WebRTC re-activate the audio session at
     // connect/answer and reset the route to the earpiece — which used to silently erase a speaker
@@ -788,6 +789,9 @@ final class CallService: NSObject {
     }
 
     func flushPendingCandidates() {
+        // Always on MAIN: called from SDP completions (WebRTC thread) while Firestore listeners (main)
+        // append to pendingRemoteCandidates - the unsynchronized mix raced/lost candidates.
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.flushPendingCandidates() }; return }
         guard let pc, pc.remoteDescription != nil, !pendingRemoteCandidates.isEmpty else { return }
         let pending = pendingRemoteCandidates
         pendingRemoteCandidates = []
@@ -906,9 +910,14 @@ extension CallService: RTCPeerConnectionDelegate {
             "sdpMLineIndex": candidate.sdpMLineIndex,
             "sdpMid": candidate.sdpMid as Any,
         ]
-        // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
-        if callDocCreated, let col = myCandidatesCollection { col.addDocument(data: data) }
-        else { localCandidateBuffer.append(data) }
+        // MAIN hop: this fires on WebRTC's signaling thread, but callDocCreated/localCandidateBuffer
+        // are also touched from Firestore callbacks (main). Unsynchronized access raced — a candidate
+        // generated at the wrong instant could be dropped (lost connectivity path) or crash.
+        DispatchQueue.main.async {
+            // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
+            if self.callDocCreated, let col = self.myCandidatesCollection { col.addDocument(data: data) }
+            else { self.localCandidateBuffer.append(data) }
+        }
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         DispatchQueue.main.async {

@@ -44,6 +44,12 @@ final class CallKitManager: NSObject {
         return uuid
     }
     func reportConnecting() { if let u = activeUUID { provider.reportOutgoingCall(with: u, startedConnectingAt: nil) } }
+
+    // Keep the SYSTEM call UI (lock screen/dynamic island) mute state in sync with the in-app toggle.
+    func setMuted(_ muted: Bool) {
+        guard let u = activeUUID else { return }
+        controller.request(CXTransaction(action: CXSetMutedCallAction(call: u, muted: muted))) { _ in }
+    }
     func reportConnected() { if let u = activeUUID { provider.reportOutgoingCall(with: u, connectedAt: nil) } }
 
     // MARK: - Incoming (idempotent per callId so two paths can't make two UUIDs)
