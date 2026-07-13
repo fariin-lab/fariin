@@ -1101,7 +1101,11 @@ struct ThreadView: View {
             // the visible rows → the checkboxes never appeared until a scroll dequeued a fresh cell (the
             // intermittent "missing checkbox / missing message" bug in 308).
             let sel = selecting ? (selectedIds.contains(m.id) ? "S1" : "S0") : "S-"
-            out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(sel)"
+            // HIGHLIGHT must be in the signature: the jump-to flash (reply/pin/search) renders via
+            // isHighlighted, and without a signature change the target row never reconfigured — the
+            // scroll landed but the flash never showed (looked like the jump "didn't work").
+            let hl = m.id == highlightId ? "H1" : "H0"
+            out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(sel)|\(hl)"
         }
         return out
     }
@@ -2271,7 +2275,11 @@ struct ThreadView: View {
                 if !searchQuery.isEmpty {
                     Button { searchQuery = "" } label: {
                         Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
+                            // 32pt real target + contentShape: the bare 16pt glyph was nearly impossible
+                            // to hit (only opaque pixels hit-test without a contentShape).
+                            .frame(width: 32, height: 32).contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 12).frame(height: 44)   // substantial native search field (matches the X)
@@ -2279,6 +2287,9 @@ struct ThreadView: View {
             Button { closeSearch() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // 44pt Apple tap target
+                    // Whole circle is the tap target — without a contentShape only the thin ✕ glyph
+                    // hit-tested, so taps on the glass circle fell through ("X not working").
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
         }

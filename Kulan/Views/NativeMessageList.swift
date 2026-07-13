@@ -58,9 +58,12 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTopInset = onTopInset
         vc.setLoadingOlder(loadingOlder)
         vc.rowSignatures = rowSignatures
-        vc.apply(rowIds: rowIds)
-        if let target = scrollTarget {
-            vc.scrollTo(id: target)
+        // The scroll target RIDES the apply (the reference model: a jump is a scroll ACTION attached to the
+        // load, landed atomically with it). Calling scrollTo after apply was a race: for a jump into older
+        // history (ensureLoaded → prepend), apply's async completion restored the pre-load offset AFTER the
+        // scroll had already run — stomping the jump ("reply/search jump doesn't work").
+        vc.apply(rowIds: rowIds, scrollTarget: scrollTarget)
+        if scrollTarget != nil {
             DispatchQueue.main.async { scrollTarget = nil }   // one-shot
         }
     }
@@ -106,6 +109,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
+    private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
+    private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
@@ -316,7 +321,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard didReveal else { return }   // never reconcile during the open — the pre-measure owns it
         // Land-when-safe: a rendered-height signal that arrives mid-scroll/animation is coalesced and
         // handled on settle — reconciling now would invalidate the layout under a live scroll (overlap).
-        if isInMotion { needsRefreshOnSettle = true; return }
+        // Remember WHICH row changed so the settle flush re-measures just it (not every visible cell).
+        if isInMotion { needsRefreshOnSettle = true; pendingSettleHeights.insert(id); return }
         // The rendered report is only a SIGNAL that something changed — the SIZER is the single height
         // authority. (Adopting the rendered value here while the same-ids path adopts the sizer value
         // made two authorities fight: any row where they disagreed >2pt reconciled back and forth
@@ -333,6 +339,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Re-lay-out after a late height change, keeping the viewport stable (the late-media re-layout).
     private func reconcile() {
         guard collectionView.bounds.height > 0 else { return }
+        // Never invalidate the layout under a live scroll (this runs a runloop after its trigger, so the
+        // user may have STARTED dragging since the motion check) — defer to settle like everything else.
+        if isInMotion { needsRefreshOnSettle = true; return }
         let wasBottom = computeAtBottom()
         let anchor = captureTopAnchor()
         layout.generation += 1
@@ -350,11 +359,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating || sendAnimating
     }
 
-    // Flush the coalesced refresh once the list settles.
+    // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
+    // motion. The old flush reconfigured EVERY visible cell unconditionally, re-rendering all bubbles
+    // the instant scrolling stopped = the flash/flicker at scroll end.
     private func settleFlush() {
-        guard needsRefreshOnSettle, !isInMotion else { return }
+        guard !isInMotion else { return }
+        // A message arrived at the bottom mid-scroll: pin now (only if the reader is still at the bottom).
+        if needsPinOnSettle {
+            needsPinOnSettle = false
+            if computeAtBottom() { pinBottom() }
+        }
+        guard needsRefreshOnSettle else { return }
         needsRefreshOnSettle = false
-        refreshVisible()
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }   // content changes (signature diff)
+        lastRowSigs = rowSignatures
+        let heightIds = pendingSettleHeights                                    // late height reports (link preview)
+        pendingSettleHeights.removeAll()
+        let target = Array(Set(changed).union(heightIds))
+        guard !target.isEmpty else { return }
+        refreshVisible(target)
     }
 
     // Re-measure + reconfigure the on-screen rows (single sizer authority, >2pt tolerance), then relayout
@@ -384,10 +408,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Apply
 
-    func apply(rowIds ids: [String]) {
+    func apply(rowIds ids: [String], scrollTarget: String? = nil) {
         let width = collectionView.bounds.width
 
         guard ids != currentIds else {
+            // A jump with no data change (target already in the loaded window): scroll now. scrollToItem
+            // is safe mid-deceleration (it takes over the scroll), so this lands even in motion.
+            if let target = scrollTarget { scrollTo(id: target) }
             // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick).
             // SIGNAL'S "LAND WHEN SAFE" GATE (CVLoadCoordinator.canLandLoad): NOTHING lands while the list
             // is in motion — no reconfigure, no re-measure, no relayout during dragging/deceleration or the
@@ -476,15 +503,36 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
                 if let p = prepend {
-                    // Keep the reader's EXACT position: shift the offset down by the height the prepended
-                    // older messages added, so nothing on screen moves. No jump, no auto-scroll-down.
                     self.collectionView.layoutIfNeeded()
-                    let delta = self.collectionView.contentSize.height - p.oldHeight
-                    self.collectionView.setContentOffset(CGPoint(x: 0, y: p.oldOffset + delta), animated: false)
+                    if let target = scrollTarget, target != "BOTTOM",
+                       let ip = self.dataSource.indexPath(for: target) {
+                        // A jump RODE this load (reply/search into older history): land the load already
+                        // POSITIONED on the target — the reference model (the scroll action is part of the
+                        // load). Restoring the pre-load offset and scrolling separately was a race that
+                        // stomped the jump.
+                        self.collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: false)
+                        self.lastStableOffset = self.collectionView.contentOffset.y
+                    } else {
+                        // Keep the reader's EXACT position: shift the offset down by the height the prepended
+                        // older messages added, so nothing on screen moves. No jump, no auto-scroll-down.
+                        let delta = self.collectionView.contentSize.height - p.oldHeight
+                        self.collectionView.setContentOffset(CGPoint(x: 0, y: p.oldOffset + delta), animated: false)
+                        if let target = scrollTarget { self.scrollTo(id: target) }
+                    }
                 } else if let anchor = trimAnchor {
                     self.restore(anchor)                             // top-trim: keep the reader's place
+                    if let target = scrollTarget { self.scrollTo(id: target) }
                 } else if wasAtBottom && !isPrepend {
-                    self.pinBottom()                                 // was at bottom: stay pinned
+                    // Stay pinned — but NEVER yank while the user is actively scrolling (a message arriving
+                    // while the finger is down within the bottom zone used to snap the list = the random
+                    // mid-scroll jump). Defer the pin to settle; if they've scrolled away by then, no pin.
+                    let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
+                        || self.collectionView.isDecelerating
+                    if userScrolling { self.needsPinOnSettle = true }
+                    else { self.pinBottom() }
+                    if let target = scrollTarget, target != "BOTTOM" { self.scrollTo(id: target) }
+                } else if let target = scrollTarget {
+                    self.scrollTo(id: target)
                 }
             }
         }
