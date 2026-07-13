@@ -197,14 +197,26 @@ struct ChatImageEditor: View {
     // editor (or the recipient's viewer) moves them in perfect sync, permanently anchored.
     @MainActor private func bakeDrawing() {
         guard !drawing.bounds.isEmpty else { return }
-        let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        let canvas = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        let img = edited.size
+        guard img.width > 0, img.height > 0, canvas.width > 0, canvas.height > 0 else { return }
+        // The photo is drawn scaledToFit inside the canvas, so it occupies a CENTERED fitted rect. The
+        // old bake rendered the whole canvas (letterbox black bars baked in → the extra black bar +
+        // distortion). Bake ONLY that fitted rect so the output keeps the photo's exact aspect.
+        let fit = min(canvas.width / img.width, canvas.height / img.height)
+        let fitted = CGSize(width: img.width * fit, height: img.height * fit)
+        let origin = CGPoint(x: (canvas.width - fitted.width) / 2, y: (canvas.height - fitted.height) / 2)
+        // Output at the photo's native resolution.
+        let outScale = max(1, img.width / fitted.width)
+        // Crop the strokes to exactly the photo's on-screen rect (drawing coords == canvas coords).
+        let strokes = drawing.image(from: CGRect(origin: origin, size: fitted), scale: outScale)
         let composed = ZStack {
-            Image(uiImage: edited).resizable().scaledToFit().frame(width: size.width, height: size.height)
-            Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale)).resizable()
+            Image(uiImage: edited).resizable().frame(width: fitted.width, height: fitted.height)
+            Image(uiImage: strokes).resizable().frame(width: fitted.width, height: fitted.height)
         }
-        .frame(width: size.width, height: size.height)
+        .frame(width: fitted.width, height: fitted.height)
         let r = ImageRenderer(content: composed)
-        r.scale = UIScreen.main.scale
+        r.scale = outScale
         if let baked = r.uiImage {
             editedCache = baked
             drawing = PKDrawing()

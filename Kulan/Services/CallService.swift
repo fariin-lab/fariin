@@ -702,7 +702,7 @@ final class CallService: NSObject {
                     guard let d = snap?.data(),
                           let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
                     self.startedAsVideo = (d["type"] as? String == "video")
-                    self.cameraOn = self.startedAsVideo   // WhatsApp model: camera opens on answer
+                    self.cameraOn = self.startedAsVideo   // accepting a video call opens the camera
                     if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
                     self.completeAnswer(ref: ref, offerSdp: sdp)
                 }
