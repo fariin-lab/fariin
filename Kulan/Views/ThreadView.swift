@@ -360,7 +360,9 @@ struct ThreadView: View {
                             Text("\(newWhileAway)").font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Color.accentColor, in: Capsule())
+                                // Fixed brand blue — Color.accentColor is WHITE in dark mode, so a white
+                                // number on it was invisible (the reported "can't see the count" bug).
+                                .background(Theme.defaultBubble(dark), in: Capsule())
                                 .offset(y: -9)
                         }
                     }
