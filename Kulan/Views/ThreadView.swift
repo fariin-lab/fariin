@@ -483,7 +483,10 @@ struct ThreadView: View {
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
-                                    cid: cid, suppressDismissPan: false)
+                                    cid: cid, suppressDismissPan: false,
+                                    onSendEdited: { data, caption, viewOnce in
+                                        Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                                    })
                 }
             }
         }
@@ -492,7 +495,10 @@ struct ThreadView: View {
         // (album cells share a bubble, so there's no single source rect); drag-down closes the photo only.
         .fullScreenCover(item: $albumViewer) { wrap in
             ImageViewerView(message: wrap.gallery.first { $0.id == wrap.startId } ?? wrap.gallery[0],
-                            in: wrap.gallery, cid: cid, suppressDismissPan: false)
+                            in: wrap.gallery, cid: cid, suppressDismissPan: false,
+                            onSendEdited: { data, caption, viewOnce in
+                                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                            })
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid)

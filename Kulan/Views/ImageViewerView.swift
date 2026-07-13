@@ -56,17 +56,27 @@ struct ImageViewerView: View {
     @State private var current: String  // id of the page being shown
     @Environment(\.dismiss) private var dismiss
 
+    // Pen edit → full editor → SEND: wired by the conversation (nil in profile/gallery contexts, where
+    // there's no send pipeline — the pen button hides there). (data, caption, viewOnce).
+    var onSendEdited: ((Data, String, Bool) -> Void)? = nil
+    private struct PenEditWrap: Identifiable { let id = UUID(); let image: UIImage }
+    @State private var penEdit: PenEditWrap?
+
     // Single-image entry (existing call sites): a one-page gallery.
-    init(message: Message, cid: String, suppressDismissPan: Bool = false) {
+    init(message: Message, cid: String, suppressDismissPan: Bool = false,
+         onSendEdited: ((Data, String, Bool) -> Void)? = nil) {
         self.gallery = [message]; self.cid = cid
         self.suppressDismissPan = suppressDismissPan
+        self.onSendEdited = onSendEdited
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
-    init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false) {
+    init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false,
+         onSendEdited: ((Data, String, Bool) -> Void)? = nil) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
         self.suppressDismissPan = suppressDismissPan
+        self.onSendEdited = onSendEdited
         _current = State(initialValue: message.id)
     }
 
@@ -135,6 +145,9 @@ struct ImageViewerView: View {
             VStack {
                 header
                 Spacer()
+                // Album/group context: thumbnails of EVERY image in the group, current highlighted —
+                // tap to jump (reference: centered strip just above the bottom bar).
+                if gallery.count > 1 { thumbStrip }
                 bottomBar
             }
             .opacity(chromeVisible ? 1 : 0)
@@ -170,6 +183,15 @@ struct ImageViewerView: View {
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
             if let items = shareItems { ActivityView(items: items) }
         }
+        // Pen flow (user spec): opens straight into DRAW mode; tapping Done there lands in the SAME full
+        // image editor used for fresh photos (crop, pen, HD, filters, caption — no new flow), and Send
+        // delivers the edited image with everything baked in. X backs out to this viewer.
+        .fullScreenCover(item: $penEdit) { wrap in
+            ChatImageEditor(source: wrap.image, startDrawing: true) { data, caption, _, viewOnce in
+                onSendEdited?(data, caption, viewOnce)
+                dismiss()   // back to the conversation, where the edited copy is sending
+            }
+        }
     }
 
     // Floating Liquid Glass header: back · You/name + date · "…" menu (Go to Chat / Save Image / Delete).
@@ -196,12 +218,57 @@ struct ImageViewerView: View {
         .padding(.horizontal, 12).padding(.top, 4)
     }
 
-    // Bottom toolbar: 48px real Liquid Glass circle buttons — Share · Reply · (Delete, own photos only).
+    // Thumbnail strip (group context): small rounded thumbs of every image, the current one framed —
+    // tap any to jump to it. Centered above the bottom bar (reference screenshot).
+    private var thumbStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                ForEach(gallery) { m in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { current = m.id }
+                    } label: {
+                        Group {
+                            if let img = loaded[m.id] {
+                                Image(uiImage: img).resizable().scaledToFill()
+                            } else {
+                                Color.white.opacity(0.15)
+                                    .task { await load(m) }   // strip thumbs load lazily like pages
+                            }
+                        }
+                        .frame(width: m.id == current ? 38 : 32, height: m.id == current ? 38 : 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            if m.id == current {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(.white, lineWidth: 1.5)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)   // few thumbs → centered; many → scrolls
+        }
+        .frame(height: 44)
+        .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.2), value: current)
+    }
+
+    // Bottom toolbar: 48px real Liquid Glass circle buttons — Share · Pen (draw on it + re-send) ·
+    // (Delete own / Save received).
     private var bottomBar: some View {
         HStack {
             barButton("square.and.arrow.up") { share() }
             Spacer()
-            barButton("arrowshape.turn.up.left") { dismiss() }   // Reply: return to the chat to reply
+            // PEN (replaces Reply, user spec): opens the pen editor on THIS image; Done lands in the
+            // FULL image editor (crop/pen/HD/…) — the same editor as a fresh photo — and Send delivers
+            // the edited copy with every modification baked in. Hidden where no send pipeline exists.
+            if onSendEdited != nil {
+                barButton("scribble.variable") {
+                    if let img = loaded[current] { penEdit = PenEditWrap(image: img) }
+                }
+            }
             Spacer()
             if isMine {
                 barButton("trash", tint: .red) { confirmDelete = true }
@@ -213,7 +280,9 @@ struct ImageViewerView: View {
         .padding(.bottom, 6)
     }
 
-    private func barButton(_ icon: String, tint: Color = .white, _ action: @escaping () -> Void) -> some View {
+    // NATIVE glyph contrast (user spec): .primary adapts to the glass — black glyphs when the material
+    // renders light, white when it renders dark (the hardcoded .white vanished on light glass).
+    private func barButton(_ icon: String, tint: Color = .primary, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 18, weight: .semibold))
