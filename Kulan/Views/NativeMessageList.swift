@@ -25,6 +25,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var rowSignatures: [String: String] = [:]  // per-row CONTENT signature → same-ids apply reconfigures ONLY changed rows
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
+    var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
+    var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released → reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
     var composerBarHeight: CGFloat = 0         // the floating composer bar's height (the ONLY SwiftUI-fed inset)
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
@@ -46,6 +48,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.setComposerBarHeight(composerBarHeight)
+        vc.canSwipeReply = canSwipeReply
+        vc.onSwipeReply = onSwipeReply
         vc.onTopInset = onTopInset
         vc.setLoadingOlder(loadingOlder)
         vc.rowSignatures = rowSignatures
@@ -69,7 +73,7 @@ private struct RowHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-final class MessageListController: UIViewController, UICollectionViewDelegate {
+final class MessageListController: UIViewController, UICollectionViewDelegate, UIGestureRecognizerDelegate {
     var coordinator: NativeMessageList.Coordinator!
     private var collectionView: UICollectionView!
     private var layout: ExactHeightLayout!
@@ -102,6 +106,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
     private var lastStableOffset: CGFloat = 0 // last user/our-pin offset → screenshot-capture recovery
     private var isDisappearing = false        // swipe-back / pop in progress → freeze all content-offset reflow
+
+    // Swipe-to-reply (the reference model): ONE pan gesture on the collection view drags the touched
+    // cell's content left and reveals a reply arrow, instead of a SwiftUI drag gesture per bubble (which
+    // fought the scroll pan and jittered). Callbacks are fed from SwiftUI.
+    var canSwipeReply: (String) -> Bool = { _ in false }
+    var onSwipeReply: (String) -> Void = { _ in }
+    private var swipePan: UIPanGestureRecognizer!
+    private weak var swipingCell: UICollectionViewCell?
+    private var swipingId: String?
+    private var swipeArrow: UIImageView?
+    private var swipeTriggered = false         // crossed the reply threshold this drag (haptic + fire on release)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -141,6 +156,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
+
+        // Single swipe-to-reply pan (reference model). Its delegate gates it to horizontal-left drags so
+        // vertical scrolling is never hijacked, and it coexists with the scroll pan.
+        swipePan = UIPanGestureRecognizer(target: self, action: #selector(handleSwipePan(_:)))
+        swipePan.delegate = self
+        collectionView.addGestureRecognizer(swipePan)
 
         // Off-screen sizer, in the hierarchy (0-alpha) so it inherits traits for accurate measurement.
         // CRITICAL: it must NOT reserve safe area. It's a child of this controller, and once the list runs
@@ -689,6 +710,93 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             if visible.contains(attr.frame) { return }   // already entirely on screen → no scroll
         }
         collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: true)
+    }
+
+    // MARK: - Swipe to reply (single pan; the reference model)
+
+    // Begin ONLY for a horizontal-left drag over a reply-eligible row, so vertical scrolling is untouched
+    // and a right-swipe (interactive pop) is untouched. This is what makes one pan safe where N SwiftUI
+    // drags were not: the scroll gesture keeps every vertical drag.
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard g === swipePan else { return true }
+        if VoiceScrubState.active { return false }                 // waveform scrub owns the touch
+        let v = swipePan.velocity(in: collectionView)
+        guard v.x < 0, abs(v.x) > abs(v.y) * 1.2 else { return false }   // horizontal-left dominant only
+        let loc = swipePan.location(in: collectionView)
+        guard let ip = collectionView.indexPathForItem(at: loc),
+              let id = dataSource.itemIdentifier(for: ip), canSwipeReply(id) else { return false }
+        return true
+    }
+
+    // Coexist with the collection view's own scroll pan (the list scrolls vertically, we translate a cell
+    // horizontally — different axes, no conflict). shouldBegin already gates us to horizontal-left.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        g === swipePan
+    }
+
+    @objc private func handleSwipePan(_ g: UIPanGestureRecognizer) {
+        switch g.state {
+        case .began:
+            let loc = g.location(in: collectionView)
+            guard let ip = collectionView.indexPathForItem(at: loc),
+                  let id = dataSource.itemIdentifier(for: ip),
+                  let cell = collectionView.cellForItem(at: ip), canSwipeReply(id) else {
+                swipingCell = nil; swipingId = nil; return
+            }
+            swipingCell = cell; swipingId = id; swipeTriggered = false
+            addSwipeArrow(to: cell)
+        case .changed:
+            guard let cell = swipingCell else { return }
+            if VoiceScrubState.active { resetSwipe(animated: false); return }   // waveform took over mid-drag
+            let tx = max(-70, min(0, g.translation(in: collectionView).x))
+            cell.contentView.transform = CGAffineTransform(translationX: tx, y: 0)
+            swipeArrow?.alpha = min(1, abs(tx) / 50)
+            if abs(tx) >= 50, !swipeTriggered {
+                swipeTriggered = true
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            } else if abs(tx) < 50 {
+                swipeTriggered = false
+            }
+        case .ended, .cancelled, .failed:
+            let fire = swipeTriggered ? swipingId : nil
+            resetSwipe(animated: true)
+            if let id = fire { onSwipeReply(id) }
+        default:
+            break
+        }
+    }
+
+    // The reply arrow sits in the space the bubble vacates. Added to the CELL (not its contentView) so the
+    // content's translate transform doesn't move it. Removed when the drag springs back.
+    private func addSwipeArrow(to cell: UICollectionViewCell) {
+        swipeArrow?.removeFromSuperview()
+        let img = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
+        img.tintColor = .secondaryLabel
+        img.contentMode = .scaleAspectFit
+        img.alpha = 0
+        img.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(img)
+        NSLayoutConstraint.activate([
+            img.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            img.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -16),
+            img.widthAnchor.constraint(equalToConstant: 20),
+            img.heightAnchor.constraint(equalToConstant: 18),
+        ])
+        swipeArrow = img
+    }
+
+    private func resetSwipe(animated: Bool) {
+        let cell = swipingCell
+        let arrow = swipeArrow
+        swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false
+        let reset = { cell?.contentView.transform = .identity; arrow?.alpha = 0 }
+        if animated {
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.4,
+                           options: [.allowUserInteraction], animations: reset) { _ in arrow?.removeFromSuperview() }
+        } else {
+            reset(); arrow?.removeFromSuperview()
+        }
     }
 
     // MARK: - Scroll observation

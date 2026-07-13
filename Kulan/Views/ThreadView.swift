@@ -981,13 +981,7 @@ struct ThreadView: View {
                 message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
                 nameFor: { personName($0) },
                 avatarFor: { conversation?.photos[$0] },
-                onReply: { m in
-                    // Replying cancels any in-progress edit (they can't both be active — otherwise send
-                    // would commit the edit and silently drop the reply).
-                    if editingMessage != nil { editingMessage = nil; input = Drafts.shared.text(cid) }
-                    withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
-                    inputFocused = true   // replying = you're about to type → open the keyboard
-                },
+                onReply: { m in beginReply(to: m) },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                 onCancelSending: { m in
                     // Discard the pending optimistic send (media still uploading — not on the server yet).
@@ -1155,6 +1149,10 @@ struct ThreadView: View {
                 }).padding(.horizontal, 12))
             },
             onReachedTop: { repo.loadOlder() },
+            canSwipeReply: { id in repo.items.first(where: { $0.rowId == id })?.sendState == nil },
+            onSwipeReply: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }
+            },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // the only SwiftUI-fed inset; nav/home/keyboard are UIKit-geometric
             onTopInset: { navBarHeight = $0 },      // geometric nav overlap → date pill / pinned bar position
@@ -1209,6 +1207,14 @@ struct ThreadView: View {
 
     private func exitSelection() {
         withAnimation(.easeInOut(duration: 0.2)) { selecting = false; selectedIds = [] }
+    }
+
+    // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit — they
+    // can't both be active, or send would commit the edit and silently drop the reply.
+    private func beginReply(to m: Message) {
+        if editingMessage != nil { editingMessage = nil; input = Drafts.shared.text(cid) }
+        withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
+        inputFocused = true   // replying = you're about to type → open the keyboard
     }
 
     // My own messages → delete-for-everyone; others → hide-for-me (same rules as the single delete).
@@ -3033,10 +3039,6 @@ struct SelectableRow: ViewModifier {
     }
 }
 
-// Synchronous flag shared between a voice bubble's waveform-scrub gesture and its reply-swipe gesture
-// (both fire in the same drag event, where @State wouldn't update in time). See `scrubFlag`.
-final class ScrubFlag { var active = false }
-
 // Upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
 // frosted-material pinwheel) — one consistent look for photo / album / video uploads.
 struct UploadingRing: View {
@@ -3125,12 +3127,7 @@ struct MessageBubble: View, Equatable {
     // modes, so the text/glyphs are always WHITE.
     private var onMyBubble: Color { .white }
 
-    @State private var dragX: CGFloat = 0
     @State private var quoteFillWidth: CGFloat = 0   // reply quote fills the bubble's content width (never a tiny box)
-    // Reference flag (NOT @State): the waveform scrub and the reply gesture fire in the SAME drag event,
-    // and a @State bool doesn't propagate synchronously within that event, so the reply read the stale
-    // (false) value and still swiped. A class is mutated + read synchronously, killing the race.
-    @State private var scrubFlag = ScrubFlag()
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
     @State private var notFoundUser = false       // @username tapped but no such user
     @AppStorage("readReceipts") private var readReceiptsPref = true
@@ -3496,42 +3493,15 @@ struct MessageBubble: View, Equatable {
             if !isMe { Spacer(minLength: 0) }
         }
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
-        // Swipe-to-reply: drag the bubble left past a threshold.
-        .offset(x: dragX)
-        // Reply arrow AFTER the offset, so it stays FIXED in the space the bubble vacates as it slides
-        // left (attached before, it slid WITH the bubble and overlapped it).
-        .overlay(alignment: .trailing) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
-                .opacity(Double(min(abs(min(dragX, 0)) / 50, 1)))
-                .padding(.trailing, 6)
-        }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 18)
-                .onChanged { v in
-                    guard !scrubFlag.active else { return }   // voice waveform scrub owns this drag — don't reply
-                    if v.translation.width < 0 { dragX = max(v.translation.width, -70) }
-                }
-                .onEnded { _ in
-                    // Never reply to a message still SENDING: the quote would capture the optimistic
-                    // local id and stay broken forever once the real server id lands.
-                    if !scrubFlag.active, dragX < -50, message.sendState == nil {
-                        onReply(message)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    }
-                    // Smooth, gentle glide back (not a fast snap).
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { dragX = 0 }
-                }
-        )
+        // Swipe-to-reply is handled by the ONE pan gesture on the collection view (NativeMessageList),
+        // not a per-bubble SwiftUI drag — a single recognizer that never fights the scroll.
     }
 
     @ViewBuilder private var content: some View {
         if message.isAudio {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
-                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark,
-                                 onScrub: { scrubFlag.active = $0 })   // scrubbing the waveform blocks reply-swipe
+                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState → the reply pan yields
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)

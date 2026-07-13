@@ -15,6 +15,11 @@ extension Notification.Name {
 // this is what stopped every off-screen bubble's onDisappear from nuking the shared session (and the
 // auto-advance chain from cutting its own playback). `pendingPlayId` hands auto-advance to a bubble
 // that isn't on screen yet (its cell claims the play in onAppear).
+// A voice-note waveform scrub is in progress. The conversation's single swipe-to-reply pan reads this
+// and yields, so dragging the waveform to seek never also drags the bubble into a reply. (The waveform's
+// scrub is a horizontal SwiftUI gesture inside the hosted cell; this flag is how the UIKit pan defers to it.)
+enum VoiceScrubState { static var active = false }   // set/read on the main thread only (gesture + UI)
+
 enum VoiceAudio {
     static var activeId: String?
     static var pendingPlayId: String?
@@ -85,7 +90,7 @@ struct VoiceMessageView: View {
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
                              unplayed: tint.opacity(0.3), playing: playing,
                              onSeek: { pct in seek(pct) },
-                             onScrub: { s in scrubbing = s; onScrub(s) })
+                             onScrub: { s in scrubbing = s; VoiceScrubState.active = s; onScrub(s) })
                     .frame(width: 158, height: 26)
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
