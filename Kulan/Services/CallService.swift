@@ -46,6 +46,7 @@ final class CallService: NSObject {
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // background camera pause/resume (frozen-frame fix)
+                updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
@@ -59,6 +60,7 @@ final class CallService: NSObject {
                 cameraOn = false; remoteCameraOn = false; usingFrontCamera = true; startedAsVideo = false
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
+                updateInCallScreenBehavior() // proximity off + allow sleep again
             }
         }
     }
@@ -250,12 +252,24 @@ final class CallService: NSObject {
         }
         CallKitManager.shared.updateHasVideo(on)
         broadcastCameraState()
+        updateInCallScreenBehavior()   // video showing ↔ keep-awake / proximity
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
     private func broadcastCameraState() {
         guard let id = callId else { return }
         db.collection("calls").document(id).updateData(["cams.\(me)": cameraOn])
+    }
+
+    // MARK: - Screen behavior during calls
+    // Voice call held to the ear → PROXIMITY sensor blanks the screen (no cheek-mutes/hangups).
+    // Video showing (either side) → screen NEVER dims/locks (SleepBlocker) and proximity stays OFF.
+    func updateInCallScreenBehavior() {
+        let inCall = state == .active || state == .reconnecting
+        let videoShowing = cameraOn || remoteCameraOn
+        UIDevice.current.isProximityMonitoringEnabled = inCall && !videoShowing && audioRoute == .earpiece
+        if inCall && videoShowing { SleepBlocker.shared.add("call-video") }
+        else { SleepBlocker.shared.remove("call-video") }
     }
 
     // MARK: - Background camera pause (WhatsApp/Signal behavior)
@@ -285,6 +299,7 @@ final class CallService: NSObject {
     private func handleRemoteCallState(_ d: [String: Any]) {
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
             remoteCameraOn = on
+            updateInCallScreenBehavior()   // their video appearing/leaving flips keep-awake/proximity
         }
     }
 
@@ -333,6 +348,7 @@ final class CallService: NSObject {
         if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
         else if outputs.contains(where: { $0.portType == .builtInReceiver }) || outputs.isEmpty { audioRoute = .earpiece }
         else { audioRoute = .external }
+        updateInCallScreenBehavior()
         // The user asked for speaker but a system reset (CallKit re-activation at connect, WebRTC
         // reconfigure) bounced the route back to the earpiece → RE-ASSERT the choice. External devices
         // (AirPods/car) always win — never fight a real device route.
