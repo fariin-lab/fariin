@@ -237,7 +237,19 @@ struct CallView: View {
                             let maxDown = max(0, geo.size.height - 150 - (winInsets.top + 70) - safeBottom - 120)
                             pipOffset = CGSize(width: min(0, max(maxLeft, w)), height: min(maxDown, max(0, h)))
                         }
-                        .onEnded { _ in pipBase = pipOffset }
+                        .onEnded { _ in
+                            // SNAP TO THE NEAREST CORNER (FaceTime/WhatsApp): the tile must never rest
+                            // mid-screen. Choose left/right by which half the tile is in, top/bottom the
+                            // same, then spring there.
+                            let maxLeft = -(geo.size.width - 104 - 28)
+                            let maxDown = max(0, geo.size.height - 150 - (winInsets.top + 70) - safeBottom - 120)
+                            let targetX: CGFloat = pipOffset.width < maxLeft / 2 ? maxLeft : 0
+                            let targetY: CGFloat = pipOffset.height > maxDown / 2 ? maxDown : 0
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                pipOffset = CGSize(width: targetX, height: targetY)
+                            }
+                            pipBase = CGSize(width: targetX, height: targetY)
+                        }
                 )
                 .onTapGesture {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }

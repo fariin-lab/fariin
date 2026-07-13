@@ -16,6 +16,20 @@ import FirebaseFunctions
 final class CallService: NSObject {
     static let shared = CallService()
 
+    private var lifecycleObserved = false
+    private func observeLifecycleIfNeeded() {
+        guard !lifecycleObserved else { return }
+        lifecycleObserved = true
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.appDidEnterBackground()
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.appWillEnterForeground()
+        }
+    }
+
     // .reconnecting = the media path dropped mid-call; we're trying to recover it.
     enum State: Equatable { case idle, outgoing, incoming, active, reconnecting, ended }
 
@@ -30,9 +44,12 @@ final class CallService: NSObject {
                 if cameraOn { isSpeaker = true; wantsSpeaker = true }   // video calls default to speakerphone (like FaceTime)
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
                 startRouteObservation()   // smart speaker button: track where audio actually goes
+                observeLifecycleIfNeeded()   // background camera pause/resume (frozen-frame fix)
             }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
+                wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
+                cameraPausedByBackground = false
                 calleeRinging = false; recordWritten = false; minimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
@@ -221,6 +238,9 @@ final class CallService: NSObject {
             startCameraCapture()
         } else {
             videoCapturer?.stopCapture()
+            // Both cameras now off → it's a voice call again: return to the earpiece (WhatsApp).
+            // (If the OTHER side still shows video, stay on speaker — you're still watching them.)
+            if !remoteCameraOn && isSpeaker { toggleSpeaker() }
         }
         CallKitManager.shared.updateHasVideo(on)
         broadcastCameraState()
@@ -230,6 +250,28 @@ final class CallService: NSObject {
     private func broadcastCameraState() {
         guard let id = callId else { return }
         db.collection("calls").document(id).updateData(["cams.\(me)": cameraOn])
+    }
+
+    // MARK: - Background camera pause (WhatsApp/Signal behavior)
+    // iOS suspends the capture session in the background, so without this the OTHER side stared at a
+    // FROZEN last frame the whole time. On background: stop capture + broadcast cams=false (they see
+    // the avatar placeholder); on foreground: resume capture + re-broadcast. `cameraOn` stays true as
+    // the INTENT so the UI and resume path know to restore.
+    private(set) var cameraPausedByBackground = false
+    func appDidEnterBackground() {
+        guard state == .active || state == .reconnecting, cameraOn, !cameraPausedByBackground else { return }
+        cameraPausedByBackground = true
+        videoCapturer?.stopCapture()
+        localVideoTrack?.isEnabled = false
+        if let id = callId { db.collection("calls").document(id).updateData(["cams.\(me)": false]) }
+    }
+    func appWillEnterForeground() {
+        guard cameraPausedByBackground else { return }
+        cameraPausedByBackground = false
+        guard state == .active || state == .reconnecting, cameraOn else { return }
+        localVideoTrack?.isEnabled = true
+        startCameraCapture()
+        broadcastCameraState()   // they see my video come back
     }
 
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
