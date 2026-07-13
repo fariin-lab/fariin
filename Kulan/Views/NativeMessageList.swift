@@ -222,7 +222,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // Exact height of a row for the given width, measured off-screen. Deterministic for every bubble type
     // (heights come from stored dimensions / fixed frames), so this equals the on-screen render.
     private func measure(_ id: String, width: CGFloat) -> CGFloat {
-        sizer.rootView = coordinator.parent.row(id)
+        // Measure EXACTLY as the cell renders: the cell wraps its content in `.frame(width: hostWidth)`,
+        // so the sizer must apply the SAME explicit width frame — not just a sizeThatFits width proposal.
+        // The two constraint mechanisms wrap Text differently in edge cases, and any disagreement made
+        // the layout frame (from the sizer) not match the rendered cell → overlap, and a permanent
+        // rendered-vs-measured mismatch that fired reconcile forever → flashing/jumping. Framing the
+        // sizer identically makes the measured height == the rendered height, exactly like the reference.
+        sizer.rootView = AnyView(coordinator.parent.row(id).frame(width: width))
         let size = sizer.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
         return ceil(size.height)
     }
