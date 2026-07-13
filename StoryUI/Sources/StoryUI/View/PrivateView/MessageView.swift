@@ -121,7 +121,9 @@ private extension MessageView {
             .focused($replyFocused)
             .modifier(ReplyPillStyle())
             .onChange(of: text, perform: { newValue in showEmoji = newValue.isEmpty })
-            .onChange(of: clearText, perform: { newValue in text = ""; showEmoji = newValue })
+            // clearText is a TOGGLE (its value flips each send) — assigning it to showEmoji hid
+            // the emoji strip after every 2nd reply. After a send the field is empty, so always show.
+            .onChange(of: clearText, perform: { _ in text = ""; showEmoji = true })
             .onChange(of: story, perform: { newValue in likeButtonTapped = newValue.isLiked })
             // onChange only fires on later swipes — seed the FIRST item's heart state too,
             // or a reopened story always shows an empty heart despite being liked.

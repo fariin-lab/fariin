@@ -27,7 +27,9 @@ struct NewChatView: View {
 
     // People you've chatted with, grouped by first letter (A–Z, then "#").
     private var sections: [(letter: String, convs: [Conversation])] {
-        let all = convRepo.conversations.filter { !$0.isCleared(me) }
+        // 1:1 people only — a group here rendered as a person (first member's name/photo)
+        // and opened the group mislabeled.
+        let all = convRepo.conversations.filter { !$0.isCleared(me) && !$0.isGroup }
         let grouped = Dictionary(grouping: all) { c -> String in
             let n = c.name(for: me).trimmingCharacters(in: .whitespaces).uppercased()
             guard let f = n.first, f.isLetter else { return "#" }

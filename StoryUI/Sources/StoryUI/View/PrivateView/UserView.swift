@@ -55,6 +55,9 @@ struct UserView: View {
                     if !isMyStory {
                         Button { NotificationCenter.default.post(name: .init("storyActionHide"), object: nil) }
                             label: { Label("Hide Stories", systemImage: "eye.slash") }
+                        // Abuse reporting (App Store 1.2) — the host files the report doc.
+                        Button(role: .destructive) { NotificationCenter.default.post(name: .init("storyActionReport"), object: nil) }
+                            label: { Label("Report", systemImage: "exclamationmark.bubble") }
                     }
                 } label: {
                     Image(systemName: "ellipsis")

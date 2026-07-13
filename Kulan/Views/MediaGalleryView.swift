@@ -378,11 +378,14 @@ struct MediaGalleryView: View {
     }
 
     private func deleteSelected() {
-        let ids = selection
+        // Only MY OWN messages — the server rejects deleting others', which made them reappear.
+        let me = AuthService.shared.uid
+        let ids = Set(all.filter { selection.contains($0.id) && $0.authorId == me }.map(\.id))
         Task {
             for id in ids { await ChatService.deleteMessage(cid: cid, messageId: id) }
             await MainActor.run {
                 all.removeAll { ids.contains($0.id) }
+                GalleryCache.store[cid] = all   // keep the reopen cache in sync (no deleted-media flash)
                 exitSelection()
             }
         }

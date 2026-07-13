@@ -35,12 +35,24 @@ final class ProfileStore {
     func updateProfile(name: String, handle: String, about: String = "") async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let h = handle.trimmingCharacters(in: .whitespaces)
+        let n = name.trimmingCharacters(in: .whitespaces)
         try await db.collection("users").document(uid).setData([
-            "name": name.trimmingCharacters(in: .whitespaces),
+            "name": n,
             "handle": h,
             "handleLower": h.lowercased(),
             "about": about.trimmingCharacters(in: .whitespacesAndNewlines),
         ], merge: true)
+
+        // Fan the new name out to every conversation's names map (mirrors uploadPhoto's
+        // photo fan-out) — chat lists read `names`, so contacts kept seeing the old name.
+        let snap = try await db.collection("conversations")
+            .whereField("users", arrayContains: uid).getDocuments()
+        if !snap.documents.isEmpty {
+            let batch = db.batch()
+            for d in snap.documents { batch.updateData(["names.\(uid)": n], forDocument: d.reference) }
+            try await batch.commit()
+        }
+
         me = await fetch(uid)
     }
 

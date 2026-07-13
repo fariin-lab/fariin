@@ -258,17 +258,32 @@ enum StoryPrefs {
     static func toggleNotify(_ uid: String) {
         var s = set("notifyStories"); if s.contains(uid) { s.remove(uid) } else { s.insert(uid) }; save("notifyStories", s)
     }
+    // seen/liked stores were APPEND-ONLY and grew forever (every story id ever). Keep them as
+    // ORDERED arrays on disk (append at the end) so "oldest" is well-defined, and drop the oldest
+    // half once past 1000 ids — same cap pattern as VoicePlayed's 600 in Models.swift.
+    private static func mutateOrdered(_ key: String, _ change: (inout [String]) -> Void) {
+        lock.lock()
+        var arr = (UserDefaults.standard.string(forKey: key) ?? "").split(separator: " ").map(String.init)
+        change(&arr)
+        if arr.count > 1000 { arr.removeFirst(arr.count - 500) }
+        cache[key] = Set(arr)   // update cache synchronously → instant reads
+        lock.unlock()
+        UserDefaults.standard.set(arr.joined(separator: " "), forKey: key)
+    }
     // Per-STORY-ITEM seen state (drives the segmented ring: each arc greys as you view that story).
     static func isStorySeen(_ id: String) -> Bool { set("seenStoryItems").contains(id) }
     static func markStorySeen(_ id: String) {
-        guard !id.isEmpty else { return }
-        var s = set("seenStoryItems"); s.insert(id); save("seenStoryItems", s)
+        guard !id.isEmpty, !isStorySeen(id) else { return }
+        mutateOrdered("seenStoryItems") { $0.append(id) }
     }
     // My own ❤️ on a story — persists so the heart is still red on reopen (Instagram).
     static func isStoryLiked(_ id: String) -> Bool { set("likedStories").contains(id) }
     static func setStoryLiked(_ id: String, _ liked: Bool) {
         guard !id.isEmpty else { return }
-        var s = set("likedStories"); if liked { s.insert(id) } else { s.remove(id) }; save("likedStories", s)
+        mutateOrdered("likedStories") { arr in
+            arr.removeAll { $0 == id }
+            if liked { arr.append(id) }
+        }
     }
     // seen flags for a bucket's stories (oldest→newest), for StoryRingView. A story is seen if I
     // viewed that exact item on THIS device (local flag) OR it's covered by my synced server
@@ -853,6 +868,12 @@ struct StoryViewer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
+        }
+        // "…" → Report (friend stories only): files a report doc for review (App Store 1.2).
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionReport"))) { _ in
+            guard !currentIsMine, let s = currentStory else { return }
+            Task { await StoriesService.shared.reportStory(s) }
+            flashSentToast("Reported")
         }
         // "…" → Delete Story (only shown on my own story) → same confirm + seamless delete as the trash button.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionDelete"))) { _ in
@@ -2351,8 +2372,16 @@ struct StoryViewersBottomSheet: View {
             }
             Spacer()
             Menu {
-                Button { } label: { Label("Send message", systemImage: "message") }
-                Button { } label: { Label("View profile", systemImage: "person.crop.circle") }
+                // Open my 1:1 chat with this viewer (same pending-chat route the group-member
+                // sheet uses); close the sheet AND the story viewer so the chat lands on top.
+                // No "View profile" here — this sheet has no profile route, and we never fake.
+                Button {
+                    AppRouter.shared.pendingChatName = v.name
+                    AppRouter.shared.pendingChatPhoto = v.photoUrl
+                    AppRouter.shared.pendingChatId = ChatService.convId(AuthService.shared.uid ?? "", v.id)
+                    onClose()
+                    NotificationCenter.default.post(name: .init("storyForceClose"), object: nil)
+                } label: { Label("Send message", systemImage: "message") }
             } label: {
                 Image(systemName: "ellipsis").font(.body).foregroundStyle(.white.opacity(0.55))
                     .frame(width: 38, height: 38).contentShape(Rectangle())

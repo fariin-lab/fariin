@@ -23,7 +23,7 @@ struct NotificationsSettingsView: View {
                 Toggle("Message Notifications", isOn: $pushOn)
                     .tint(.green)
                     .onChange(of: pushOn) { _, on in
-                        if on { Push.register() } else { Push.unregister() }
+                        if on { Push.register() } else { Task { await Push.unregister() } }   // unregister is now async
                     }
             } footer: {
                 Text("Get notified of new messages when Kulan is closed.")
@@ -108,6 +108,7 @@ struct DevicesView: View {
 struct BlockedUsersView: View {
     private var repo = ConversationsRepository.shared
     @Environment(\.colorScheme) private var scheme
+    @State private var toUnblock: Conversation?   // row awaiting the "Unblock?" confirm
     private var me: String { AuthService.shared.uid ?? "" }
     private var blocked: [Conversation] {
         repo.conversations.filter { $0.blockedBy[me] == true }
@@ -126,7 +127,8 @@ struct BlockedUsersView: View {
                             AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 40)
                             Text(conv.name(for: me)).font(.body)
                             Spacer()
-                            Button("Unblock") { Task { await ChatService.setBlocked(conv.id, false) } }
+                            Button("Unblock") { toUnblock = conv }
+                                .buttonStyle(.borderless)   // explicit — a default Button in a List row fires on ANY row tap
                                 .font(.subheadline.weight(.semibold))
                                 .tint(.red)
                         }
@@ -137,6 +139,14 @@ struct BlockedUsersView: View {
         }
         .navigationTitle("Blocked Users")
         .navigationBarTitleDisplayMode(.inline)
+        // Confirm before unblocking — an accidental row tap must not silently unblock someone.
+        .alert("Unblock \(toUnblock.map { $0.name(for: me) } ?? "")?",
+               isPresented: Binding(get: { toUnblock != nil }, set: { if !$0 { toUnblock = nil } })) {
+            Button("Cancel", role: .cancel) {}
+            Button("Unblock", role: .destructive) {
+                if let conv = toUnblock { Task { await ChatService.setBlocked(conv.id, false) } }
+            }
+        }
     }
 }
 

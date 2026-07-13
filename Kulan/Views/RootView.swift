@@ -169,7 +169,7 @@ struct OnboardingView: View {
                 } header: {
                     Text("Create your profile")
                 } footer: {
-                    Text("Username: letters, numbers and _ only, 3–24 characters.")
+                    Text("Username: letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red) }
@@ -226,7 +226,7 @@ struct OnboardingView: View {
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }
         guard ChatService.isValidHandle(h) else {
-            error = "Username: letters, numbers and _ only, 3–24 characters"; return
+            error = "Username: letters, numbers and _ only, 3–30 characters"; return   // matches Limits.usernameMaxChars
         }
         saving = true; error = nil
         do {

@@ -84,7 +84,9 @@ final class StoriesService {
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
     @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = []) {
-        uploadTask?.cancel()
+        // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
+        // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
+        let previous = uploadTask
         uploadingImage = UIImage(data: image)
         uploadStartedAt = Date()
         // Pre-store the picked bytes in URLCache under the synthetic URL so the injected uploading item
@@ -101,6 +103,7 @@ final class StoriesService {
         let token = UUID()
         currentUploadToken = token
         uploadTask = Task {
+            _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
             do { try await postStory(image: image, caption: caption, excluded: excluded, included: included) }
@@ -208,7 +211,8 @@ final class StoriesService {
     // while the transcode + upload run in the background.
     @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false, caption: String = "",
                                              excluded: Set<String> = [], included: Set<String> = []) {
-        uploadTask?.cancel()
+        // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
+        let previous = uploadTask
         uploadingImage = UIImage(data: thumbnail)
         uploadStartedAt = Date()
         if let u = URL(string: Self.uploadingURLString) {
@@ -219,6 +223,7 @@ final class StoriesService {
         let token = UUID()
         currentUploadToken = token
         uploadTask = Task {
+            _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
             do { try await postVideoStory(videoURL: videoURL, muted: muted, caption: caption, excluded: excluded, included: included) }
@@ -366,9 +371,16 @@ final class StoriesService {
     }
 
     func deleteStory(_ id: String) async {
-        // Delete the Storage media FIRST (deterministic path), then the doc — else an early
-        // delete (before expiry) leaks the image forever (cleanup only handles EXPIRED docs).
-        try? await Storage.storage().reference().child("stories/\(id)/photo.jpg").delete()
+        // Delete the Storage media FIRST (while the doc still exists, so rules pass), then the
+        // doc — else an early delete (before expiry) leaks the media forever (cleanup only
+        // handles EXPIRED docs). Read the doc's REAL mediaPath: videos live at video.mp4 +
+        // thumb.jpg — the old hardcoded photo.jpg leaked both files on every video delete.
+        let data = (try? await db.collection("stories").document(id).getDocument())?.data()
+        let path = data?["mediaPath"] as? String ?? "stories/\(id)/photo.jpg"
+        try? await Storage.storage().reference().child(path).delete()
+        if data?["type"] as? String == "video" {
+            try? await Storage.storage().reference().child("stories/\(id)/thumb.jpg").delete()
+        }
         try? await db.collection("stories").document(id).delete()
         // Drop it from the live row immediately — callers check "was that my last story?"
         // right after this, which must not race the listener's delete event.
@@ -399,6 +411,10 @@ final class StoriesService {
         for d in snap.documents {
             if let path = d.data()["mediaPath"] as? String {
                 try? await Storage.storage().reference().child(path).delete()
+            }
+            // Videos also have a poster thumb next to the mp4 — delete it too or it leaks.
+            if d.data()["type"] as? String == "video" {
+                try? await Storage.storage().reference().child("stories/\(d.documentID)/thumb.jpg").delete()
             }
             try? await d.reference.delete()
         }

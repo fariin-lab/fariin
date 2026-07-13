@@ -40,7 +40,12 @@ struct MainShell: View {
         }
         // Call UI is mounted at the root (CallContainer in RootView) so it survives all
         // navigation. Here we only start listening for incoming calls.
-        .onAppear { call.observeIncoming() }
+        .onAppear {
+            call.observeIncoming()
+            // Fresh install: a 0 watermark counted EVERY historical missed call in the badge —
+            // treat everything before first launch as seen. (Same unit as the compare above: seconds.)
+            if callsSeenAt == 0 { callsSeenAt = Date().timeIntervalSince1970 }
+        }
         .task(id: profile.me?.photoUrl) { await loadSettingsIcon() }
         // Remember the last real tab so the search circle (tab 3) knows whether to do a
         // Chats / Calls / Settings search.
@@ -149,6 +154,16 @@ private extension UIImage {
     }
 }
 
+// Pending outbound call awaiting the user's confirm — thread-view parity (its call-history
+// rows ask first); these surfaces dialed instantly on a stray tap.
+struct PendingCall: Identifiable {
+    let uid: String
+    let name: String
+    let photo: String?
+    let video: Bool
+    var id: String { uid + (video ? "-v" : "-a") }
+}
+
 // Native Phone-app-style call history (mockup IMG_4467): All / Missed segmented filter,
 // search, rows with avatar, name (red if missed), direction, time, and an info button.
 // Tap a row to call back; (i) opens the contact. Indigo brand kept.
@@ -161,6 +176,7 @@ struct CallsView: View {
     @State private var selection = Set<String>()
     @State private var showDeleteCalls = false
     @State private var searchText = ""
+    @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
 
     private var shown: [CallEntry] {
         var list = filter == 1 ? repo.calls.filter { $0.missedIncoming } : repo.calls
@@ -216,8 +232,8 @@ struct CallsView: View {
                                 call: call,
                                 count: run.entries.count,
                                 onProfile: { profileTarget = call },
-                                onCall: {   // call back the same way (video stays video, like Signal)
-                                    CallService.shared.startCall(to: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
+                                onCall: {   // call back the same way (video stays video, like Signal) — after a confirm
+                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
                                 }
                             )
                             .tag(run.id)
@@ -233,10 +249,10 @@ struct CallsView: View {
                             // (Tick reposition lives in ChatRow; see chat list.)
                             .contextMenu {
                                 Button {
-                                    CallService.shared.startCall(to: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
+                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
                                 } label: { Label("Voice Call", systemImage: "phone") }
                                 Button {
-                                    CallService.shared.startCall(to: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
+                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
                                 } label: { Label("Video Call", systemImage: "video") }
                                 Button {
                                     AppRouter.shared.pendingChatName = call.name
@@ -305,6 +321,17 @@ struct CallsView: View {
                 ContactInfoView(cid: c.cid, name: c.name, photoUrl: c.photoUrl, source: .calls)
             }
             .sheet(isPresented: $showNew) { NewCallView() }
+            // Same native confirm the thread view uses — never dial on a stray tap.
+            .alert(pendingCall?.video == true ? "Video call" : "Voice call",
+                   isPresented: Binding(get: { pendingCall != nil }, set: { if !$0 { pendingCall = nil } }),
+                   presenting: pendingCall) { c in
+                Button("Cancel", role: .cancel) { }
+                Button("Call") {
+                    CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
+                }
+            } message: { c in
+                Text("\(c.video ? "Video call" : "Call") \(c.name)?")
+            }
         }
     }
 }
@@ -380,6 +407,7 @@ struct NewCallView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
     @State private var query = ""
+    @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
     private var me: String { AuthService.shared.uid ?? "" }
 
     private var sections: [(letter: String, convs: [Conversation])] {
@@ -433,6 +461,18 @@ struct NewCallView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
             }
+            // Same native confirm the thread view uses — never dial on a stray tap.
+            .alert(pendingCall?.video == true ? "Video call" : "Voice call",
+                   isPresented: Binding(get: { pendingCall != nil }, set: { if !$0 { pendingCall = nil } }),
+                   presenting: pendingCall) { c in
+                Button("Cancel", role: .cancel) { }
+                Button("Call") {
+                    CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
+                    dismiss()
+                }
+            } message: { c in
+                Text("\(c.video ? "Video call" : "Call") \(c.name)?")
+            }
         }
     }
 
@@ -454,9 +494,9 @@ struct NewCallView: View {
     }
 
     private func call(_ c: Conversation, video: Bool) {
-        CallService.shared.startCall(to: c.otherUid(me), name: c.displayName(me),
-                                     photo: c.displayPhoto(me), video: video)
-        dismiss()
+        // Ask first; the alert's Call button dials + dismisses.
+        pendingCall = PendingCall(uid: c.otherUid(me), name: c.displayName(me),
+                                  photo: c.displayPhoto(me), video: video)
     }
 }
 
@@ -523,7 +563,9 @@ struct ChatsView: View {
               !StoryPrefs.isHidden(conv.otherUid(me)),   // hidden author: no ring on the chat-list avatar
               let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) })
         else { return [] }
-        return StoryPrefs.seenFlags(g.stories)
+        // upTo watermark = same split-brain guard as the stories row (server lastViewedAt
+        // covers views from other devices / reinstalls, not just local flags).
+        return StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt)
     }
 
     // Mark every (non-archived) unread chat as read.
@@ -663,7 +705,12 @@ struct ChatsView: View {
     // System action list for a chat row's context menu (HIG order + SF Symbols).
     @ViewBuilder private func chatMenu(_ conv: Conversation) -> some View {
         if conv.unread(me) > 0 {
-            Button { Task { await ChatService.resetUnread(conv.id) } } label: {
+            Button {
+                // Full parity with opening the chat: reset MY counter, send read receipts,
+                // and drop its delivered notifications + fix the app badge.
+                Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
+                NotificationCleaner.clear(cid: conv.id)
+            } label: {
                 Label("Read", systemImage: "envelope.open")
             }
         } else {
@@ -840,10 +887,12 @@ struct ChatsView: View {
                     // only when truly unfiltered; a filtered empty result says so instead.
                     .overlay(alignment: .top) {
                         if visible.isEmpty {
+                            // Per-filter copy — the Groups filter was showing the Unread text.
                             ContentUnavailableView(
-                                chatFilter == 0 ? "No chats yet" : "No unread chats",
-                                systemImage: chatFilter == 0 ? "bubble.left.and.bubble.right" : "checkmark.circle",
-                                description: Text(chatFilter == 0 ? "Tap the compose button to start one." : "You're all caught up."))
+                                chatFilter == 0 ? "No chats yet" : (chatFilter == 2 ? "No groups yet" : "No unread chats"),
+                                systemImage: chatFilter == 0 ? "bubble.left.and.bubble.right" : (chatFilter == 2 ? "person.3" : "checkmark.circle"),
+                                description: Text(chatFilter == 0 ? "Tap the compose button to start one."
+                                                  : (chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up.")))
                                 .padding(.top, storiesRowHeight + 24)
                                 .allowsHitTesting(false)
                         }
@@ -954,7 +1003,8 @@ struct ChatsView: View {
             } message: {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
             }
-            .confirmationDialog("Mute \(pendingMute?.name(for: me) ?? "")",
+            // displayName, not name(for:) — the latter shows a MEMBER's name for groups.
+            .confirmationDialog("Mute \(pendingMute?.displayName(me) ?? "")",
                                 isPresented: Binding(get: { pendingMute != nil },
                                                      set: { if !$0 { pendingMute = nil } }),
                                 titleVisibility: .visible) {
@@ -1034,7 +1084,7 @@ struct ArchivedChatsView: View {
                                     .frame(width: storyCardW, height: storyCardW * 1.46)
                                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // match home cards
                                 AvatarView(name: g.name, photoUrl: g.photoUrl, size: 32)
-                                    .overlay(StoryRingView(seen: StoryPrefs.seenFlags(g.stories), lineWidth: 2)
+                                    .overlay(StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 2)   // watermark: match the stories row
                                         .frame(width: 37, height: 37))
                                     .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
                                     .padding(8)
@@ -1259,6 +1309,8 @@ struct ChatRow: View, Equatable {
         // treatment as single photos/videos — never raw emoji text in the preview.
         if s.hasPrefix("🎥 ") { return ("video.fill", String(s.dropFirst("🎥 ".count))) }
         if s.hasPrefix("📷 ") { return ("photo.fill", String(s.dropFirst("📷 ".count))) }
+        // Mixed photo+video albums ("🎬 3 Media") — same icon+label treatment, never raw emoji.
+        if s.hasPrefix("🎬 ") { return ("photo.on.rectangle.angled", String(s.dropFirst("🎬 ".count))) }
         switch s {
         case "📄 File":              return ("doc.fill", "File")
         case "GIF":                  return ("sparkles", "GIF")
@@ -1307,7 +1359,7 @@ struct ChatRow: View, Equatable {
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         let c = conv.lastMessageCipher
-        guard c.hasPrefix("enc") || c.hasPrefix("📷") || c.hasPrefix("🎤 Voice message") || c.hasPrefix("🎥") else { return "" }
+        guard c.hasPrefix("enc") || c.hasPrefix("📷") || c.hasPrefix("🎤 Voice message") || c.hasPrefix("🎥") || c.hasPrefix("🎬") else { return "" }
         let n = conv.names[conv.lastSender] ?? "Someone"
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }
@@ -1318,7 +1370,7 @@ struct ChatRow: View, Equatable {
     // and not a frozen blocked-chat row). 📹 call markers are unaffected.
     private var isPhotoPreview: Bool {
         !conv.leaksBlocked(me)
-            && (conv.lastMessageCipher.hasPrefix("📷") || conv.lastMessageCipher.hasPrefix("🎥"))
+            && (conv.lastMessageCipher.hasPrefix("📷") || conv.lastMessageCipher.hasPrefix("🎥") || conv.lastMessageCipher.hasPrefix("🎬"))
             && (conv.lastImageUrl?.isEmpty == false)
     }
     // "Photo" / "Photos" / "Video · 0:12" / "2 Videos" next to the little thumbnail (emoji stripped).
@@ -1326,6 +1378,7 @@ struct ChatRow: View, Equatable {
         let c = conv.lastMessageCipher
         if c.hasPrefix("🎥 ") { return String(c.dropFirst("🎥 ".count)) }
         if c.hasPrefix("📷 ") { return String(c.dropFirst("📷 ".count)) }
+        if c.hasPrefix("🎬 ") { return String(c.dropFirst("🎬 ".count)) }   // mixed album → "3 Media"
         return "Photo"
     }
     // Preview area, in priority order: blocked freeze → live typing → unsent draft →

@@ -16,6 +16,7 @@ struct AddStorySheet: View {
     @State private var editorVideo: EditorVideo?
     @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
     @State private var pendingCapture: UIImage?   // camera shot held until the camera cover dismisses
+    @State private var pendingTextMode = false    // "Aa" from the camera held until the camera cover dismisses
     @State private var pendingTextStory: StoryShareData?   // text story held until the composer cover dismisses
     @State private var shareTextStory: StoryShareData?     // then shown to the audience sheet
     @State private var showCamera = false
@@ -51,10 +52,13 @@ struct AddStorySheet: View {
             // fullScreenCovers never fight (which silently dropped the captured shot).
             .fullScreenCover(isPresented: $showCamera, onDismiss: {
                 if let ui = pendingCapture { pendingCapture = nil; editorImage = EditorImage(ui) }
+                // Same pattern for "Aa": toggling showText WHILE the camera cover was still
+                // dismissing intermittently dropped the text composer (two covers fighting).
+                else if pendingTextMode { pendingTextMode = false; showText = true }
             }) {
                 StoryCameraView(onCapture: { d in if let ui = UIImage(data: d) { pendingCapture = ui }; showCamera = false },
                                 onClose: { showCamera = false },
-                                onTextMode: { showCamera = false; showText = true })
+                                onTextMode: { pendingTextMode = true; showCamera = false })
             }
             // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
             .fullScreenCover(isPresented: $showText, onDismiss: {

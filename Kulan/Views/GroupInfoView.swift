@@ -111,7 +111,8 @@ struct GroupInfoView: View {
                 if let d = try? await item.loadTransferable(type: Data.self) {
                     try? await ChatService.uploadGroupAvatar(cid: cid, data: d)
                 }
-                await MainActor.run { uploadingAvatar = false }
+                // Reset so re-picking (even the same photo) fires onChange again (WallpaperPickerSheet pattern).
+                await MainActor.run { uploadingAvatar = false; avatarItem = nil }
             }
         }
         .task { media = await ChatService.sharedMedia(cid) }
@@ -259,8 +260,9 @@ struct GroupInfoView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(media.prefix(12)) { m in
-                            if let url = m.imageUrl {
-                                SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
+                            // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
+                            if let url = m.imageUrl ?? m.thumbUrl {
+                                SecureImageView(imageUrl: url, enc: m.imageUrl != nil ? m.enc : m.thumbEnc, cid: cid)
                                     .frame(width: 84, height: 84)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
@@ -295,7 +297,13 @@ struct GroupInfoView: View {
         } message: { Text("This clears the chat from your device only.") }
         .confirmationDialog("Report this group?", isPresented: $confirmReport, titleVisibility: .visible) {
             Button("Report", role: .destructive) {
-                Task { await ChatService.report(reportedUid: conv?.admins.first ?? "", cid: cid, reason: "group") }
+                // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
+                let creator = conv?.createdBy
+                let target = conv?.admins.first(where: { $0 != me })
+                    ?? ((creator?.isEmpty == false && creator != me) ? creator : nil)
+                    ?? conv?.users.first(where: { $0 != me })
+                    ?? ""
+                Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("The group will be reported to moderators for review.") }

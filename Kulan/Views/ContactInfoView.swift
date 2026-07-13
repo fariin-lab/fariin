@@ -464,8 +464,9 @@ struct ContactInfoView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(media.prefix(12)) { m in
-                        if let url = m.imageUrl {
-                            SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
+                        // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
+                        if let url = m.imageUrl ?? m.thumbUrl {
+                            SecureImageView(imageUrl: url, enc: m.imageUrl != nil ? m.enc : m.thumbEnc, cid: cid)
                                 .frame(width: 84, height: 84)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

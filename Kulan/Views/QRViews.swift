@@ -62,10 +62,11 @@ struct ScanQRView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var handling = false
     @State private var notFound = false
+    @State private var scanReset = 0   // bump to re-arm the scanner after a failed resolve
 
     var body: some View {
         ZStack {
-            QRScanner { code in resolve(code) }.ignoresSafeArea()
+            QRScanner(onCode: { code in resolve(code) }, resetToken: scanReset).ignoresSafeArea()
             VStack {
                 HStack {
                     Button { dismiss() } label: {
@@ -86,27 +87,42 @@ struct ScanQRView: View {
     }
 
     private func resolve(_ code: String) {
-        guard !handling, let url = URL(string: code), url.scheme == "kulan", url.host == "u" else { return }
+        guard !handling else { return }
+        guard let url = URL(string: code), url.scheme == "kulan", url.host == "u" else {
+            // Not a Kulan code: show feedback + re-arm — the scanner used to stay dead here.
+            notFound = true
+            rearmScanner()
+            return
+        }
         handling = true
         let handle = url.pathComponents.last(where: { $0 != "/" }) ?? ""
         Task {
             if let user = await ChatService.findByHandle(handle) {
                 await MainActor.run { onUser(user); dismiss() }
             } else {
-                await MainActor.run { notFound = true; handling = false }
+                await MainActor.run { notFound = true; handling = false; rearmScanner() }
             }
         }
+    }
+
+    // Re-arm after a beat, so a bad code still in frame retries ~1/s instead of every camera frame.
+    private func rearmScanner() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { scanReset += 1 }
     }
 }
 
 // AVFoundation QR camera (UIKit-backed).
 struct QRScanner: UIViewControllerRepresentable {
     var onCode: (String) -> Void
+    var resetToken: Int = 0   // caller bumps this to re-arm scanning after a failed resolve
     func makeUIViewController(context: Context) -> ScannerVC { let vc = ScannerVC(); vc.onCode = onCode; return vc }
-    func updateUIViewController(_ vc: ScannerVC, context: Context) {}
+    func updateUIViewController(_ vc: ScannerVC, context: Context) {
+        if vc.lastResetToken != resetToken { vc.lastResetToken = resetToken; vc.reset() }
+    }
 
     final class ScannerVC: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
         var onCode: ((String) -> Void)?
+        var lastResetToken = 0
         private let session = AVCaptureSession()
         private var preview: AVCaptureVideoPreviewLayer?
 
@@ -135,6 +151,7 @@ struct QRScanner: UIViewControllerRepresentable {
         override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); session.stopRunning() }
 
         private var didFind = false   // fire once — not on every camera frame (was spamming findByHandle ~30fps)
+        func reset() { didFind = false }   // re-arm after a failed resolve, or one bad scan kills the scanner
         func metadataOutput(_ output: AVCaptureMetadataOutput,
                             didOutput objs: [AVMetadataObject], from connection: AVCaptureConnection) {
             guard !didFind,

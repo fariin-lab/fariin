@@ -296,8 +296,10 @@ enum MessageSearch {
                             : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: c.id)
                         guard !text.isEmpty else { return nil }
                         let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                        // Index the SAFE label, not the raw "kulan-…:" payload — contact/location
+                        // cards then match and display as "Contact"/"Location", never the marker.
                         return SearchableMessage(id: doc.documentID, cid: c.id, chatName: name,
-                                                 photoUrl: photo, text: text, date: date)
+                                                 photoUrl: photo, text: quoteSafeLabel(text), date: date)
                     }
                 }
             }
@@ -350,8 +352,10 @@ extension MessageSearch {
             guard !text.isEmpty else { return nil }
             if data["viewOnce"] as? Bool == true { return nil }   // view-once is never searchable (Signal)
             let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            return InChatMessage(id: doc.documentID, text: text, authorId: author, date: date,
-                                 tokens: ChatSearch.tokens(text))
+            // Same raw-marker guard as the global corpus: index/display the safe label.
+            let safe = quoteSafeLabel(text)
+            return InChatMessage(id: doc.documentID, text: safe, authorId: author, date: date,
+                                 tokens: ChatSearch.tokens(safe))
         }
         corpusCache[cid] = (Date(), out)
         return out
@@ -451,6 +455,7 @@ struct ContactsSearchView: View {
     private var repo = ConversationsRepository.shared
     @Environment(\.colorScheme) private var scheme
     @State private var query = ""
+    @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
     @FocusState private var searchFocused: Bool
 
     private var me: String { AuthService.shared.uid ?? "" }
@@ -468,9 +473,9 @@ struct ContactsSearchView: View {
         NavigationStack {
             List(results) { conv in
                 Button {
-                    CallService.shared.startCall(to: conv.otherUid(me),
-                                                 name: conv.name(for: me),
-                                                 photo: conv.photoUrl(for: me))
+                    // Ask first (never dial on a stray tap) — same confirm as the thread view.
+                    pendingCall = PendingCall(uid: conv.otherUid(me), name: conv.name(for: me),
+                                              photo: conv.photoUrl(for: me), video: false)
                 } label: {
                     HStack(spacing: 12) {
                         AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 46)
@@ -497,6 +502,17 @@ struct ContactsSearchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)   // search field anchors at the BOTTOM, consistently
             .background { SearchCancelWatcher(canReturn: { trimmed.isEmpty }, onCancel: onCancel) }
+            // Same native confirm the thread view uses before calling back.
+            .alert(pendingCall?.video == true ? "Video call" : "Voice call",
+                   isPresented: Binding(get: { pendingCall != nil }, set: { if !$0 { pendingCall = nil } }),
+                   presenting: pendingCall) { c in
+                Button("Cancel", role: .cancel) { }
+                Button("Call") {
+                    CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
+                }
+            } message: { c in
+                Text("\(c.video ? "Video call" : "Call") \(c.name)?")
+            }
         }
         .searchable(text: $query,
                     prompt: "Search contacts")

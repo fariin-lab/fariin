@@ -25,6 +25,7 @@ final class PlayerView: UIView {
     private let cacheManager: CacheManager
 
     private var observation: NSKeyValueObservation?
+    private var sizeObservation: NSKeyValueObservation?
 
     // MARK: - Initializers
     override init(frame: CGRect) {
@@ -37,6 +38,7 @@ final class PlayerView: UIView {
 
     deinit {
         observation = nil
+        sizeObservation = nil
         player = nil
     }
 
@@ -90,6 +92,17 @@ private extension PlayerView {
         self.getVideoLength(videoURL: url)
         self.playerLayer.player = self.player
         self.playerLayer.videoGravity = .resizeAspectFill
+        // Fill vs fit decided by aspect, like photos (ImageLoader.decideContentMode): a landscape/
+        // wide video hard-cropped by an unconditional fill lost most of its frame — FIT those
+        // (black bars), keep tall videos edge-to-edge. presentationSize is 0 until the item is
+        // ready, so observe it once and default to fill.
+        sizeObservation = player?.currentItem?.observe(\.presentationSize, options: [.new, .initial]) { [weak self] item, _ in
+            let s = item.presentationSize
+            guard let self, s.width > 0, s.height > 0 else { return }
+            let screen = UIScreen.main.bounds
+            let fills = s.height / s.width >= screen.height / screen.width - 0.02
+            DispatchQueue.main.async { self.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect }
+        }
         self.playerLayer.backgroundColor = UIColor.black.cgColor
         playerLayer.removeFromSuperlayer()
         self.contentView.layer.addSublayer(self.playerLayer)
@@ -197,6 +210,7 @@ private extension PlayerView {
     func replaceCurrentItemObserver() {
         self.player?.replaceCurrentItem(with: nil)
         self.observation = nil
+        self.sizeObservation = nil
         self.player = nil
     }
 }

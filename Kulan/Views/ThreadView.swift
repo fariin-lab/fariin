@@ -91,6 +91,7 @@ struct ThreadView: View {
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
+    @State private var micDenied = false            // mic permission denied → "open Settings" alert
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
@@ -272,7 +273,12 @@ struct ThreadView: View {
                 // Read receipts: only for INCOMING messages the user can actually see (at the bottom) —
                 // never for own sends, never while scrolled up reading history (audit: receipts were
                 // sent for messages the user hadn't seen).
-                if !mine && isAtBottom && !repo.iBlocked { ChatService.markReadThrottled(cid) }
+                if !mine && isAtBottom && !repo.iBlocked {
+                    ChatService.markReadThrottled(cid)
+                    // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
+                    // badge goes stale if the app is killed while this chat is still open.
+                    Task { await ChatService.resetUnread(cid) }
+                }
             }
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
@@ -418,6 +424,13 @@ struct ThreadView: View {
                                                         set: { if !$0 { sendError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(sendError ?? "") }
+        // Hold-to-record with mic permission denied → deep-link to the app's Settings page.
+        .alert("Microphone access is off", isPresented: $micDenied) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Allow microphone access in Settings to record voice messages.") }
     }
 
     private var threadPickers: some View {
@@ -668,7 +681,9 @@ struct ThreadView: View {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
             Task { await drainSendQueue() }              // re-drive any text send lost to an app kill
-            recorder.prepare()                           // pre-warm so hold-to-record is instant
+            // No recorder.prepare() here: it triggered the mic-permission prompt the moment ANY
+            // chat opened. Permission is asked on the first real hold (requestAndStart), and the
+            // session re-warms itself after each record (AudioRecorder.reset → prepare).
             // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) — flip to the
             // locked bar so the user can send or cancel the partial note (was: recording discarded).
             recorder.onInterrupt = {
@@ -706,9 +721,16 @@ struct ThreadView: View {
             groupCallListener?.remove(); groupCallListener = nil
             AppRouter.shared.activeChatId = nil
             Task { await ChatService.setTyping(cid, false) }
-            // Don't leave a half-finished recording running when you leave the chat.
-            if recorder.isRecording { recorder.cancel() }
-            recordLocked = false; recordDrag = .zero; holdStarted = false
+            // Messages that arrived while the chat was OPEN were read live but only onAppear reset
+            // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
+            Task { await ChatService.resetUnread(cid) }
+            // Don't leave a half-finished recording running when you leave the chat — unless it's
+            // LOCKED: an in-chat push (profile tap) also fires onDisappear, and cancelling there
+            // destroyed a hands-free recording mid-take. A locked recording survives navigation.
+            if recorder.isRecording && !recordLocked {
+                recorder.cancel()
+                recordDrag = .zero; holdStarted = false
+            }
         }
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
         // Draft follows every edit (so the chat list is correct the moment you leave), but
@@ -1071,7 +1093,12 @@ struct ThreadView: View {
             .onChange(of: isAtBottom) { _, atBottom in
                 if atBottom {
                     newWhileAway = 0
-                    if !repo.iBlocked { ChatService.markReadThrottled(cid) }
+                    if !repo.iBlocked {
+                        ChatService.markReadThrottled(cid)
+                        // Mirror the arrival path: zero the stored counter the moment these are seen,
+                        // so the badge is right even if the app dies before onDisappear.
+                        Task { await ChatService.resetUnread(cid) }
+                    }
                 }
             }
     }
@@ -2463,7 +2490,9 @@ struct ThreadView: View {
                 Text(r.fileName ?? "File").font(.caption).lineLimit(1).foregroundStyle(.secondary)
             }
         } else {
-            Text(r.text).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+            // quoteSafeLabel: a contact/location card's text is a raw kulan-…: marker (uid + storage
+            // URL) — the live banner must show "Contact"/"Location", never the payload.
+            Text(quoteSafeLabel(r.text)).font(.caption).lineLimit(1).foregroundStyle(.secondary)
         }
     }
     private func replyVoiceDuration(_ r: Message) -> String {
@@ -2659,7 +2688,13 @@ struct ThreadView: View {
     // Solid, high-contrast icon (.primary = white in dark / black in light, 100% opacity) in a
     // Signal-style 40x40 tap target.
     private var inFieldCamera: some View {
-        Button { showCamera = true } label: {
+        Button {
+            // Same as "+": fully resign the keyboard BEFORE presenting, or iOS remembers the field
+            // as first responder and flashes the keyboard back when the cover closes.
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            showCamera = true
+        } label: {
             Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: 24, height: 24).foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
@@ -2667,7 +2702,12 @@ struct ThreadView: View {
     }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     private var inFieldGif: some View {
-        Button { showGifPicker = true } label: {
+        Button {
+            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            showGifPicker = true
+        } label: {
             Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: 24, height: 24).foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
@@ -2748,6 +2788,13 @@ struct ThreadView: View {
 
     private func beginHoldRecording() {
         guard !holdStarted, !recordLocked else { return }
+        // Permission already DENIED: don't flip into the recording UI (nothing would be captured —
+        // the bar ran with a frozen 0:00). Point the user at Settings instead. A first-ever hold
+        // (undetermined) still falls through to requestAndStart(), which shows the system prompt.
+        if AVAudioApplication.shared.recordPermission == .denied {
+            micDenied = true
+            return
+        }
         holdStarted = true
         recorder.requestAndStart()
         impact(.medium)
@@ -2880,11 +2927,9 @@ struct ThreadView: View {
 
     private func stopAndSendAudio() async {
         // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
-        // still tear down cleanly so the reply bar / recording UI never gets stuck.
-        guard let (data, dur, wf) = recorder.finish() else {
-            await MainActor.run { replyingTo = nil }
-            return
-        }
+        // still tear down cleanly so the recording UI never gets stuck. Keep replyingTo though:
+        // a dropped too-short note must not destroy the reply target — the user just retries.
+        guard let (data, dur, wf) = recorder.finish() else { return }
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
         // recording), then reconcile when the upload echoes back — no dead lag on release.
         let clientId = UUID().uuidString
@@ -3358,8 +3403,12 @@ struct MessageBubble: View, Equatable {
                         }
                         // Edit: text messages only — NOT a contact/location card (its "text" is a marker;
                         // editing would corrupt the card and expose the raw payload in the composer).
+                        // GIF/file are excluded too (their text is never rendered, so an "edit" would be
+                        // invisible), and Edit only shows inside the server-enforced edit window.
                         if isMe && !message.isImage && !message.isAudio && !message.isCall
-                            && !message.isFeatureMarker && message.sendState == nil {
+                            && !message.isFeatureMarker && !message.isGif && !message.isFile
+                            && message.sendState == nil
+                            && Date().timeIntervalSince(message.createdAt) < Limits.editWindowSeconds {
                             Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
                         }
                         if canPin {
@@ -3439,7 +3488,9 @@ struct MessageBubble: View, Equatable {
                     if v.translation.width < 0 { dragX = max(v.translation.width, -70) }
                 }
                 .onEnded { _ in
-                    if !scrubFlag.active, dragX < -50 {
+                    // Never reply to a message still SENDING: the quote would capture the optimistic
+                    // local id and stay broken forever once the real server id lands.
+                    if !scrubFlag.active, dragX < -50, message.sendState == nil {
                         onReply(message)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }

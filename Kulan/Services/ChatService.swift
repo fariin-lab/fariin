@@ -505,6 +505,12 @@ enum ChatService {
             "lastMessage": "📷 \(images.count) Photos", "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
+        // Refresh the chat-list thumbnail (photo parity with sendImage) — without this the list
+        // kept showing a PREVIOUS photo's thumb next to "N Photos".
+        if let first = items.first, let u = first["imageUrl"], let e = first["enc"] {
+            convUpdate["lastImageUrl"] = u
+            convUpdate["lastImageEnc"] = e
+        }
         if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
         else {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -599,6 +605,13 @@ enum ChatService {
         var convUpdate: [String: Any] = [
             "lastMessage": preview, "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
         ]
+        // Refresh the chat-list thumbnail (photo parity with sendImage): first image in the mix,
+        // else the first video's poster — both carry {imageUrl, enc}, which is all the list needs.
+        if let firstThumb = out.first(where: { ($0["kind"] as? String) == "image" }) ?? out.first,
+           let u = firstThumb["imageUrl"], let e = firstThumb["enc"] {
+            convUpdate["lastImageUrl"] = u
+            convUpdate["lastImageEnc"] = e
+        }
         if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
         else {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""

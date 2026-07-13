@@ -270,8 +270,10 @@ struct AccountSettingsView: View {
         .alert("Sign out?", isPresented: $showSignOut) {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
-                Push.unregister()   // BEFORE signOut (needs auth): stop message + CallKit ring pushes to this phone
-                try? Auth.auth().signOut(); dismiss(); onSignOut()
+                Task {
+                    await Push.unregister()   // AWAITED before signOut (needs auth): stop message + CallKit ring pushes to this phone
+                    try? Auth.auth().signOut(); dismiss(); onSignOut()
+                }
             }
         } message: {
             Text("You'll need to sign back in to use Kulan on this device.")
@@ -618,6 +620,7 @@ struct EditProfileView: View {
                 about = profile.me?.about ?? ""
             }
             .onChange(of: photoItem) { _, item in
+                guard let item else { return }   // ignore our own reset in upload() — don't cancel a live upload
                 uploadTask?.cancel()
                 uploadTask = Task { await upload(item) }
             }
@@ -626,6 +629,9 @@ struct EditProfileView: View {
 
     private func upload(_ item: PhotosPickerItem?) async {
         guard let item else { return }
+        // Reset on every exit so re-picking (even the same photo) fires onChange again
+        // (WallpaperPickerSheet pattern). onChange guards nil, so this never cancels a newer pick.
+        defer { photoItem = nil }
         uploading = true; error = nil
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { uploading = false; return }

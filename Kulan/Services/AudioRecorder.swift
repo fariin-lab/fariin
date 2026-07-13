@@ -64,6 +64,10 @@ final class AudioRecorder {
                 if self.wasInterrupted, self.isRecording, opts?.contains(.shouldResume) == true {
                     try? AVAudioSession.sharedInstance().setActive(true)
                     self.recorder?.record()
+                    // Re-arm metering: .began invalidated the timer, so without this the elapsed
+                    // clock and live waveform stayed frozen after the interruption ended.
+                    self.beginMetering(resuming: true)
+                    self.wasInterrupted = false
                 }
             @unknown default: break
             }
@@ -126,9 +130,13 @@ final class AudioRecorder {
         }
     }
 
-    private func beginMetering() {
-        isRecording = true; elapsed = 0; levels = []; allLevels = []; smoothed = 0
-        Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (Signal's sleep block)
+    private func beginMetering(resuming: Bool = false) {
+        // `resuming` = restarting the timer after an interruption ends: skip the state reset so the
+        // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
+        if !resuming {
+            isRecording = true; elapsed = 0; levels = []; allLevels = []; smoothed = 0
+            Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (Signal's sleep block)
+        }
         timer?.invalidate()
         // Pre-compute the envelope smoothing coefficients from the fixed tick dt: a one-pole
         // low-pass, alpha = 1 − e^(−dt/τ). Fast attack τ + slow decay τ = real meter ballistics.

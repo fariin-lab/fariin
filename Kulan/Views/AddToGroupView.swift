@@ -11,6 +11,7 @@ struct AddToGroupView: View {
     private var me: String { AuthService.shared.uid ?? "" }
     @State private var working: String? = nil   // cid currently being added
     @State private var notice: String?
+    @State private var noticeIsSuccess = false   // only a success notice should close the sheet on OK
     @State private var pendingGroup: Conversation?   // group awaiting the native "Add New Member" confirm
 
     // Every group I'm a member of, alphabetical.
@@ -42,7 +43,8 @@ struct AddToGroupView: View {
                 }
             }
             .alert("Add to a Group", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
-                Button("OK") { dismiss() }
+                // Only close on success — after an error the user should be able to try another group.
+                Button("OK") { if noticeIsSuccess { dismiss() } }
             } message: { Text(notice ?? "") }
             // Native bottom action sheet (image-2 look), attached at the top level so it never anchors to a
             // row and adapts into a popover. Replaces the manual UIAlertController that rendered as a bubble.
@@ -106,10 +108,10 @@ struct AddToGroupView: View {
                 await MainActor.run {
                     working = nil
                     if keyless.isEmpty { dismiss() }
-                    else { notice = "\(contactName) hasn't opened Kulan yet — they'll see messages once they do." }
+                    else { noticeIsSuccess = true; notice = "\(contactName) hasn't opened Kulan yet — they'll see messages once they do." }
                 }
             } catch {
-                await MainActor.run { working = nil; notice = error.localizedDescription }
+                await MainActor.run { working = nil; noticeIsSuccess = false; notice = error.localizedDescription }
             }
         }
     }
