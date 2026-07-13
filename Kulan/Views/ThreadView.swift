@@ -3111,6 +3111,7 @@ struct MessageBubble: View, Equatable {
     private var onMyBubble: Color { .white }
 
     @State private var dragX: CGFloat = 0
+    @State private var quoteFillWidth: CGFloat = 0   // reply quote fills the bubble's content width (never a tiny box)
     // Reference flag (NOT @State): the waveform scrub and the reply gesture fire in the SAME drag event,
     // and a @State bool doesn't propagate synchronously within that event, so the reply read the stale
     // (false) value and still swiped. A class is mutated + read synchronously, killing the race.
@@ -3826,7 +3827,11 @@ struct MessageBubble: View, Equatable {
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                replyQuote   // hugs its own content now (no maxWidth:.infinity) → the bubble never balloons
+                // The reply quote FILLS the bubble's content width (measured below) instead of hugging its
+                // own short text — so a one-character reply no longer collapses into a tiny box above a
+                // wide message. Width-only (height unchanged), so it never disturbs the row layout. The
+                // width = the widest element (usually the body), so a long reply still widens the bubble.
+                replyQuote.frame(width: quoteFillWidth > 0 ? quoteFillWidth : nil, alignment: .leading)
                 // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
                 if let link = firstLinkURL {
                     LinkPreviewCard(url: link, isMe: isMe, dark: dark)
@@ -3835,6 +3840,10 @@ struct MessageBubble: View, Equatable {
                 // Text + time laid out in a real HStack so the time can never overlap the words.
                 bodyLine
             }
+            .background(GeometryReader { g in
+                Color.clear.preference(key: QuoteFillWidthKey.self, value: g.size.width)
+            })
+            .onPreferenceChange(QuoteFillWidthKey.self) { quoteFillWidth = $0 }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -4176,6 +4185,13 @@ struct FilePreview: UIViewControllerRepresentable {
 // DISPLAY-TIME guard for reply-quote snippets (file scope — used by MessageBubble AND ThreadView):
 // quotes persisted BEFORE the safeText fix carry the raw "kulan-…:" marker forever (encrypted
 // snapshots) — map them to friendly labels when rendering, so old quotes clean up too.
+// Measures a reply bubble's content width so the reply quote can fill it (never a tiny box under a wide
+// message). Max-reduce: the widest element (the message body) wins.
+struct QuoteFillWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.contactMarker) { return "Contact" }
     if t.hasPrefix(Message.locationMarker) { return "Location" }
