@@ -102,57 +102,11 @@ struct ImageViewerView: View {
     private var chromeVisible: Bool { !chromeHidden && !dismissing }
 
     var body: some View {
+        // Split into pagerLayer/chromeLayer — the inline body blew the type-checker budget.
         ZStack {
             Color.black.ignoresSafeArea()
-
-            // Horizontal paging between photos; each page zooms/dismisses independently. EVERY page is
-            // pinned to the exact full screen size (GeometryReader) so a portrait (9:16) and a landscape
-            // (16:9) photo page identically — mixed aspect ratios were paging with inconsistent geometry
-            // (offset/jank at the page seam). The image aspect-fits + centers WITHIN each uniform page.
-            GeometryReader { geo in
-                TabView(selection: $current) {
-                    ForEach(gallery) { m in
-                        Group {
-                            if let img = loaded[m.id] {
-                                // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at
-                                // the CONTAINER level below so it can't fight the TabView pager (the
-                                // 2-day bug). ZoomImageView keeps only pinch-zoom.
-                                ZoomImageView(image: img,
-                                              onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
-                                              onDim: { _ in }, onDismiss: {},
-                                              allowsDismissPan: false,
-                                              onZoom: { pageZoom = $0 })
-                            } else {
-                                ProgressView().tint(.white)
-                                    .task { await load(m) }
-                            }
-                        }
-                        .frame(width: geo.size.width, height: geo.size.height)   // uniform page size
-                        .tag(m.id)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-            }
-            .ignoresSafeArea()
-            // Gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
-            // so swiping to the next photo is instant instead of showing a spinner.
-            .onChange(of: current) { _, _ in
-                prefetchNeighbors()
-                pageZoom = 1   // fresh page
-            }
-            .task { prefetchNeighbors() }
-
-            VStack {
-                header
-                Spacer()
-                // Album/group context: thumbnails of EVERY image in the group, current highlighted —
-                // tap to jump (reference: centered strip just above the bottom bar).
-                if gallery.count > 1 { thumbStrip }
-                bottomBar
-            }
-            .opacity(chromeVisible ? 1 : 0)
-            .allowsHitTesting(chromeVisible)
-            .animation(.easeInOut(duration: 0.25), value: chromeVisible)
+            pagerLayer
+            chromeLayer
         }
         // The interactive dismiss (SignalMediaDismiss.swift): one UIKit vertical pan on the
         // presented root; on begin this live content hides ONCE and a lightweight image copy moves 1:1
@@ -192,6 +146,60 @@ struct ImageViewerView: View {
                 dismiss()   // back to the conversation, where the edited copy is sending
             }
         }
+    }
+
+    // Horizontal paging between photos; each page zooms/dismisses independently. EVERY page is
+    // pinned to the exact full screen size (GeometryReader) so a portrait (9:16) and a landscape
+    // (16:9) photo page identically — mixed aspect ratios were paging with inconsistent geometry
+    // (offset/jank at the page seam). The image aspect-fits + centers WITHIN each uniform page.
+    private var pagerLayer: some View {
+        GeometryReader { geo in
+            TabView(selection: $current) {
+                ForEach(gallery) { m in
+                    pagerPage(m)
+                        .frame(width: geo.size.width, height: geo.size.height)   // uniform page size
+                        .tag(m.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+        .ignoresSafeArea()
+        // Gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
+        // so swiping to the next photo is instant instead of showing a spinner.
+        .onChange(of: current) { _, _ in
+            prefetchNeighbors()
+            pageZoom = 1   // fresh page
+        }
+        .task { prefetchNeighbors() }
+    }
+
+    @ViewBuilder private func pagerPage(_ m: Message) -> some View {
+        if let img = loaded[m.id] {
+            // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
+            // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
+            ZoomImageView(image: img,
+                          onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
+                          onDim: { _ in }, onDismiss: {},
+                          allowsDismissPan: false,
+                          onZoom: { pageZoom = $0 })
+        } else {
+            ProgressView().tint(.white)
+                .task { await load(m) }
+        }
+    }
+
+    private var chromeLayer: some View {
+        VStack {
+            header
+            Spacer()
+            // Album/group context: thumbnails of EVERY image in the group, current highlighted —
+            // tap to jump (reference: centered strip just above the bottom bar).
+            if gallery.count > 1 { thumbStrip }
+            bottomBar
+        }
+        .opacity(chromeVisible ? 1 : 0)
+        .allowsHitTesting(chromeVisible)
+        .animation(.easeInOut(duration: 0.25), value: chromeVisible)
     }
 
     // Floating Liquid Glass header: back · You/name + date · "…" menu (Go to Chat / Save Image / Delete).
