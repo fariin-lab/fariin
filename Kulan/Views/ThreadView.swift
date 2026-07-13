@@ -98,11 +98,8 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
-    @State private var topVisibleId: String?       // topmost visible row → floating date header
     @State private var navBarHeight: CGFloat = 100  // GEOMETRIC nav overlap (fed by the list controller); sane default pre-first-report
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
-    @State private var floatingDateShown = false   // visible while scrolling, fades when idle
-    @State private var floatingDateFade: DispatchWorkItem?
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -229,7 +226,6 @@ struct ThreadView: View {
     // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
     @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
             listContainer(proxy)
-            .defaultScrollAnchor(.bottom)
             // Appear fully-formed: the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
@@ -254,7 +250,8 @@ struct ThreadView: View {
                 // the chat mid-scroll during the push transition.
                 if repo.didInitialLoad { revealAtOpenAnchor(proxy, settlePasses: 3) }   // measured -> reveal fast (no blink)
             }
-            .scrollDismissesKeyboard(.interactively)   // drag the messages down -> keyboard follows
+            // Interactive keyboard dismiss on drag is handled in UIKit (collectionView.keyboardDismissMode
+            // = .interactive); the SwiftUI modifier here was a no-op on the representable.
             .onChange(of: repo.items.count) { old, new in
                 guard new > old else { return }
                 let mine = repo.items.last?.authorId == me
@@ -1054,24 +1051,9 @@ struct ThreadView: View {
     // SwiftUI ScrollView. Extracted so threadScroll's builder stays under the type-checker limit.
     @ViewBuilder
     private func listContainer(_ proxy: ScrollViewProxy) -> some View {
+        // The floating date pill is drawn + updated inside the UIKit list now (no SwiftUI overlay, no
+        // topVisibleId round-trip). listContainer is just the list body.
         listBody(proxy)
-            // Floating date header (top-centered, fades out when idle). Kept HERE (not in the
-            // big scrollStack chain) so the type-checker isn't overloaded. The list is FULL-BLEED under the
-            // nav bar now, so "top" = the raw screen top — pad by the measured nav-bar height so the pill
-            // floats just BELOW the header (it was riding up into the status bar next to the clock).
-            .overlay(alignment: .top) { floatingDateHeader.padding(.top, navBarHeight + 6) }
-            .onChange(of: topVisibleId) { _, _ in bumpFloatingDate() }
-    }
-
-    private func bumpFloatingDate() {
-        // The floating date pill is shown WHILE scrolling (topmost message's day, updated
-        // as sections cross the top) and fades out ~1.2s after scrolling stops. topVisibleId changes are our
-        // scroll-activity signal; each change re-arms the idle fade.
-        if !floatingDateShown { withAnimation(.easeOut(duration: 0.15)) { floatingDateShown = true } }
-        floatingDateFade?.cancel()
-        let work = DispatchWorkItem { withAnimation(.easeIn(duration: 0.35)) { floatingDateShown = false } }
-        floatingDateFade = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     // The UIKit list is THE list (user decision 2026-07-11: "completely use this").
@@ -1158,28 +1140,11 @@ struct ThreadView: View {
             onTopInset: { navBarHeight = $0 },      // geometric nav overlap → date pill / pinned bar position
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
-            topVisibleId: $topVisibleId
+            // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
+            // the scroll callback. We only hand it a pure rowId → day-label mapping; no SwiftUI state is
+            // written on scroll, so scrolling never re-runs the conversation tree.
+            dayLabelFor: { id in repo.items.first(where: { $0.rowId == id }).map { dayLabel($0.createdAt) } }
         )
-    }
-
-    // Floating date header: a pill centered at the top of the list that stays visible while
-    // scrolling and updates to the day of the topmost visible message, then fades out when idle.
-    private var floatingDate: String? {
-        guard let id = topVisibleId, let m = repo.items.first(where: { $0.rowId == id }) else { return nil }
-        return dayLabel(m.createdAt)
-    }
-
-    @ViewBuilder private var floatingDateHeader: some View {
-        if floatingDateShown, let label = floatingDate {
-            Text(label)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14).frame(height: 30)
-                .liquidGlass(Capsule(), interactive: false)   // real native Liquid Glass, stays pinned
-                .padding(.top, 8)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-        }
     }
 
     // Native-list jump: flash the message (highlightId) and scroll the collection view to it.

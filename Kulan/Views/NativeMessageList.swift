@@ -32,7 +32,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
-    @Binding var topVisibleId: String?         // rowId of the topmost visible row → drives the floating date header
+    // Day label for the floating date pill, resolved from a rowId. Called from scrollViewDidScroll and
+    // rendered by a UIKit pill INSIDE the controller — so scrolling no longer writes SwiftUI state (a
+    // per-tick `topVisibleId` binding write re-ran the whole ThreadView tree mid-scroll = the round-trip
+    // that made scrolling feel unstable). Reading repo.items here is a pure read; it triggers no re-render.
+    var dayLabelFor: (String) -> String?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -50,6 +54,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setComposerBarHeight(composerBarHeight)
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
+        vc.dayLabelFor = dayLabelFor
         vc.onTopInset = onTopInset
         vc.setLoadingOlder(loadingOlder)
         vc.rowSignatures = rowSignatures
@@ -118,6 +123,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var swipeArrow: UIImageView?
     private var swipeTriggered = false         // crossed the reply threshold this drag (haptic + fire on release)
 
+    // Floating date pill (the sticky day header), rendered in UIKit and updated directly from
+    // scrollViewDidScroll — NOT via a SwiftUI binding. Shows the topmost visible row's day while scrolling,
+    // fades ~1.2s after scrolling stops. This is what removes the per-scroll SwiftUI round-trip.
+    var dayLabelFor: (String) -> String? = { _ in nil }
+    private let datePill = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    private let dateLabel = UILabel()
+    private var dateFadeWork: DispatchWorkItem?
+    private var lastDateId: String?
+
     override func viewDidLoad() {
         super.viewDidLoad()
         layout = ExactHeightLayout()
@@ -182,6 +196,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         NSLayoutConstraint.activate([
             topSpinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             topSpinner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+        ])
+
+        // Floating date pill (top-center, below the nav bar). A UIKit capsule updated in scrollViewDidScroll.
+        datePill.translatesAutoresizingMaskIntoConstraints = false
+        datePill.layer.cornerRadius = 15
+        datePill.layer.cornerCurve = .continuous
+        datePill.clipsToBounds = true
+        datePill.alpha = 0
+        datePill.isUserInteractionEnabled = false
+        dateLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        dateLabel.textColor = .label
+        dateLabel.translatesAutoresizingMaskIntoConstraints = false
+        datePill.contentView.addSubview(dateLabel)
+        view.addSubview(datePill)
+        NSLayoutConstraint.activate([
+            datePill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            datePill.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
+            datePill.heightAnchor.constraint(equalToConstant: 30),
+            dateLabel.centerYAnchor.constraint(equalTo: datePill.contentView.centerYAnchor),
+            dateLabel.leadingAnchor.constraint(equalTo: datePill.contentView.leadingAnchor, constant: 14),
+            dateLabel.trailingAnchor.constraint(equalTo: datePill.contentView.trailingAnchor, constant: -14),
         ])
 
         // Keyboard handled HERE, UIKit-native (the view's frame never changes — ThreadView ignores the
@@ -827,9 +862,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let nearTop = scrollView.contentOffset.y <= 72
         if nearTop && !inTopZone && userDriven { coordinator.parent.onReachedTop() }
         inTopZone = nearTop
-        // Topmost visible row → the floating date header (the sticky date).
-        let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
-        if coordinator.parent.topVisibleId != top { coordinator.parent.topVisibleId = top }
+        // Topmost visible row → the floating date pill (UIKit, updated in place — NO SwiftUI write).
+        // Only on real user scrolls, so the programmatic open/pin never flashes the pill.
+        if userDriven {
+            let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
+            updateDatePill(topId: top)
+        }
+    }
+
+    // Show the day of the topmost visible row while scrolling; fade ~1.2s after it stops. Runs entirely in
+    // UIKit — no binding write, so scrolling never re-runs the SwiftUI conversation tree.
+    private func updateDatePill(topId: String?) {
+        guard didReveal, let topId, let label = dayLabelFor(topId) else { return }
+        if topId != lastDateId { lastDateId = topId; dateLabel.text = label }
+        if datePill.alpha < 1 {
+            UIView.animate(withDuration: 0.15) { self.datePill.alpha = 1 }
+        }
+        dateFadeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.35) { self?.datePill.alpha = 0 }
+        }
+        dateFadeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     // MARK: - Screenshot recovery
