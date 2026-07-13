@@ -115,12 +115,20 @@ struct CallView: View {
     // Their video shows only when their camera is actually on (the track object lingers even after
     // they turn the camera off, so gate on the signalled camera state, not just the track).
     private var hasRemote: Bool { call.remoteCameraOn && call.remoteVideoTrack != nil }
-    // Show MY camera full-screen until the other side's video arrives (or when I tap to swap).
-    private var showLocalFull: Bool { call.isVideo && (!hasRemote || isLocalExpanded) }
-    // Fall back to the avatar when a video call has nothing displayable full-screen.
+    // Show MY camera full-screen while RINGING (WhatsApp preview) or when I tapped to swap. Once the
+    // call is CONNECTED and their camera is off, THEY own the big view (avatar) and I go to the PiP —
+    // my video never fills the screen just because they turned their camera off (they'd "vanish").
+    private var connectedCall: Bool { call.state == .active || call.state == .reconnecting }
+    private var showLocalFull: Bool {
+        call.isVideo && (isLocalExpanded || (!hasRemote && !connectedCall))
+    }
+    // Avatar fills the big view whenever there is no remote video to show (voice call, or their
+    // camera is off mid-call) and I haven't swapped my own feed fullscreen.
     private var showAvatar: Bool {
         if !call.isVideo { return true }
-        return !hasRemote && (!call.cameraOn || call.localVideoTrack == nil) && !isLocalExpanded
+        if isLocalExpanded { return false }
+        if connectedCall { return !hasRemote }
+        return !hasRemote && (!call.cameraOn || call.localVideoTrack == nil)
     }
 
     // MARK: - Background (video feed, or avatar/gradient fallback)
@@ -205,9 +213,11 @@ struct CallView: View {
         let safeBottom = winInsets.bottom
         let pipIsLocal = !isLocalExpanded                                   // small window = the OTHER feed
         let pipTrack = isLocalExpanded ? call.remoteVideoTrack : call.localVideoTrack
-        // PiP only appears once the remote video is here (before that, MY camera is full-screen).
-        // Then hide a local PiP if the camera is off; a remote PiP always shows.
-        let visible = hasRemote && pipTrack != nil && (pipIsLocal ? call.cameraOn : true)
+        // The LOCAL PiP shows whenever my camera is on and my feed isn't fullscreen — including when
+        // the remote camera is OFF (their avatar owns the big view, I stay in the corner tile; their
+        // video simply replaces the avatar when they turn it on). A remote PiP still needs their video.
+        let visible = pipTrack != nil && !showLocalFull
+            && (pipIsLocal ? (call.cameraOn && connectedCall) : hasRemote)
         return Group {
             if visible, let track = pipTrack {
                 ZStack(alignment: .topTrailing) {
