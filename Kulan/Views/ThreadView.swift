@@ -1139,6 +1139,17 @@ struct ThreadView: View {
             },
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
+            // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread
+            // messages, the FIRST open lands at the first unread — the same row anchorUnread marks with
+            // the divider. Computed synchronously (unreadOnOpen seeds from the cached conversation) so
+            // it's ready when the list performs its first open; consumed exactly once.
+            initialScrollId: {
+                guard unreadOnOpen > 0 else { return nil }
+                let msgs = repo.messages
+                let idx = max(0, msgs.count - unreadOnOpen)
+                guard idx < msgs.count else { return nil }
+                return repo.items.first { $0.id == msgs[idx].id }?.rowId
+            }(),
             canSwipeReply: { id in repo.items.first(where: { $0.rowId == id })?.sendState == nil },
             onSwipeReply: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }

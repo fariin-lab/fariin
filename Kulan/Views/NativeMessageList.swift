@@ -26,6 +26,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
     var selecting: Bool = false                // selection mode — drives the selection-animation land gate
+    // The reference's initial scroll position: when the conversation has unread messages, the FIRST open
+    // lands with the first-unread row (its unread divider) near the top — not at the bottom. Consumed
+    // exactly once at first open; nil (or an id outside the loaded window) falls back to the bottom.
+    var initialScrollId: String? = nil
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released → reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
@@ -54,6 +58,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.loadViewIfNeeded()
         vc.setComposerBarHeight(composerBarHeight)
         vc.setSelecting(selecting)
+        vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
@@ -718,8 +723,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    // The first open: measure everything at the real width, place exact frames, land at the bottom, reveal.
-    // Everything the user sees is already final — no estimate → measure correction, so no shake.
+    // The first open: measure everything at the real width, place exact frames, land at the initial
+    // position, reveal. Everything the user sees is already final — no estimate → measure correction, so
+    // no shake. INITIAL POSITION (the reference's initialPosition): the first-unread row near the top
+    // when the conversation has unread messages; otherwise the exact bottom.
     private func performFirstOpenIfReady() {
         guard !didInitialScroll,
               collectionView.bounds.width > 0, collectionView.bounds.height > 0,
@@ -729,14 +736,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
         didInitialScroll = true
-        pinBottom()
-        // Keep pinned for one runloop as a belt-and-suspenders guard, then release to free scrolling.
+        landAtInitialPosition()
+        // Re-assert for one runloop as a belt-and-suspenders guard, then release to free scrolling.
         pendingBottomOnOpen = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.pinBottom()
+            self.landAtInitialPosition()
             self.reveal()
             self.pendingBottomOnOpen = false
+        }
+    }
+
+    // First-unread near the top (12pt breathing room under the nav bar), clamped to the valid range;
+    // no unread target (or target outside the loaded window) → the exact bottom.
+    private func landAtInitialPosition() {
+        if let target = initialScrollId, let ip = dataSource.indexPath(for: target),
+           let attr = layout.layoutAttributesForItem(at: ip) {
+            let minY = -collectionView.adjustedContentInset.top
+            let y = min(max(minY, attr.frame.minY - collectionView.adjustedContentInset.top - 12), maxContentOffsetY)
+            collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            lastStableOffset = y
+            lastKnownDistanceFromBottom = safeDistanceFromBottom
+        } else {
+            pinBottom()
         }
     }
 
