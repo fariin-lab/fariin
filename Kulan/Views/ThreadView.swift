@@ -1168,7 +1168,13 @@ struct ThreadView: View {
     // UIKit bubble migration (stage 1): resolve a NATIVE model for a message the UIKit path fully supports —
     // plain 1:1 delivered text, default bubble color, no adornments. Any special case returns nil and the
     // message keeps its SwiftUI cell, so no feature is lost while the surface is progressively migrated.
+    // Master switch for the UIKit bubble path. OFF: a sizing mismatch between the native cell's measured
+    // and rendered height corrupted the layout (content stranded at the top with a gap) when native and
+    // SwiftUI cells were mixed. Re-enable only after the UIKit measurement is proven to equal the render.
+    private static let useUIKitBubbles = false
+
     private func uikitBubbleModel(for rowId: String) -> UIKitBubbleModel? {
+        guard Self.useUIKitBubbles else { return nil }
         guard !isGroup, !selecting, chatColorSpec == nil,
               let idx = repo.items.firstIndex(where: { $0.rowId == rowId }) else { return nil }
         guard !shouldShowDate(at: idx) else { return nil }             // date-header rows render the pill in SwiftUI
