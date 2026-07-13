@@ -640,9 +640,9 @@ final class CallService: NSObject {
                     self.otherPhotoUrl = photo.isEmpty ? nil : photo
                     self.isCaller = false
                     let isVideoCall = (d["type"] as? String == "video")
-                    // TELEGRAM MODEL: answering a video call does NOT auto-start MY camera - I see them,
-                    // they see my avatar, and MY video starts only when I tap the camera button.
-                    self.cameraOn = false
+                    // WhatsApp model (user choice): accepting a video call opens MY camera immediately —
+                    // both sides see each other the instant the call connects.
+                    self.cameraOn = isVideoCall
                     self.startedAsVideo = isVideoCall
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
@@ -668,7 +668,7 @@ final class CallService: NSObject {
             }
             return
         }
-        self.cameraOn = false   // TELEGRAM MODEL: my camera never auto-starts on answer
+        self.cameraOn = video   // WhatsApp model: accepting a video call opens my camera immediately
         self.startedAsVideo = video
         self.callId = callId
         self.otherName = name
@@ -702,7 +702,7 @@ final class CallService: NSObject {
                     guard let d = snap?.data(),
                           let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
                     self.startedAsVideo = (d["type"] as? String == "video")
-                    self.cameraOn = false   // TELEGRAM MODEL: my camera never auto-starts on answer
+                    self.cameraOn = self.startedAsVideo   // WhatsApp model: camera opens on answer
                     if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
                     self.completeAnswer(ref: ref, offerSdp: sdp)
                 }
