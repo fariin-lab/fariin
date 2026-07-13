@@ -98,6 +98,7 @@ struct ThreadView: View {
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
     @State private var navBarHeight: CGFloat = 100  // GEOMETRIC nav overlap (fed by the list controller); sane default pre-first-report
+    @State private var pinBarInset: CGFloat = 100    // SwiftUI-measured top inset for the pinned bar (307 placement)
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle
     @State private var floatingDateFade: DispatchWorkItem?
@@ -189,7 +190,7 @@ struct ThreadView: View {
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .overlay(alignment: .top) {
-                topPinArea(proxy).padding(.top, navBarHeight)
+                topPinArea(proxy).padding(.top, pinBarInset)
             }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. Its OWN height is measured HERE (a reader outside the bar reports only the
@@ -219,6 +220,18 @@ struct ThreadView: View {
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
+            // Pinned-bar inset: measured the same way build 307 did (a GeometryReader in an
+            // ignoresSafeArea background reports the TRUE top inset = status bar + nav bar). The date
+            // pill uses the list controller's geometric report; the pin bar keeps this SwiftUI value so
+            // its placement matches native exactly (the geometric value sat it slightly too low).
+            .background {
+                GeometryReader { geo in
+                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
+                        if v > 0 { pinBarInset = v }
+                    }
+                }
+                .ignoresSafeArea()
+            }
     }
 
     // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
@@ -1115,7 +1128,12 @@ struct ThreadView: View {
         for m in repo.items {
             let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
             let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
-            out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)"
+            // SELECTION must be in the signature: the row renders a checkbox (and dims) in select mode.
+            // Without it, entering select mode didn't change any signature → the list skipped reconfiguring
+            // the visible rows → the checkboxes never appeared until a scroll dequeued a fresh cell (the
+            // intermittent "missing checkbox / missing message" bug in 308).
+            let sel = selecting ? (selectedIds.contains(m.id) ? "S1" : "S0") : "S-"
+            out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(sel)"
         }
         return out
     }
