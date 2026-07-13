@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AVFoundation
+import UIKit   // app-lifecycle notifications (background camera pause/resume)
 import CoreMedia
 import WebRTC
 import FirebaseAuth
