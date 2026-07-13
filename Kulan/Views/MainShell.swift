@@ -797,6 +797,11 @@ struct ChatsView: View {
                                 .equatable()   // skip rebuild when this conversation is unchanged
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())   // whole row tappable (incl. empty space)
+                                // Context menu attached to the ROW CONTENT, not the Button. On a Button
+                                // inside a List the button's press gesture swallows the context-menu
+                                // long-press, so the menu never appeared; on the content it fires. iOS
+                                // still lifts the real row as the native peek preview.
+                                .contextMenu { chatMenu(conv) }
                         }
                         .buttonStyle(ChatRowPressStyle())   // grey highlight while held
                         .tag(conv.id)
@@ -826,12 +831,8 @@ struct ChatsView: View {
                             }
                             .tint(.orange)
                         }
-                        // Native long-press: no custom preview closure, so iOS lifts the actual chat
-                        // row itself (the system-native peek, like Mail/Messages list) above the menu —
-                        // zero custom rendering, so none of the cut/overflow bugs the mini-timeline had.
-                        .contextMenu {
-                            chatMenu(conv)
-                        }
+                        // (contextMenu moved onto the row content above — a Button in a List swallows
+                        // the long-press, so attaching it here never triggered.)
                       }
                     }
                     .listStyle(.plain)
