@@ -113,8 +113,8 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
-    @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
-    @State private var keyboardOverlapFromBar: CGFloat = 0   // geometric keyboard overlap = bar's distance from screen bottom
+    // (Keyboard is handled natively now: the composer safeAreaBar grows the bottom safe area and the list's
+    // .always adjustment folds it in — no measured bar height / geometric signal needed.)
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -196,12 +196,13 @@ struct ThreadView: View {
             // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
             messagesLayer(proxy)
-            // Full-bleed UNDER both bars AND the keyboard: the list's FRAME never changes — the
-            // keyboard/composer are handled purely via the manual content insets fed below. (Ignoring only
-            // the container let the frame shrink with the keyboard while insets also moved = the broken
-            // keyboard layout.) Messages scroll beneath the blur bars, so no band.
-            .ignoresSafeArea(.container, edges: [.top, .bottom])
-            .ignoresSafeArea(.keyboard, edges: .bottom)
+            // Full-bleed under the NAV BAR only (frosted nav over scrolling messages). The BOTTOM safe area
+            // is intentionally NOT ignored: the composer's `safeAreaBar` grows the bottom safe area — and,
+            // when the keyboard opens, rides it so the safe area becomes composer+keyboard. The list's
+            // `contentInsetAdjustmentBehavior = .always` folds that into the content inset automatically
+            // (build-292 model). Ignoring the bottom/keyboard safe area is exactly what forced the buggy
+            // manual-inset path that double-counted the keyboard and stranded the content high with a gap.
+            .ignoresSafeArea(.container, edges: .top)
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. Its OWN height is measured HERE (a reader outside the bar reports only the
             // home-indicator/keyboard, NOT the bar — that mistake left the list's bottom inset ~46pt so the
@@ -219,25 +220,6 @@ struct ThreadView: View {
                     HStack { Spacer(); jumpToBottomButton }
                         .padding(.bottom, 10)
                     bottomBarContent
-                        .background {
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onChange(of: geo.size.height, initial: true) { _, h in
-                                        composerBarHeight = h
-                                    }
-                                    // GEOMETRIC keyboard source (the root-cause fix, telemetry-confirmed):
-                                    // UIKit's keyboard-frame notifications never reach the list controller
-                                    // in this hosting configuration (overlap stayed 0 with the keyboard up
-                                    // = no pin ever ran = "the chat doesn't move"). But this BAR visibly
-                                    // rides the keyboard — its bottom edge IS the keyboard's top. Feed
-                                    // that distance-from-screen-bottom as the overlap: keyboard closed →
-                                    // ≈ home-indicator (nets to 0 extra); open → the keyboard height; and
-                                    // it updates EVERY FRAME of the ride, so the list tracks in lockstep.
-                                    .onChange(of: geo.frame(in: .global).maxY, initial: true) { _, maxY in
-                                        keyboardOverlapFromBar = max(0, UIScreen.main.bounds.height - maxY)
-                                    }
-                            }
-                        }
                 }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
@@ -1252,8 +1234,6 @@ struct ThreadView: View {
                 if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }
             },
             loadingOlder: repo.loadingOlder,
-            composerBarHeight: composerBarHeight,   // the bar's own height (SwiftUI-measured)
-            keyboardOverlapFromBar: keyboardOverlapFromBar,   // geometric keyboard overlap (the bar rides the keyboard)
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from

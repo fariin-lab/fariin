@@ -37,12 +37,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released → reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
-    var composerBarHeight: CGFloat = 0         // the floating composer bar's height (SwiftUI-measured)
-    // GEOMETRIC keyboard overlap: the composer bar's distance from the screen bottom (the bar rides the
-    // keyboard, so this IS the keyboard measurement). Telemetry proved UIKit's keyboard notifications
-    // never reach this controller in our hosting configuration — this signal replaces them, and because
-    // SwiftUI reports it per animation frame, the list tracks the keyboard in lockstep for free.
-    var keyboardOverlapFromBar: CGFloat = 0
+    // (Keyboard is native now — the composer safeAreaBar grows the bottom safe area and .always folds it;
+    // no keyboard signal is passed in. See updateBottomInset.)
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
@@ -65,8 +61,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
-        vc.setComposerBarHeight(composerBarHeight)
-        vc.setKeyboardOverlap(keyboardOverlapFromBar)
         vc.uikitBubble = uikitBubble
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
@@ -334,19 +328,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             dateLabel.trailingAnchor.constraint(equalTo: datePill.contentView.trailingAnchor, constant: -14),
         ])
 
-        // Keyboard handled HERE, UIKit-native (the view's frame never changes — ThreadView ignores the
-        // keyboard safe area): observe the real keyboard frame and fold its overlap into the bottom inset.
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange(_:)),
-                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        // Keyboard is handled NATIVELY now (safeAreaBar + .always fold; see updateBottomInset) — no keyboard
+        // notification observers. The list stays pinned across the keyboard resize via stickBottom.
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
-        // STALE-KEYBOARD-INSET guards: leaving the chat/app with the keyboard up can tear the keyboard
-        // down WITHOUT a frame-change notification reaching us — keyboardOverlap then stays ~340pt, the
-        // bottom inset stays inflated, and the user can scroll the conversation way past its end and it
-        // RESTS there ("no limit scroll", messages stuck at the top). Reset the overlap explicitly.
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
-                                               name: UIResponder.keyboardDidHideNotification, object: nil)
         // Background: only RECORD that the keyboard is gone (no reflow while offscreen — that's what made
         // the chat visibly shift/flash on return). The correction lands on foreground.
         NotificationCenter.default.addObserver(self, selector: #selector(appBackgrounded),
@@ -1017,10 +1003,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         updateBottomInset()
     }
 
-    // The GEOMETRIC keyboard signal (root-cause fix — see keyboardOverlapFromBar on the representable).
-    // Fed per animation frame while the bar rides the keyboard: each step re-derives the inset and the
-    // at-bottom pin instantly, so the content tracks the keyboard in lockstep with what the user sees.
-    func setKeyboardOverlap(_ raw: CGFloat) {
+    // GEOMETRIC keyboard signal v2 (telemetry root-cause fix). The old signal measured the bar against the
+    // SCREEN bottom, which over-counted the keyboard when the list frame ALSO shrinks with the keyboard —
+    // the keyboard got subtracted twice and the content rested a keyboard-height too high (a big gap under
+    // the last message). Instead, measure how much the composer bar (which rides the keyboard) COVERS the
+    // collection view — coverage = list-bottom − bar-top — and derive the keyboard portion from that. If the
+    // frame shrinks, the list bottom sits at the keyboard top so coverage collapses to just the composer and
+    // the keyboard portion is 0 (the frame-shrink already made the room). If it doesn't shrink, coverage is
+    // composer+keyboard and the portion is the full keyboard. Either way, no double count.
+    func setComposerTop(_ topY: CGFloat) {
+        guard view.window != nil, topY > 0 else { return }
+        let cvMaxY = collectionView.convert(collectionView.bounds, to: nil).maxY
+        let coverage = max(0, cvMaxY - topY)                 // composer (+ keyboard, if the frame didn't shrink)
+        let keyboardPortion = max(0, coverage - composerBarH)  // just the keyboard's contribution
+        setKeyboardOverlapInternal(keyboardPortion)
+    }
+
+    // Fed the keyboard portion per animation frame while the bar rides the keyboard: each step re-derives the
+    // inset and the at-bottom pin instantly, so the content tracks the keyboard in lockstep with the user.
+    func setKeyboardOverlapInternal(_ raw: CGFloat) {
         guard abs(raw - keyboardOverlap) > 0.5 else { return }
         geoRiding = true   // the ride owns the inset+offset until the trailing settle; layout passes stand off
         // Session bookkeeping (was previously set from the dead notification path): the keyboard session
@@ -1171,58 +1172,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     //     collection view's scroll position when user drags with the keyboard."
     //  4. At bottom → stay at bottom ("don't do any fancy math"); scrolled away → shift content in LOCKSTEP
     //     with the inset delta, clamped to the content bounds.
+    // NATIVE keyboard model (build-292, Apple-native): the bottom inset is STATIC. The composer is an iOS 26
+    // `safeAreaBar` (floatingBottomBar) — it grows the collection view's bottom SAFE AREA, and when the
+    // keyboard opens it rides the keyboard so the safe area becomes composer+keyboard. With
+    // `contentInsetAdjustmentBehavior = .always`, UIKit folds that safe area into adjustedContentInset for
+    // us — no manual keyboard math, no notifications, no geometric signal (all of which double-counted the
+    // keyboard and stranded the content high). This +12 is just Signal's small gap so the last bubble and
+    // its reaction badge clear the composer. Staying pinned across the keyboard resize is done in
+    // viewDidLayoutSubviews via `stickBottom` (captured in viewWillLayoutSubviews, BEFORE the resize).
     private func updateBottomInset(animated: Bool = false) {
-        guard isViewLoaded else { return }
-        guard !isDisappearing else { dbg("skip-disappearing"); return }
-        // (1) Interactive pop in progress → no inset work at all. A cancelled pop rebalances the appearance
-        // callbacks (isDisappearing has a window there); the gesture's own state does not.
+        guard isViewLoaded, !isDisappearing else { return }
         if let pop = navigationController?.interactivePopGestureRecognizer {
-            switch pop.state {
-            case .possible, .failed: break
-            default: dbg("skip-pop"); return
-            }
+            switch pop.state { case .possible, .failed: break; default: return }
         }
-        // .always already adds the geometric home-indicator overlap; the keyboard replaces it when up.
-        let keyboardExtra = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
-        let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
-        let old = collectionView.contentInset.bottom
-        guard abs(old - newBottom) > 0.5 else { dbg("skip-equal"); return }
-        // Inside the keyboard window, trust the truth captured at SESSION START — never a mid-ride
-        // computeAtBottom(): the geometric signal steps per frame, and a step whose pin lags one frame
-        // reads "not at bottom", takes the lockstep branch, and the ride ends SHORT of the bottom (the
-        // observed gap above the composer, dist=153 at rest). keyboardSessionWasAtBottom holds for the
-        // whole ride (cleared if the user deliberately scrolls away), so every step pins exactly.
-        let wasAtBottom = atBottomForKeyboard
-            ?? (keyboardSessionWasAtBottom || (didInitialScroll && computeAtBottom()))
-        let oldYOffset = collectionView.contentOffset.y
-        // (2) The inset write itself must never move content: stash the offset and put it back immediately.
-        let applyInset = {
-            let stash = self.collectionView.contentOffset
-            self.collectionView.contentInset.bottom = newBottom
-            self.collectionView.setContentOffset(stash, animated: false)
-            self.collectionView.verticalScrollIndicatorInsets.bottom = self.composerBarH + keyboardExtra
-        }
-        if animated { applyInset() } else { UIView.performWithoutAnimation(applyInset) }
-        // (3) Interactive keyboard drag owns the offset — hands off.
-        guard !collectionView.isDragging else { dbg("skip-drag"); return }
-        guard didInitialScroll else { dbg("skip-preopen"); return }
-        if wasAtBottom {
-            // (4a) Was at the bottom → stay at the bottom, nothing fancier.
-            dbg(animated ? "pin-anim" : "pin")
-            if animated { pinBottom() }                              // inside the keyboard animation → tracks it
-            else { UIView.performWithoutAnimation { pinBottom() } }
-        } else if didReveal {
-            dbg("lockstep")
-            // (4b) Scrolled away → shift in lockstep with the inset change, clamped to the content bounds,
-            // so the keyboard never covers the messages being read and hiding it follows them back down.
-            let delta = newBottom - old
-            let minY = -collectionView.adjustedContentInset.top
-            let maxY = max(minY, collectionView.contentSize.height - collectionView.bounds.height
-                                + collectionView.adjustedContentInset.bottom)
-            let y = min(max(minY, oldYOffset + delta), maxY)
-            if abs(y - collectionView.contentOffset.y) > 0.5 {
-                collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
-            }
+        let newBottom: CGFloat = 12
+        guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
+        UIView.performWithoutAnimation {
+            let stash = collectionView.contentOffset
+            collectionView.contentInset.bottom = newBottom   // never moves content: stash + restore the offset
+            collectionView.setContentOffset(stash, animated: false)
         }
     }
 
