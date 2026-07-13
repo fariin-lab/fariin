@@ -25,6 +25,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var rowSignatures: [String: String] = [:]  // per-row CONTENT signature → same-ids apply reconfigures ONLY changed rows
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
+    var selecting: Bool = false                // selection mode — drives the selection-animation land gate
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released → reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
@@ -52,6 +53,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.setComposerBarHeight(composerBarHeight)
+        vc.setSelecting(selecting)
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
@@ -146,6 +148,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var scrollAnimationWatchdog: Timer?
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window, reference)
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
+    // Selection-mode animation coordination (the reference's selectionAnimationState): the land that
+    // CARRIES the checkbox change passes (even mid-motion), then further lands defer until the slide
+    // animation window closes — a reconfigure mid-slide clobbered the checkbox animation.
+    private enum SelectionAnimationState { case idle, willAnimate, animating }
+    private var selectionAnimationState: SelectionAnimationState = .idle
+    private var isSelecting = false
+
+    func setSelecting(_ s: Bool) {
+        guard s != isSelecting else { return }
+        isSelecting = s
+        selectionAnimationState = .willAnimate   // the next land carries the checkboxes — let it through
+    }
     var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var lastStableOffset: CGFloat = 0 // last user/our-pin offset → screenshot-capture recovery
@@ -408,7 +422,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var isInMotion: Bool {
         collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
             || sendAnimating || swipingCell != nil || keyboardAnimating || programmaticScrollAnimating
-            || Date() < captureFreezeUntil
+            || selectionAnimationState == .animating || Date() < captureFreezeUntil
         // keyboardAnimating: the reference's canLandLoad blocks lands during the keyboard animation —
         // a reconfigure landing mid-keyboard fights the animated inset track (visible fight/jump).
         // programmaticScrollAnimating: same rule for OUR animated scrolls (jumps, pin-to-bottom glides).
@@ -487,6 +501,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // A jump with no data change (target already in the loaded window): scroll now. scrollToItem
             // is safe mid-deceleration (it takes over the scroll), so this lands even in motion.
             if let target = scrollTarget { scrollTo(id: target) }
+            // Selection land (reference exception): the update that carries the checkbox change passes
+            // even mid-motion, then opens the animation window that defers everything else.
+            if selectionAnimationState == .willAnimate {
+                selectionAnimationState = .animating
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.selectionAnimationState = .idle
+                    self?.settleFlush()
+                }
+                let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+                let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }
+                lastRowSigs = rowSignatures
+                if !changed.isEmpty { refreshVisible(changed) }
+                return
+            }
             // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick).
             // SIGNAL'S "LAND WHEN SAFE" GATE (CVLoadCoordinator.canLandLoad): NOTHING lands while the list
             // is in motion — no reconfigure, no re-measure, no relayout during dragging/deceleration or the
@@ -721,6 +749,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewWillDisappear(animated)
         isDisappearing = true
         shouldAnimateKeyboardChanges = false   // off-screen keyboard changes apply silently (reference)
+    }
+
+    // Rotation / size change (the reference's setScrollActionForSizeTransition): capture the position
+    // BEFORE the transition — bottom-pinned (within 50pt) restores the pin; mid-history restores the
+    // topmost visible row — and re-assert it after the width-change re-measure has run.
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        guard didInitialScroll else { return }
+        let wasBottom = computeAtBottom() || lastKnownDistanceFromBottom < 50
+        let anchor = wasBottom ? nil : captureTopAnchor()
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self else { return }
+            self.collectionView.layoutIfNeeded()   // the width-change re-measure ran in viewWillLayoutSubviews
+            if wasBottom { self.pinBottom() }
+            else if let anchor { self.restore(anchor) }
+        }
+    }
+
+    // Safe-area churn (in-call status banner, dynamic island, rotation) re-derives the inset directly —
+    // the reference hooks viewSafeAreaInsetsDidChange into its inset/load pipeline the same way.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        updateBottomInset()
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)

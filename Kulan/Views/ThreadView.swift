@@ -280,15 +280,20 @@ struct ThreadView: View {
             .onChange(of: repo.pinnedMessageIds) { _, ids in pinIndex = max(0, ids.count - 1) }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
             .onChange(of: repo.otherTyping) { _, t in
-                if t && isAtBottom { proxy.scrollTo("BOTTOM", anchor: .bottom) }
+                // Typing indicator appears while at the bottom → reveal it (the reference auto-scrolls for
+                // a typing indicator only when the reader was at the bottom). proxy.scrollTo was a NO-OP
+                // on the native list — this intent never actually executed.
+                if t && isAtBottom { nativeScrollTarget = "BOTTOM" }
             }
             // Keyboard opening: if I was already at the bottom, keep the newest messages pinned right
-            // above the keyboard (the system doesn't reliably do this, which left the chat looking
-            // like it jumped up/away). If I'm reading history (not at bottom), leave my place alone.
+            // above the keyboard. The list's inset pin covers this at the UIKit level; this explicit
+            // glide is the belt-and-suspenders for cases where focus lands before the keyboard frame —
+            // and it too was a proxy.scrollTo NO-OP that never executed (the "tap input → conversation
+            // doesn't move" report).
             .onChange(of: inputFocused) { _, focused in
                 guard focused, isAtBottom else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    proxy.scrollTo("BOTTOM", anchor: .bottom)
+                    nativeScrollTarget = "BOTTOM"
                 }
             }
             // (Jump-to-bottom button moved: it's anchored ABOVE the composer bar in scrollStack — the list
@@ -1133,6 +1138,7 @@ struct ThreadView: View {
                 }).padding(.horizontal, 12))
             },
             onReachedTop: { repo.loadOlder() },
+            selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
             canSwipeReply: { id in repo.items.first(where: { $0.rowId == id })?.sendState == nil },
             onSwipeReply: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }
