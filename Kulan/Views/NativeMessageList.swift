@@ -112,6 +112,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
+    private var popGestureHooked = false                 // interactive-pop target attached once
     var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
@@ -361,7 +362,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // landings mid-capture mixed two layout generations = the overlapping-elements-on-screenshot bug.
     private var isInMotion: Bool {
         collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-            || sendAnimating || Date() < captureFreezeUntil
+            || sendAnimating || swipingCell != nil || Date() < captureFreezeUntil
     }
 
     // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
@@ -648,6 +649,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewDidAppear(animated)
         isDisappearing = false
         updateBottomInset()   // correct the inset if a cancelled pop / return changed the keyboard state
+        // Swiping back with the KEYBOARD UP: dismiss the keyboard the moment the pop gesture begins
+        // (the reference behavior) — the transition then runs against a settled layout instead of
+        // fighting a live keyboard teardown (that fight was the swipe-back chaos: mixed-up bars,
+        // misplaced messages mid-transition). Position is preserved: inset updates are blocked while
+        // the gesture is active and re-validated only when it resolves.
+        if !popGestureHooked, let pop = navigationController?.interactivePopGestureRecognizer {
+            pop.addTarget(self, action: #selector(popGestureChanged(_:)))
+            popGestureHooked = true
+        }
+    }
+
+    @objc private func popGestureChanged(_ g: UIGestureRecognizer) {
+        switch g.state {
+        case .began:
+            if keyboardOverlap > 0 { view.window?.endEditing(true) }   // keyboard down FIRST, then the swipe
+        case .ended, .cancelled, .failed:
+            // Gesture resolved (pop completed or cancelled): re-validate the inset once, silently. On a
+            // completed pop the view is disappearing and the guard no-ops; on a cancel this restores truth.
+            UIView.performWithoutAnimation { updateBottomInset() }
+        default:
+            break
+        }
     }
 
     override func viewWillLayoutSubviews() {
@@ -715,6 +738,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var keyboardOverlap: CGFloat = 0
     private var keyboardAnimating = false     // a keyboard-synced inset animation is in flight — layout passes
                                               // must NOT re-assert the inset/pin instantly and override it
+    // At-bottom truth CAPTURED when the keyboard animation starts. Mid-animation inset updates (the reply
+    // banner growing the composer bar) can't trust computeAtBottom() — the offset is mid-flight — so they
+    // reuse this instead. Cleared when the keyboard animation completes.
+    private var atBottomForKeyboard: Bool?
     func setComposerBarHeight(_ h: CGFloat) {
         guard abs(h - composerBarH) > 0.5 else { return }
         composerBarH = h
@@ -726,6 +753,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let window = view.window else { return }
         let kbInView = view.convert(end, from: window.coordinateSpace)
         keyboardOverlap = max(0, view.bounds.maxY - kbInView.minY)   // 0 when hidden (frame moves offscreen)
+        // During an interactive pop the transition owns the geometry: record the overlap (done above) but
+        // run NO inset animation — updateBottomInset is blocked during the pop and re-validated on
+        // viewDidAppear / gesture end. Animating layout mid-transition was part of the swipe-back chaos.
+        if let pop = navigationController?.interactivePopGestureRecognizer {
+            switch pop.state {
+            case .possible, .failed: break
+            default: return
+            }
+        }
+        // Capture the at-bottom truth NOW (pre-animation offsets are trustworthy; mid-flight ones are not) —
+        // every inset update inside the keyboard window reuses it.
+        atBottomForKeyboard = didInitialScroll && computeAtBottom()
         // Animate the inset/offset change IN LOCKSTEP with the keyboard's OWN animation (duration + curve
         // straight from the notification), the way the reference does — so the messages track the keyboard
         // as it slides instead of snapping to the final position while the keyboard is still moving (the jump).
@@ -741,7 +780,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.animate(withDuration: duration, delay: 0, options: [options, .beginFromCurrentState]) {
             self.updateBottomInset(animated: true)
             self.collectionView.layoutIfNeeded()
-        } completion: { _ in self.keyboardAnimating = false }
+        } completion: { _ in
+            self.keyboardAnimating = false
+            self.atBottomForKeyboard = nil
+        }
     }
 
     // Keyboard fully gone: the overlap is 0 no matter what the last frame notification said.
@@ -792,7 +834,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
         let old = collectionView.contentInset.bottom
         guard abs(old - newBottom) > 0.5 else { return }
-        let wasAtBottom = didInitialScroll && computeAtBottom()
+        // Inside the keyboard window, trust the truth captured at animation START (a reply banner growing
+        // the bar mid-flight would otherwise read a mid-animation offset and miss the pin).
+        let wasAtBottom = atBottomForKeyboard ?? (didInitialScroll && computeAtBottom())
         let oldYOffset = collectionView.contentOffset.y
         // (2) The inset write itself must never move content: stash the offset and put it back immediately.
         let applyInset = {
@@ -876,7 +920,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard g === swipePan else { return true }
         if VoiceScrubState.active { return false }                 // waveform scrub owns the touch
         let v = swipePan.velocity(in: collectionView)
-        guard v.x < 0, abs(v.x) > abs(v.y) * 1.2 else { return false }   // horizontal-left dominant only
+        guard v.x < 0, abs(v.x) > abs(v.y) else { return false }   // horizontal-left dominant only
         let loc = swipePan.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc),
               let id = dataSource.itemIdentifier(for: ip), canSwipeReply(id) else { return false }
@@ -900,13 +944,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 swipingCell = nil; swipingId = nil; return
             }
             swipingCell = cell; swipingId = id; swipeTriggered = false
-            addSwipeArrow(to: cell)
+            addSwipeArrow(for: cell)
         case .changed:
             guard let cell = swipingCell else { return }
             if VoiceScrubState.active { resetSwipe(animated: false); return }   // waveform took over mid-drag
-            let tx = max(-70, min(0, g.translation(in: collectionView).x))
-            cell.contentView.transform = CGAffineTransform(translationX: tx, y: 0)
-            swipeArrow?.alpha = min(1, abs(tx) / 50)
+            // 1:1 with the finger to the threshold, then RUBBER-BAND (drag past -70 moves at 1/4 speed,
+            // capped) — attached-to-the-finger up close, physical resistance past the commit point.
+            let t = min(0, g.translation(in: collectionView).x)
+            let tx = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)
+            // Transform the CELL itself — the proven path (the send animation moved cells this way).
+            // Transforming the hosted contentView had its transform fought by the SwiftUI hosting layout,
+            // which is why the bubble barely moved ("stays fixed, no feedback").
+            cell.transform = CGAffineTransform(translationX: tx, y: 0)
+            let progress = min(1, abs(tx) / 50)
+            swipeArrow?.alpha = progress
+            swipeArrow?.transform = CGAffineTransform(scaleX: 0.6 + 0.4 * progress, y: 0.6 + 0.4 * progress)
             if abs(tx) >= 50, !swipeTriggered {
                 swipeTriggered = true
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -915,39 +967,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         case .ended, .cancelled, .failed:
             let fire = swipeTriggered ? swipingId : nil
-            resetSwipe(animated: true)
+            resetSwipe(animated: true, velocity: g.velocity(in: collectionView).x)
             if let id = fire { onSwipeReply(id) }
+            settleFlush()   // land anything that was deferred while the swipe owned the cell
         default:
             break
         }
     }
 
-    // The reply arrow sits in the space the bubble vacates. Added to the CELL (not its contentView) so the
-    // content's translate transform doesn't move it. Removed when the drag springs back.
-    private func addSwipeArrow(to cell: UICollectionViewCell) {
+    // The reply arrow sits in the space the bubble vacates — added to the COLLECTION VIEW at the cell's
+    // frame (the cell itself translates, the arrow must not move with it).
+    private func addSwipeArrow(for cell: UICollectionViewCell) {
         swipeArrow?.removeFromSuperview()
         let img = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
         img.tintColor = .secondaryLabel
         img.contentMode = .scaleAspectFit
         img.alpha = 0
-        img.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(img)
-        NSLayoutConstraint.activate([
-            img.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            img.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -16),
-            img.widthAnchor.constraint(equalToConstant: 20),
-            img.heightAnchor.constraint(equalToConstant: 18),
-        ])
+        img.frame = CGRect(x: cell.frame.maxX - 36, y: cell.frame.midY - 9, width: 20, height: 18)
+        collectionView.addSubview(img)
         swipeArrow = img
     }
 
-    private func resetSwipe(animated: Bool) {
+    private func resetSwipe(animated: Bool, velocity: CGFloat = 0) {
         let cell = swipingCell
         let arrow = swipeArrow
         swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false
-        let reset = { cell?.contentView.transform = .identity; arrow?.alpha = 0 }
+        let reset = { cell?.transform = .identity; arrow?.alpha = 0 }
         if animated {
-            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.4,
+            // Seed the spring with the release velocity so a fast flick snaps back livelier than a slow let-go.
+            let distance = abs(cell?.transform.tx ?? 0)
+            let v = distance > 0 ? min(3, abs(velocity) / max(1, distance)) : 0.4
+            UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: v,
                            options: [.allowUserInteraction], animations: reset) { _ in arrow?.removeFromSuperview() }
         } else {
             reset(); arrow?.removeFromSuperview()
