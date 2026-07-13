@@ -135,6 +135,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
     private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
+    private var needsReconcileOnSettle = false // a reconcile deferred mid-motion whose heights were pre-adopted
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
@@ -403,7 +404,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard collectionView.bounds.height > 0 else { return }
         // Never invalidate the layout under a live scroll (this runs a runloop after its trigger, so the
         // user may have STARTED dragging since the motion check) — defer to settle like everything else.
-        if isInMotion { needsRefreshOnSettle = true; return }
+        // needsReconcileOnSettle specifically: the heights cache may ALREADY hold the new value, so the
+        // settle signature/height diff can come up empty — without this flag the relayout was dropped and
+        // the cache and on-screen frames diverged permanently (overlap + a wrong continuity delta later).
+        if isInMotion { needsRefreshOnSettle = true; needsReconcileOnSettle = true; return }
         let wasBottom = computeAtBottom()
         let anchor = captureTopAnchor()
         layout.generation += 1
@@ -443,7 +447,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollAnimationWatchdog?.invalidate()
         scrollAnimationWatchdog = nil
         programmaticScrollAnimating = false
-        settleFlush()   // land whatever coalesced during the animation (no-op when nothing pending)
+        settleFlush()            // land whatever coalesced during the animation (no-op when nothing pending)
+        autoLoadMoreIfNeeded()   // reference: autoLoadMoreIfNecessary on animation complete — a programmatic
+                                 // scroll (status-bar tap, jump) can land near the top and still needs paging
     }
 
     // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
@@ -464,7 +470,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let heightIds = pendingSettleHeights                                    // late height reports (link preview)
         pendingSettleHeights.removeAll()
         let target = Array(Set(changed).union(heightIds))
-        guard !target.isEmpty else { return }
+        guard !target.isEmpty else {
+            // Nothing to reconfigure, but a deferred reconcile may still be owed (heights already adopted
+            // before the defer — the diff can't see it). Run it now or the layout stays diverged.
+            if needsReconcileOnSettle { needsReconcileOnSettle = false; reconcile() }
+            return
+        }
+        needsReconcileOnSettle = false   // refreshVisible re-measures + reconciles as needed
         refreshVisible(target)
     }
 
@@ -557,13 +569,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let beforeY = frameMinY(for: currentIds)
         let visibleBefore = collectionView.indexPathsForVisibleItems.sorted()
             .compactMap { dataSource.itemIdentifier(for: $0) }
+        // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids —
+        // a dirty layout preparing after the mutation would mix old counts with new heights (garbage
+        // before-state under the batch update, corrupting the continuity adjustment).
+        collectionView.layoutIfNeeded()
+
+        // Content changes that BATCH with an ids change (a reaction/read-tick arriving in the same repo
+        // emission as a new message — constant with Firestore listener batches) must still reconfigure:
+        // diffable apply does NOT touch rows present in both snapshots, and the old reseed silently
+        // dropped them (stale bubbles until cell recycle).
+        let contentChanged = visibleBefore.filter { ids.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
+        for id in contentChanged { heights[id] = measure(id, width: width) }   // changed content → fresh height
         if ids.count < currentIds.count {   // rows left (trim/delete): drop their cached heights too
             let keep = Set(ids)
             heights = heights.filter { keep.contains($0.key) }
         }
         let afterY = frameMinY(for: ids)
+
+        // Selection flip riding an ids change: advance the state machine here too (it was only consumed
+        // on the same-ids path — a message arriving in the same render as long-press-select lost the
+        // checkbox land AND leaked .willAnimate into a later spurious block window).
+        if selectionAnimationState == .willAnimate {
+            selectionAnimationState = .animating
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.selectionAnimationState = .idle
+                self?.settleFlush()
+            }
+        }
 
         // Anchor cascade (the reference order): visible rows first — bottom-most first when the reader is
         // at the bottom, top-most first otherwise — then any row present in both windows.
@@ -576,6 +610,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(ids, toSection: 0)
+        if !contentChanged.isEmpty { snapshot.reconfigureItems(contentChanged) }   // C2: batched content lands too
         currentIds = ids
         layout.generation += 1   // ids/heights changed → next prepare() rebuilds frames (O(1) check otherwise)
 
@@ -613,9 +648,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // "just before performBatchUpdates" — UIKit applies it in the same transaction as the update,
             // so no frame ever renders at the stale offset. Covers prepend, top-trim, delete, and mixed
             // changes in one mechanism. The layout's targetContentOffset override remains as the fallback
-            // channel. The radar-28167779 workaround (layoutIfNeeded on the OLD data first) guarantees a
-            // clean before-state — batch updates on a layout-dirty collection view corrupt/crash.
-            collectionView.layoutIfNeeded()
+            // channel. (The radar-28167779 layoutIfNeeded ran BEFORE the heights/ids mutation above.)
             if adjustment != 0 {
                 let ctx = UICollectionViewLayoutInvalidationContext()
                 ctx.contentOffsetAdjustment = CGPoint(x: 0, y: adjustment)
@@ -812,7 +845,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
-        stickBottom = didInitialScroll && !pendingBottomOnOpen && !sendAnimating && computeAtBottom()
+        stickBottom = didInitialScroll && !pendingBottomOnOpen && !sendAnimating
+            && !programmaticScrollAnimating && computeAtBottom()   // never re-pin under an in-flight jump
         // Keep the registration's width pin fresh: cells configured during this pass read hostWidth.
         if collectionView.bounds.width > 0 { hostWidth = collectionView.bounds.width }
         // Width change (rotation / split view): every measured height is width-dependent — drop + re-measure,
@@ -859,7 +893,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // is actively scrolling. A SwiftUI-induced layout pass mid-scroll (e.g. isAtBottom flipping near the
         // bottom re-runs the tree) used to hit pinBottom here and YANK the user to the bottom = the scroll jump.
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !userScrolling else { return }
+        guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !programmaticScrollAnimating,
+              !userScrolling else { return }
         if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
         else { clampOffsetIfBeyondContent() }
     }
@@ -915,7 +950,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // straight from the notification), the way the reference does — so the messages track the keyboard
         // as it slides instead of snapping to the final position while the keyboard is still moving (the jump).
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
-        guard duration > 0 else { updateBottomInset(); return }
+        guard duration > 0 else {
+            updateBottomInset()          // uses the truth captured just above…
+            atBottomForKeyboard = nil    // …then clears it — no completion will (duration-0 changes:
+            return                       // hardware keyboard / input-mode switches) and a stale TRUE
+        }                                // later yanked a history reader to the bottom on a banner grow
         let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
             ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
         let options = UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16)
@@ -942,12 +981,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     @objc private func keyboardDidHide() {
         let wasAtBottomSession = keyboardSessionWasAtBottom
         keyboardSessionWasAtBottom = false
+        atBottomForKeyboard = nil   // session over — never let a stale capture drive later inset updates
         if keyboardOverlap != 0 {
             keyboardOverlap = 0
             updateBottomInset()
         }
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        if wasAtBottomSession, !userScrolling, !isDisappearing, didInitialScroll {
+        // Also hands-off while a programmatic jump animates (tapping a reply quote dismisses the keyboard
+        // AND starts a jump — the definitive pin was cancelling the jump and wedging its animation flag).
+        if wasAtBottomSession, !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
             UIView.performWithoutAnimation { pinBottom() }
         }
     }
@@ -1032,6 +1074,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let y = max(-collectionView.adjustedContentInset.top, target)
         lastStableOffset = y   // our intentional position → screenshot recovery target
         if animated {
+            // ALREADY at the target: an animated no-op scroll never fires scrollViewDidEndScrollingAnimation,
+            // which would wedge programmaticScrollAnimating for the full 5s watchdog and freeze every
+            // content land in that window (fired on essentially every keyboard-open at the bottom).
+            guard abs(collectionView.contentOffset.y - y) > 0.5 else { return }
             scrollingAnimationDidStart()   // lands defer until the glide completes (reference)
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
         } else if abs(collectionView.contentOffset.y - y) > 0.5 {
@@ -1080,6 +1126,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // drags were not: the scroll gesture keeps every vertical drag.
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard g === swipePan else { return true }
+        if isSelecting { return false }                            // selection mode: rows toggle, never reply-swipe
         if VoiceScrubState.active { return false }                 // waveform scrub owns the touch
         let v = swipePan.velocity(in: collectionView)
         guard v.x < 0, abs(v.x) > abs(v.y) else { return false }   // horizontal-left dominant only
@@ -1150,6 +1197,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swipeArrow = img
     }
 
+    // The swiped cell scrolled off and is being RECYCLED for another row: kill the swipe immediately —
+    // keeping the transform would slide the WRONG row left when the cell is reused.
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        guard cell === swipingCell else { return }
+        resetSwipe(animated: false)
+        swipePan.isEnabled = false; swipePan.isEnabled = true   // cancel the in-flight pan
+    }
+
     private func resetSwipe(animated: Bool, velocity: CGFloat = 0) {
         let cell = swipingCell
         let arrow = swipeArrow
@@ -1204,6 +1260,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if userDriven {
             lastStableOffset = scrollView.contentOffset.y
             userScrolledSinceTimer = true
+            // Scrolled away from the bottom mid-keyboard-session → the definitive settle at keyboardDidHide
+            // must NOT yank the reader back down (they left the bottom deliberately, keyboard up).
+            if keyboardSessionWasAtBottom, safeDistanceFromBottom > 44 { keyboardSessionWasAtBottom = false }
         }
         // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
         // 0.1s one-shot timer on the COMMON runloop mode (fires during scrolling) — the reference model:
@@ -1288,7 +1347,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     //     ran BEFORE the capture scroll and restored nothing).
     @objc func screenshotTaken() {
         guard didInitialScroll, !isDisappearing,
-              !collectionView.isDragging, !collectionView.isTracking else { return }
+              !collectionView.isDragging, !collectionView.isTracking,
+              !collectionView.isDecelerating else { return }   // never rewind a legitimate fling to a stale offset
         captureFreezeUntil = Date().addingTimeInterval(1.5)
         let snapBack: () -> Void = { [weak self] in
             guard let self else { return }
