@@ -267,9 +267,13 @@ final class CallService: NSObject {
     func updateInCallScreenBehavior() {
         let inCall = state == .active || state == .reconnecting
         let videoShowing = cameraOn || remoteCameraOn
-        UIDevice.current.isProximityMonitoringEnabled = inCall && !videoShowing && audioRoute == .earpiece
-        if inCall && videoShowing { SleepBlocker.shared.add("call-video") }
-        else { SleepBlocker.shared.remove("call-video") }
+        let proximity = inCall && !videoShowing && audioRoute == .earpiece
+        let keepAwake = inCall && videoShowing
+        DispatchQueue.main.async {   // UIDevice + SleepBlocker are main-actor
+            UIDevice.current.isProximityMonitoringEnabled = proximity
+            if keepAwake { SleepBlocker.shared.add("call-video") }
+            else { SleepBlocker.shared.remove("call-video") }
+        }
     }
 
     // MARK: - Background camera pause (WhatsApp/Signal behavior)
