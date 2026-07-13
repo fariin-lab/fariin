@@ -289,6 +289,10 @@ struct ZoomImageView: UIViewControllerRepresentable {
     var allowsDismissPan: Bool = true   // false in the media editor: zoom only, no drag-to-close
     var onZoom: (CGFloat) -> Void = { _ in }   // reports live zoom scale so the container can gate drag-dismiss
     var cornerRadius: CGFloat = 0       // >0 rounds the IMAGE itself (tall media), scaled to stay visually constant
+    // false in the single-image EDITOR: the zoomed photo may overflow its letterboxed canvas and cover
+    // the full screen (the chrome floats over it) — the same unclipped growth as the video editor's
+    // scaleEffect zoom, so at full zoom there are no top/bottom borders. Viewers keep the default clip.
+    var clipsZoomOverflow: Bool = true
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
@@ -299,6 +303,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
         vc.allowsDismissPan = allowsDismissPan
         vc.onZoom = onZoom
         vc.mediaCornerRadius = cornerRadius
+        vc.clipsZoomOverflow = clipsZoomOverflow
         return vc
     }
     func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {
@@ -317,6 +322,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     var onDismiss: (() -> Void)?
     var allowsDismissPan = true
     var onZoom: ((CGFloat) -> Void)?
+    var clipsZoomOverflow = true   // editor sets false → zoom grows past the canvas like the video editor
 
     private var scrollView: ZoomableMediaView!
     private var imageView: UIImageView!
@@ -351,6 +357,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
 
         scrollView = ZoomableMediaView(mediaView: imageView, onSingleTap: { [weak self] in self?.onSingleTap?() })
         scrollView.mediaCornerRadius = mediaCornerRadius
+        scrollView.clipsToBounds = clipsZoomOverflow   // editor: overflow the canvas while zooming (video parity)
         scrollView.delegate = self
         view.addSubview(scrollView)
         scrollView.frame = view.bounds

@@ -183,7 +183,10 @@ struct ChatImageEditor: View {
                 // (kept visually constant across zoom). Normal ratios: cornerRadius 0 → unchanged.
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
                               onDim: { _ in }, onDismiss: {}, allowsDismissPan: false,
-                              cornerRadius: isTallMedia ? 22 : 0)
+                              cornerRadius: isTallMedia ? 22 : 0,
+                              // Video-editor parity: the zoomed photo overflows the letterboxed canvas and
+                              // covers the full screen at high zoom (no top/bottom borders); chrome floats.
+                              clipsZoomOverflow: false)
                     .frame(width: area.width, height: area.height)
             }
         }
