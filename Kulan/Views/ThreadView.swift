@@ -98,7 +98,6 @@ struct ThreadView: View {
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var topVisibleId: String?       // topmost visible row → floating date header
     @State private var navBarHeight: CGFloat = 100  // GEOMETRIC nav overlap (fed by the list controller); sane default pre-first-report
-    @State private var pinBarInset: CGFloat = 100    // SwiftUI-measured top inset for the pinned bar (307 placement)
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
     @State private var floatingDateShown = false   // visible while scrolling, fades when idle
     @State private var floatingDateFade: DispatchWorkItem?
@@ -190,7 +189,10 @@ struct ThreadView: View {
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .overlay(alignment: .top) {
-                topPinArea(proxy).padding(.top, pinBarInset)
+                // Sit right below the nav bar using the SAME geometric top overlap the date pill uses
+                // (list controller's view.safeAreaInsets.top). The SwiftUI reader I tried lived inside the
+                // safe-area-ignored region and reported a wildly wrong value → the bar dropped mid-screen.
+                topPinArea(proxy).padding(.top, navBarHeight)
             }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. Its OWN height is measured HERE (a reader outside the bar reports only the
@@ -220,18 +222,6 @@ struct ThreadView: View {
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
-            // Pinned-bar inset: measured the same way build 307 did (a GeometryReader in an
-            // ignoresSafeArea background reports the TRUE top inset = status bar + nav bar). The date
-            // pill uses the list controller's geometric report; the pin bar keeps this SwiftUI value so
-            // its placement matches native exactly (the geometric value sat it slightly too low).
-            .background {
-                GeometryReader { geo in
-                    Color.clear.onChange(of: geo.safeAreaInsets.top, initial: true) { _, v in
-                        if v > 0 { pinBarInset = v }
-                    }
-                }
-                .ignoresSafeArea()
-            }
     }
 
     // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.

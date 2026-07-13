@@ -101,6 +101,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
     private var lastStableOffset: CGFloat = 0 // last user/our-pin offset → screenshot-capture recovery
+    private var isDisappearing = false        // swipe-back / pop in progress → freeze all content-offset reflow
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -175,8 +176,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // RESTS there ("no limit scroll", messages stuck at the top). Reset the overlap explicitly.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
                                                name: UIResponder.keyboardDidHideNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
+        // Background: only RECORD that the keyboard is gone (no reflow while offscreen — that's what made
+        // the chat visibly shift/flash on return). The correction lands on foreground.
+        NotificationCenter.default.addObserver(self, selector: #selector(appBackgrounded),
                                                name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appForegrounded),
+                                               name: UIApplication.willEnterForegroundNotification, object: nil)
 
         buildDataSource()
     }
@@ -530,6 +535,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     // MARK: - Bottom pinning
 
+    // Swipe-back dismisses the keyboard mid-transition; reacting to that keyboard-frame change (shrinking
+    // the inset + re-pinning) shifted the conversation during the pop. Freeze all content-offset reflow
+    // while the view is disappearing; re-validate when it (re)appears (a cancelled pop returns here).
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        isDisappearing = true
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        isDisappearing = false
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        isDisappearing = false
+        updateBottomInset()   // correct the inset if a cancelled pop / return changed the keyboard state
+    }
+
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
@@ -601,16 +623,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         updateBottomInset()
     }
 
-    // Keyboard fully gone (or the app backgrounded, which force-dismisses it): the overlap is 0 no
-    // matter what the last frame notification said.
+    // Keyboard fully gone: the overlap is 0 no matter what the last frame notification said.
     @objc private func keyboardDidHide() {
         guard keyboardOverlap != 0 else { return }
         keyboardOverlap = 0
         updateBottomInset()
     }
 
+    // Backgrounding force-dismisses the keyboard WITHOUT a frame notification. Record overlap = 0 so the
+    // inset isn't left stale (the "no-limit scroll" bug), but do NOT reflow the offset while offscreen —
+    // reflowing here is what made the conversation visibly jump/blank on return.
+    @objc private func appBackgrounded() { keyboardOverlap = 0 }
+    // On return, re-validate the inset once (the keyboard is genuinely down now) with no animation, so
+    // the content is correct without a visible shift.
+    @objc private func appForegrounded() {
+        UIView.performWithoutAnimation { updateBottomInset() }
+    }
+
     private func updateBottomInset() {
         guard isViewLoaded else { return }
+        // While the view is disappearing (swipe-back) or backgrounded, the keyboard collapsing must NOT
+        // move the content — the shift was visible during the pop. Update nothing; viewDidAppear
+        // re-validates the inset if we come back.
+        guard !isDisappearing else { return }
         // .always already adds the geometric home-indicator overlap; the keyboard replaces it when up.
         let keyboardExtra = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
         let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
@@ -706,7 +741,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // lands wrong (or our layout shifted meanwhile), the chat is left scrolled away. When the screenshot
     // notification fires, snap back to the last position the USER (or our own pinning) put the list at.
     @objc func screenshotTaken() {
-        guard didInitialScroll, !collectionView.isDragging, !collectionView.isTracking else { return }
+        guard didInitialScroll, !isDisappearing,
+              !collectionView.isDragging, !collectionView.isTracking else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let target = self.lastStableOffset
