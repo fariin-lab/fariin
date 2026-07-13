@@ -323,7 +323,7 @@ struct InChatMessage: Identifiable {
 extension MessageSearch {
     // Load (up to `limit`) of ONE chat's messages, decrypting only the text. Group messages are sealed
     // per-sender, so every author's key is warmed first (same as the global corpus loader).
-    // Signal indexes messages incrementally instead of re-scanning on every search. Kulan's version:
+    // The reference approach indexes messages incrementally instead of re-scanning on every search. Kulan's version:
     // cache the decrypted corpus per chat for a short TTL, so reopening search moments later doesn't
     // re-fetch + re-decrypt up to 1000 messages again.
     private static var corpusCache: [String: (at: Date, corpus: [InChatMessage])] = [:]
@@ -350,7 +350,7 @@ extension MessageSearch {
                 ? Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid, authorId: author)
                 : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid)
             guard !text.isEmpty else { return nil }
-            if data["viewOnce"] as? Bool == true { return nil }   // view-once is never searchable (Signal)
+            if data["viewOnce"] as? Bool == true { return nil }   // view-once is never searchable
             let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             // Same raw-marker guard as the global corpus: index/display the safe label.
             let safe = quoteSafeLabel(text)

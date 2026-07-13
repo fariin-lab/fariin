@@ -1,7 +1,7 @@
 //
 // Route A: UIKit UIPageViewController pager (replaces the SwiftUI TabView). The dismiss pan is added to
 // the pager's OWN scroll view (a real direct subview) with require(toFail:), so cube (sideways) and
-// dismiss (down) are mutually exclusive (Signal's StoryPageViewController mechanism). Each page hosts
+// dismiss (down) are mutually exclusive (the same page-controller mechanism). Each page hosts
 // the existing SwiftUI StoryDetailView, so all the story logic (progress, reply, tap-advance) is reused.
 // The cube fold itself is the existing rotation3DEffect inside StoryDetailView (reads its own position).
 //
@@ -19,7 +19,7 @@ struct StoryPager: UIViewControllerRepresentable {
     let onDragChanged: (CGFloat) -> Void   // overlay fade only; the card itself moves in UIKit (smooth)
     let onCommit: () -> Void               // pulled past threshold -> dismiss
     let onCancel: () -> Void               // released short -> overlays restore
-    let onSwipeUp: () -> Void              // up-swipe -> host opens the views sheet (Telegram)
+    let onSwipeUp: () -> Void              // up-swipe -> host opens the views sheet
     var onSwipeUpChanged: (CGFloat) -> Void = { _ in }   // LIVE upward drag amount (pts, +up) → real-time open
     var onSwipeUpEnded: (CGFloat, CGFloat) -> Void = { _, _ in }  // (translation +up, velocity +up) on release
     var dismissEnabled: Bool = true        // install the library's native DOWN dismiss pan (smooth UIKit)
@@ -66,7 +66,7 @@ struct StoryPager: UIViewControllerRepresentable {
         coordinator.cubeLink = nil
     }
 
-    // Telegram's cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the
+    // The cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the
     // cube-distance depth so the two faces meet at the shared edge, and a face push (+w/2 z) so the centred
     // page sits flat at full size (cancels the -w/2). t in [-1, 1]: 0 = flat centre, ±1 = edge-on.
     static func cubeTransform(_ t: CGFloat, width w: CGFloat) -> CATransform3D {
@@ -245,7 +245,7 @@ struct StoryPager: UIViewControllerRepresentable {
             // shake/black, so it's disabled — the pager just provides the horizontal slide.
         }
 
-        // Telegram's cube: rotate each page around the shared vertical edge with perspective depth, driven
+        // The cube: rotate each page around the shared vertical edge with perspective depth, driven
         // by its position relative to screen centre. Centre page = flat; ±1 page = 90° (edge-on, hidden).
         @objc func applyCube() {
             guard let scroll = internalScroll else { return }
@@ -268,7 +268,7 @@ struct StoryPager: UIViewControllerRepresentable {
                     sub.layer.transform = CATransform3DIdentity            // resting page is pixel-perfect
                 } else if abs(t) <= 1.0 {
                     // Undo the scroll's flat slide FIRST, then rotate — so the cube anchors to the screen
-                    // edge instead of stacking rotation on top of the slide. Telegram drives the cube from
+                    // edge instead of stacking rotation on top of the slide. The transform drives the cube from
                     // the pan alone with no scroll translation underneath (confirmed from StoryContainerScreen);
                     // this makes our UIPageViewController scroll behave the same way visually.
                     let undoSlide = CATransform3DMakeTranslation(-relX, 0, 0)
@@ -334,7 +334,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
-                // Telegram commit: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
+                // commit threshold: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
                 if ty > 200 || (ty > 5 && vy > 200) {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
@@ -438,7 +438,7 @@ final class StoryPageHostVC: UIHostingController<AnyView> {
     override init(rootView: AnyView) {
         super.init(rootView: rootView)
         view.backgroundColor = .clear
-        // The story photo must fill edge-to-edge UNDER the status bar (WhatsApp). A UIHostingController insets
+        // The story photo must fill edge-to-edge UNDER the status bar. A UIHostingController insets
         // its SwiftUI content by the safe area by default — THAT was the black strip at the top. Turn it off;
         // the progress bars + reply bar re-add their own safe-area padding inside StoryDetailView.
         if #available(iOS 16.4, *) { safeAreaRegions = [] }

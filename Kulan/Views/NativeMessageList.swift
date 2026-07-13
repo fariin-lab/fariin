@@ -1,14 +1,14 @@
 import SwiftUI
 import UIKit
 
-// UIKit-backed message list that reproduces Signal's conversation open + scroll behaviour (our own
+// UIKit-backed message list that reproduces the reference conversation open + scroll behaviour (our own
 // code). A UICollectionView hosts our existing SwiftUI rows (MessageBubble etc.) via
 // UIHostingConfiguration, so no bubble feature is lost — only the scroll container differs.
 //
 // ROOT-CAUSE FIX (the "shake / jump / flicker on open"): we do NOT self-size cells. Self-sizing means
 // the collection view lays out with an ESTIMATED height, scrolls to the bottom using the wrong total,
-// then measures each SwiftUI cell and CORRECTS — and that correction is the visible shake. Signal never
-// self-sizes: its ConversationViewLayout pre-measures every cell and lays out EXACT frames, so the very
+// then measures each SwiftUI cell and CORRECTS — and that correction is the visible shake. The reference
+// never self-sizes: its layout pre-measures every cell and lays out EXACT frames, so the very
 // first frame is already final and scroll-to-bottom lands perfectly.
 //
 // We copy that exactly:
@@ -18,14 +18,14 @@ import UIKit
 //      changes a row height — the pre-measure is correct on the first pass.
 //   2. Genuine late height changes (only link-preview cards, which fetch Open-Graph data async) are
 //      reconciled ONCE via a GeometryReader height report, with scroll position preserved — the same way
-//      Signal re-lays-out when media sizes land late. Gated until after the first reveal so it can never
+//      the reference re-lays-out when media sizes land late. Gated until after the first reveal so it can never
 //      affect the open.
 struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in order (Message.rowId)
     var rowSignatures: [String: String] = [:]  // per-row CONTENT signature → same-ids apply reconfigures ONLY changed rows
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
     var onReachedTop: () -> Void               // near-top -> page older
-    var loadingOlder: Bool = false             // show the top spinner while older messages page in (Signal)
+    var loadingOlder: Bool = false             // show the top spinner while older messages page in
     var composerBarHeight: CGFloat = 0         // the floating composer bar's height (the ONLY SwiftUI-fed inset)
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
@@ -77,7 +77,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     private var reg: UICollectionView.CellRegistration<UICollectionViewCell, String>!
 
     private var currentIds: [String] = []
-    private var heights: [String: CGFloat] = [:]   // rowId -> exact measured height (Signal's cellSize cache)
+    private var heights: [String: CGFloat] = [:]   // rowId -> exact measured height (cell-size cache)
     private var measuredWidth: CGFloat = 0
     private var hostWidth: CGFloat = 0             // final cell width, pinned into each hosted row's first layout
 
@@ -85,13 +85,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     // A child VC so it inherits our trait collection (Dynamic Type), matching the on-screen render.
     private let sizer = UIHostingController(rootView: AnyView(Color.clear))
 
-    // Signal's load-older indicator: a small spinner pinned at the top of the list while older messages
+    // Load-older indicator: a small spinner pinned at the top of the list while older messages
     // page in. Kept as a fixed overlay (not a scrolling cell / content inset) so it can't disturb the
     // exact-frame layout or the prepend anchor math.
     private let topSpinner = UIActivityIndicatorView(style: .medium)
 
     private var didInitialScroll = false      // the first open has landed at the bottom
-    private var didReveal = false             // hidden until the first frame is final (Signal's hasAppliedFirstLoad)
+    private var didReveal = false             // hidden until the first frame is final (first-load applied)
     private var scheduledEmptyReveal = false  // one-shot fallback for a genuinely-empty / slow-decrypt chat
     private var pendingBottomOnOpen = false   // brief open window: keep pinned to bottom
     private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
@@ -121,7 +121,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         // applies .ignoresSafeArea), and UIKit derives the top/home overlap from real geometry — a value
         // that can NOT desync (this is what made the top rock-solid in 299-301). The parts UIKit can't
         // know — the SwiftUI composer bar's height and the keyboard — are added as contentInset.bottom by
-        // updateBottomInset() (bar height fed from SwiftUI; keyboard observed directly, Signal's model).
+        // updateBottomInset() (bar height fed from SwiftUI; keyboard observed directly, our model).
         // The earlier fully-manual .never + SwiftUI GeometryReader insets desynced during keyboard
         // transitions (readers reporting late/0 → top inset 0 → bubbles under the header).
         collectionView.contentInsetAdjustmentBehavior = .always
@@ -217,7 +217,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         dataSource.apply(initial, animatingDifferences: false)
     }
 
-    // MARK: - Measurement (Signal's pre-measured cellSize)
+    // MARK: - Measurement (pre-measured cell size)
 
     // Exact height of a row for the given width, measured off-screen. Deterministic for every bubble type
     // (heights come from stored dimensions / fixed frames), so this equals the on-screen render.
@@ -263,7 +263,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         DispatchQueue.main.async { [weak self] in self?.reconcile() }
     }
 
-    // Re-lay-out after a late height change, keeping the viewport stable (Signal's late-media re-layout).
+    // Re-lay-out after a late height change, keeping the viewport stable (the late-media re-layout).
     private func reconcile() {
         guard collectionView.bounds.height > 0 else { return }
         let wasBottom = computeAtBottom()
@@ -275,7 +275,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         else if let anchor { restore(anchor) }
     }
 
-    // MARK: - Land-when-safe (Signal's canLandLoad)
+    // MARK: - Land-when-safe (the land-when-safe gate)
 
     // The list is "in motion" while the user scrolls or an insert animation runs — content updates must
     // never land during this (they invalidate the layout mid-scroll → overlap/jumps).
@@ -386,11 +386,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             return
         }
 
-        // Send / receive at the bottom ANIMATES (Signal's recipe: animated batch insert + animated scroll
+        // Send / receive at the bottom ANIMATES (the recipe: animated batch insert + animated scroll
         // to bottom). Only a single genuine new row animates; multi-row chunk loads and prepends do not.
         let animate = isAppend && wasAtBottom && appendedCount == 1
         if animate {
-            // Premium send (iMessage/Telegram): insert the new cell instantly, land at the bottom so it's in
+            // Premium send: insert the new cell instantly, land at the bottom so it's in
             // view just above the composer, then the BUBBLE flies up out of the composer — it starts pushed
             // down near the input field (slightly smaller) and springs to its resting position. Natural
             // spring physics, no fade/pop.
@@ -504,7 +504,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         }
     }
 
-    // MARK: - Scroll continuity (anchor / restore) — Signal's anti-jump idea, our implementation
+    // MARK: - Scroll continuity (anchor / restore) — the anti-jump idea, our implementation
 
     private func captureTopAnchor() -> (id: String, distanceFromTop: CGFloat)? {
         guard let ip = collectionView.indexPathsForVisibleItems.min(),
@@ -575,7 +575,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     // The two insets UIKit's geometric .always adjustment can't know: the SwiftUI composer bar's height
     // (fed once from a reader ON the bar itself) and the live keyboard overlap (observed directly —
-    // Signal's model). Everything else (nav-bar top, home indicator) comes from real geometry via the
+    // our model). Everything else (nav-bar top, home indicator) comes from real geometry via the
     // safe area, so it can never desync. Keeps the newest message pinned when the bottom inset grows.
     var onTopInset: ((CGFloat) -> Void)?      // ThreadView positions the date pill / pinned bar with this
     private var lastReportedTop: CGFloat = -1
@@ -641,7 +641,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 
     // MARK: - Jump to a message (reply / search)
 
-    // Center-if-not-entirely-on-screen (Signal's search/jump alignment): when the target row is already
+    // Center-if-not-entirely-on-screen (the search/jump alignment): when the target row is already
     // fully visible, don't move at all — repeated next/prev taps between two on-screen results then feel
     // stable instead of re-centering the list on every tap.
     func scrollTo(id: String) {
@@ -689,7 +689,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
         let nearTop = scrollView.contentOffset.y <= 72
         if nearTop && !inTopZone && userDriven { coordinator.parent.onReachedTop() }
         inTopZone = nearTop
-        // Topmost visible row → the floating date header (Signal's sticky date).
+        // Topmost visible row → the floating date header (the sticky date).
         let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
         if coordinator.parent.topVisibleId != top { coordinator.parent.topVisibleId = top }
     }
@@ -714,14 +714,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
     }
 }
 
-// Signal-style pre-measured layout: cell heights are known before layout (never self-sized), so every
+// Pre-measured layout: cell heights are known before layout (never self-sized), so every
 // frame is exact on the first pass. `heightForItem` reads the controller's measured-height cache; prepare
 // stacks the rows into exact frames and an exact content height. This is the whole anti-shake mechanism —
 // with no estimate → measure step, there is nothing to correct and nothing to hide.
 final class ExactHeightLayout: UICollectionViewLayout {
     var heightForItem: ((Int) -> CGFloat)?
     var animateInserts = false            // a fade-in for a freshly inserted (sent/received) bottom cell
-    // Signal's renderStateId: an O(1) identity check instead of re-stacking frames on every prepare().
+    // A render-state id: an O(1) identity check instead of re-stacking frames on every prepare().
     // The controller bumps this whenever ids/heights change; unchanged generation + width + count →
     // the cached frames are reused untouched (prepare() is called constantly during scrolling).
     var generation = 0

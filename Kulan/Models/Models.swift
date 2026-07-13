@@ -55,7 +55,7 @@ struct Message: Identifiable, Equatable {
     var replyTo: ReplyRef?
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
-    var viewOnce: Bool = false        // view-once photo (Signal-style): recipient can open it exactly once
+    var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
     var album: [AlbumItem] = []       // 2+ photos sent together = ONE album message (grid + one caption)
     var localAlbum: [Data] = []       // optimistic album previews shown before upload
     var localAlbumIsVideo: [Bool] = [] // per optimistic item: is it a video? (→ play badge before upload)
@@ -181,7 +181,7 @@ struct Message: Identifiable, Equatable {
         self.localAlbumIsVideo = localAlbumIsVideo
     }
 
-    // One item inside an album message — a photo OR a video (mixed media grouping, like Signal/WA).
+    // One item inside an album message — a photo OR a video (mixed media grouping, as standard messengers do).
     // For a video, `imageUrl`/`enc` are its POSTER thumbnail; `videoUrl`/`videoEnc`/`duration` are the clip.
     struct AlbumItem: Equatable {
         let imageUrl: String

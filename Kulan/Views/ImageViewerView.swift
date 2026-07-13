@@ -3,10 +3,10 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import Photos
 
-// Direction-locked pan (Signal's DirectionalPanGestureRecognizer, AGPL-3.0). Kulan-local copy so the
+// Direction-locked pan gesture recognizer. Kulan-local copy so the
 // app target can use it (the StoryUI package has its own). Only begins in the allowed direction.
 final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
-    enum Dir { case up, down, left, right, vertical }   // .vertical = Signal's dismiss config (up AND down engage)
+    enum Dir { case up, down, left, right, vertical }   // .vertical = the dismiss config (up AND down engage)
     let dir: Dir
     init(direction: Dir, target: AnyObject, action: Selector) {
         self.dir = direction
@@ -24,7 +24,7 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let dx = loc.x - prev.x
             let ok: Bool = {
                 if abs(dy) > abs(dx) {
-                    if dir == .vertical { return true }   // Signal: any predominantly-vertical move engages
+                    if dir == .vertical { return true }   // any predominantly-vertical move engages
                     if dir == .up, dy < 0 { return true }
                     if dir == .down, dy > 0 { return true }
                 } else {
@@ -46,9 +46,9 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
     }
 }
 
-// Full-screen photo viewer. Zoom/pan is Signal's exact ZoomableMediaView (UIScrollView), cloned 1:1.
+// Full-screen photo viewer. Zoom/pan uses ZoomableMediaView (UIScrollView).
 // Drag down at rest dismisses; when opened with a gallery, swipe horizontally to page between photos
-// (Photos/Signal). Chrome follows the current page.
+// (like the native photo viewer). Chrome follows the current page.
 struct ImageViewerView: View {
     let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
@@ -77,7 +77,7 @@ struct ImageViewerView: View {
     @State private var shareItems: [Any]?
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
-    @State private var dismissing = false                 // Signal dismiss in flight → live content hidden ONCE
+    @State private var dismissing = false                 // dismiss in flight → live content hidden ONCE
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
     private var isMine: Bool { message.authorId == (AuthService.shared.uid ?? "") }
@@ -124,7 +124,7 @@ struct ImageViewerView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
             .ignoresSafeArea()
-            // Signal's gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
+            // Gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
             // so swiping to the next photo is instant instead of showing a spinner.
             .onChange(of: current) { _, _ in
                 prefetchNeighbors()
@@ -141,7 +141,7 @@ struct ImageViewerView: View {
             .allowsHitTesting(chromeVisible)
             .animation(.easeInOut(duration: 0.25), value: chromeVisible)
         }
-        // SIGNAL'S EXACT INTERACTIVE DISMISS (SignalMediaDismiss.swift): one UIKit vertical pan on the
+        // The interactive dismiss (SignalMediaDismiss.swift): one UIKit vertical pan on the
         // presented root; on begin this live content hides ONCE and a lightweight image copy moves 1:1
         // with the finger (constant 0.8 scale cock, direct backdrop alpha, finish-on-any-progress,
         // 0.25s critically-damped spring). Replaces the old per-frame SwiftUI drag entirely.
@@ -156,7 +156,7 @@ struct ImageViewerView: View {
                 onHideContent: { dismissing = $0 },
                 onDismiss: { dismiss() })
         }
-        // Transparent presentation so the fading backdrop reveals the CONVERSATION behind (Signal).
+        // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.
         .presentationBackground(.clear)
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
@@ -280,7 +280,7 @@ struct ImageViewerView: View {
     }
 }
 
-// Host VC that drives Signal's ZoomableMediaView + a drag-down-to-dismiss pan (only at min zoom).
+// Host VC that drives ZoomableMediaView + a drag-down-to-dismiss pan (only at min zoom).
 struct ZoomImageView: UIViewControllerRepresentable {
     let image: UIImage
     var onSingleTap: () -> Void = {}
@@ -394,14 +394,14 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     // YBIBInteractionProfile). Only the interaction is copied: the image follows the finger and
     // shrinks toward center over height*1.2 (floor 0.35), the backdrop fades over height*0.7, and
     // release dismisses on a flick (|v.y| > 800) OR a drag past height*0.22 — else it snaps back
-    // in 0.15s. Down-locked here (Signal DirectionalPan) since Kulan only closes downward.
+    // in 0.15s. Down-locked here (DirectionalPan) since Kulan only closes downward.
     @objc private func handleDismiss(_ g: UIPanGestureRecognizer) {
         guard scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01 else { return }
         let t = g.translation(in: view)
         let h = max(1, view.bounds.height)
         switch g.state {
         case .changed:
-            // PURE 1:1 translation — the image is locked to the finger (Signal's MediaDismiss moves the
+            // PURE 1:1 translation — the image is locked to the finger (the media dismiss moves the
             // media by raw translation). The scale shrinks GENTLY with vertical progress but is folded
             // into the SAME transform (translate THEN scale about the top so the touched point stays put),
             // never a separate UIView.animate — the old animated 0.2s "lift" overrode the presentation
@@ -417,7 +417,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
             onDim?(1.0 - Double(progress) * 0.85)
         case .ended, .cancelled:
             // Commit on a flick or once dragged ~18% of the height; otherwise a critically-damped
-            // spring back (Signal: response ~0.25, damping 1 — no overshoot).
+            // spring back (response ~0.25, damping 1 — no overshoot).
             if g.velocity(in: view).y > 700 || t.y > h * 0.18 {
                 onDismiss?()
             } else {
@@ -431,9 +431,8 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     }
 }
 
-// Cloned from Signal-iOS SignalUI/Media/ZoomableMediaView.swift (AGPL-3.0). PureLayout + Signal CG
-// helpers swapped for plain UIKit. min zoom = fit, max = fit*8, double-tap to 2x at the tap point,
-// constraint-based centering, safe-area change resets zoom. Signal's exact behaviour.
+// Zoomable media view backed by a UIScrollView. min zoom = fit, max = fit*8, double-tap to 2x at the
+// tap point, constraint-based centering, safe-area change resets zoom.
 final class ZoomableMediaView: UIScrollView {
     private let mediaView: UIView
     private let singleTapBlock: () -> Void

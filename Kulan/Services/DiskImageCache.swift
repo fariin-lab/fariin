@@ -2,7 +2,7 @@ import UIKit
 import CryptoKit
 
 extension UIImage {
-    // Signal's quantized-decode idea: never hold a bitmap bigger than the screen needs. A 12MP photo
+    // The standard quantized-decode idea: never hold a bitmap bigger than the screen needs. A 12MP photo
     // decodes to ~48MB; bounded to 2048px it's ~12MB with no visible difference in a bubble or a
     // full-screen view (deep pinch-zoom re-reads the full bytes from disk if ever needed).
     func boundedForDisplay(maxPixels: CGFloat = 2048) -> UIImage {
@@ -19,11 +19,11 @@ extension UIImage {
 //
 // Once an image or story is fetched it is written to disk, so reopening a chat /
 // story or relaunching the app loads it INSTANTLY from local storage with no
-// network request — and it stays viewable offline (WhatsApp/Messenger behaviour).
+// network request — and it stays viewable offline (the standard messenger behaviour).
 //
 // Encrypted chat media is stored DECRYPTED but with iOS file protection
 // (.completeFileProtectionUnlessOpen), so it is encrypted at rest while the device
-// is locked — the standard approach used by Signal/WhatsApp.
+// is locked — the standard approach used by secure messengers.
 //
 // A size budget (LRU by last-access date) keeps the cache from bloating storage;
 // iOS may additionally purge the Caches dir under storage pressure, which is fine.
@@ -39,7 +39,7 @@ final class DiskImageCache {
         mem.countLimit = 250
         // Application Support, NOT Caches: iOS reclaims Caches under storage pressure, which was making
         // cached photos/avatars re-download after the OS purged them. Application Support is permanent
-        // (Signal/WhatsApp store media here); the 250 MB LRU below bounds growth ourselves. Excluded
+        // (secure messengers store media here); the 250 MB LRU below bounds growth ourselves. Excluded
         // from iCloud backup + file-protected at rest.
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         dir = base.appendingPathComponent("MediaCache", isDirectory: true)
@@ -63,7 +63,7 @@ final class DiskImageCache {
                 try? fm.removeItem(at: oldDir)
             }
         }
-        // Signal's LRUCache evacuates in the background: decoded UIImages are the app's biggest heap
+        // The standard LRU cache evacuates in the background: decoded UIImages are the app's biggest heap
         // objects, and a backgrounded app holding hundreds of them is first in line for jetsam (and
         // background thermal work). The disk tier stays, so reopening is still instant.
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,

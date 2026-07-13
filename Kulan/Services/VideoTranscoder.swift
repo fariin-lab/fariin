@@ -13,7 +13,7 @@ enum VideoTranscoder {
         let height: Double
     }
 
-    // maxSeconds: hard cap for stories (WhatsApp/Signal rule — longer videos are auto-trimmed
+    // maxSeconds: hard cap for stories (the standard rule — longer videos are auto-trimmed
     // to the first N seconds, never rejected). nil = full length (video messages).
     // stripAudio: the story editor's mute — re-composes with the video track ONLY, so the
     // sound is genuinely gone from the uploaded file (not just muted in the preview).

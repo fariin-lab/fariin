@@ -1,19 +1,18 @@
 import SwiftUI
 import UIKit
 
-// Signal's interactive media dismiss, ported 1:1 from MediaInteractiveDismiss +
-// MediaDismissAnimationController (studied from source; constants preserved exactly):
+// Interactive media dismiss — an interactive-dismiss + dismiss-animation controller pair:
 //   • ONE vertical DirectionalPanGestureRecognizer on the presented viewer's root view.
 //   • On begin, the live SwiftUI content is hidden ONCE and a LIGHTWEIGHT COPY of the media moves —
-//     an image copy when available (Signal's MediaTransitionImageView), else a live snapshot of the
+//     an image copy when available (a media transition image view), else a live snapshot of the
 //     media's screen region. The copy sits in a shadow container (black 20%, offset (0,32), radius 48).
 //   • Finger lock: copy.center = fromFrame.center + RAW translation, 1:1 both axes. The 0.8 scale and
-//     shadow are Signal's 0.2s "cock" scrubbed inside the 0.25s interactive timeline → they complete at
+//     shadow are a 0.2s "cock" scrubbed inside the 0.25s interactive timeline → they complete at
 //     progress 0.8 and are NOT recomputed as functions of position.
-//   • progress = clamp01(hypot(dx, dy) / 88)  (Signal's distanceToCompletion = 88pt).
+//   • progress = clamp01(hypot(dx, dy) / 88)  (distanceToCompletion = 88pt).
 //   • Backdrop alpha driven DIRECTLY from progress. Zero per-frame SwiftUI work.
-//   • Release: FINISH on any progress (Signal: percentComplete > 0 — no velocity gate) with the 0.25s
-//     critically-damped spring toward Signal's own no-destination fallback frame (fromFrame shifted
+//   • Release: FINISH on any progress (percentComplete > 0 — no velocity gate) with the 0.25s
+//     critically-damped spring toward a no-destination fallback frame (fromFrame shifted
 //     down by its height); gesture-cancel springs everything back.
 // Shared by the image viewer AND the video player — one code path.
 struct SignalDismissHost: UIViewRepresentable {
@@ -62,7 +61,7 @@ struct SignalDismissHost: UIViewRepresentable {
             vc.view.addGestureRecognizer(g)
         }
 
-        // Coexist with the pager + zoom scroll views (Signal coordinates via delegation the same way);
+        // Coexist with the pager + zoom scroll views (coordinated via delegation the same way);
         // the directional recognizer self-cancels on horizontal intent, and we gate on canBegin.
         func gestureRecognizer(_ g: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
@@ -80,7 +79,7 @@ struct SignalDismissHost: UIViewRepresentable {
                 bd.backgroundColor = .black
                 bd.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-                // The lightweight copy: the image itself when loaded (Signal's MediaTransitionImageView),
+                // The lightweight copy: the image itself when loaded (a media transition image view),
                 // else a live snapshot of the media's region (videos).
                 let content: UIView
                 if let img = m.image {
@@ -92,7 +91,7 @@ struct SignalDismissHost: UIViewRepresentable {
                     content = root.resizableSnapshotView(from: m.frame, afterScreenUpdates: false,
                                                          withCapInsets: .zero) ?? UIView()
                 }
-                // Shadow container (Signal: plain UIView so it can carry both corners and shadow).
+                // Shadow container (plain UIView so it can carry both corners and shadow).
                 let c = UIView(frame: m.frame)
                 c.layer.shadowColor = UIColor.black.withAlphaComponent(0.2).cgColor   // ows_blackAlpha20
                 c.layer.shadowOffset = CGSize(width: 0, height: 32)
@@ -112,9 +111,9 @@ struct SignalDismissHost: UIViewRepresentable {
                 guard active, let c = container else { return }
                 let o = g.translation(in: root)
                 let progress = min(1, max(0, hypot(o.x, o.y) / Self.distanceToCompletion))
-                // 1:1 finger lock (Signal: center = fromFrame.offsetBy(offset).center) — both axes, raw.
+                // 1:1 finger lock (center = fromFrame.offsetBy(offset).center) — both axes, raw.
                 c.center = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y)
-                // The constant 0.8 scale + shadow: Signal's 0.2s cock inside the 0.25s timeline → both
+                // The constant 0.8 scale + shadow: a 0.2s cock inside the 0.25s timeline → both
                 // complete at progress 0.8 (scrubbed, not recomputed from position).
                 let t = min(1, progress / 0.8)
                 c.transform = CGAffineTransform(scaleX: 1 - 0.2 * t, y: 1 - 0.2 * t)
@@ -125,7 +124,7 @@ struct SignalDismissHost: UIViewRepresentable {
                 guard active else { return }
                 let o = g.translation(in: root)
                 let v = g.velocity(in: root)
-                // Signal's completion decision (shouldCompleteTransition): finish ONLY if the media was
+                // The completion decision (shouldCompleteTransition): finish ONLY if the media was
                 // dragged past the dismiss threshold OR flung downward fast; otherwise CANCEL and spring
                 // it back to exactly where it came from. This is what lets you drag down, change your
                 // mind, drag back up, and fully recover — the net downward offset is what counts, so

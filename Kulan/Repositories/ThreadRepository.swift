@@ -28,7 +28,7 @@ final class ThreadRepository {
     let cid: String
 
     private let pageSize = 40
-    // Signal's MessageLoader caps the in-memory window (~500) and LRU-drops the oldest — an unbounded
+    // The standard approach caps the in-memory window (~500) and LRU-drops the oldest — an unbounded
     // window is a memory + main-thread cost that feeds watchdog kills on huge chats. We trim on live
     // commits above a high-water mark (paging older may exceed the cap briefly; the next live commit
     // trims back, and canLoadOlder flips true so the dropped history re-pages on scroll).
@@ -51,7 +51,7 @@ final class ThreadRepository {
 
     var otherTyping = false
     var typingNames: [String] = []   // group: who is currently typing
-    private var typingExpiry: Timer? // Signal: incoming typing self-clears after 15s — a crashed sender's flag can't stick
+    private var typingExpiry: Timer? // incoming typing self-clears after 15s — a crashed sender's flag can't stick
     var otherOnline = false
     var otherLastActive: Date?
     var otherLastReadMillis: Double = 0
@@ -62,12 +62,12 @@ final class ThreadRepository {
     private var otherUid = ""
     private var myBlockedAtMillis: Double = 0       // when I blocked
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
-    var pinnedMessageIds: [String] = []   // up to 5 pinned messages (Telegram-style)
+    var pinnedMessageIds: [String] = []   // up to 5 pinned messages (standard)
 
     init(cid: String) {
         self.cid = cid
         // Seed the last-decrypted messages SYNCHRONOUSLY so the conversation is fully rendered and
-        // frozen on the first frame — before the push transition — like Signal/WhatsApp, instead of
+        // frozen on the first frame — before the push transition — as standard messengers do, instead of
         // fading in a beat late while the E2EE decrypt runs off the main thread. The live listener
         // in start() then reconciles silently (same ids → no visible change). First-ever open this
         // session has no cache → normal async load + reveal.
@@ -331,7 +331,7 @@ final class ThreadRepository {
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
     }
 
-    // Incoming typing self-clears after 15s without a refresh (Signal's IncomingIndicators): if the
+    // Incoming typing self-clears after 15s without a refresh: if the
     // sender's app crashed/lost network before writing typing=false, the bubble would otherwise stick
     // until some other doc change. Re-armed on every snapshot where typing is (still) true.
     private func armTypingExpiry() {
@@ -343,7 +343,7 @@ final class ThreadRepository {
         }
     }
 
-    // Signal's FailedMessagesJob idea, adapted: a bubble must never spin "sending" forever. Any
+    // Failed-message sweep, adapted: a bubble must never spin "sending" forever. Any
     // optimistic message still .sending after 2 minutes flips to .failed ("Tap to retry"). If its
     // upload later succeeds anyway, the server echo removes the pending — the state self-corrects.
     private func sweepStuckSends() {
@@ -356,7 +356,7 @@ final class ThreadRepository {
         if changed { refreshItems() }
     }
 
-    // LRU-drop the OLDEST messages once the window blows past the high-water mark (Signal's 500-cap).
+    // LRU-drop the OLDEST messages once the window blows past the high-water mark (the standard 500-cap).
     // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
     private func trimWindowIfNeeded() {
         guard byId.count > windowHighWater else { return }

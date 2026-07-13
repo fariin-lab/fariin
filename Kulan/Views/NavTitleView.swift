@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 // Bridges a SwiftUI view into the navigation bar as the native `UINavigationItem.titleView` — the
-// exact approach Signal uses. A titleView is a subview of the UINavigationBar, so it renders ON TOP
+// standard approach. A titleView is a subview of the UINavigationBar, so it renders ON TOP
 // of the bar's native blur (never covered), left-aligns after the back button, slides with the
 // native swipe-back, and its tap is a native gesture — no custom overlay/blur.
 //
@@ -114,7 +114,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
     }
 }
 
-// Full-width title container (Signal's trick): a large finite intrinsic width so the nav bar hands
+// Full-width title container (the standard trick): a large finite intrinsic width so the nav bar hands
 // the title view the whole title area, letting its content left-align. A finite value (not
 // .greatestFiniteMagnitude) avoids Auto Layout blowing up.
 final class TitleContainerView: UIView {

@@ -93,7 +93,7 @@ extension View {
         }
     }
 
-    /// Signal-style composer: a native iOS 26 blur bar (`safeAreaBar`) that the message list scrolls
+    /// Native-style composer: a native iOS 26 blur bar (`safeAreaBar`) that the message list scrolls
     /// UNDER (ThreadView runs the list full-bleed with .ignoresSafeArea(.bottom) and feeds the composer
     /// height back as the list's manual bottom inset). Because messages are always behind the blur, it
     /// reads seamless with no band — exactly like the header. safeAreaInset fallback for older OSes.

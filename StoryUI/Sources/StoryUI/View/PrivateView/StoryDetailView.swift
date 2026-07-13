@@ -64,7 +64,7 @@ struct StoryDetailView: View {
     @State private var hostPause = HostPauseBox()  // @State keeps the SAME box across re-renders
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
     @State private var isFolding: Bool = false   // true while this page is mid-cube-fold (pause timer)
-    @State private var captionExpanded: Bool = false   // Telegram: tap the caption to expand past 3 lines
+    @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
 
     private var messageViewPosition: CGFloat {
         return -keyboardManager.currentHeight
@@ -116,7 +116,7 @@ struct StoryDetailView: View {
                                     ? -Constant.MessageView.height : .zero
                                 )
                         )
-                        // Telegram-style caption: overlaid on the media (never baked into the photo).
+                        // Overlay caption: overlaid on the media (never baked into the photo).
                         .overlay(captionView(story.caption, plain: story.config.storyType == .plain()), alignment: .bottom)
                         // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
                         // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
@@ -166,7 +166,7 @@ struct StoryDetailView: View {
         .onChange(of: viewModel.currentStoryUser) { newValue in
             NotificationCenter.default.post(name: .stopVideo, object: nil)
             resetProgress()
-            // WhatsApp/Instagram: when this bucket becomes current, open at the FIRST UNSEEN item (e.g. a new
+            // When this bucket becomes current, open at the FIRST UNSEEN item (e.g. a new
             // story D after A/B/C were seen) instead of always restarting at item 0.
             if newValue == model.id { timerProgress = CGFloat(firstUnseenIndex()) }
             playVideo()
@@ -342,7 +342,7 @@ private extension StoryDetailView {
     @ViewBuilder
     func messageView(with index: Int) -> some View {
         let story = getStory(with: index)
-        // Reply-bar (friend) stories sit on a SOLID BLACK footer bar (Instagram), not floating over
+        // Reply-bar (friend) stories sit on a SOLID BLACK footer bar, not floating over
         // the photo — the media ends at the top of this bar. Own/plain stories render an empty reply
         // area (they use the app's own black footer), so they get a clear background here.
         // Solid black footer ONLY when the keyboard is CLOSED. When you tap to reply, the bar rises
@@ -374,7 +374,7 @@ private extension StoryDetailView {
             .allowsHitTesting(false)
     }
 
-    // Telegram StoryContentCaptionComponent: 16pt regular white text with a soft shadow, left-aligned,
+    // The caption component: 16pt regular white text with a soft shadow, left-aligned,
     // 16pt side padding, sitting over a 128pt black gradient (0 → 80%). Collapsed to 3 lines; tap to expand.
     @ViewBuilder
     func captionView(_ text: String, plain: Bool = false) -> some View {
@@ -383,7 +383,7 @@ private extension StoryDetailView {
                 LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
                     .frame(height: 210)   // backs both the caption AND the floating reply bar
                     .allowsHitTesting(false)
-                // Our own design (clean, IG/Telegram-style): bottom-LEFT, no hard line, over the soft fade.
+                // Our own design (clean, story-style): bottom-LEFT, no hard line, over the soft fade.
                 Text(text)
                     .font(.system(size: 16))
                     .foregroundColor(.white)
@@ -411,13 +411,13 @@ private extension StoryDetailView {
             HStack(spacing: 0) {
                 Rectangle()
                     .fill(.black.opacity(0.01))
-                    .frame(width: geo.size.width / 3)   // left third = back (IG: smaller back zone)
+                    .frame(width: geo.size.width / 3)   // left third = back (smaller back zone)
                     .onTapGesture { tapPreviousStory() }
                 Rectangle()
                     .fill(.black.opacity(0.01))
                     .onTapGesture { tapNextStory() }     // right two-thirds = next
             }
-            // Hold to pause (IG/Snap). onLongPressGesture's onPressingChanged pauses on press-down
+            // Hold to pause. onLongPressGesture's onPressingChanged pauses on press-down
             // and resumes on release; crucially, a horizontal swipe exceeds maximumDistance and
             // CANCELS the press (→ resume) so the TabView can still page between users (R2 fix —
             // a minimumDistance:0 drag stole the touch from the pager).
@@ -614,7 +614,7 @@ private extension StoryDetailView {
         return model.stories[index]
     }
 
-    // First UNSEEN item index (WhatsApp/Instagram open-at-newest). All seen → 0 (replay from the start).
+    // First UNSEEN item index (open-at-newest). All seen → 0 (replay from the start).
     func firstUnseenIndex() -> Int {
         model.stories.firstIndex(where: { !$0.isSeen }) ?? 0
     }

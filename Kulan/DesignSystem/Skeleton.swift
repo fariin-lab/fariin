@@ -2,7 +2,7 @@ import SwiftUI
 
 // Shimmering skeleton placeholders. Shown ONLY while there's no data yet (first cold
 // load); once content is cached it renders instantly, so this never flashes on warm
-// loads — the Signal "always-stable, never-blank" feel. Design-neutral: each skeleton
+// loads — an always-stable, never-blank feel. Design-neutral: each skeleton
 // mirrors the real row's shape so nothing jumps when the real content arrives.
 
 // Shimmering gray that fills its frame — the building block for every skeleton, and

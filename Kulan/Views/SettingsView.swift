@@ -19,7 +19,7 @@ private struct SettingsRowLabel: View {
 }
 
 // Parent settings — profile cell on top, then grouped rows that push to dedicated
-// sub-screens (the Signal/Telegram structure), built our way with native List.
+// sub-screens (the standard settings structure), built our way with native List.
 struct SettingsView: View {
     var onSignOut: () -> Void
     var asTab = false   // true when shown as a bottom tab (no "Done" — nothing to dismiss)
@@ -383,7 +383,7 @@ struct PrivacySettingsView: View {
     @AppStorage("shareLastSeen") private var shareLastSeen = true
     var body: some View {
         List {
-            // (The Signal-style message list is now THE list — the experimental toggle and the old
+            // (The standard message list is now THE list — the experimental toggle and the old
             // SwiftUI fallback were removed 2026-07-11 per user decision.)
             Section {
                 Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)

@@ -2,7 +2,7 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-// Telegram-style profile screen: hero avatar, quick-action tiles, bio card, and a
+// Modern-style profile screen: hero avatar, quick-action tiles, bio card, and a
 // shared-media card. Real where the data exists (name/@handle, mute, block, clear,
 // shared media, bio); honest "coming soon" for features not built yet (calls live
 // on a separate branch; in-chat search isn't built). No fabricated data — the title
@@ -87,7 +87,7 @@ struct ContactInfoView: View {
         }
     }
 
-    // Bold grouped-list section title above a card (Signal/Apple style).
+    // Bold grouped-list section title above a card (standard grouped-list style).
     private func sectionHeader(_ title: String) -> some View {
         Text(title).font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
@@ -225,7 +225,7 @@ struct ContactInfoView: View {
             .alert("Video calls", isPresented: $showVideoSoon) { Button("OK", role: .cancel) {} } message: { Text("Video calling is coming soon.") }
     }
 
-    // Profile settings rows (Telegram order): Disappearing Messages, Sounds & Notifications,
+    // Profile settings rows (standard order): Disappearing Messages, Sounds & Notifications,
     // Verify Encryption. Wallpaper / Share / Clear / Report / Block now live in the "…" menu.
     private var settingsCard: some View {
         VStack(spacing: 0) {
@@ -256,7 +256,7 @@ struct ContactInfoView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "plus")
                         .font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
-                        .frame(width: 36, height: 36)   // Signal's contact-row avatar size (.thirtySix)
+                        .frame(width: 36, height: 36)   // the standard contact-row avatar size (.thirtySix)
                         .background(Circle().fill(Color(.systemGray5)))   // LIGHT grey (user request; grey4 was too dark)
                     Text("Add to a Group").foregroundStyle(.primary)
                     Spacer()
@@ -290,7 +290,7 @@ struct ContactInfoView: View {
         muted = true; mutedUntil = until
         Task { await ChatService.setMute(cid, until: until) }
     }
-    // "Muted until 1:12 PM" (today) / "Muted until 9 Jul, 1:12 PM" (later) / "Muted always" (Signal).
+    // "Muted until 1:12 PM" (today) / "Muted until 9 Jul, 1:12 PM" (later) / "Muted always" (standard).
     private var muteUntilLabel: String {
         let secs = mutedUntil / 1000
         if secs > Date().addingTimeInterval(3600 * 24 * 365 * 5).timeIntervalSince1970 { return "Muted always" }
@@ -376,7 +376,7 @@ struct ContactInfoView: View {
                 actionTile("video", "video.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) }
                 actionTile("voice", "phone.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) }
             }
-            // Native menu (pops up) instead of a custom action sheet. Signal: when ALREADY muted, the menu
+            // Native menu (pops up) instead of a custom action sheet. When ALREADY muted, the menu
             // is just "Muted until <time>" + Unmute — the durations only appear when the chat is unmuted.
             Menu {
                 if muted {

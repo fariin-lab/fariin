@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Custom bubble-colour editor (our own recreation of Signal's "Custom Color" page): Solid/Gradient
+// Custom bubble-colour editor (our own custom bubble-colour page): Solid/Gradient
 // segmented control, a live message preview, a Hue slider and a Saturation slider, Set to apply.
 struct CustomColorView: View {
     let cid: String

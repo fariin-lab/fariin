@@ -39,7 +39,7 @@ final class AudioRecorder {
     ]
 
     // Set when a call/Siri/alarm interrupted an in-flight recording: the partial note is PRESERVED
-    // (paused, file kept) instead of discarded — the user can still send or cancel it (Signal keeps an
+    // (paused, file kept) instead of discarded — the user can still send or cancel it (standard messengers keep an
     // interrupted draft; the old behavior deleted a long recording with no recovery).
     var wasInterrupted = false
 
@@ -105,7 +105,7 @@ final class AudioRecorder {
             // it in .playback). `setActive(true)` synchronously negotiates with the audio hardware and
             // blocks the UI ~100–300ms — that was the hold-to-record lag. When the session is already
             // .playAndRecord (pre-warmed in prepare(), kept warm across records), skip it and record()
-            // instantly, like Signal. (First record right after playing a voice note still reconfigures.)
+            // instantly. (First record right after playing a voice note still reconfigures.)
             if s.category != .playAndRecord {
                 try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
                 try? s.setActive(true)
@@ -135,7 +135,7 @@ final class AudioRecorder {
         // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
         if !resuming {
             isRecording = true; elapsed = 0; levels = []; allLevels = []; smoothed = 0
-            Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (Signal's sleep block)
+            Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (sleep block)
         }
         timer?.invalidate()
         // Pre-compute the envelope smoothing coefficients from the fixed tick dt: a one-pole

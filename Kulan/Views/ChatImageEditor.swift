@@ -3,7 +3,7 @@ import PencilKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
-// In-chat photo editor (WhatsApp-style): the picked image fills the screen with a caption bar
+// In-chat photo editor: the picked image fills the screen with a caption bar
 // and a tool row — crop (aspect), pen (draw), light (adjust filters), HD (full-quality). On send
 // the edits are flattened into one image and handed back via onSend (+ an optional caption).
 // Every button is real. Reuses DrawingCanvas (defined in StoryEditorView.swift).
@@ -23,7 +23,7 @@ struct ChatImageEditor: View {
 
     private func close() { if inline { onClose?() } else { dismiss() } }
 
-    @State private var viewOnce = false   // Signal-style: recipient can open the photo exactly once
+    @State private var viewOnce = false   // view-once: recipient can open the photo exactly once
     @State private var penHue = 0.0       // palette slider (0 = white end)
     @State private var isHighlighter = false
     @State private var penWidth: CGFloat = 6
@@ -35,7 +35,7 @@ struct ChatImageEditor: View {
     @State private var aspectIndex = 0
     @State private var hd = false
     @State private var canvasSize: CGSize = .zero
-    @State private var bottomChromeH: CGFloat = 118   // measured live from the actual bottom bars (Signal queries toolbar heights at runtime)
+    @State private var bottomChromeH: CGFloat = 118   // measured live from the actual bottom bars (toolbar heights queried at runtime)
     @FocusState private var captionFocused: Bool
 
     private static let ctx = CIContext()
@@ -123,8 +123,8 @@ struct ChatImageEditor: View {
                 if isDrawing { penBar.padding(.bottom, 8) }
                 else { bottomBar.padding(.bottom, 8) }
             }
-            // Live-measure the bottom chrome so the image area excludes exactly its height (Signal
-            // queries toolbar heights at runtime). Skipped while the keyboard is up so the canvas
+            // Live-measure the bottom chrome so the image area excludes exactly its height (toolbar
+            // heights queried at runtime). Skipped while the keyboard is up so the canvas
             // never resizes with the keyboard.
             .background(
                 GeometryReader { g in
@@ -137,7 +137,7 @@ struct ChatImageEditor: View {
         .animation(.easeInOut(duration: 0.2), value: captionFocused)
     }
 
-    // Crop presented INLINE with a cross-fade (Signal's in-place crop feel).
+    // Crop presented INLINE with a cross-fade (in-place crop feel).
     @ViewBuilder private var cropOverlay: some View {
         if showCrop {
             ChatCropView(image: source, inline: true,
@@ -164,7 +164,7 @@ struct ChatImageEditor: View {
                 Image(uiImage: edited)
                     .resizable().scaledToFit()
                     .frame(width: area.width, height: area.height)
-                // Signal-style brush: OUR palette slider drives the ink (no PKToolPicker chrome).
+                // Custom brush: OUR palette slider drives the ink (no PKToolPicker chrome).
                 DrawingCanvas(drawing: $drawing, isActive: true,
                               penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
                               showsToolPicker: false,
@@ -269,7 +269,7 @@ struct ChatImageEditor: View {
         .buttonStyle(.plain)
     }
 
-    // Bottom chrome (Signal AttachmentApprovalToolbar): a row of round glass tool buttons, then the
+    // Bottom chrome (attachment approval toolbar): a row of round glass tool buttons, then the
     // caption capsule + round send. Minimal — no dead icons, everything works.
     private var bottomBar: some View {
         VStack(spacing: 12) {
@@ -295,9 +295,9 @@ struct ChatImageEditor: View {
                 .buttonStyle(.plain)
             } else {
 
-            // Caption + send (Signal's text toolbar). The ① toggle (Signal's viewOnceButton) sits in the
+            // Caption + send (text toolbar). The ① toggle (view-once button) sits in the
             // capsule; view-once media can't carry a caption, so the field becomes "View Once Media".
-            // .bottom-aligned so the send button hugs the bottom of a tall multi-line caption (iMessage).
+            // .bottom-aligned so the send button hugs the bottom of a tall multi-line caption.
             HStack(alignment: .bottom, spacing: 10) {
                 // .bottom-aligned inner row too, so the ① toggle STAYS at the bottom (next to the last
                 // line + send) as the caption grows — it was floating UP with the first line.
@@ -310,7 +310,7 @@ struct ChatImageEditor: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 9)
                     } else {
-                        // Multi-line caption (Signal): 1 → ~7 lines, then scrolls.
+                        // Multi-line caption: 1 → ~7 lines, then scrolls.
                         TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
                                   axis: .vertical)
                             .lineLimit(1...7)

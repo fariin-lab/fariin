@@ -41,7 +41,7 @@ struct StoryEditorView: View {
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
     @State private var canvasSize: CGSize = .zero
     // Pinch-zoom + pan the photo directly on the canvas (baked WYSIWYG into the post). Driven by UIKit
-    // recognizers (PinchPanGestureView) using Telegram's accumulate-and-reset pattern — see below.
+    // recognizers (PinchPanGestureView) using the standard accumulate-and-reset pattern — see below.
     @State private var photoZoom: CGFloat = 1
     @State private var photoOffset: CGSize = .zero
     // Real device safe-area top from the window (the editor's GeometryReader under-reports it because the
@@ -82,7 +82,7 @@ struct StoryEditorView: View {
         updateIconContrast()   // re-sample brightness so the controls stay readable on this photo
     }
 
-    // The photo's aspect-fit size inside the frame (Signal "always-cover" clamp basis).
+    // The photo's aspect-fit size inside the frame ("always-cover" clamp basis).
     private func fittedSize(in frame: CGSize) -> CGSize {
         let s = edited.size
         guard s.width > 0, s.height > 0 else { return frame }
@@ -90,7 +90,7 @@ struct StoryEditorView: View {
         return CGSize(width: s.width * scale, height: s.height * scale)
     }
     // Clamp the pan so the photo edge can reach the frame edge but never past it (no gaps / floating).
-    // offset ∈ ±(scaledSize − frameSize)/2  — exactly Signal's ImageEditorTransform.normalize math.
+    // offset ∈ ±(scaledSize − frameSize)/2  — the standard image-transform normalize math.
     private func clampedOffset(_ off: CGSize, zoom: CGFloat, in frame: CGSize) -> CGSize {
         let fit = fittedSize(in: frame)
         let maxX = max(0, (fit.width * zoom - frame.width) / 2)
@@ -307,7 +307,7 @@ struct StoryEditorView: View {
             }
             .padding(.bottom, 10)   // user: caption bar sat too low — lift it for breathing room
 
-            // Tool row hides while typing a caption (IG/WA: only the caption field stays, above the keyboard).
+            // Tool row hides while typing a caption (only the caption field stays, above the keyboard).
             if !captionFocused {
                 HStack(spacing: 14) {
                     // Aa / crop / draw grouped in ONE dark capsule (target design), not separate circles.
@@ -405,7 +405,7 @@ struct StoryEditorView: View {
         let data = await flatten()
         posting = false
         guard !data.isEmpty else { postError = true; return }   // never hand off a zero-byte (broken) image
-        // Caption travels as TEXT (rendered as a Telegram overlay in the viewer), NOT baked into the photo —
+        // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data, caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -421,7 +421,7 @@ struct StoryEditorView: View {
         }
         let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
         let composed = ZStack(alignment: .bottom) {
-            Color.black   // Signal/WhatsApp lobby = photo on black (no blurred self-background)
+            Color.black   // standard lobby = photo on black (no blurred self-background)
             // Foreground photo with the SAME fit + zoom + pan as the editor → WYSIWYG.
             Image(uiImage: base).resizable().scaledToFit()
                 .scaleEffect(photoZoom).offset(photoOffset)
@@ -436,7 +436,7 @@ struct StoryEditorView: View {
                     .rotationEffect(o.rotation)
                     .position(o.center)
             }
-            // (Caption is NOT baked here — it's posted as text and drawn as a Telegram-style overlay.)
+            // (Caption is NOT baked here — it's posted as text and drawn as an overlay.)
         }
         .frame(width: size.width, height: size.height)
         let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
@@ -515,7 +515,7 @@ struct StoryEditorView: View {
     }
 }
 
-// MARK: - Text-on-photo overlay (Telegram/Instagram style)
+// MARK: - Text-on-photo overlay (modern style)
 
 struct TextOverlay: Identifiable, Equatable {
     let id = UUID()
@@ -627,7 +627,7 @@ struct TextOverlayView: View {
     }
 }
 
-// Full-screen text editor (Telegram image 220): focused field + font/color/align/bg controls.
+// Full-screen text editor: focused field + font/color/align/bg controls.
 struct TextEditorOverlay: View {
     @Binding var draft: TextOverlay
     var onCancel: () -> Void
@@ -848,7 +848,7 @@ struct ZoomableImageView: UIViewRepresentable {
 struct DrawingCanvas: UIViewRepresentable {
     @Binding var drawing: PKDrawing
     let isActive: Bool
-    var penColor: UIColor? = nil          // set (with showsToolPicker false) → Signal-style external palette
+    var penColor: UIColor? = nil          // set (with showsToolPicker false) → external palette
     var showsToolPicker: Bool = true
     var inkType: PKInkingTool.InkType = .pen   // pen vs marker/highlighter
     var penWidth: CGFloat = 6
@@ -887,7 +887,7 @@ struct DrawingCanvas: UIViewRepresentable {
     }
 }
 
-// Real interactive crop, Telegram style: pan/zoom the image inside a fixed frame, surroundings DIMMED
+// Real interactive crop: pan/zoom the image inside a fixed frame, surroundings DIMMED
 // (you see what you're cropping out), rotation dial (-45°…45°) with auto-zoom so corners never gap,
 // rotate-90, flip, aspect MENU, grid that fades in during a gesture, corner handles, Reset.
 // Done renders exactly what's inside the frame. Body split into sub-views for the type-checker.

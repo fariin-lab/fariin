@@ -1,6 +1,6 @@
 import UIKit
 
-// Ref-counted "keep the screen awake" manager (Signal's DeviceSleepManager): recording a long voice
+// Ref-counted "keep the screen awake" manager (a device sleep manager): recording a long voice
 // note or listening to one must not let the phone auto-lock, but the idle timer must never be left
 // disabled once nothing needs it. Each holder adds/removes a reason; the timer is disabled only
 // while ≥1 reason is held. Main-thread only (UIApplication requirement).

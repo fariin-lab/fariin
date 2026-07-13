@@ -19,7 +19,7 @@ struct CallEntry: Identifiable, Hashable {
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
     var missed: Bool { outcome == "missed" }
     /// Red/badge-worthy only when THEY called and I didn't pick up — my own
-    /// unanswered outgoing call is just "Outgoing" (Phone/Signal/WhatsApp rule).
+    /// unanswered outgoing call is just "Outgoing" (standard call-history rule).
     var missedIncoming: Bool { missed && !mine }
 }
 

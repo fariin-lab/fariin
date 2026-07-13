@@ -2,11 +2,11 @@ import SwiftUI
 import UIKit
 import CoreImage.CIFilterBuiltins
 
-// Kulan's own "verify encryption" screen (our look, not a copy of Signal/WhatsApp/BiP).
+// Kulan's own "verify encryption" screen (our look, not a copy of other messengers).
 // Shows the chat's safety number + a QR of it. Two people confirm their end-to-end
 // encryption is genuine either by comparing the number or by scanning each other's code;
 // a match marks the chat Verified. If a key ever changes (new device / re-install), the
-// number changes and the chat quietly drops back to unverified — exactly like Signal.
+// number changes and the chat quietly drops back to unverified — the standard behavior.
 struct VerifyEncryptionView: View {
     let cid: String
     let peerName: String

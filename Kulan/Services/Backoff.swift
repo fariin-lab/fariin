@@ -1,6 +1,6 @@
 import Foundation
 
-// Jittered exponential backoff (Signal's OWSOperation.retryIntervalForExponentialBackoff):
+// Jittered exponential backoff (the standard retry-interval formula):
 // min(cap, 2^attempt × base/2) × random(0.75…1.25). The jitter prevents synchronized
 // "thundering herd" retries across clients when a backend hiccups.
 enum Backoff {
@@ -14,7 +14,7 @@ enum Backoff {
     }
 }
 
-// Terminal "this media is gone" registry (Signal marks unrecoverable attachments as a final state
+// Terminal "this media is gone" registry (the standard approach: mark unrecoverable attachments as a final state
 // instead of retrying forever). In Kulan's mailman model a delivered 1:1 video is DELETED from the
 // server — a 404 on it is permanent, so remember that and never re-fetch. Persisted like HiddenMessages.
 enum DeadMedia {

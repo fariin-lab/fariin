@@ -72,7 +72,7 @@ struct LocationPickerSheet: View {
             // A finger drag on the map = the user deliberately choosing a spot (enables Send even with
             // no GPS / permission denied — they're pointing at a real place).
             .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in userMovedMap = true })
-            // Fixed center pin — pan the map to choose the spot (Telegram-style).
+            // Fixed center pin — pan the map to choose the spot.
             .overlay {
                 Image(systemName: "mappin")
                     .font(.system(size: 34, weight: .semibold))

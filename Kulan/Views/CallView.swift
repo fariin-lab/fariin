@@ -20,6 +20,18 @@ struct CallView: View {
     private var pipOffset: CGSize { get { call.pipOffset } nonmutating set { call.pipOffset = newValue } }
     private var pipBase: CGSize { get { call.pipBase } nonmutating set { call.pipBase = newValue } }
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var flippingCamera = false   // brief blur mask over the front/back capture restart
+
+    // Smooth camera flip: blur the local feed, restart the capturer (mirror already flipped), clear the
+    // blur after the new camera is running — so the ~200ms restart reads as a transition, not a freeze.
+    private func flipCamera() {
+        guard !flippingCamera else { return }
+        withAnimation(.easeOut(duration: 0.12)) { flippingCamera = true }
+        call.switchCamera()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+            withAnimation(.easeIn(duration: 0.22)) { flippingCamera = false }
+        }
+    }
 
     private var statusText: String {
         switch call.state {
@@ -120,7 +132,7 @@ struct CallView: View {
     // Their video shows only when their camera is actually on (the track object lingers even after
     // they turn the camera off, so gate on the signalled camera state, not just the track).
     private var hasRemote: Bool { call.remoteCameraOn && call.remoteVideoTrack != nil }
-    // Show MY camera full-screen while RINGING (WhatsApp preview) or when I tapped to swap. Once the
+    // Show MY camera full-screen while RINGING (self-preview) or when I tapped to swap. Once the
     // call is CONNECTED and their camera is off, THEY own the big view (avatar) and I go to the PiP —
     // my video never fills the screen just because they turned their camera off (they'd "vanish").
     private var connectedCall: Bool { call.state == .active || call.state == .reconnecting }
@@ -140,8 +152,11 @@ struct CallView: View {
 
     @ViewBuilder private func background(_ geo: GeometryProxy) -> some View {
         let full: RTCVideoTrack? = showLocalFull ? call.localVideoTrack
-                                                 : (call.isVideo ? call.remoteVideoTrack : nil)
-        let canShow = full != nil && !(showLocalFull && !call.cameraOn)
+                                                 : (hasRemote ? call.remoteVideoTrack : nil)
+        // Only show a fullscreen feed that is ACTUALLY LIVE. Otherwise hide the renderer (opacity 0) so
+        // the shared Metal view doesn't keep its last frame on screen — that stale frame was YOUR frozen
+        // ringing-preview showing as the background behind the avatar when the other camera is off.
+        let canShow = full != nil && (showLocalFull ? call.cameraOn : hasRemote)
         // STABILITY (LiveKit pattern): never swap view-tree branches. The gradient/avatar-blur is
         // a permanent base, and ONE Metal renderer stays mounted on top for the whole video call —
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
@@ -152,6 +167,7 @@ struct CallView: View {
             Color.black
             if call.isVideo {
                 VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
+                    .blur(radius: (showLocalFull && flippingCamera) ? 18 : 0)   // mask the flip restart
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
                     // natural dimensions) that can exceed the screen and oversize the ZStack, which
                     // GeometryReader then top-leading-aligns — pushing the centered avatar/controls
@@ -178,7 +194,7 @@ struct CallView: View {
             .buttonStyle(CallControlStyle())
 
             Spacer()
-            // Big bold name over a smaller status (WhatsApp/FaceTime scale — 18pt read as a toolbar label).
+            // Big bold name over a smaller status (18pt read as a toolbar label).
             VStack(spacing: 3) {
                 Text(call.otherName).font(.system(size: 26, weight: .bold)).foregroundStyle(.white).lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -228,10 +244,13 @@ struct CallView: View {
                 ZStack(alignment: .topTrailing) {
                     VideoRendererView(track: track, mirror: pipIsLocal && call.usingFrontCamera)
                         .frame(width: 104, height: 150)
+                        // Blur the local feed briefly during a camera flip so the ~200ms capture restart
+                        // (a frozen last frame) is masked into a smooth transition instead of a hard cut.
+                        .blur(radius: (pipIsLocal && flippingCamera) ? 14 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.25), lineWidth: 1))
                     if pipIsLocal {
-                        Button { call.switchCamera() } label: {
+                        Button { flipCamera() } label: {
                             Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                                 .padding(6).background(.black.opacity(0.45), in: Circle())
@@ -253,7 +272,7 @@ struct CallView: View {
                             pipOffset = CGSize(width: min(0, max(maxLeft, w)), height: min(maxDown, max(0, h)))
                         }
                         .onEnded { _ in
-                            // SNAP TO THE NEAREST CORNER (FaceTime/WhatsApp): the tile must never rest
+                            // SNAP TO THE NEAREST CORNER (standard PiP): the tile must never rest
                             // mid-screen. Choose left/right by which half the tile is in, top/bottom the
                             // same, then spring there.
                             let maxLeft = -(geo.size.width - 104 - 28)
@@ -281,14 +300,14 @@ struct CallView: View {
     private var controlBar: some View {
         HStack(spacing: 14) {
             callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted) { call.toggleMute() }
-            // MY camera — turn it on/off freely (Signal-style; the other side just sees it, no
+            // MY camera — turn it on/off freely (the other side just sees it, no
             // permission). Only once CONNECTED; dimmed while still Calling/Ringing.
             callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn) { call.toggleCamera() }
                 .disabled(call.state != .active)
                 .opacity(call.state == .active ? 1 : 0.4)
             // Flip front/back only while my camera is on.
             if call.cameraOn {
-                callCircle("arrow.triangle.2.circlepath", active: false) { call.switchCamera() }
+                callCircle("arrow.triangle.2.circlepath", active: false) { flipCamera() }
             }
             speakerCircle
             endCircle
@@ -302,7 +321,7 @@ struct CallView: View {
         .padding(.horizontal, 18)
     }
 
-    // Smart speaker (WhatsApp/FaceTime): no external device → plain earpiece/speaker toggle.
+    // Smart speaker: no external device → plain earpiece/speaker toggle.
     // AirPods/Bluetooth/wired connected → the glyph shows the LIVE route and the tap opens the
     // NATIVE system route picker (AVRoutePickerView) to choose iPhone / AirPods / Speaker.
     @ViewBuilder private var speakerCircle: some View {
@@ -336,7 +355,7 @@ struct CallView: View {
                 .foregroundStyle(active ? .black : .white)
                 .frame(width: 52, height: 52)
                 // Idle = real Liquid Glass circle (was a flat white-16% fill); active keeps the
-                // solid white pop (WhatsApp look), where glass would just mute the contrast.
+                // solid white pop, where glass would just mute the contrast.
                 .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
                 .liquidGlass(Circle(), interactive: true, enabled: !active)
         }
@@ -358,7 +377,7 @@ struct CallView: View {
     }
 }
 
-// The system audio-route picker (the exact FaceTime one), rendered invisible so our own
+// The system audio-route picker (the exact native one), rendered invisible so our own
 // glyph shows underneath; the view stays fully tappable and presents the native picker.
 struct AudioRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
@@ -435,7 +454,7 @@ struct CallContainer<Content: View>: View {
 
 // MARK: - MiniCallBar
 
-// WhatsApp/Signal-style 40pt green bar at the top when the call is minimized.
+// A 40pt green bar at the top when the call is minimized.
 struct MiniCallBar: View {
     private var call: CallService { CallService.shared }
     @State private var now = Date()

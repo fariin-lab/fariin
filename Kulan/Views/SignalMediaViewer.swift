@@ -2,27 +2,27 @@ import SwiftUI
 import UIKit
 import Photos
 
-// MARK: - Feature-flagged Signal-style media viewer (Settings → Developer → "Use Signal Media Viewer")
+// MARK: - Feature-flagged interactive media viewer (Settings → Developer → alternate media-viewer toggle)
 //
-// A faithful port of Signal-iOS's `MediaPageViewController` + `MediaInteractiveDismiss` INTERACTION,
+// A media viewer that reproduces the standard interactive-dismiss + paging INTERACTION,
 // adapted to our app. It is NOT a visual reskin — it copies the mechanism:
-//   • UIPageViewController paging between the gallery's images (interPageSpacing 20, like Signal).
-//   • Per-page zoom via the existing `ZoomableMediaView` (already Signal's ZoomableMediaView clone):
+//   • UIPageViewController paging between the gallery's images (interPageSpacing 20).
+//   • Per-page zoom via the existing `ZoomableMediaView`:
 //     aspect-fit → 8×, double-tap 2×, centered by constraint constants.
-//   • ONE vertical `DirectionalPanGestureRecognizer` drives the dismiss (Signal's MediaInteractiveDismiss):
+//   • ONE vertical `DirectionalPanGestureRecognizer` drives the dismiss:
 //       - progress = clamp01( hypot(offset.x, offset.y) / 88 )                 (88pt distanceToCompletion)
 //       - the media FINGER-LOCKS 1:1: center = originalCenter + raw translation (no rubber-band on move)
 //       - a single constant scale toward 0.8 + a backdrop fade, both interpolated by progress
-//       - on release: FINISH (dismiss) if any progress (Signal's `percentComplete > 0`, no velocity gate),
+//       - on release: FINISH (dismiss) on any progress (percent complete > 0, no velocity gate),
 //         else CANCEL with a 0.25s critically-damped spring (dampingRatio 1) back home.
 //   • The dismiss pan only engages at minimum zoom; a horizontal intent falls through to the pager
 //     (DirectionalPan self-cancels when the cross-axis velocity dominates).
 //
-// ADAPTATION: Signal's dismiss flies the media back to its thumbnail via a UIKit view-controller
-// transition (MediaZoom/DismissAnimationController + MediaPresentationContext). Our chat is SwiftUI and
-// presents through `.fullScreenCover`, which owns its own present/dismiss animation, so there is no
-// thumbnail-hero flyback here; the finished drag glides the media the rest of the way out and fades.
-// Everything else (the drag feel itself) matches Signal. OFF keeps the existing `ImageViewerView`.
+// ADAPTATION: the reference approach flies the media back to its thumbnail via a UIKit view-controller
+// transition. Our chat is SwiftUI and presents through `.fullScreenCover`, which owns its own
+// present/dismiss animation, so there is no thumbnail-hero flyback here; the finished drag glides the
+// media the rest of the way out and fades. Everything else (the drag feel itself) matches the reference.
+// OFF keeps the existing `ImageViewerView`.
 
 struct SignalMediaViewer: UIViewControllerRepresentable {
     let gallery: [Message]
@@ -43,7 +43,7 @@ struct SignalMediaViewer: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: SignalMediaPageController, context: Context) {}
 }
 
-// MARK: - Page controller (Signal's MediaPageViewController)
+// MARK: - Page controller
 
 final class SignalMediaPageController: UIPageViewController, UIPageViewControllerDataSource,
                                        UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
@@ -56,7 +56,7 @@ final class SignalMediaPageController: UIPageViewController, UIPageViewControlle
     private var dismissPan: DirectionalPanGestureRecognizer!
     private var dragStartCenter: CGPoint = .zero
 
-    // Chrome (kept OUT of the moving media so it stays put and only fades, like Signal).
+    // Chrome (kept OUT of the moving media so it stays put and only fades).
     private let topBar = UIView()
     private let bottomBar = UIView()
     private var chromeHidden = false
@@ -88,7 +88,7 @@ final class SignalMediaPageController: UIPageViewController, UIPageViewControlle
         delegate = self
         setViewControllers([makeItem(at: index)], direction: .forward, animated: false)
 
-        // Signal's MediaInteractiveDismiss: one vertical directional pan on the page view's own view.
+        // Interactive dismiss: one vertical directional pan on the page view's own view.
         dismissPan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
         dismissPan.delegate = self
         view.addGestureRecognizer(dismissPan)
@@ -102,7 +102,7 @@ final class SignalMediaPageController: UIPageViewController, UIPageViewControlle
         return vc
     }
 
-    // MARK: Paging (Signal pages between all images in the context)
+    // MARK: Paging (pages between all images in the context)
 
     func pageViewController(_ pv: UIPageViewController, viewControllerBefore vc: UIViewController) -> UIViewController? {
         guard let cur = vc as? SignalMediaItemController,
@@ -121,7 +121,7 @@ final class SignalMediaPageController: UIPageViewController, UIPageViewControlle
         }
     }
 
-    // MARK: Interactive dismiss — Signal's exact math
+    // MARK: Interactive dismiss — the exact math
 
     @objc private func handleDismiss(_ g: UIPanGestureRecognizer) {
         guard let item = currentItem, item.isAtMinZoom else { return }
@@ -134,14 +134,14 @@ final class SignalMediaPageController: UIPageViewController, UIPageViewControlle
             setChrome(hidden: true, animated: true)
 
         case .changed:
-            // Finger-lock 1:1: center follows the raw translation (Signal: center = fromMediaFrame.offsetBy(offset).center).
+            // Finger-lock 1:1: center follows the raw translation (center = fromMediaFrame.offsetBy(offset).center).
             item.mediaContainer.center = CGPoint(x: dragStartCenter.x + offset.x, y: dragStartCenter.y + offset.y)
             let scale = 1 - progress * 0.2                              // interpolate toward the constant 0.8
             item.mediaContainer.transform = CGAffineTransform(scaleX: scale, y: scale)
             backdrop.alpha = 1 - progress * 0.85
 
         case .ended, .cancelled:
-            // Signal finishes on ANY progress (percentComplete > 0), no velocity threshold; else cancels.
+            // Finishes on ANY progress (percent complete > 0), no velocity threshold; else cancels.
             if g.state == .ended, progress > 0 {
                 let target = CGPoint(x: dragStartCenter.x + offset.x,
                                      y: view.bounds.height + item.mediaContainer.bounds.height)
@@ -229,7 +229,7 @@ final class SignalMediaPageController: UIPageViewController, UIPageViewControlle
     }
 }
 
-// MARK: - Per-page controller (Signal's MediaItemViewController): zoom + the media the dismiss moves
+// MARK: - Per-page controller: zoom + the media the dismiss moves
 
 final class SignalMediaItemController: UIViewController, UIScrollViewDelegate {
     let message: Message

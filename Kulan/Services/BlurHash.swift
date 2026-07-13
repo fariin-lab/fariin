@@ -1,6 +1,6 @@
 import UIKit
 
-// BlurHash (the standard public algorithm Signal uses, our own compact implementation): a ~28-char
+// BlurHash (the standard public algorithm, our own compact implementation): a ~28-char
 // string that encodes a 4×3-component DCT of the image. It travels WITH the message (sealed like the
 // caption), so the recipient's bubble shows a recognizable blur of the actual photo instantly —
 // before a single byte of the real image has downloaded. Decode renders tiny (32px) and is scaled up

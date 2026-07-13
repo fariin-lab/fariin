@@ -1,7 +1,7 @@
 import SwiftUI
 
-// A per-chat bubble colour the user picks for THEMSELVES (local, never synced) — like Signal's Chat
-// Color. One colour = solid; two = a gradient. Stored per-cid in UserDefaults as a compact hex string.
+// A per-chat bubble colour the user picks for THEMSELVES (local, never synced) — the standard per-chat
+// colour. One colour = solid; two = a gradient. Stored per-cid in UserDefaults as a compact hex string.
 struct ChatColorSpec: Equatable, Identifiable {
     var colors: [UInt]        // 1 = solid, 2 = gradient (RGB hex)
     var id: String { stored }
@@ -45,7 +45,7 @@ struct ChatColorSpec: Equatable, Identifiable {
 }
 
 enum ChatColors {
-    // Preset swatches shown in the picker (a mix of gradients + solids, Signal-style).
+    // Preset swatches shown in the picker (a mix of gradients + solids, the standard style).
     static let presets: [ChatColorSpec] = [
         .init(colors: [0xE9459B, 0xF06CC9]),   // pink gradient
         .init(colors: [0x5B6CF0, 0x8A4BF0]),   // blue → purple

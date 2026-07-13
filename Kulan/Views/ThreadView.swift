@@ -57,7 +57,7 @@ struct ThreadView: View {
     @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
-    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (Signal's pause timer)
+    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (idle pause timer)
     @State private var viewerImage: Message?
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
@@ -83,7 +83,7 @@ struct ThreadView: View {
     @State private var showVideoSoon = false
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
     @State private var showWallpaper = false      // "Change Wallpaper" from the profile menu opens the picker here
-    // Hold-to-record voice gesture state (WhatsApp/Telegram-style).
+    // Hold-to-record voice gesture state (standard hold-to-record).
     @State private var recordLocked = false        // recording continues after finger lifts
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
@@ -99,9 +99,9 @@ struct ThreadView: View {
     @State private var topVisibleId: String?       // topmost visible row → floating date header
     @State private var navBarHeight: CGFloat = 100  // GEOMETRIC nav overlap (fed by the list controller); sane default pre-first-report
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
-    @State private var floatingDateShown = false   // visible while scrolling, fades when idle (Signal/Telegram)
+    @State private var floatingDateShown = false   // visible while scrolling, fades when idle
     @State private var floatingDateFade: DispatchWorkItem?
-    // Message multi-select (Signal-style): leading checkmark, whole-row tap, bottom action bar.
+    // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
     @State private var bulkForward: [Message]?
@@ -112,13 +112,13 @@ struct ThreadView: View {
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
     @State private var searchIndex = 0
-    @State private var lastSearchText: String?   // identical-query dedup (Signal): arrows/focus don't re-run the search
+    @State private var lastSearchText: String?   // identical-query dedup: arrows/focus don't re-run the search
     @State private var searchJumpSeq = 0         // coalesces rapid next/prev jumps — only the latest target lands
     @FocusState private var searchFocused: Bool
-    // Signal-style UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
+    // UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
     @State private var isAtBottom = true
-    @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left (WhatsApp)
+    @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
@@ -131,7 +131,7 @@ struct ThreadView: View {
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
-    @State private var editingMessage: Message?   // INLINE edit (Telegram-style) — no modal/sheet
+    @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
     @State private var reportTarget: Message?     // abuse-report confirm (App Store 1.2)
     @FocusState private var inputFocused: Bool
@@ -175,14 +175,14 @@ struct ThreadView: View {
     }
 
     @ViewBuilder private func scrollStack(_ proxy: ScrollViewProxy) -> some View {
-            // Signal-style: the message list runs edge-to-edge UNDER the nav bar so the native iOS 26
+            // The message list runs edge-to-edge UNDER the nav bar so the native iOS 26
             // blur frosts the messages scrolling beneath it (seamless, no band). `.ignoresSafeArea(.top)`
             // lets the list extend under the header; the list's own inset logic (unchanged) still clears
             // the bars. The pinned-message bar floats as a top overlay, positioned below the header.
             // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
             messagesLayer(proxy)
-            // Full-bleed UNDER both bars AND the keyboard (Signal): the list's FRAME never changes — the
+            // Full-bleed UNDER both bars AND the keyboard: the list's FRAME never changes — the
             // keyboard/composer are handled purely via the manual content insets fed below. (Ignoring only
             // the container let the frame shrink with the keyboard while insets also moved = the broken
             // keyboard layout.) Messages scroll beneath the blur bars, so no band.
@@ -196,7 +196,7 @@ struct ThreadView: View {
             // home-indicator/keyboard, NOT the bar — that mistake left the list's bottom inset ~46pt so the
             // last messages sat behind the composer).
             .floatingBottomBar {
-                // SIGNAL'S EXACT MODEL — NO background at all. Signal's iOS-26 input toolbar is a
+                // THE REFERENCE MODEL — NO background at all. The iOS-26 input toolbar is a
                 // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
                 // controls themselves are Liquid Glass, blurring what passes directly under THEM.
                 // Our pills already are native glassEffect in a GlassEffectContainer — every
@@ -225,7 +225,7 @@ struct ThreadView: View {
     @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
             listContainer(proxy)
             .defaultScrollAnchor(.bottom)
-            // Appear fully-formed (WhatsApp): the cache chunk lands DURING the push transition
+            // Appear fully-formed: the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
             .opacity(1)   // the UIKit list manages its own reveal (alpha until the first frame is final)
@@ -254,7 +254,7 @@ struct ThreadView: View {
                 guard new > old else { return }
                 let mine = repo.items.last?.authorId == me
                 if !settled {
-                    // INITIAL LOAD (WhatsApp-clean): pin to the OPEN ANCHOR (the saved in-session spot,
+                    // INITIAL LOAD (clean): pin to the OPEN ANCHOR (the saved in-session spot,
                     // else the newest) as cache→live chunks land. NON-animated + still under the reveal
                     // veil, so it's invisible — no wiggle. Applies even with unread messages: the unread
                     // divider is only a marker you scroll up to, it never steals the open position. (The
@@ -299,7 +299,7 @@ struct ThreadView: View {
             // (Jump-to-bottom button moved: it's anchored ABOVE the composer bar in scrollStack — the list
             // is full-bleed now, so a list-anchored overlay landed at the raw screen bottom UNDER the bar.)
             // Float the composer OVER the messages (iOS 26 native via safeAreaBar):
-            // the glass dims/blurs the messages scrolling under it like iMessage;
+            // the glass dims/blurs the messages scrolling under it like the native bars;
             // the scroll content auto-insets so the last message never hides.
             // Skeleton placeholder bubbles until the first page is ready (cold load only;
             // a cached chat flips didInitialLoad instantly, so this never flashes).
@@ -325,7 +325,7 @@ struct ThreadView: View {
     @ViewBuilder private var jumpToBottomButton: some View {
         if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
             Button {
-                // Two-stage (Signal): if there are unread messages I haven't reached yet, jump
+                // Two-stage: if there are unread messages I haven't reached yet, jump
                 // to the FIRST unread; otherwise glide to the newest message.
                 if let unread = firstUnreadId, repo.items.contains(where: { $0.id == unread }) {
                     nativeScrollTarget = unread
@@ -454,8 +454,8 @@ struct ThreadView: View {
                 viewedOnceTick += 1
             }
         }) { msg in
-            // CLOSE = only the PHOTO follows the finger and the black backdrop fades (Apple Photos /
-            // Instagram), NOT the whole page. The native .zoom transition's own drag moved the WHOLE card
+            // CLOSE = only the PHOTO follows the finger and the black backdrop fades (system photo
+            // viewer), NOT the whole page. The native .zoom transition's own drag moved the WHOLE card
             // (and .interactiveDismissDisabled did NOT suppress it), so it's removed — the in-viewer
             // image-only pan (suppressDismissPan: false) owns the drag-down close, like the album viewer.
             Group {
@@ -464,7 +464,7 @@ struct ThreadView: View {
                     ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
-                    // Pass every photo in the chat so you can swipe between them (Photos/Signal-style paging).
+                    // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
                                     cid: cid, suppressDismissPan: false)
                 }
@@ -492,14 +492,14 @@ struct ThreadView: View {
         }
         .fullScreenCover(item: $editImage) { wrap in
             ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
-                // Caption travels INSIDE the image message (one bubble, Signal-style).
+                // Caption travels INSIDE the image message (one bubble).
                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
             }
         }
         .fullScreenCover(item: $mediaToApprove) { wrap in
             // Mixed approval pager (images + videos, per-item edit, one caption, one send). EVERYTHING
-            // selected — photos AND videos, in order — is delivered as ONE album message group (Signal/
-            // WhatsApp), with one caption. A single lone image/video keeps its dedicated fast path.
+            // selected — photos AND videos, in order — is delivered as ONE album message group,
+            // with one caption. A single lone image/video keeps its dedicated fast path.
             MediaApprovalView(items: wrap.items) { ordered, caption, hd in
                 Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
             }
@@ -622,7 +622,7 @@ struct ThreadView: View {
         }
         // "Go to Chat" from the media gallery: pop the profile/gallery push back to this chat, then
         // scroll to + flash the message.
-        // Voice-note auto-advance (Signal): when a note finishes naturally, chain into the NEXT voice
+        // Voice-note auto-advance: when a note finishes naturally, chain into the NEXT voice
         // message below it (scroll it into view + play), voicemail-style. Stops at the last one.
         .onReceive(NotificationCenter.default.publisher(for: .voiceNoteFinished)) { note in
             guard let id = note.object as? String,
@@ -798,7 +798,7 @@ struct ThreadView: View {
             let msg = repo.messages.first { $0.id == pid }
             let author = msg.map { personName($0.authorId) } ?? "Pinned Message"
             HStack(spacing: 10) {
-                // Vertical count indicator (one bar per pin, current highlighted) — Telegram-style.
+                // Vertical count indicator (one bar per pin, current highlighted).
                 if ids.count > 1 {
                     VStack(spacing: 2) {
                         ForEach(0..<ids.count, id: \.self) { i in
@@ -906,7 +906,7 @@ struct ThreadView: View {
     // Extracted from `body` so the type-checker can handle the screen (the inline ForEach
     // with all its closures was too complex as one expression after the header refactor).
     @ViewBuilder
-    // WhatsApp/Telegram-style intro card at the top of a group: avatar, name, members,
+    // Intro card at the top of a group: avatar, name, members,
     // "you created this group", and an Add Members CTA (admins).
     private var groupIntroCard: some View {
         VStack(spacing: 8) {
@@ -933,7 +933,7 @@ struct ThreadView: View {
         .padding(.horizontal, 36).padding(.top, 14).padding(.bottom, 6)
     }
 
-    // (The old SwiftUI fallback list was deleted 2026-07-11 — the Signal-style UIKit list is THE list.
+    // (The old SwiftUI fallback list was deleted 2026-07-11 — the UIKit list is THE list.
     // Its ForEach(Array(repo.items.enumerated())) copied every Message per render and watchdogged
     // build 280 on the main thread.)
 
@@ -948,7 +948,7 @@ struct ThreadView: View {
     @ViewBuilder
     private func rowView(at index: Int, _ msg: Message, jumpTo: @escaping (String) -> Void) -> some View {
         if shouldShowDate(at: index) {
-            // Signal-style inline day separator: a centered, translucent rounded pill (matches the
+            // Inline day separator: a centered, translucent rounded pill (matches the
             // floating sticky date header).
             Text(dayLabel(msg.createdAt))
                 .font(.caption.weight(.semibold))
@@ -1049,12 +1049,12 @@ struct ThreadView: View {
         }
     }
 
-    // The scrolling list itself — the UIKit list (Signal-style scroll) when the flag is on, else the
+    // The scrolling list itself — the UIKit list when the flag is on, else the
     // SwiftUI ScrollView. Extracted so threadScroll's builder stays under the type-checker limit.
     @ViewBuilder
     private func listContainer(_ proxy: ScrollViewProxy) -> some View {
         listBody(proxy)
-            // Signal-style floating date header (top-centered, fades out when idle). Kept HERE (not in the
+            // Floating date header (top-centered, fades out when idle). Kept HERE (not in the
             // big scrollStack chain) so the type-checker isn't overloaded. The list is FULL-BLEED under the
             // nav bar now, so "top" = the raw screen top — pad by the measured nav-bar height so the pill
             // floats just BELOW the header (it was riding up into the status bar next to the clock).
@@ -1063,7 +1063,7 @@ struct ThreadView: View {
     }
 
     private func bumpFloatingDate() {
-        // Signal/Telegram: the floating date pill is shown WHILE scrolling (topmost message's day, updated
+        // The floating date pill is shown WHILE scrolling (topmost message's day, updated
         // as sections cross the top) and fades out ~1.2s after scrolling stops. topVisibleId changes are our
         // scroll-activity signal; each change re-arms the idle fade.
         if !floatingDateShown { withAnimation(.easeOut(duration: 0.15)) { floatingDateShown = true } }
@@ -1073,13 +1073,13 @@ struct ThreadView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
-    // The Signal-style UIKit list is THE list (user decision 2026-07-11: "completely use this").
+    // The UIKit list is THE list (user decision 2026-07-11: "completely use this").
     // The old SwiftUI fallback — and its main-thread Message-array copy that watchdogged build 280 —
     // is gone along with the Settings toggle.
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         nativeList
             .contentShape(Rectangle())
-            // Tap anywhere on the conversation → dismiss the keyboard (iMessage/Signal). This gesture
+            // Tap anywhere on the conversation → dismiss the keyboard. This gesture
             // lived on the deleted SwiftUI fallback list; simultaneous so bubble taps still work.
             .simultaneousGesture(
                 TapGesture().onEnded {
@@ -1120,7 +1120,7 @@ struct ThreadView: View {
         return out
     }
 
-    // UIKit (Signal-style) message list. Reuses the SAME rowView, so every bubble feature is identical.
+    // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
     // Jumps (reply/search) route through nativeScrollTarget; read receipts + jump-button count come from
     // the shared onChange(of: repo.items.count) handler on the container.
     private var nativeList: some View {
@@ -1133,7 +1133,7 @@ struct ThreadView: View {
                     Task {
                         await repo.ensureLoaded(jid)
                         await MainActor.run {
-                            // Reply-to-deleted (Signal tombstone): if the original is gone, say so
+                            // Reply-to-deleted (tombstone): if the original is gone, say so
                             // instead of silently doing nothing. The quote itself still shows its saved
                             // snapshot, so the reply is never blank.
                             if repo.items.contains(where: { $0.id == jid }) { flashAndScroll(jid) }
@@ -1152,7 +1152,7 @@ struct ThreadView: View {
         )
     }
 
-    // Signal-style floating date header: a pill centered at the top of the list that stays visible while
+    // Floating date header: a pill centered at the top of the list that stays visible while
     // scrolling and updates to the day of the topmost visible message, then fades out when idle.
     private var floatingDate: String? {
         guard let id = topVisibleId, let m = repo.items.first(where: { $0.rowId == id }) else { return nil }
@@ -1219,7 +1219,7 @@ struct ThreadView: View {
         bulkForward = msgs
     }
 
-    // MARK: - In-chat search (Signal-style: top bar + step through matches)
+    // MARK: - In-chat search (top bar + step through matches)
 
     private func activateSearch() {
         withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
@@ -1236,25 +1236,25 @@ struct ThreadView: View {
         searchFocused = false
         withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
         searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil
-        // Signal leaves the conversation where the last result was — no scroll restore on close.
+        // Leave the conversation where the last result was — no scroll restore on close.
     }
 
-    // Recompute matches as you type — Signal's search semantics, our implementation:
-    //  • minimum 2 characters (shorter queries clear results, same as Signal's floor)
+    // Recompute matches as you type — our search semantics:
+    //  • minimum 2 characters (shorter queries clear results)
     //  • identical-query dedup (arrow keys / focus changes don't re-run the search)
     //  • token-prefix AND matching, case/diacritic/width-insensitive ("hel wor" matches "Hello World")
     //  • corpus (history) + the LIVE window merged, so a just-sent or just-edited message is instantly
-    //    searchable (Signal's index updates on write; our corpus snapshot alone would be stale)
-    //  • capped at the newest 500 matches (Signal's kDefaultMaxResults)
+    //    searchable (the index updates on write; our corpus snapshot alone would be stale)
+    //  • capped at the newest 500 matches (default max results)
     //  • the focused position is PRESERVED across query refinement (clamped), measured from the newest
-    //    end — Signal clamps the previous index rather than yanking you back to the first result
+    //    end — clamp the previous index rather than yanking you back to the first result
     private func updateSearchMatches() {
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else {
             searchMatches = []; lastSearchText = nil
             return
         }
-        guard q != lastSearchText else { return }   // identical query → no re-run (Signal's dedup)
+        guard q != lastSearchText else { return }   // identical query → no re-run (dedup)
         lastSearchText = q
         let terms = ChatSearch.queryTerms(q)
         guard !terms.isEmpty else { searchMatches = []; return }
@@ -1272,7 +1272,7 @@ struct ThreadView: View {
         let matched = pool
             .filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
             .sorted { $0.date < $1.date }
-        searchMatches = Array(matched.suffix(500))   // keep the newest 500 (Signal's cap)
+        searchMatches = Array(matched.suffix(500))   // keep the newest 500 (result cap)
 
         guard !searchMatches.isEmpty else { return }
         searchIndex = max(0, (searchMatches.count - 1) - min(distanceFromNewest, searchMatches.count - 1))
@@ -1288,7 +1288,7 @@ struct ThreadView: View {
     private func goToCurrentMatch() {
         guard searchMatches.indices.contains(searchIndex) else { return }
         let id = searchMatches[searchIndex].id
-        // Coalesce rapid next/prev taps (Signal's lastOnly load queue): each tap supersedes the one
+        // Coalesce rapid next/prev taps (lastOnly load queue): each tap supersedes the one
         // before, so N fast taps land ONE scroll on the final target instead of racing N ensureLoaded
         // pagers + N scroll animations.
         searchJumpSeq += 1
@@ -1300,7 +1300,7 @@ struct ThreadView: View {
                 // The native list keys cells by rowId (clientId ?? id). Own sent messages keep a clientId, so
                 // scrolling by the raw message id found no cell → no scroll. Translate id → rowId. (No
                 // full-bubble flash for search; the term stays highlighted in-text. A deleted match simply
-                // no-ops — the id resolves to no row, same graceful degradation as Signal.)
+                // no-ops — the id resolves to no row, the same graceful degradation.)
                 nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id
             }
         }
@@ -1380,7 +1380,7 @@ struct ThreadView: View {
             }
     }
 
-    // Custom attach panel (Telegram/WhatsApp-style) — slides up from the + button.
+    // Custom attach panel — slides up from the + button.
     // Top: one-tap recents strip (camera-roll photos + videos). Below: the pickers.
     private var attachPanel: some View {
         VStack(spacing: 0) {
@@ -1496,7 +1496,7 @@ struct ThreadView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    // Signal's exact attachment-button spec (AttachmentFormatPickerView): a 76×50pt CAPSULE button
+    // Attachment-button spec: a 76×50pt CAPSULE button
     // with the icon inside, and a footnote-medium label 8pt BELOW the capsule.
     private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
@@ -1507,7 +1507,7 @@ struct ThreadView: View {
             VStack(spacing: 8) {
                 Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(.primary)
                     .frame(width: 76, height: 50)
-                    .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass capsule (Signal shape)
+                    .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass capsule
                 Text(label).font(.footnote.weight(.medium)).foregroundStyle(.primary)
             }
         }
@@ -1581,14 +1581,14 @@ struct ThreadView: View {
 
     // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
     private var headerLabel: some View {
-        // Measurements matched to Signal-iOS's ConversationHeaderView (iOS 26 variant): 40pt avatar,
+        // Measurements matched to a reference conversation header (iOS 26 variant): 40pt avatar,
         // 12pt avatar→name spacing, 17pt-semibold title (.headline), a 16×16 title-row icon at 5pt.
         HStack(spacing: 12) {
             AvatarView(name: liveTitle, photoUrl: photoUrl, size: 40)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     Text(liveTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    // Constant reminder that messages self-delete here (WhatsApp shows one too) —
+                    // Constant reminder that messages self-delete here —
                     // this timer being invisible is how a whole chat history vanished unnoticed.
                     if repo.disappearSeconds > 0 {
                         Image(systemName: "timer")
@@ -1846,7 +1846,7 @@ struct ThreadView: View {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
                                   authorId: me, clientId: clientId, sendState: .sending)
             pending.viewOnce = viewOnce
-            pending.text = caption   // caption rides inside the image bubble (Signal)
+            pending.text = caption   // caption rides inside the image bubble
             repo.addPending(pending)
         }
         do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption) }
@@ -1914,7 +1914,7 @@ struct ThreadView: View {
         }
     }
 
-    // Call record as a WhatsApp-style message bubble. Outgoing = right-aligned accent
+    // Call record as a message bubble. Outgoing = right-aligned accent
     // bubble; incoming & missed = left-aligned received bubble. Inside: a circular call
     // A newer-version feature this build can't render: a centered, system-notification-style card (icon +
     // explanation) — deliberately distinct from any chat bubble so it can't be read as normal content.
@@ -1966,7 +1966,7 @@ struct ThreadView: View {
         let mine = m.callerUid == me
         let missed = m.callOutcome == "missed"
         let video = m.callVideo
-        // WhatsApp semantics (user spec): "Missed call" (red) is ONLY for calls I RECEIVED and didn't
+        // Call semantics (user spec): "Missed call" (red) is ONLY for calls I RECEIVED and didn't
         // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" —
         // neutral colors, outgoing arrow — never red, never "tap to call back" (I was the one calling).
         let incomingMissed = missed && !mine
@@ -2108,7 +2108,7 @@ struct ThreadView: View {
     }
 
     // Turn on the message-row slide-in transition a beat AFTER the chat has revealed, so the
-    // opening batch appears with zero movement (WhatsApp) and only genuinely-new messages slide in.
+    // opening batch appears with zero movement and only genuinely-new messages slide in.
     private func enableSlideInAfterReveal() {
         guard !settled else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { settled = true }
@@ -2179,7 +2179,7 @@ struct ThreadView: View {
         }
     }
 
-    // Multi-select (Signal's AttachmentApproval flow): one photo → the full editor; 2+ photos → the
+    // Multi-select (attachment-approval flow): one photo → the full editor; 2+ photos → the
     // approval screen (swipeable zoomable pages, ordered thumb rail, ONE caption, send in order).
     // Videos go straight into the send pipeline (separate transcode path), same as before.
     private func sendPickedMulti(_ items: [PhotosPickerItem]) async {
@@ -2192,7 +2192,7 @@ struct ThreadView: View {
             await MainActor.run { editImage = EditImageWrap(image: ui) }
             return
         }
-        // Load every picked item IN ORDER (selection order = send order, like Signal) into the unified
+        // Load every picked item IN ORDER (selection order = send order) into the unified
         // media list: a lone photo/video keeps its dedicated editor; anything else (multiple photos,
         // multiple videos, or a MIX) opens the mixed approval pager — swipe all, edit each, one caption.
         var items: [ApprovalMedia] = []
@@ -2264,7 +2264,7 @@ struct ThreadView: View {
 
     // When I've blocked this contact, the composer is replaced by an unblock bar —
     // you genuinely can't send while blocked (real enforcement, not cosmetic).
-    // Top search bar (Signal-style): rounded field with inline clear + a circular X to close search.
+    // Top search bar: rounded field with inline clear + a circular X to close search.
     private var searchBar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
@@ -2293,7 +2293,7 @@ struct ThreadView: View {
     }
 
     // Bottom bar shown during search (replaces the composer, sits above the keyboard): ↑/↓ through
-    // matches + a count, like Signal.
+    // matches + a count.
     private var searchNavBar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 24) {
@@ -2391,7 +2391,7 @@ struct ThreadView: View {
     private func replyPreviewRow(_ r: Message) -> some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3, height: 34)
-            // Real media thumbnail when replying to a photo / GIF / video (Telegram/WhatsApp-style).
+            // Real media thumbnail when replying to a photo / GIF / video.
             if r.isImage, let url = r.imageUrl {
                 SecureImageView(imageUrl: url, enc: r.enc, cid: cid)
                     .frame(width: 36, height: 36)
@@ -2422,7 +2422,7 @@ struct ThreadView: View {
         .onTapGesture { }
     }
 
-    // Inline edit preview (Telegram-style): pencil + "Edit Message" + snippet + cancel (X).
+    // Inline edit preview: pencil + "Edit Message" + snippet + cancel (X).
     private func editPreviewRow(_ e: Message) -> some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3, height: 34)
@@ -2451,7 +2451,7 @@ struct ThreadView: View {
     private func saveEdit() {
         guard let e = editingMessage else { return }
         let newText = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Empty text = cancel the edit (Signal: an edit can't erase a message) — the old silent return
+        // Empty text = cancel the edit (an edit can't erase a message) — the old silent return
         // left the composer STUCK in edit mode with no way out.
         // Unchanged text = nothing to save; just leave edit mode.
         if !newText.isEmpty && newText != e.text {
@@ -2499,7 +2499,7 @@ struct ThreadView: View {
         let d = Int(r.duration ?? 0); return String(format: "%d:%02d", d / 60, d % 60)
     }
 
-    // Subtle neutral fill (no glass, no shadow) — the iMessage field tint.
+    // Subtle neutral fill (no glass, no shadow) — the native field tint.
     private var fieldFill: Color { dark ? Color(hex: 0x2A2A2E) : Color(hex: 0xEEEEF2) }
 
     // True while the finger is held down recording (not yet locked).
@@ -2576,7 +2576,7 @@ struct ThreadView: View {
         // (No blur bridge now: the recording mic is a red circle, not a glass element.)
         composerGlassContainer(grouped: true) {
         HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left; the field (with the mic INSIDE); Send
-            // Hidden ENTIRELY while recording (Signal-style: the attach button is removed from the
+            // Hidden ENTIRELY while recording (the attach button is removed from the
             // toolbar during a voice memo). Collapsing via opacity/frame did NOT work — iOS 26's
             // native glassEffect ignores .opacity, so the "+" kept showing. Fully removing it is the
             // reliable fix; the mic is a separate stable slot (its own .id), so this sibling change
@@ -2669,7 +2669,7 @@ struct ThreadView: View {
                     typingSent = now
                     Task { await ChatService.setTyping(cid, now) }
                 }
-                // Signal's pause timer: typing auto-stops after 3s of no keystrokes (even with text still
+                // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
                 // in the field), so a parked draft doesn't show "typing…" forever on the other side.
                 typingIdleStop?.cancel()
                 if now {
@@ -2686,7 +2686,7 @@ struct ThreadView: View {
 
     // Camera lives INSIDE the field (right), only when not typing/recording.
     // Solid, high-contrast icon (.primary = white in dark / black in light, 100% opacity) in a
-    // Signal-style 40x40 tap target.
+    // a 40x40 tap target.
     private var inFieldCamera: some View {
         Button {
             // Same as "+": fully resign the keyboard BEFORE presenting, or iOS remembers the field
@@ -2738,7 +2738,7 @@ struct ThreadView: View {
         HStack(spacing: 10) {
             Image(systemName: "mic.fill")
                 .font(.system(size: 18)).foregroundStyle(.red)
-                .symbolEffect(.pulse, options: .repeating)   // gentle live pulse, like Telegram
+                .symbolEffect(.pulse, options: .repeating)   // gentle live pulse
             RecordTimerText(recorder: recorder)
             Spacer(minLength: 8)
             HStack(spacing: 3) {
@@ -2753,7 +2753,7 @@ struct ThreadView: View {
         .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording — no vertical distortion
     }
 
-    // Hold-to-record (Signal/WhatsApp-style, our own code on the AudioRecorder engine):
+    // Hold-to-record (standard hold-to-record, our own code on the AudioRecorder engine):
     //   • press & hold the mic  → recording starts instantly (session is pre-warmed)
     //   • slide LEFT past the threshold, release → cancel (discard)
     //   • slide UP into the lock target → hands-free lock (finger can lift; bar takes over)
@@ -2772,7 +2772,7 @@ struct ThreadView: View {
             .renderingMode(.template).resizable().scaledToFit()
             .foregroundStyle(.primary)                     // solid white (dark) / black (light)
             .frame(width: 22, height: 24)
-            .frame(width: 40, height: 40)                  // Signal-style 40x40 tap target
+            .frame(width: 40, height: 40)                  // 40x40 tap target
             .opacity(recordingHeld ? 0 : 1)
             // Instant UIKit hold gesture (minimumPressDuration 0) — fires on touch-down, no SwiftUI
             // arbitration lag. Overlay stays mounted during recording so it keeps tracking the drag.
@@ -2783,7 +2783,7 @@ struct ThreadView: View {
                     onEnded: { t, cancelled in endHoldRecording(t, cancelled: cancelled) }
                 )
             }
-            .padding(.trailing, 4)                         // Signal: last icon 4pt from the bar edge
+            .padding(.trailing, 4)                         // last icon 4pt from the bar edge
     }
 
     private func beginHoldRecording() {
@@ -2964,7 +2964,7 @@ struct HeroSource: ViewModifier {
     }
 }
 
-// Device-local record of consumed view-once photos (Signal enforces on-device too: once opened, the
+// Device-local record of consumed view-once photos (enforced on-device too: once opened, the
 // bubble flips to "Viewed" and can never be reopened here).
 enum ViewedOnce {
     private static let key = "viewedOnceMessageIds"
@@ -2980,7 +2980,7 @@ enum ViewedOnce {
     }
 }
 
-// Selection wrapper (Signal-style): in select mode a circular checkmark slides in on the LEADING edge
+// Selection wrapper: in select mode a circular checkmark slides in on the LEADING edge
 // (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
 // selected row gets a soft highlight. Off select mode, the row is untouched.
 struct SelectableRow: ViewModifier {
@@ -3012,7 +3012,7 @@ struct SelectableRow: ViewModifier {
 // (both fire in the same drag event, where @State wouldn't update in time). See `scrubFlag`.
 final class ScrubFlag { var active = false }
 
-// Signal-style upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
+// Upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
 // frosted-material pinwheel) — one consistent look for photo / album / video uploads.
 struct UploadingRing: View {
     @State private var spin = false
@@ -3085,7 +3085,7 @@ struct MessageBubble: View, Equatable {
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
     var replyStoryNS: Namespace.ID? = nil   // native zoom anchor for the story-quote thumbnail
     var isHighlighted: Bool = false
-    var searchTerm: String = ""           // in-chat search: highlight this term inside the text (Signal-style)
+    var searchTerm: String = ""           // in-chat search: highlight this term inside the text
     var isFirstInCluster: Bool = true
     var isLastInCluster: Bool = true
     var otherLastRead: Double = 0
@@ -3136,7 +3136,7 @@ struct MessageBubble: View, Equatable {
         let full = message.text
         var str = AttributedString(full)
         str.font = .system(size: 17)
-        // In-chat search (Signal-style): highlight the matched TERM inside the text — never the whole
+        // In-chat search: highlight the matched TERM inside the text — never the whole
         // bubble. Applied before the plain-text fast path so text-only messages highlight too.
         // Gated at 2+ chars (the search floor) and matched case/diacritic/width-insensitively, so the
         // highlight finds exactly what the search matched (café highlights for "cafe").
@@ -3200,7 +3200,7 @@ struct MessageBubble: View, Equatable {
     // The message text + trailing time as one line (short) or wrapped (long) — shared by the plain and
     // the reply-quote layouts so the two stay identical.
     private var bodyLine: some View {
-        // Signal's exact layout: the text flows FULL WIDTH, and only the LAST line reserves room for the
+        // The exact layout: the text flows FULL WIDTH, and only the LAST line reserves room for the
         // timestamp. An HStack { text; time } instead reserved a full-height column beside the text, so
         // EVERY line wrapped early → the big empty column on the right. Here we append an INVISIBLE inline
         // run that mirrors the metaRow (same font/glyphs → exact same width) to the end of the text, so
@@ -3240,7 +3240,7 @@ struct MessageBubble: View, Equatable {
         return .handled
     }
 
-    // Aggregate uid->emoji into (emoji, count, mine), most-popular first (Signal's logic,
+    // Aggregate uid->emoji into (emoji, count, mine), most-popular first (standard logic,
     // our own pill design). Ties broken by emoji for a stable order.
     private var reactionCounts: [(emoji: String, count: Int, mine: Bool)] {
         Dictionary(grouping: message.reactions.values, by: { $0 })
@@ -3441,7 +3441,7 @@ struct MessageBubble: View, Equatable {
                         }
                         }   // end normal (non-sending) menu
                     }
-                    // Double-tap to quick-react with a heart (iMessage/WhatsApp-style).
+                    // Double-tap to quick-react with a heart.
                     .highPriorityGesture(TapGesture(count: 2).onEnded {
                         guard message.sendState == nil else { return }   // not until it's on the server
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -3458,7 +3458,7 @@ struct MessageBubble: View, Equatable {
                     .padding(.top, 1)
                 }
             }
-            // Jump-to flash, Signal-style: a brief dim pulse over THE BUBBLE CONTENT ONLY (the photo /
+            // Jump-to flash: a brief dim pulse over THE BUBBLE CONTENT ONLY (the photo /
             // voice note / text bubble itself). Applied BEFORE the maxWidth frame so it hugs the actual
             // content — the old row-level background painted a full-width block behind the whole row.
             .overlay(
@@ -3470,7 +3470,7 @@ struct MessageBubble: View, Equatable {
             if !isMe { Spacer(minLength: 0) }
         }
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
-        // Telegram-style swipe-to-reply: drag the bubble left past a threshold.
+        // Swipe-to-reply: drag the bubble left past a threshold.
         .offset(x: dragX)
         // Reply arrow AFTER the offset, so it stays FIXED in the space the bubble vacates as it slides
         // left (attached before, it slid WITH the bubble and overlapped it).
@@ -3556,7 +3556,7 @@ struct MessageBubble: View, Equatable {
             }
         } else if message.isVideo {
             // ONE bubble: video on top, caption flush below sharing a single background + outline
-            // (Signal/WhatsApp) — the caption was previously not rendered at all ("video + caption not
+            // as one unit — the caption was previously not rendered at all ("video + caption not
             // working"). With a caption the meta lives in the caption row; a bare video floats it.
             let hasCaption = !message.text.isEmpty
             VStack(alignment: .leading, spacing: 4) {
@@ -3583,7 +3583,7 @@ struct MessageBubble: View, Equatable {
                                 .background(.black.opacity(0.45), in: Circle())
                         }
                     }
-                    .overlay(alignment: .topLeading) {   // length chip, WhatsApp-style corner
+                    .overlay(alignment: .topLeading) {   // length chip, top corner
                         HStack(spacing: 4) {
                             Image(systemName: "video.fill").font(.system(size: 10))
                             Text(videoDurationLabel).font(.system(size: 11, weight: .semibold))
@@ -3606,7 +3606,7 @@ struct MessageBubble: View, Equatable {
                         if message.sendState == .failed { onResend(message) }
                         else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
                     }
-                    // Caption INSIDE the same bubble (Signal: the caption is the message body).
+                    // Caption INSIDE the same bubble (the caption is the message body).
                     if hasCaption {
                         HStack(alignment: .bottom, spacing: 6) {
                             Text(message.text).font(.system(size: 17))
@@ -3622,12 +3622,12 @@ struct MessageBubble: View, Equatable {
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
-            // Album (2+ photos as ONE message): a grid + one caption, like Signal/Telegram.
+            // Album (2+ photos as ONE message): a grid + one caption.
             VStack(alignment: .leading, spacing: 0) {
                 albumGrid
                 if !message.text.isEmpty {
                     HStack(alignment: .bottom, spacing: 6) {
-                        Text(message.text).font(.system(size: 17))   // same as a normal message (Signal never shrinks caption text)
+                        Text(message.text).font(.system(size: 17))   // same as a normal message (caption text is never shrunk)
                             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                         metaRow.padding(.bottom, 1)   // time on EVERY bubble
                     }
@@ -3653,9 +3653,9 @@ struct MessageBubble: View, Equatable {
                 }
             }
         } else if message.isImage, message.viewOnce {
-            // View-once photo (Signal): never rendered inline — a "① Photo" pill. The recipient taps it
+            // View-once photo: never rendered inline — a "① Photo" pill. The recipient taps it
             // to open the full-screen viewer EXACTLY once; after that it reads "Viewed" and is inert.
-            // The sender's own pill is always inert (senders can't reopen, same as Signal).
+            // The sender's own pill is always inert (senders can't reopen).
             let viewed = isViewedOnce
             HStack(spacing: 8) {
                 Image(systemName: viewed ? "circle.slash" : "1.circle")
@@ -3674,16 +3674,16 @@ struct MessageBubble: View, Equatable {
                 onTapImage(message)   // ThreadView marks it viewed when the viewer closes
             }
         } else if message.isImage {
-            // ONE bubble (Signal/Telegram/WhatsApp): the photo on top, the caption flush below, sharing a
+            // ONE bubble: the photo on top, the caption flush below, sharing a
             // single background + a single rounded outline — never two separate bubbles.
-            // Signal's media sizing algorithm (CVMediaAlbumView/CVComponentBodyMedia measure rules,
-            // reimplemented): aspect clamped to [0.35, 2.857] (very tall/wide images clamp, squares fill
+            // Media sizing algorithm (our own measure rules):
+            // aspect clamped to [0.35, 2.857] (very tall/wide images clamp, squares fill
             // the box), the box height caps at the max media width, the CAPTION reserves only a MIN-width
             // floor (it never stretches or distorts the media beyond that), tiny originals never upscale,
             // and the caption wraps at the bubble width with 12pt insets.
             let hasCaption = !message.text.isEmpty
             let box: CGSize = {
-                let boxMax = min(maxBubbleWidth, 350)   // Signal's maxMediaMessageWidth cap
+                let boxMax = min(maxBubbleWidth, 350)   // max media message width cap
                 let aspect: CGFloat = {
                     guard let w = message.width, let h = message.height, w > 0, h > 0 else { return 1 }
                     return min(max(CGFloat(w / h), 0.35), 2.857)
@@ -3723,7 +3723,7 @@ struct MessageBubble: View, Equatable {
                     // Native zoom hero (same mechanism as the story close): the viewer grows out of this
                     // bubble and the drag-down dismiss shrinks back into it, following the finger.
                     .modifier(HeroSource(ns: imageNS, id: message.id))
-                    .overlay {   // clean WhatsApp/Telegram-style upload indicator (ring in a frosted disc)
+                    .overlay {   // clean upload indicator (ring in a frosted disc)
                         if message.sendState == .sending {
                             ZStack {
                                 Color.black.opacity(0.18)
@@ -3745,10 +3745,10 @@ struct MessageBubble: View, Equatable {
                         if message.sendState == .failed { onResend(message) }
                         else if message.localImageData == nil { onTapImage(message) }   // only open uploaded photos
                     }
-                    // Caption INSIDE the same bubble (Signal: the caption is the message body).
+                    // Caption INSIDE the same bubble (the caption is the message body).
                     if hasCaption {
                         HStack(alignment: .bottom, spacing: 6) {
-                            Text(message.text).font(.system(size: 17))   // same as a normal message (Signal never shrinks caption text)
+                            Text(message.text).font(.system(size: 17))   // same as a normal message (caption text is never shrunk)
                                 .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
                             metaRow.padding(.bottom, 1)   // time on EVERY bubble
                         }
@@ -3842,7 +3842,7 @@ struct MessageBubble: View, Equatable {
         return 1
     }
 
-    // Telegram-style album MOSAIC (not a uniform grid): 2 = side-by-side (or stacked when the shots are
+    // Album MOSAIC (not a uniform grid): 2 = side-by-side (or stacked when the shots are
     // wide), 3 = one large + two stacked, 4 = 2×2, 5+ = 2×2 with a "+N" on the last. Photos crop-to-fill
     // their cells; the caption rides below in the SAME bubble (handled by the album branch).
     @ViewBuilder private var albumGrid: some View {
@@ -3940,8 +3940,8 @@ struct MessageBubble: View, Equatable {
         let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
     }
 
-    // Tap an album photo → open the full-screen viewer paged over EVERY photo in the album (Signal:
-    // an album opens as a swipeable gallery, starting on the tapped photo). Each album item becomes a
+    // Tap an album photo → open the full-screen viewer paged over EVERY photo in the album (an
+    // album opens as a swipeable gallery, starting on the tapped photo). Each album item becomes a
     // synthetic image Message so ImageViewerView can page through them.
     private func openAlbumItem(_ i: Int) {
         guard message.album.indices.contains(i) else { return }
@@ -3977,7 +3977,7 @@ struct MessageBubble: View, Equatable {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(fg.opacity(0.7))
                     .frame(width: 3)
-                // Status reply → show the status thumbnail (WhatsApp-style).
+                // Status reply → show the status thumbnail.
                 if reply.isStatus, let thumb = reply.storyThumbUrl, !thumb.isEmpty {
                     StoryImage(url: thumb)
                         .frame(width: 30, height: 38)
@@ -3996,7 +3996,7 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 8).padding(.vertical, 5)
             // Hug the quote's own content (name + snippet), truncating a long snippet at the bubble width.
             // The old maxWidth:.infinity ballooned the WHOLE bubble to full width even for a tiny reply (the
-            // big empty space). No width frame → hugs when short, truncates when long. iMessage/Telegram look.
+            // big empty space). No width frame → hugs when short, truncates when long. The standard look.
             // Tint the quote box with the (contrasting) text color so it's always visible —
             // the old white tint vanished on the white "mine" bubble in dark mode.
             .background(fg.opacity(0.12))

@@ -8,7 +8,7 @@ import FirebaseStorage
 // our storage never holds delivered videos. Groups skip the delete (other members still
 // need it) — the 30-day storage sweep collects those.
 //
-// The player itself is Signal's media-viewer style (not AVKit): a plain AVPlayer layer with a MINIMAL,
+// The player itself is a custom media-viewer style (not AVKit): a plain AVPlayer layer with a MINIMAL,
 // fading chrome — a bottom scrubber + time labels + play/pause, tap the video to toggle the chrome, no
 // native transport bar / PiP / AirPlay clutter.
 struct VideoPlayerScreen: View {
@@ -27,8 +27,8 @@ struct VideoPlayerScreen: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var hideWork: DispatchWorkItem?
-    @State private var dismissing = false          // Signal dismiss in flight → live content hidden ONCE
-    // Pinch-zoom + pan (Signal hosts video in the same zoomable view as photos).
+    @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
+    // Pinch-zoom + pan (video hosted in the same zoomable view as photos).
     @State private var zoom: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
     @State private var pan: CGSize = .zero
@@ -95,7 +95,7 @@ struct VideoPlayerScreen: View {
         .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
         .animation(.easeInOut(duration: 0.25), value: showChrome)
         .animation(.easeInOut(duration: 0.2), value: isPlaying)
-        // Zoomed-in pan (the dismiss drag is now the shared Signal pan below, images + videos identical).
+        // Zoomed-in pan (the dismiss drag is now the shared pan below, images + videos identical).
         .simultaneousGesture(
             DragGesture(minimumDistance: 8)
                 .updating($panDrag) { v, s, _ in if zoomed { s = v.translation } }
@@ -103,7 +103,7 @@ struct VideoPlayerScreen: View {
                     if zoomed { pan.width += g.translation.width; pan.height += g.translation.height }
                 }
         )
-        // SIGNAL'S EXACT INTERACTIVE DISMISS — the SAME code path as the image viewer
+        // The interactive dismiss — the SAME code path as the image viewer
         // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight snapshot copy locked 1:1 to
         // the finger, constant 0.8 scale, direct backdrop alpha, finish-on-any-progress, 0.25s spring.
         .opacity(dismissing ? 0 : 1)
@@ -125,7 +125,7 @@ struct VideoPlayerScreen: View {
                 },
                 onDismiss: { dismiss() })
         }
-        .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind (Signal)
+        .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
         .statusBarHidden(true)
         .task { await load() }
         .onDisappear { cleanup() }
@@ -153,13 +153,13 @@ struct VideoPlayerScreen: View {
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    // Real Liquid Glass bottom bar (Signal's minimalist control cluster): play/pause · elapsed ·
+    // Real Liquid Glass bottom bar (a minimalist control cluster): play/pause · elapsed ·
     // scrubber · duration in ONE glass capsule. Mono-digit 13pt labels.
     private var scrubberBar: some View {
         HStack(spacing: 12) {
             // No play/pause button here (user request) — tap the video center to play/pause.
             Text(fmt(current)).font(.system(size: 13).monospacedDigit()).foregroundStyle(.white)
-            // Scrub = pause-then-resume (Signal): remember whether it was playing, pause while dragging,
+            // Scrub = pause-then-resume: remember whether it was playing, pause while dragging,
             // seek live, resume on release only if it was playing.
             Slider(value: $progress, in: 0...1) { editing in
                 scrubbing = editing
@@ -241,7 +241,7 @@ struct VideoPlayerScreen: View {
     private func load() async {
         if let local = VideoCache.url(for: message.id) { await MainActor.run { startPlayer(local) }; return }
         // Known-gone (mailman: delivered 1:1 videos are deleted server-side; a 404 is PERMANENT).
-        // Terminal state — show unavailable instantly, never re-fetch (Signal's unrecoverable-attachment state).
+        // Terminal state — show unavailable instantly, never re-fetch (the unrecoverable-attachment state).
         if DeadMedia.contains(message.id) { await MainActor.run { unavailable = true }; return }
         guard let s = message.videoUrl, let url = URL(string: s), let meta = message.enc else {
             await MainActor.run { unavailable = true }; return
@@ -268,7 +268,7 @@ struct VideoPlayerScreen: View {
         let p = AVPlayer(url: url)
         player = p
         duration = message.duration ?? 0
-        // Smooth scrubber (Signal runs a high-frequency observer); don't fight the user while scrubbing.
+        // Smooth scrubber (a high-frequency observer); don't fight the user while scrubbing.
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { time in
             if duration <= 0, let d = p.currentItem?.duration.seconds, d.isFinite { duration = d }
             guard !scrubbing else { return }
@@ -291,7 +291,7 @@ struct VideoPlayerScreen: View {
     }
 }
 
-// Plain AVPlayer layer (aspect-fit), no AVKit transport controls — Signal's media-viewer surface.
+// Plain AVPlayer layer (aspect-fit), no AVKit transport controls — a custom media-viewer surface.
 private struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
     func makeUIView(context: Context) -> PlayerLayerUIView { PlayerLayerUIView(player: player) }

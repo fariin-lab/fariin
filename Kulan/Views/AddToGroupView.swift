@@ -1,7 +1,7 @@
 import SwiftUI
 
 // "Add to a Group" (from a contact's profile): lists MY existing groups; tap one to add this contact to
-// it. Groups the contact already belongs to are shown disabled as "Already a member" (Signal/Telegram).
+// it. Groups the contact already belongs to are shown disabled as "Already a member" (standard).
 // This is NOT the create-group flow — it only adds to existing groups. Native inset-grouped list.
 struct AddToGroupView: View {
     let contactUid: String

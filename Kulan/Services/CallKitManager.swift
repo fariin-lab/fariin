@@ -22,7 +22,7 @@ final class CallKitManager: NSObject {
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
         // Branded incoming ringtone (bundled resource) instead of the generic iOS ring — this is
-        // what the RECEIVER hears while their phone rings, the way WhatsApp/Signal ship their own.
+        // what the RECEIVER hears while their phone rings, the way standard messengers ship their own.
         // CallKit loops it for the whole ring. Swap the file to change the sound; keep the name.
         config.ringtoneSound = "kulan_ringtone.wav"
         provider = CXProvider(configuration: config)

@@ -16,7 +16,7 @@ public struct Story: Identifiable, Hashable {
     public var isSeen: Bool = false   // per-item seen flag (host-supplied) → viewer opens at the first UNSEEN item
     public var duration: Double = Constant.storySecond
     public var config: StoryConfiguration
-    public var caption: String = ""   // Telegram-style overlay caption (rendered on the media, never baked in)
+    public var caption: String = ""   // overlay caption (rendered on the media, never baked in)
 
     public init(id: String = UUID().uuidString,
                 mediaURL: String,

@@ -17,7 +17,7 @@ struct EmojiView: View {
     
     let userClosure: UserCompletionHandler?
     
-    // TELEGRAM LOOK (story reply reactions): one compact row of small emojis inside a rounded
+    // Compact reaction row (story reply reactions): one compact row of small emojis inside a rounded
     // translucent pill with a "Send reaction as a private message" caption and a trailing chevron
     // — instead of the old big 50pt 2-row grid.
     private var flatEmojis: [String] { emojiArray?.flatMap { $0 } ?? [] }

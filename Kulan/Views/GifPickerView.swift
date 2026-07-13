@@ -12,7 +12,7 @@ struct GifPickerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                // Masonry (WhatsApp-style): 2 columns, each GIF at its OWN natural aspect ratio,
+                // Masonry (standard style): 2 columns, each GIF at its OWN natural aspect ratio,
                 // added to whichever column is currently shorter — no fixed card that stretches them.
                 HStack(alignment: .top, spacing: 4) {
                     ForEach(0..<2, id: \.self) { col in

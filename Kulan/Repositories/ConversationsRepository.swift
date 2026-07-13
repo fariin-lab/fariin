@@ -61,7 +61,7 @@ final class ConversationsRepository {
         Task { try? await Crypto.shared.ensureReady() }   // key setup in the background
     }
 
-    // Coalesced publish (Signal's DatabaseChangeObserver idea): the conversations query fires on EVERY
+    // Coalesced publish (change-observer idea): the conversations query fires on EVERY
     // hot-field change in ANY chat (typing flags, lastRead, presence-adjacent fields), and reassigning
     // the whole array each time forces a full SwiftUI chat-list recomputation. Publish immediately when
     // idle, but collapse bursts to one publish per interval — and skip no-op snapshots entirely.

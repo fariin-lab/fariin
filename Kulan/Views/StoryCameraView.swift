@@ -3,7 +3,7 @@ import AVFoundation
 import UIKit
 import PhotosUI
 
-// Full-screen story camera (Snapchat/Instagram-style): live preview, capture, flip,
+// Full-screen story camera (standard story-camera style): live preview, capture, flip,
 // flash, zoom levels, and a library shortcut. Hands back JPEG Data on capture/pick.
 // NOTE: camera can't be exercised in CI — verify on a real device.
 

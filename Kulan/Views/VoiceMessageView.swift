@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
-// Voice-note chain events (Signal's auto-advance): when a note finishes naturally, the chat looks up
+// Voice-note chain events (auto-advance): when a note finishes naturally, the chat looks up
 // the NEXT voice message and asks its bubble to play — voicemail-style hands-free listening.
 extension Notification.Name {
     static let voiceNoteFinished = Notification.Name("voiceNoteFinished")   // object = finished message id
@@ -10,7 +10,7 @@ extension Notification.Name {
     static let voiceNoteStopOthers = Notification.Name("voiceNoteStopOthers") // object = the id NOW playing → others pause
 }
 
-// Playback ownership (Signal's single shared audio player, minimal form): exactly one voice note owns
+// Playback ownership (a single shared audio player, minimal form): exactly one voice note owns
 // the audio session at a time. Only the OWNER may deactivate the session / touch proximity on teardown —
 // this is what stopped every off-screen bubble's onDisappear from nuking the shared session (and the
 // auto-advance chain from cutting its own playback). `pendingPlayId` hands auto-advance to a bubble
@@ -40,9 +40,9 @@ struct VoiceMessageView: View {
     @State private var progress: Double = 0
     @State private var timer: Timer?
     @State private var scrubbing = false   // a live drag owns the scrubber — the 20Hz timer must not fight it
-    @State private var rate: Float = 1.0   // playback speed (1× / 1.5× / 2×), like Signal/WhatsApp
+    @State private var rate: Float = 1.0   // playback speed (1× / 1.5× / 2×), standard messenger style
 
-    // Signal's CVAudioPlayback caches: the chosen speed sticks for the WHOLE conversation, and a paused
+    // Playback caches: the chosen speed sticks for the WHOLE conversation, and a paused
     // note's position survives its cell scrolling off-screen and back (cell reuse resets @State).
     private static var rateByCid: [String: Float] = [:]
     private static var pausedProgress: [String: Double] = [:]
@@ -81,12 +81,12 @@ struct VoiceMessageView: View {
                     .frame(width: 158, height: 26)
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
-                    // "Not heard yet" dot (WhatsApp's blue mic, our way) — fades once played.
+                    // "Not heard yet" dot (a blue mic indicator, our way) — fades once played.
                     if unheard {
                         Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
                             .transition(.opacity)
                     }
-                    // Speed toggle (1× / 1.5× / 2×) — appears once the note is loaded, like Signal.
+                    // Speed toggle (1× / 1.5× / 2×) — appears once the note is loaded.
                     if player != nil {
                         Button { cycleRate() } label: {
                             Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
@@ -99,7 +99,7 @@ struct VoiceMessageView: View {
             }
         }
         .onAppear {
-            rate = Self.rateByCid[cid] ?? 1                                   // per-chat speed sticks (Signal)
+            rate = Self.rateByCid[cid] ?? 1                                   // per-chat speed sticks (standard)
             if !playing, let saved = Self.pausedProgress[message.id] { progress = saved }   // restore paused position
             // Auto-advance handoff for a bubble that was OFF-SCREEN when its turn came: the router parks
             // the id; the freshly-realized cell claims it here (the notification would have been dropped).
@@ -118,19 +118,19 @@ struct VoiceMessageView: View {
                 fm.removeItemIfExists(at: fm.temporaryDirectory.appendingPathComponent("local-\(message.rowId).m4a"))
             }
         }
-        // Single-player rule (Signal): when ANOTHER note starts, pause this one. The new owner has
+        // Single-player rule: when ANOTHER note starts, pause this one. The new owner has
         // already claimed VoiceAudio.activeId, so our teardown won't touch the shared session.
         .onReceive(NotificationCenter.default.publisher(for: .voiceNoteStopOthers)) { note in
             guard let id = note.object as? String, id != message.id, playing else { return }
             pause()
         }
-        // Auto-advance (Signal): the chat posts .voiceNotePlay with the NEXT note's id when the previous
+        // Auto-advance: the chat posts .voiceNotePlay with the NEXT note's id when the previous
         // one finishes — if it's this bubble and it isn't already playing, start it.
         .onReceive(NotificationCenter.default.publisher(for: .voiceNotePlay)) { note in
             guard let id = note.object as? String, id == message.id, !playing else { return }
             toggle()
         }
-        // Raise-to-ear (Signal/WhatsApp): while a voice note plays, lifting the phone to your ear routes
+        // Raise-to-ear: while a voice note plays, lifting the phone to your ear routes
         // playback to the earpiece; lowering it returns to the speaker. Monitoring is on ONLY during playback.
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.proximityStateDidChangeNotification)) { _ in
             guard playing else { return }
@@ -200,7 +200,7 @@ struct VoiceMessageView: View {
         guard player != nil else { return }
         guard !VoiceAudio.callActive else { return }   // never steal the session from an active call
         // Claim playback ownership FIRST, then pause any other playing note (its teardown sees a
-        // different owner and leaves the shared session alone) — Signal's single-player rule.
+        // different owner and leaves the shared session alone) — the single-player rule.
         VoiceAudio.activeId = message.id
         NotificationCenter.default.post(name: .voiceNoteStopOthers, object: message.id)
         // Playing it = heard: clears the accent mic in the chat list + the dot here.
@@ -273,7 +273,7 @@ extension FileManager {
     }
 }
 
-// Premium waveform (Signal/WhatsApp style): rounded amplitude bars, the played portion
+// Premium waveform (standard style): rounded amplitude bars, the played portion
 // tinted, draggable to seek. Drawn in a Canvas (one pass — cheap to redraw on progress).
 struct WaveformBars: View {
     let bars: [Int]          // 0…100

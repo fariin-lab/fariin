@@ -142,7 +142,7 @@ struct GroupInfoView: View {
                 }
                 Text(conv?.title ?? "Group").font(.title2.weight(.bold))
                 Text(conv?.memberCountLabel ?? "").font(.subheadline).foregroundStyle(.secondary)
-                // Description (tap to add/edit if admin) — like Signal/Telegram group info.
+                // Description (tap to add/edit if admin) — like standard group info.
                 if let d = conv?.groupDescription, !d.isEmpty {
                     Text(d).font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

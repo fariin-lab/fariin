@@ -8,7 +8,7 @@ extension Notification.Name {
     static let openChatWallpaper = Notification.Name("openChatWallpaper")
 }
 
-// A per-chat wallpaper the user sets for THEMSELVES (like WhatsApp) — stored locally, never
+// A per-chat wallpaper the user sets for THEMSELVES (the standard behavior) — stored locally, never
 // synced to the other person and never uploaded. Three kinds: none (default app background),
 // one of the built-in gradients, or a photo from the user's LIBRARY (see WallpaperStore):
 // every gallery image ever applied is kept locally and reusable, so `.photo` carries the

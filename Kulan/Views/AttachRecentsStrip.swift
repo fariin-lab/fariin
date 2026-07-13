@@ -10,7 +10,7 @@ import UIKit
     static var albums: [AttachAlbum] = []
 }
 
-// Telegram/WhatsApp-style recents strip for the attach panel: the newest camera-roll
+// Standard recents strip for the attach panel: the newest camera-roll
 // photos + videos, one tap to send. Asks for read access on first use; with Limited
 // access it simply shows whatever the user granted. Photos open the chat editor
 // (crop/caption); videos go straight into the send pipeline.
@@ -34,12 +34,12 @@ struct AttachRecentsStrip: View {
     private let pageSize = 200                                // batch size per page-in
     @State private var loadingPick = false   // fetching the full-size asset after a tap
     @State private var selectedIds: [String] = []    // chosen asset ids, in tap order (checkbox taps)
-    // GLOBAL selection store (native-picker/Signal/WhatsApp pattern): the selected PHAssets themselves,
+    // GLOBAL selection store (native-picker pattern): the selected PHAssets themselves,
     // captured at toggle time — selection survives browsing between albums. Resolving from the visible
     // album's array dropped everything picked in OTHER folders (the cross-album selection bug).
     @State private var selectedAssets: [String: PHAsset] = [:]
     @State private var caption = ""                  // caption for the selected batch
-    @State private var viewOnce = false              // WhatsApp/Signal "view once" toggle (single photo only)
+    @State private var viewOnce = false              // "view once" toggle (single photo only)
     @State private var showAlbums = false
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
@@ -122,18 +122,18 @@ struct AttachRecentsStrip: View {
     private var captionBar: some View {
         HStack(alignment: .bottom, spacing: 10) {   // send hugs the bottom as the caption grows
             HStack(alignment: .bottom, spacing: 8) {
-                // View-once media can't carry a caption (WhatsApp/Signal), so the field is disabled + the
+                // View-once media can't carry a caption, so the field is disabled + the
                 // prompt says why when View Once is on.
                 TextField("", text: $caption,
                           prompt: Text(viewOnce ? "No caption for View Once" : "Add a caption…")
                             .foregroundColor(Color(.systemGray)),
                           axis: .vertical)
-                    .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls (Signal)
+                    .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
                     .disabled(viewOnce)
                     .padding(.vertical, 9)   // single-line vertical centering; ① stays bottom-aligned
-                // View Once (WhatsApp/Signal): the "1" toggle inside the caption field, for a single photo.
+                // View Once: the "1" toggle inside the caption field, for a single photo.
                 // When on, the photo self-destructs after the recipient opens it once — and the caption is
                 // cleared + disabled.
                 if selectedIds.count == 1 {
@@ -185,7 +185,7 @@ struct AttachRecentsStrip: View {
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
             LazyVGrid(columns: cols, spacing: 6) {
-                cameraTile                                   // first cell = Camera (Telegram/WhatsApp)
+                cameraTile                                   // first cell = Camera
                 switch status {
                 case .authorized, .limited:
                     ForEach(assets, id: \.localIdentifier) { a in
@@ -283,7 +283,7 @@ struct AttachRecentsStrip: View {
     // Fetch the WHOLE library (no fetchLimit — the old 60 cap was why most of the library never showed),
     // newest first, images+videos only (predicate, so nothing is skipped by manual filtering). The
     // PHFetchResult is lazy, so the fetch itself is cheap; assets are MATERIALIZED in pages of `pageSize`
-    // as the grid scrolls (loadMoreIfNeeded), like Signal's windowed gallery.
+    // as the grid scrolls (loadMoreIfNeeded), like a windowed gallery.
     private func load() {
         let f = PHFetchOptions()
         f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
@@ -318,7 +318,7 @@ struct AttachRecentsStrip: View {
         if tail.contains(where: { $0.localIdentifier == a.localIdentifier }) { appendNextPage() }
     }
 
-    // Limited Photos access: let the user extend the shared selection in place (Signal's manage flow),
+    // Limited Photos access: let the user extend the shared selection in place (the manage flow),
     // then reload so the new items appear immediately.
     private func presentLimitedPicker() {
         var top = UIApplication.shared.connectedScenes
@@ -443,7 +443,7 @@ struct AttachRecentsStrip: View {
     }
 
     // Load every selected item (in tap order): photos go out as an album (or the editor for one), each
-    // selected VIDEO is sent on its own (the album carries images only — Signal/WhatsApp do the same).
+    // selected VIDEO is sent on its own (the album carries images only).
     // Resolve the selection from the GLOBAL store; any id somehow missing (e.g. state restored) is
     // re-fetched from the library by identifier, so no selected item is ever silently dropped.
     private func resolveSelected(_ ids: [String]) -> [String: PHAsset] {

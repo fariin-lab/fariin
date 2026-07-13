@@ -1,19 +1,19 @@
 import Foundation
 
-// In-conversation search engine — Signal's search pipeline semantics (their FTS5 unicode61 tokenizer +
+// In-conversation search engine — the standard search pipeline semantics (an FTS5 unicode61 tokenizer +
 // prefix-match AND queries), reimplemented as our own code over Kulan's in-memory decrypted corpus.
 // E2EE means the server can never search messages; the only possible index is client-side, built from
 // text we've already decrypted, and never persisted as plaintext.
 //
 // Semantics replicated exactly:
 //  • Normalization: NFC compose, case-fold, diacritic-fold (café ≡ cafe), width-fold (CJK), then strip
-//    punctuation/symbols/control chars and collapse whitespace. (Signal strips punctuation in
-//    normalizeText and lets SQLite's unicode61 tokenizer do the case/diacritic folding — with no SQLite
+//    punctuation/symbols/control chars and collapse whitespace. (The reference implementation strips punctuation in
+//    normalization and lets SQLite's unicode61 tokenizer do the case/diacritic folding — with no SQLite
 //    we do both in code.)
 //  • Query building: terms = words (with digits split out, so "abc123" → "abc") + a digits-only term
 //    ("abc123" → "123", so numeric search works), deduped.
 //  • Matching: EVERY query term must PREFIX-match at least one message token ("hel" matches "hello");
-//    terms are ANDed. No OR, no phrase operators — same as Signal.
+//    terms are ANDed. No OR, no phrase operators — the standard behavior.
 enum ChatSearch {
     /// Fold + strip a string down to searchable form (applied identically to messages and queries).
     static func normalize(_ text: String) -> String {
@@ -25,7 +25,7 @@ enum ChatSearch {
             if CharacterSet.alphanumerics.contains(scalar) {
                 out.unicodeScalars.append(scalar)
             } else {
-                out.append(" ")   // punctuation/symbols/controls → separators (Signal strips them)
+                out.append(" ")   // punctuation/symbols/controls → separators (stripped out)
             }
         }
         return out
@@ -36,7 +36,7 @@ enum ChatSearch {
         normalize(text).split(separator: " ").map(String.init)
     }
 
-    /// Query terms (Signal's buildQuery): words with digits split out + a digits-only term, deduped.
+    /// Query terms (the standard query builder): words with digits split out + a digits-only term, deduped.
     static func queryTerms(_ query: String) -> [String] {
         let norm = normalize(query)
         guard !norm.isEmpty else { return [] }

@@ -1,6 +1,5 @@
 //
-// Direction-locked pan recognizer, cloned from Signal-iOS (SignalUI/Views/DirectionalPanGestureRecognizer.swift,
-// AGPL-3.0). It only begins if the first movement is in the allowed direction and cancels itself if the
+// Direction-locked pan recognizer. It only begins if the first movement is in the allowed direction and cancels itself if the
 // cross-axis dominates. We pair it with scrollView.panGestureRecognizer.require(toFail:) so the cube page
 // swipe and the swipe-down dismiss are mutually exclusive.
 //

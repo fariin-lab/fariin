@@ -2,7 +2,7 @@ import SwiftUI
 
 // "Message Info" for a group message I sent: who has read it vs who it's only been delivered to,
 // derived from the per-member lastRead timestamps (a member has read it if their last-read time is at
-// or after this message's time). WhatsApp/Telegram's read-by list, our own layout.
+// or after this message's time). A standard read-by list, our own layout.
 struct MessageInfoView: View {
     let message: Message
     let members: [String]                 // other group members (excluding me)

@@ -8,8 +8,8 @@ import CryptoKit
 // identical on both phones when the keys are genuine. If a man-in-the-middle swapped
 // either side's key, the two phones compute DIFFERENT numbers and the mismatch is visible.
 //
-// The math follows Signal's NumericFingerprint (iterated SHA-512, five bytes -> five
-// decimal digits) because it's a proven construction; the screen around it is Kulan's own.
+// The math follows the standard numeric-fingerprint construction (iterated SHA-512, five bytes
+// -> five decimal digits) because it's proven; the screen around it is Kulan's own.
 enum SafetyNumber {
     private static let iterations = 5200          // key-stretch: makes a truncated-digest preimage costly
     private static let version: [UInt8] = [0x00, 0x00]
@@ -50,7 +50,7 @@ enum SafetyNumber {
         for _ in 0..<iterations {
             var h = SHA512()
             h.update(data: hash)
-            h.update(data: pub)                 // re-mix the key each round (Signal does the same)
+            h.update(data: pub)                 // re-mix the key each round (as the standard construction does)
             hash = Data(h.finalize())
         }
         var digits = ""

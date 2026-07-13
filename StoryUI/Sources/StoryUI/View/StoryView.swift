@@ -24,7 +24,7 @@ public struct StoryView: View {
     let onItemSeen: ((String) -> Void)?      // fires each individual story id as it becomes visible
     let onDrag: ((CGFloat) -> Void)?         // swipe-down amount (so the host can hide its overlays)
     let showMore: Bool                      // show the header "…" dropdown menu
-    let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet (Telegram)
+    let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet
     let onSwipeUpChanged: ((CGFloat) -> Void)?   // live upward drag amount → real-time sheet open
     let onSwipeUpEnded: ((CGFloat, CGFloat) -> Void)?   // (translation +up, velocity +up) on release
     let dismissEnabled: Bool               // install the library's native DOWN swipe-down-to-dismiss pan

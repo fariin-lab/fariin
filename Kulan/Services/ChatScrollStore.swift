@@ -2,7 +2,7 @@ import Foundation
 
 // Where each chat was last scrolled to — kept in memory ONLY (never written to disk).
 //
-// This is exactly WhatsApp's behavior: while the app stays alive, reopening a chat lands you
+// This is exactly the standard behavior: while the app stays alive, reopening a chat lands you
 // right where you left it (mid-history or bottom); once the app is killed the RAM is wiped, so a
 // cold launch finds nothing here and falls back to the newest message. No persistence needed —
 // the in-memory lifetime IS the feature.

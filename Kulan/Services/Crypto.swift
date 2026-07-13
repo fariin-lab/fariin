@@ -196,7 +196,7 @@ final class Crypto {
         (await preloadKey(uid)).map { Data($0) }
     }
 
-    // In-flight fetch dedup (Signal's ProfileFetcher): on a cold start the chat list, the open thread,
+    // In-flight fetch dedup (the standard profile-fetch pattern): on a cold start the chat list, the open thread,
     // and group-member warms all request the same keys SIMULTANEOUSLY — without dedup each fires its
     // own Firestore read. Concurrent callers now share one Task per uid.
     private var keyFetches: [String: Task<Bytes?, Never>] = [:]
@@ -301,11 +301,11 @@ final class Crypto {
     // Memoized decrypt for hot, repeatedly-rendered text — the chat-list last-message
     // preview decrypts on EVERY row render/scroll. The same (cid, raw) always yields the
     // same plaintext, so caching it avoids re-running libsodium box.open per frame (a
-    // real scroll-smoothness win, Signal-style "decrypt once, reuse"). NSCache is
+    // real scroll-smoothness win, the standard "decrypt once, reuse"). NSCache is
     // thread-safe and self-evicting under memory pressure.
     private let previewCache: NSCache<NSString, NSString> = {
         let c = NSCache<NSString, NSString>()
-        c.countLimit = 500   // bounded (Signal caps every hot cache) — plaintext previews are small but not free
+        c.countLimit = 500   // bounded (cap every hot cache) — plaintext previews are small but not free
         return c
     }()
     func decryptCached(_ raw: String, cid: String) -> String {

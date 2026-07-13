@@ -1,6 +1,6 @@
 import Foundation
 
-// Device-side store for chat videos (the "mailman" model, like Signal): our storage only
+// Device-side store for chat videos (the "mailman" model): our storage only
 // carries the encrypted video until it's delivered — each phone keeps its OWN decrypted
 // copy here, permanently. Sender saves at send time; recipient saves on first download,
 // then deletes the server object. Files live in Application Support (not Caches, so iOS

@@ -9,7 +9,7 @@ enum Limits {
     static let pinnedMessagesPerChat = 3
     static let pinnedChats = 3
     static let forwardChatsAtOnce = 5
-    static let mediaPerMessage = 32   // WhatsApp parity (user request; was 30)
+    static let mediaPerMessage = 32   // raised for parity with standard messengers (user request; was 30)
     static let fileUploadBytes = 2 * 1024 * 1024 * 1024            // 2 GB
     static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB after 720p transcode
     static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
@@ -21,7 +21,7 @@ enum Limits {
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
     static let storyUploadBytes = 100 * 1024 * 1024              // 100 MB
-    static let storyVideoSeconds = 30   // WhatsApp/Signal cap; longer picks are auto-trimmed, never rejected
+    static let storyVideoSeconds = 30   // standard cap; longer picks are auto-trimmed, never rejected
     static let storyCaptionChars = 700
 
     // Groups

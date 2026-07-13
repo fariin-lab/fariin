@@ -95,7 +95,7 @@ struct GroupCallView: View {
         .background(.ultraThinMaterial, in: Capsule())
     }
 
-    // Native audio-route button (the FaceTime picker): group calls run on speaker by default;
+    // Native audio-route button (the system route picker): group calls run on speaker by default;
     // this lets you move the call to AirPods/Bluetooth/earpiece through the system sheet.
     private var routeCtrl: some View {
         ZStack {

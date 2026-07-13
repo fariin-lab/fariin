@@ -1,6 +1,6 @@
 import Foundation
 
-// Device-side store for decrypted voice notes — the audio twin of VideoCache (Signal's attachment
+// Device-side store for decrypted voice notes — the audio twin of VideoCache (the standard attachment
 // store model: download + decrypt ONCE, keep the plaintext on-device forever, replay from the local
 // file). Files live in Application Support (never purged by iOS, unlike tmp/ or Caches), protected at
 // rest, excluded from iCloud backup — so a voice note plays instantly on every relaunch with no

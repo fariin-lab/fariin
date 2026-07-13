@@ -42,14 +42,14 @@ final class CallService: NSObject {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
             if state == .outgoing, cameraOn {
-                // Outgoing VIDEO call: ringback through the LOUDSPEAKER (WhatsApp) — you're looking at
+                // Outgoing VIDEO call: ringback through the LOUDSPEAKER — you're looking at
                 // your preview at arm's length, not holding the phone to your ear.
                 isSpeaker = true; wantsSpeaker = true
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             }
             if state == .active {
-                // Video calls default to speakerphone (FaceTime). startedAsVideo covers the CALLEE in the
-                // Telegram model: their camera starts OFF on answer, but they're watching video at arm's
+                // Video calls default to speakerphone. startedAsVideo covers the CALLEE in the
+                // camera-off-on-answer model: their camera starts OFF on answer, but they're watching video at arm's
                 // length — audio must still go loud.
                 if cameraOn || startedAsVideo { isSpeaker = true; wantsSpeaker = true }
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
@@ -86,7 +86,7 @@ final class CallService: NSObject {
     private var ringbackPlayer: AVAudioPlayer?
     private var tonePlayer: AVAudioPlayer?       // busy / ended one-shot tones
     private var localAudioTrack: RTCAudioTrack?
-    // Video (1:1). Each side controls its OWN camera independently (Signal/Zoom-style): no
+    // Video (1:1). Each side controls its OWN camera independently: no
     // permission — turning your camera on just sends your video and the other side sees it. The
     // video layout shows whenever EITHER camera is on.
     var cameraOn = false            // is MY camera sending
@@ -235,14 +235,15 @@ final class CallService: NSObject {
     func switchCamera() {
         guard cameraOn, let capturer = videoCapturer else { return }
         let next = !usingFrontCamera
+        usingFrontCamera = next   // flip the mirror IMMEDIATELY; the UI masks the ~200ms restart with a blur
         // Stop the running capture BEFORE starting the other camera — restarting a live
-        // RTCCameraVideoCapturer in place can freeze/black the local feed on flip.
+        // capturer in place can freeze/black the local feed on flip.
         capturer.stopCapture { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: next) }
         }
     }
 
-    // MARK: - Camera (each side controls its OWN camera, Signal-style — no permission handshake)
+    // MARK: - Camera (each side controls its OWN camera — no permission handshake)
 
     // Turn MY camera on/off. The video m-line was negotiated at call setup, so this is a pure
     // track-enable + capture start/stop — NO renegotiation. Broadcast my state so the other side
@@ -252,7 +253,7 @@ final class CallService: NSObject {
         cameraOn = on
         localVideoTrack?.isEnabled = on
         if on {
-            if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone, like FaceTime
+            if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone
             // Re-tune echo cancellation for LOUDSPEAKER (the hear-your-own-voice fix): .videoChat mode
             // engages the speakerphone-tuned voice processing. Keep the speaker override.
             try? AVAudioSession.sharedInstance().setMode(.videoChat)
@@ -260,7 +261,7 @@ final class CallService: NSObject {
             startCameraCapture()
         } else {
             videoCapturer?.stopCapture()
-            // Both cameras now off → it's a voice call again: return to the earpiece (WhatsApp) and
+            // Both cameras now off → it's a voice call again: return to the earpiece and
             // back to the earpiece-tuned echo cancellation.
             if !remoteCameraOn && isSpeaker { toggleSpeaker() }
             if !remoteCameraOn { try? AVAudioSession.sharedInstance().setMode(.voiceChat) }
@@ -291,7 +292,7 @@ final class CallService: NSObject {
         }
     }
 
-    // MARK: - Background camera pause (WhatsApp/Signal behavior)
+    // MARK: - Background camera pause (standard behavior)
     // iOS suspends the capture session in the background, so without this the OTHER side stared at a
     // FROZEN last frame the whole time. On background: stop capture + broadcast cams=false (they see
     // the avatar placeholder); on foreground: resume capture + re-broadcast. `cameraOn` stays true as
@@ -347,7 +348,7 @@ final class CallService: NSObject {
 
     // Where call audio is coming out right now. With no external device the speaker button is a
     // plain earpiece/speaker toggle; with AirPods/Bluetooth/wired around, the button shows the
-    // live route and opens the NATIVE route picker instead (FaceTime/WhatsApp behavior).
+    // live route and opens the NATIVE route picker instead (system behavior).
     enum AudioRoute { case earpiece, speaker, external }
     var audioRoute: AudioRoute = .earpiece
     var externalAudioAvailable = false
@@ -537,7 +538,7 @@ final class CallService: NSObject {
             guard let self else { return }
             guard granted else { self.hangUp(); return }   // no mic -> don't start a dead call
             // NO ringback yet - silence during "Calling…" (their phone is not ringing); the tone
-            // starts when ringingAt arrives and the label flips to "Ringing…" (WhatsApp behavior).
+            // starts when ringingAt arrives and the label flips to "Ringing…" (standard behavior).
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
             let ref = self.db.collection("calls").document()
             self.callId = ref.documentID
@@ -554,7 +555,7 @@ final class CallService: NSObject {
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
                         "offer": ["sdp": sdp.sdp, "type": "offer"],
-                        "cams": [self.me: self.cameraOn],   // seed my camera state (Signal-style per-side)
+                        "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]) { [weak self] err in
                         guard let self else { return }
@@ -640,7 +641,7 @@ final class CallService: NSObject {
                     self.otherPhotoUrl = photo.isEmpty ? nil : photo
                     self.isCaller = false
                     let isVideoCall = (d["type"] as? String == "video")
-                    // WhatsApp model (user choice): accepting a video call opens MY camera immediately —
+                    // Camera-on-answer model (user choice): accepting a video call opens MY camera immediately —
                     // both sides see each other the instant the call connects.
                     self.cameraOn = isVideoCall
                     self.startedAsVideo = isVideoCall
@@ -668,7 +669,7 @@ final class CallService: NSObject {
             }
             return
         }
-        self.cameraOn = video   // WhatsApp model: accepting a video call opens my camera immediately
+        self.cameraOn = video   // camera-on-answer model: accepting a video call opens my camera immediately
         self.startedAsVideo = video
         self.callId = callId
         self.otherName = name
@@ -723,7 +724,7 @@ final class CallService: NSObject {
                 guard let answerSdp else { return }
                 pc.setLocalDescription(answerSdp) { _ in
                     var data: [String: Any] = ["answer": ["sdp": answerSdp.sdp, "type": "answer"], "status": "active"]
-                    data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (Signal-style per-side)
+                    data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
                     ref.updateData(data)
                 }
             }
@@ -786,7 +787,7 @@ final class CallService: NSObject {
                 self.appliedRemoteRestart = v
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
-            // The other side's camera on/off (Signal-style per-side, no permission).
+            // The other side's camera on/off (per-side, no permission).
             self.handleRemoteCallState(d)
         }
         listeners.append(l)

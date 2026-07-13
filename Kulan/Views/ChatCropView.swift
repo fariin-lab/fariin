@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Interactive crop screen (Signal / iOS Photos behaviour, my own code). Clean, minimalist layout:
+// Interactive crop screen (standard photo-crop behaviour, my own code). Clean, minimalist layout:
 //   • top bar  — Cancel (✕) · Reset
 //   • image band — the photo with a crop frame: corner brackets to resize, drag inside to move,
 //                  thirds grid, everything outside the frame dimmed
@@ -119,7 +119,7 @@ struct ChatCropView: View {
         .allowsHitTesting(false)
     }
 
-    // Heavier white L-brackets at each corner (Photos/Signal look).
+    // Heavier white L-brackets at each corner (standard crop look).
     private var brackets: some View {
         Path { p in
             let l: CGFloat = 22

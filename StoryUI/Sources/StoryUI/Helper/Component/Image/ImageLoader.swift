@@ -137,7 +137,7 @@ final class ImageLoader: UIView {
     // .clipShape doesn't clip the UIVisualEffectView blur (it composites separately and spills past the
     // mask), so the friend reply-bar card stayed square; a UIKit corner mask clips the blur reliably.
     var bottomCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
-    // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped (Instagram/WhatsApp).
+    // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped.
     var imageView = UIImageView()
     // Background: a zoomed + blurred copy of the same photo that fills the empty top/bottom.
     private let backgroundImageView = UIImageView()
@@ -293,7 +293,7 @@ final class ImageLoader: UIView {
 private extension ImageLoader {
    func setupImageView() {
        backgroundColor = .black
-       // WhatsApp/Instagram for non-9:16 photos: a zoomed + heavily-blurred copy of the SAME image fills the
+       // For non-9:16 photos: a zoomed + heavily-blurred copy of the SAME image fills the
        // whole screen behind, so the empty top/bottom become a blurred color-matched backdrop (no black bars).
        backgroundImageView.contentMode = .scaleAspectFill
        backgroundImageView.clipsToBounds = true
@@ -302,7 +302,7 @@ private extension ImageLoader {
 
        // Foreground: the photo at its TRUE aspect ratio — aspect-FIT so a square/landscape is never
        // cropped/zoomed. The empty top/bottom become the zoomed + blurred backdrop above (user prefers
-       // this resize+blur look over Instagram's center-crop fill).
+       // this resize+blur look over a center-crop fill).
        imageView.contentMode = .scaleAspectFit
        imageView.clipsToBounds = true
        addSubview(imageView)

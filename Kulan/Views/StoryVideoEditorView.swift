@@ -6,7 +6,7 @@ import AVKit
 // editor (muted poster-frame wash behind it, black frame above/below), with the same caption
 // bar (40px) + NEXT (46px) layout. Tools: mute toggle only — crop/pen/text are photo tools.
 // Videos longer than the story cap are auto-trimmed to the first 30s at post time
-// (WhatsApp/Signal behavior); a label says so up front, nothing is rejected.
+// (as standard messengers do); a label says so up front, nothing is rejected.
 struct StoryVideoEditorView: View {
     let url: URL
     var onPosted: () -> Void = {}

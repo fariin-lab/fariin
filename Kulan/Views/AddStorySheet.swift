@@ -132,7 +132,7 @@ struct AddStorySheet: View {
         StoryThumb(asset: asset, store: store)
             .aspectRatio(1, contentMode: .fill)
             .clipped()
-            // Video tiles get the standard duration badge (bottom-right, like Photos/WhatsApp).
+            // Video tiles get the standard duration badge (bottom-right, like the system Photos app).
             .overlay(alignment: .bottomTrailing) {
                 if asset.mediaType == .video {
                     Text(durationLabel(asset.duration))

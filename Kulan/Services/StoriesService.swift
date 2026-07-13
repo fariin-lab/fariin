@@ -13,7 +13,7 @@ struct Story: Identifiable, Hashable {
     let expiresAt: Date
     let mediaUrl: String
     let allowsReplies: Bool
-    var caption: String = ""   // Telegram-style overlay caption (stored as text, rendered in the viewer)
+    var caption: String = ""   // overlay caption (stored as text, rendered in the viewer)
     var isVideo: Bool = false
     var duration: Double = 0   // video length in seconds (photos: 0 → viewer uses the 5s standard)
     var thumbUrl: String = ""  // video poster frame (photos: empty)
@@ -35,7 +35,7 @@ struct StoryGroup: Identifiable {
 
     var id: String { authorUid }
 
-    // Unseen ⇔ ANY story I haven't watched yet (WhatsApp/Instagram rule: watching 1 of 5 no
+    // Unseen ⇔ ANY story I haven't watched yet (the standard rule: watching 1 of 5 no
     // longer greys the whole ring). A story counts as seen if I viewed that exact item on this
     // device (StoryPrefs flag) OR it's not newer than my synced watermark — `lastViewedAt` holds
     // the POST time of the newest story of theirs I've watched (covers reinstalls/other devices).
@@ -237,7 +237,7 @@ final class StoriesService {
         }
     }
 
-    // Post a video story: auto-trim to the first 30s (WhatsApp/Signal standard — never reject),
+    // Post a video story: auto-trim to the first 30s (standard behavior — never reject),
     // transcode to 720p H.264, upload the poster thumb + the mp4, then fill both URLs atomically
     // (the repository skips docs with an empty mediaUrl, so nobody sees a half-uploaded story).
     func postVideoStory(videoURL: URL, muted: Bool = false, caption: String = "", expiryHours: Double = 24,
@@ -424,7 +424,7 @@ final class StoriesService {
 // Loads the stories I can see (mine + others' that include me), unexpired, grouped by
 // person, with my seen-state attached. LIVE: snapshot listeners (same pattern as the chat
 // list) push new/deleted stories and my seen-watermarks straight into the row — a friend's
-// new ring slides in while you're sitting on the screen (WhatsApp), no pull-to-refresh.
+// new ring slides in while you're sitting on the screen, no pull-to-refresh.
 @Observable
 final class StoriesRepository {
     static let shared = StoriesRepository()

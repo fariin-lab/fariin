@@ -146,7 +146,7 @@ struct VideoApprovalView: View {
         HStack(spacing: 10) {
             TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
                       axis: .vertical)
-                .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls (Signal)
+                .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls
                 .foregroundStyle(.primary).focused($captionFocused)
                 .padding(.horizontal, 16).padding(.vertical, 9).frame(minHeight: 40)
                 .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)

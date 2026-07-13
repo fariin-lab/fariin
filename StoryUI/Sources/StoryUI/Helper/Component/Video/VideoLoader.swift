@@ -71,7 +71,7 @@ final class PlayerView: UIView {
 
 private extension PlayerView {
     func setupPlayer(_ url: URL) {
-        // Stories are sound-on media (WhatsApp/Instagram): .playback plays through the ringer
+        // Stories are sound-on media: .playback plays through the ringer
         // switch. The default (.soloAmbient) muted every story video on a silenced phone.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         self.player?.replaceCurrentItem(with: nil)

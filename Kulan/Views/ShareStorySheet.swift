@@ -6,7 +6,7 @@ struct StoryShareData: Identifiable { let id = UUID(); let data: Data; var capti
 
 // A picked video awaiting the audience sheet: the source file + the poster frame the editor
 // already generated (drives the uploading ring immediately; the transcode runs in the background).
-// muted = the editor's speaker toggle → the upload strips the audio track (real, like WhatsApp).
+// muted = the editor's speaker toggle → the upload strips the audio track (real, as standard messengers do).
 struct StoryVideoPayload { let url: URL; let thumbnail: Data; var muted: Bool = false }
 
 // "Share Story" audience sheet: choose who sees the story, then Post.
@@ -18,7 +18,7 @@ struct ShareStorySheet: View {
     var onPosted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
-    // Remember the last audience choice (WhatsApp/Signal/Telegram all do) instead of resetting each post.
+    // Remember the last audience choice (as standard messengers do) instead of resetting each post.
     @State private var mode = UserDefaults.standard.integer(forKey: "storyAudMode")   // 0 contacts, 1 except, 2 only
     @State private var excluded = Set(UserDefaults.standard.stringArray(forKey: "storyAudExcluded") ?? [])
     @State private var included = Set(UserDefaults.standard.stringArray(forKey: "storyAudIncluded") ?? [])

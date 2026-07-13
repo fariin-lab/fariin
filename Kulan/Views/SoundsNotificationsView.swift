@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import FirebaseFirestore
 
-// Full-screen "Sounds & Notifications" for a chat (Telegram-style), pushed from the profile.
+// Full-screen "Sounds & Notifications" for a chat (full-page style), pushed from the profile.
 // Sections: Message Sound + Call Sound (each opens a real sound picker) and Mute.
 struct SoundsNotificationsView: View {
     let cid: String

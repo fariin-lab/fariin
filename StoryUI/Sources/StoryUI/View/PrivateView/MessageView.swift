@@ -52,7 +52,7 @@ private extension MessageView {
             }
             clearText.toggle()
             userClosure?(story, text, nil, false)
-            // Close the keyboard after sending (WhatsApp: send → keyboard dismisses, story resumes).
+            // Close the keyboard after sending (send → keyboard dismisses, story resumes).
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
     }
@@ -66,7 +66,7 @@ private extension MessageView {
             Image(systemName: likeButtonTapped ? Constant.MessageView.likeImageTapped : Constant.MessageView.likeImage)
                 .font(.title3)                                   // smaller heart
                 .foregroundColor(likeButtonTapped ? .red : .white)
-                .shadow(color: .black.opacity(0.35), radius: 4, y: 1)   // soft shadow (WhatsApp) so it reads on any photo
+                .shadow(color: .black.opacity(0.35), radius: 4, y: 1)   // soft shadow so it reads on any photo
                 .scaleEffect(likeButtonTapped ? 1.18 : 1.0)      // pop when you give love
                 .animation(.spring(response: 0.3, dampingFraction: 0.45), value: likeButtonTapped)
         }

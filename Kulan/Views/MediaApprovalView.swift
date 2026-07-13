@@ -8,8 +8,8 @@ enum SendMedia {
     case video(url: URL, thumb: UIImage, duration: Double)   // final (trimmed) url + poster + duration
 }
 
-// One media item awaiting approval — the mixed-selection unit (Signal's approval flow treats images
-// and videos as one attachment list; so do we).
+// One media item awaiting approval — the mixed-selection unit (the approval flow treats images
+// and videos as one attachment list).
 enum ApprovalMedia: Identifiable {
     case image(UUID, UIImage)
     case video(UUID, URL, UIImage?, Double)   // id, local url, poster thumb, duration (s)
@@ -29,7 +29,7 @@ enum ApprovalMedia: Identifiable {
     }
 }
 
-// Mixed-media pre-send approval — replaces the images-only screen. Signal/WhatsApp behavior:
+// Mixed-media pre-send approval — replaces the images-only screen. Standard behavior:
 //   • ONE selection of images + videos, swipeable zoomable pages in selection order.
 //   • Per-item editing: images get crop + pen (the same editors as the single-photo flow);
 //     videos get TRIM (filmstrip with drag handles, live-looped preview of the kept range).
@@ -242,7 +242,7 @@ struct MediaApprovalView: View {
                 .padding(.horizontal, 16)
             }
             HStack(spacing: 10) {
-                // Multi-line caption (Signal): grows from 1 up to ~7 lines, then scrolls.
+                // Multi-line caption: grows from 1 up to ~7 lines, then scrolls.
                 TextField("", text: $caption,
                           prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
                           axis: .vertical)

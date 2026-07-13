@@ -5,13 +5,13 @@ import UIKit
 import CoreImage
 import StoryUI
 
-// Telegram/IG segmented story ring: one arc per story (3 stories = 3 arcs with gaps, 1 = full circle).
+// Segmented story ring: one arc per story (3 stories = 3 arcs with gaps, 1 = full circle).
 // Colorful gradient when unviewed, grey when viewed. Reused on story cards AND chat-list avatars.
 struct StoryRingView: View {
     let seen: [Bool]                 // per segment, oldest→newest; true = viewed (grey), false = colorful
-    var lineWidth: CGFloat = 2.0     // Telegram activeLineWidth (unseen); seen is drawn thinner
+    var lineWidth: CGFloat = 2.0     // the active line width (unseen); seen is drawn thinner
     var body: some View {
-        // TELEGRAM spec (AvatarStoryIndicatorComponent + default dark theme):
+        // Ring spec (default dark theme):
         //  • UNSEEN gradient storyUnseenColors = 0x34C76F (green) → 0x3DA1FD (blue)
         //  • SEEN solid storySeenColors = 0x48484A (grey)
         //  • the SEEN ring is thinner than the unseen ring (inactiveLineWidth < activeLineWidth)
@@ -24,7 +24,7 @@ struct StoryRingView: View {
             let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
                                                         startPoint: .top, endPoint: .bottom))
             let grey = AnyShapeStyle(Color(hex: 0x48484A))
-            let gapPts: CGFloat = n > 1 ? activeW * 2.0 : 0           // Telegram: spacing = activeLineWidth·2
+            let gapPts: CGFloat = n > 1 ? activeW * 2.0 : 0           // spacing = activeLineWidth·2
             let gap = d > 0 ? gapPts / (CGFloat.pi * d) : 0
             let seg = 1.0 / CGFloat(n)
             ZStack {
@@ -276,7 +276,7 @@ enum StoryPrefs {
         guard !id.isEmpty, !isStorySeen(id) else { return }
         mutateOrdered("seenStoryItems") { $0.append(id) }
     }
-    // My own ❤️ on a story — persists so the heart is still red on reopen (Instagram).
+    // My own ❤️ on a story — persists so the heart is still red on reopen.
     static func isStoryLiked(_ id: String) -> Bool { set("likedStories").contains(id) }
     static func setStoryLiked(_ id: String, _ liked: Bool) {
         guard !id.isEmpty else { return }
@@ -320,7 +320,7 @@ struct StoriesRow: View {
     }
     private var cardH: CGFloat { cardW * 1.46 }
 
-    // Ordering (WhatsApp): UNVIEWED first, then VIEWED — BOTH sorted by newest post first (never
+    // Ordering: UNVIEWED first, then VIEWED — BOTH sorted by newest post first (never
     // by when I watched). Re-sorts live (no reload) the instant a person's last unseen story is
     // watched (markSeenLocally advances the watermark) and the cards animate.
     private var orderedOthers: [StoryGroup] {
@@ -566,9 +566,9 @@ private struct StoryFriendCard: View, Equatable {
 }
 
 
-// MARK: - Story Viewer (Instagram-style)
+// MARK: - Story Viewer
 
-// Full-screen story viewer: thin progress bars at top, Instagram-style header and
+// Full-screen story viewer: thin progress bars at top, story-style header and
 // bottom reply bar, tap-right = next / tap-left = back, hold = pause, swipe-down = close.
 // Full-screen story viewer — now powered by the StoryUI library (MIT) for its native swipe,
 // progress bars, tap-to-advance, hold-to-pause and reply/emoji bar. We map our StoryGroups into
@@ -588,7 +588,7 @@ struct StoryViewer: View {
     var onProfile: (StoryGroup) -> Void = { _ in }   // tap the story header → that user's profile
     var onDeletedRemaining: (StoryGroup) -> Void = { _ in }   // deleted an item but more of mine remain → re-feed
     @State private var isPresented = true
-    @State private var sentToast = false   // "Sent" confirmation after a reply (WhatsApp-style)
+    @State private var sentToast = false   // "Sent" confirmation after a reply
     // Owner controls (my own story): Views/reactions/delete bar instead of the reply bar.
     @State private var currentBucketUid = ""
     @State private var currentStoryId = ""
@@ -1021,7 +1021,7 @@ struct StoryViewer: View {
                         if let c = currentStory?.caption, !c.isEmpty {
                             Text(c)
                                 .font(.body).foregroundStyle(.white)
-                                .lineLimit(4)   // don't let a long caption climb over the whole photo (IG/WA cap)
+                                .lineLimit(4)   // don't let a long caption climb over the whole photo (caption cap)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 16).padding(.top, 26).padding(.bottom, 14)
                                 .background(LinearGradient(colors: [.clear, .black.opacity(0.45)],
@@ -1071,9 +1071,9 @@ struct StoryViewer: View {
         // image tracks the finger directly; on release the sheet's own spring animates
         // viewersProgress and the image rides that spring home (the native-feeling settle).
         // Minimal: a clean lerp between full-screen (frac 0) and the card slot (frac 1).
-        // TELEGRAM ZOOM (ported verbatim from StoryItemSetContainerComponent): the story content
+        // The zoom (ported verbatim from the reference container): the story content
         // is scaled about its OWN CENTRE and its CENTRE is moved to the card slot — NOT anchored to
-        // the top with a separate offset and a trimming clip. Telegram:
+        // the top with a separate offset and a trimming clip. The reference:
         //   currentContentScale = contentMinScale * fraction + 1.0 * (1 - fraction)
         //   transform = CATransform3DMakeScale(scale, scale, 1)   // about the layer centre
         //   setPosition(contentContainerView, contentFrame.centre) // move the centre
@@ -1117,9 +1117,9 @@ struct StoryViewer: View {
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
             // Landing on a person no longer greys their whole ring — seen state advances per ITEM
-            // below (WhatsApp rule: the ring stays colored until every story is watched).
+            // below (the standard rule: the ring stays colored until every story is watched).
             onUserChanged: { uid in currentBucketUid = uid; loadBarViewers() },
-            // Anonymous viewing leaves NO trace (Telegram-incognito): no local flags either.
+            // Anonymous viewing leaves NO trace (incognito / anonymous): no local flags either.
             onItemSeen: { id in
                 currentStoryId = id
                 // The synthetic still-uploading item has no real doc — don't persist it as "seen"
@@ -1219,7 +1219,7 @@ struct StoryViewer: View {
     // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
     // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
     // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    // (Fixed-aspect cards retired for good — the TELEGRAM RULE: the card is the zoom's
+    // (Fixed-aspect cards retired for good — the core rule: the card is the zoom's
     // endpoint, the story's own shape. Any fixed card shape forces trimming or a settle
     // mismatch; both were user-rejected.)
 
@@ -1239,7 +1239,7 @@ struct StoryViewer: View {
         // carousel hand-off is untouched.
         let sizeP = max(0, min(1, p / 0.9))
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // TELEGRAM RULE: pure uniform zoom of the whole story, centre-anchored, zero cuts.
+        // Core rule: pure uniform zoom of the whole story, centre-anchored, zero cuts.
         // The landing scale (slotH/contentH) makes the story exactly the card's size — the
         // settle swap is pixel-identical, so the image can never jump.
         let s1 = slotH / max(contentH, 1)
@@ -1257,8 +1257,8 @@ struct StoryViewer: View {
     // tracks the finger exactly like the sheet; on release the sheet's spring drives viewersProgress
     // and the story rides it home. The endpoint mirrors the carousel slot exactly (scale =
     // slotH/contentH, offset = blockTop) so the story lands on the card's size/position.
-    private var storyZoomFrac: CGFloat { max(0, min(1, viewersProgress)) }   // = Telegram contentScaleFraction
-    // TELEGRAM zoom parameters. scale = contentMinScale·frac + 1·(1-frac); anchorY = the media's
+    private var storyZoomFrac: CGFloat { max(0, min(1, viewersProgress)) }   // = the content scale fraction
+    // Zoom parameters. scale = contentMinScale·frac + 1·(1-frac); anchorY = the media's
     // own centre as a fraction of the full-screen layer (so the scale pivots on the content
     // centre); centreShift = how far to move that centre to land on the card slot's centre.
     private var tgZoom: (scale: CGFloat, anchorY: CGFloat, centerShift: CGFloat) {
@@ -1270,7 +1270,7 @@ struct StoryViewer: View {
         let blockTop = topInset + (avail - countArea - slotH) / 2
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         let minScale = slotH / max(contentH, 1)                       // contentMinScale
-        let s = minScale * storyZoomFrac + 1.0 * (1 - storyZoomFrac)  // Telegram formula
+        let s = minScale * storyZoomFrac + 1.0 * (1 - storyZoomFrac)  // the standard formula
         let mediaCenterRest = contentH / 2                           // content centre at rest
         let mediaCenterTarget = blockTop + slotH / 2                 // slot centre
         return (s, mediaCenterRest / scr.height,
@@ -1431,7 +1431,7 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
-    // TELEGRAM-EXACT (user's final call): the centre is the REAL story scaled as ONE living
+    // Reference-exact (user's final call): the centre is the REAL story scaled as ONE living
     // unit — through the drag AND at rest. No stand-in card renderer, no trimming, no
     // re-framing. (The settle stand-in existed to mask geometry mismatches now fixed at the
     // root: aspect-true zoom endpoint == card size, factory frames at contentH, freeze
@@ -1531,7 +1531,7 @@ struct StoryViewer: View {
               let me = AuthService.shared.uid, me != s.authorUid else { return }
 
         // Pure like-button toggle (no text, no picker emoji): remember it locally so the heart
-        // is still red when the story is reopened (Instagram). Un-like removes my reaction from
+        // is still red when the story is reopened. Un-like removes my reaction from
         // the author's "Seen by" and sends nothing.
         if typed == nil && emoji == nil {
             StoryPrefs.setStoryLiked(storyId, isLiked)
@@ -1551,7 +1551,7 @@ struct StoryViewer: View {
             try? await ChatService.sendText(cid: cid, text: text, replyTo: ref)
             if isReaction { await StoriesService.shared.setStoryReaction(s, emoji: text) }   // shows in "Seen by"
         }
-        flashSentToast()   // optimistic "Sent" confirmation (WhatsApp-style)
+        flashSentToast()   // optimistic "Sent" confirmation
     }
 
     // Receipt ONLY the photo actually shown (drives accurate view counts + "Seen by"), and
@@ -1567,7 +1567,7 @@ struct StoryViewer: View {
         return f.localizedString(for: d, relativeTo: Date())
     }
 
-    // Telegram owner bar: overlapping viewer avatars + "N Views" + ❤️ reactions (tap → sheet) + delete.
+    // Owner bar: overlapping viewer avatars + "N Views" + ❤️ reactions (tap → sheet) + delete.
     // Views/reactions/delete controls, shared by the gradient overlay bar and the solid footer.
     private var ownerControls: some View {
         let reactions = barViewers.filter { !($0.reaction ?? "").isEmpty }.count
@@ -1601,8 +1601,8 @@ struct StoryViewer: View {
         }
     }
 
-    // TELEGRAM LOOK: the cancel X lives INSIDE the loading ring (one element, not a separate X +
-    // spinner + trash), then the "Uploading…" label. Tapping the ring cancels the upload. (Telegram's
+    // The look: the cancel X lives INSIDE the loading ring (one element, not a separate X +
+    // spinner + trash), then the "Uploading…" label. Tapping the ring cancels the upload. (The reference
     // ring is determinate — grows with % — but we only track an uploading flag, so the ring spins.)
     private var uploadingControls: some View {
         HStack(spacing: 12) {
@@ -1710,7 +1710,7 @@ struct UploadingStoryViewer: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 8)
                 Spacer()
-                // Telegram look: cancel X INSIDE the loading ring, then "Uploading…".
+                // Loading look: cancel X INSIDE the loading ring, then "Uploading…".
                 HStack(spacing: 12) {
                     Button { stories.cancelUpload(); onClose() } label: {
                         UploadCancelRing(diameter: 28)
@@ -1778,7 +1778,7 @@ struct UploadingStoryHandoff: View {
     }
 }
 
-// "Seen by" sheet — who viewed my status (premium, like WhatsApp/IG).
+// "Seen by" sheet — who viewed my status (premium).
 struct SeenBySheet: View {
     let storyId: String
     @Environment(\.dismiss) private var dismiss
@@ -1823,7 +1823,7 @@ struct SeenBySheet: View {
 }
 
 
-// Carousel of ALL my posted stories, shown above the open viewers sheet (Telegram / user mockup):
+// Carousel of ALL my posted stories, shown above the open viewers sheet (per the user mockup):
 // ONLY the rounded photos — no captions, no avatars, no progress bars. Side cards carry a small
 // eye+heart count inside their bottom edge; the CENTRED card shows its count BIG underneath.
 // Swiping (or tapping a side card) re-centres a story and re-targets the viewers list below.
@@ -1855,8 +1855,8 @@ private struct SnapshotCardContent: View {
     }
 }
 
-// TELEGRAM-style upload indicator: a thin ring with the cancel X inside it (one control).
-// Tapping it cancels the upload. The ring spins (we track an uploading flag, not a % — Telegram's
+// Story-style upload indicator: a thin ring with the cancel X inside it (one control).
+// Tapping it cancels the upload. The ring spins (we track an uploading flag, not a % — the reference
 // grows with real progress). Generous frame so the whole ring is an easy tap target.
 struct UploadCancelRing: View {
     var diameter: CGFloat = 28
@@ -1881,7 +1881,7 @@ struct UploadCancelRing: View {
 }
 
 // The chat-list uploading card's indicator: my avatar with a clean thin ring spinning
-// around it (same Telegram-style arc as UploadCancelRing). Replaces the native circular
+// around it (same arc style as UploadCancelRing). Replaces the native circular
 // ProgressView, whose pinwheel blades rendered as a messy wedge over the avatar.
 struct UploadingAvatarRing: View {
     let name: String
@@ -1953,10 +1953,10 @@ struct MyStoriesCarousel: View {
         }
     }
 
-    // TELEGRAM CAROUSEL geometry (ported from StoryItemSetContainerComponent). itemSpacing=12;
+    // Carousel geometry (ported from the reference container). itemSpacing=12;
     // side cards are 54pt narrower (sideVisibleItemWidth); fullItemScrollDistance / halfItemScroll-
-    // Distance are the exact Telegram metrics; sideVisibleItemScale is the side card's relative
-    // scale. Each card's x + scale come straight from Telegram's combinedFraction math.
+    // Distance are the reference metrics; sideVisibleItemScale is the side card's relative
+    // scale. Each card's x + scale come straight from the combinedFraction math.
     private var itemSpacing: CGFloat { 12 }
     private var sideW: CGFloat { max(1, slotW - 54) }                          // sideVisibleItemWidth
     private var fullDist: CGFloat { slotW * 0.5 + itemSpacing + sideW * 0.5 }  // fullItemScrollDistance
@@ -1971,12 +1971,12 @@ struct MyStoriesCarousel: View {
         VStack(spacing: 12) {
             GeometryReader { geo in
                 let centralX = geo.size.width / 2
-                let dragFrac = dragX / fullDist          // live finger, in item units (Telegram scroll fraction)
+                let dragFrac = dragX / fullDist          // live finger, in item units (scroll fraction)
                 ZStack {
                     ForEach(Array(stories.enumerated()), id: \.element.id) { pair in
                         let i = pair.offset
                         let s = pair.element
-                        // Telegram: combinedFraction = (index offset) + scroll fraction.
+                        // combinedFraction = (index offset) + scroll fraction.
                         let cf = CGFloat(i - index) + dragFrac
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
@@ -2003,7 +2003,7 @@ struct MyStoriesCarousel: View {
                     .onChanged { v in
                         if !dragging {
                             // Engage almost immediately (5pt, was 12) so the cards start tracking the
-                            // finger right away — the 12pt dead-zone read as laggy vs Telegram.
+                            // finger right away — the 12pt dead-zone read as laggy.
                             guard abs(v.translation.width) > 5,
                                   abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
                             dragging = true
@@ -2087,7 +2087,7 @@ struct MyStoriesCarousel: View {
                         content.opacity(Self.centreDistance(proxy) < 0.35 ? 0 : 1)
                     }
             }
-            // (Cover-flow scale now comes from Telegram's itemScale applied in body — no per-card
+            // (Cover-flow scale now comes from the itemScale applied in body — no per-card
             // visualEffect scale here, or it would double.)
             .id(s.id)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
@@ -2137,12 +2137,12 @@ struct MyStoriesCarousel: View {
     }
 }
 
-// Telegram-architecture viewers sheet: a SEPARATE bottom layer holding ONLY the drag handle, search,
+// The reference viewers-sheet architecture: a SEPARATE bottom layer holding ONLY the drag handle, search,
 // and the scrollable viewer list — NO story media (the carousel above it is its own layer). It drives
 // `progress` (0 closed … 1 open); the StoryViewer's backdrop reads the same value → always in sync.
 struct StoryViewersBottomSheet: View {
     // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
-    // same value, so the two layers always agree on the layout. Telegram makes the LIST the dominant
+    // same value, so the two layers always agree on the layout. The design makes the LIST the dominant
     // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
     static let heightFraction: CGFloat = 0.60   // tuned so the ASPECT-TRUE cards land at ~231's 120pt width (chunky) — stable size everywhere, no stretch
 
@@ -2155,7 +2155,7 @@ struct StoryViewersBottomSheet: View {
     @State private var viewers: [StoryViewerInfo] = []
     @State private var search = ""
     @State private var loading = true
-    @State private var tab = 0   // 0 = All Viewers, 1 = Contacts (Telegram tabs)
+    @State private var tab = 0   // 0 = All Viewers, 1 = Contacts (tabs)
     @State private var dragStart: CGFloat? = nil
     @State private var listOffset: CGFloat = 0   // the viewer list's scroll offset (0 = top)
 
@@ -2171,7 +2171,7 @@ struct StoryViewersBottomSheet: View {
         if tab == 1 { let c = contactUids; v = v.filter { c.contains($0.id) } }   // Contacts tab
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty { v = v.filter { $0.name.localizedCaseInsensitiveContains(q) } }
-        // Telegram order (sortMode .reactionsFirst): people who REACTED come first, then most-recent.
+        // Sort order (sortMode .reactionsFirst): people who REACTED come first, then most-recent.
         return v.sorted { a, b in
             let ar = !(a.reaction ?? "").isEmpty
             let br = !(b.reaction ?? "").isEmpty
@@ -2194,7 +2194,7 @@ struct StoryViewersBottomSheet: View {
             )
             .frame(maxHeight: .infinity, alignment: .bottom)   // park at the bottom of the screen
             // Rubber-band past fully-open (progress can exceed 1 while dragging up): resist so the
-            // sheet eases to a soft stop instead of a hard wall, Telegram-style.
+            // sheet eases to a soft stop instead of a hard wall.
             .offset(y: (1 - min(progress, 1)) * sheetH - overshoot(progress) )
         }
         .ignoresSafeArea()
@@ -2219,7 +2219,7 @@ struct StoryViewersBottomSheet: View {
         return 22 * (1 - 1 / (1 + (p - 1) * 3))   // asymptotes to ~22pt
     }
 
-    // ONE unified drag (Telegram): dragging the handle/search OR the list (when the list is at its
+    // ONE unified drag: dragging the handle/search OR the list (when the list is at its
     // top and you pull down) drives the sheet up/down. `fromList` gates the list case so mid-list
     // scrolling isn't hijacked. The list is scroll-disabled while the sheet isn't fully open, so once
     // a collapse starts the list locks and the drag owns the motion.
@@ -2294,7 +2294,7 @@ struct StoryViewersBottomSheet: View {
         .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: false))
     }
 
-    // "All Viewers | Contacts" tabs (Telegram StoryItemSetViewListComponent): active tab is white
+    // "All Viewers | Contacts" tabs (the viewer-list tabs component): active tab is white
     // with an underline, inactive is dimmed. Tapping switches the list filter (no sheet drag).
     private var tabSelector: some View {
         HStack(spacing: 24) {
@@ -2342,7 +2342,7 @@ struct StoryViewersBottomSheet: View {
         // set), so the list's own scroll/rubber-band can NEVER fight the drag at the top (that fight was
         // the down-drag "shaking"). The drag owns the motion cleanly, matching the smooth upward open.
         .scrollDisabled(progress < 1 || dragStart != nil)
-        // Pulling the list down at its top collapses the sheet (Telegram hand-off).
+        // Pulling the list down at its top collapses the sheet (hand-off).
         .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: true))
     }
 

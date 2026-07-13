@@ -3,12 +3,12 @@ import Foundation
 // Generates standard call-progress tones as in-memory WAV data — no bundled assets.
 // Ringback: what the caller hears while waiting ("ring… ring…"). Busy: declined /
 // unavailable. Ended: a short descending two-beep when a connected call hangs up.
-// These mirror the call-state sounds big apps (WhatsApp/Signal) play.
+// These mirror the call-state sounds big messaging apps play.
 enum RingbackTone {
     // Ringback (440+480 Hz). Tighter, more continuous cadence than the US standard
     // (2s ring / 4s silence) — a 4s gap feels like the call went dead. We use 1.8s on /
     // 1.2s off (3s cycle) so the caller hears a steady "ringing" while waiting, like
-    // WhatsApp. Looped forever by the player.
+    // a standard messenger. Looped forever by the player.
     static func wavData(sampleRate: Int = 8000) -> Data {
         let cycle = 3.0
         let total = Int(Double(sampleRate) * cycle)   // one cadence cycle, looped by the player

@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 // Long-press reaction + actions menu, the any-emoji picker, and the "who reacted"
-// sheet. Signal's logic (one emoji per user, recents, full picker, reactor list),
+// sheet. The standard reaction logic (one emoji per user, recents, full picker, reactor list),
 // our own Kulan design.
 
 // Recently-used reaction emoji, persisted so the quick bar adapts to the user.

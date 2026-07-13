@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-// Instant hold-to-record gesture (the way Signal gets it to fire the moment you touch the mic). A
+// Instant hold-to-record gesture (fires the moment you touch the mic). A
 // SwiftUI DragGesture goes through SwiftUI's gesture arbitration and can be delayed by ancestor views,
 // which made recording feel laggy/unreliable. A UIKit UILongPressGestureRecognizer with
 // minimumPressDuration = 0 recognises on touch-DOWN with no delay and no arbitration — so recording

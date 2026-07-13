@@ -11,7 +11,7 @@ struct MainShell: View {
     @State private var settingsIcon: UIImage?
     @State private var tab = 0
     @State private var previousTab = 0   // last non-search tab → drives what the search circle searches
-    // Missed-call badge on the Calls tab (WhatsApp/Signal): incoming missed calls newer
+    // Missed-call badge on the Calls tab: incoming missed calls newer
     // than the last time the tab was viewed. Local-only "seen" watermark.
     @AppStorage("callsSeenAt") private var callsSeenAt: Double = 0
     private var missedBadge: Int {
@@ -59,7 +59,7 @@ struct MainShell: View {
         }
         // Load call history at startup so the badge is right before the tab is ever opened
         // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).
-        // STAGGERED ~1.5s (Signal's AppReadiness): this isn't needed for the first frame, and launching
+        // STAGGERED ~1.5s (deferred app-readiness): this isn't needed for the first frame, and launching
         // it alongside the chat-list listener + key warm + stories load made a main-thread stampede in
         // the fragile launch window. Delaying non-critical launch work spreads the load out.
         .task {
@@ -184,7 +184,7 @@ struct CallsView: View {
         if !q.isEmpty { list = list.filter { $0.name.lowercased().contains(q) } }
         return list
     }
-    // Consecutive same-kind calls collapse into one "name (3)" row (Phone/Signal/WhatsApp):
+    // Consecutive same-kind calls collapse into one "name (3)" row (like the native Phone app):
     // same person, same direction/outcome/type, same day, adjacent in the list.
     struct CallRun: Identifiable {
         var entries: [CallEntry]          // newest first (list order)
@@ -232,7 +232,7 @@ struct CallsView: View {
                                 call: call,
                                 count: run.entries.count,
                                 onProfile: { profileTarget = call },
-                                onCall: {   // call back the same way (video stays video, like Signal) — after a confirm
+                                onCall: {   // call back the same way (video stays video) — after a confirm
                                     pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
                                 }
                             )
@@ -245,7 +245,7 @@ struct CallsView: View {
                                 }
                                 .tint(.red)   // force red — the app's white tint was washing it out
                             }
-                            // Long-press menu (Signal-style) — every action is real.
+                            // Long-press menu — every action is real.
                             // (Tick reposition lives in ChatRow; see chat list.)
                             .contextMenu {
                                 Button {
@@ -301,7 +301,7 @@ struct CallsView: View {
                             Text("Missed").tag(1)
                         }
                         .pickerStyle(.segmented)
-                        .frame(width: 150)   // compact All/Missed pill (Signal-style), not full-width
+                        .frame(width: 150)   // compact All/Missed pill, not full-width
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showNew = true } label: { Image(systemName: "phone.badge.plus") }
@@ -513,7 +513,7 @@ struct ChatsView: View {
     @State private var path = NavigationPath()
     @State private var pendingDelete: Conversation?
     @State private var pendingMute: Conversation?
-    // Multi-select edit mode (Telegram-style).
+    // Multi-select edit mode.
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var showArchived = false
@@ -540,7 +540,7 @@ struct ChatsView: View {
     private func openStoryChat(_ g: StoryGroup) {
         path.append(ChatTarget(id: storyCid(g.authorUid), name: g.name, photo: g.photoUrl))
     }
-    // WhatsApp-style header fade: hide the nav-bar icons while a chat is pushed so they
+    // Header fade: hide the nav-bar icons while a chat is pushed so they
     // don't float statically over the screen during the interactive swipe-back. Driven by
     // navigation depth — a non-empty path (which holds through the ENTIRE drag) keeps them
     // hidden; they fade back only when the list is fully back (path empty again on commit).
@@ -601,7 +601,7 @@ struct ChatsView: View {
     // Native nav bar with a crisp circle avatar — glass stripped via the iOS 26
     // opt-out, same as the chat header. Keeps the large "Chats" title + smooth
     // push transitions instead of a hand-rolled bar.
-    // Avatar dropdown menu: Select Chats / Settings / Archive (Telegram-style).
+    // Avatar dropdown menu: Select Chats / Settings / Archive.
     // Left: Edit (multi-select). Settings moved to its own tab, so no avatar here anymore.
     private var editButton: some View {
         Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
@@ -670,7 +670,7 @@ struct ChatsView: View {
         }
     }
 
-    // Persist a pinned-chat reorder via fractional indexing (Telegram-style).
+    // Persist a pinned-chat reorder via fractional indexing.
     private func reorderPinned(from source: IndexSet, to destination: Int) {
         let rows = visible
         guard let from = source.first, rows.indices.contains(from) else { return }
@@ -801,10 +801,10 @@ struct ChatsView: View {
                         .buttonStyle(ChatRowPressStyle())   // grey highlight while held
                         .tag(conv.id)
                         .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)   // clean, no row lines (like Signal)
+                        .listRowSeparator(.hidden)   // clean, no row lines
                         .moveDisabled(true)   // reordering removed — pinned chats stay fixed
                         // Full-swipe enabled like the leading (Pin) edge. The FIRST action is
-                        // what a full swipe triggers, so Archive leads (WhatsApp-style): a long
+                        // what a full swipe triggers, so Archive leads: a long
                         // left swipe archives; Mute/Delete are still revealed for a tap.
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button {
@@ -835,7 +835,7 @@ struct ChatsView: View {
                       }
                     }
                     .listStyle(.plain)
-                    // Signal-style: when a new message bumps a chat to the top, the rows
+                    // When a new message bumps a chat to the top, the rows
                     // slide to their new order instead of popping. Scoped to the order/
                     // membership only, so it won't animate unrelated content changes.
                     .animation(.spring(response: 0.38, dampingFraction: 0.86), value: visible.map(\.id))
@@ -1327,7 +1327,7 @@ struct ChatRow: View, Equatable {
             Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
-    // "Reacted 🙏" preview when the newest event in the chat is a reaction (WhatsApp-style).
+    // "Reacted 🙏" preview when the newest event in the chat is a reaction.
     private var reactionPreview: String? {
         guard conv.freshReaction(me), let enc = conv.lastReactionEnc else { return nil }
         let emoji = conv.isGroup
@@ -1421,7 +1421,7 @@ struct ChatRow: View, Equatable {
         }
     }
 
-    // WhatsApp-style ticks for MY last message: single grey = sent, double accent = read.
+    // Delivery ticks for MY last message: single grey = sent, double accent = read.
     @ViewBuilder private var ticksView: some View {
         let read = conv.lastReadByOther(me)
         HStack(spacing: -3) {
@@ -1448,12 +1448,12 @@ struct ChatRow: View, Equatable {
     var body: some View {
         // 56pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
         HStack(spacing: 12) {
-            // WhatsApp rule: a story ring must NOT enlarge the row — the photo shrinks a hair
+            // Rule: a story ring must NOT enlarge the row — the photo shrinks a hair
             // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
             AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
                        size: storySeen.isEmpty ? 56 : 49)
                 // This circle is the story's zoom anchor: opening from here grows the viewer out
-                // of THIS ring, and closing shrinks back into it (WhatsApp/Telegram behavior).
+                // of THIS ring, and closing shrinks back into it (the standard behavior).
                 // Anchored on the PHOTO ONLY — with the ring inside the anchor, the hero
                 // stretched the grey ring segments during the zoom (user glitch screenshot).
                 .modifier(RowStoryAnchor(ns: storyNS, id: "row-\(conv.id)"))

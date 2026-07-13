@@ -30,7 +30,7 @@ struct SecureImageView: View {
                 Rectangle().fill(Color.gray.opacity(0.18))
                     .overlay { Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary) }
             } else if let hash = placeholderHash, let blur = BlurHash.decode(hash) {
-                // Signal's placeholder chain: a recognizable blur of the ACTUAL photo (decoded from the
+                // Placeholder chain: a recognizable blur of the ACTUAL photo (decoded from the
                 // ~28-char hash that travels in the message) beats a gray skeleton while bytes download.
                 Image(uiImage: blur).resizable().scaledToFill()
             } else {
@@ -60,7 +60,7 @@ struct SecureImageView: View {
                 ui = UIImage(data: data); clearBytes = data
             }
             if let ui {
-                // Display + memory-cache a display-BOUNDED bitmap (Signal's decode buckets: a 12MP photo
+                // Display + memory-cache a display-BOUNDED bitmap (display-decode buckets: a 12MP photo
                 // shouldn't live as a 48MB bitmap per bubble); the ORIGINAL bytes go to disk untouched.
                 let bounded = ui.boundedForDisplay()
                 DiskImageCache.shared.store(bounded, data: clearBytes, for: imageUrl)   // decrypted, file-protected on disk

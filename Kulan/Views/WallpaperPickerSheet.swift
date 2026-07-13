@@ -1,7 +1,7 @@
 import SwiftUI
 import PhotosUI
 
-// Telegram-style "Select Theme" sheet, our own look. A native sheet with a row of gradient swatches
+// "Select Theme" sheet, our own look. A native sheet with a row of gradient swatches
 // + None (+ a Photos tile when a custom photo is the pick). Picking a swatch LIVE-previews it on the
 // chat behind. The bottom button is contextual: "Choose Wallpaper from Photos" when nothing new is
 // selected (settled), and morphs to "Apply Wallpaper" — tinted with the pick's own colour — the

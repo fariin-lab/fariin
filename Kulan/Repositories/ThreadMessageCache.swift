@@ -5,16 +5,15 @@ import UIKit
 //
 // This is what lets a reopened chat render its conversation SYNCHRONOUSLY at ThreadRepository.init
 // — fully painted and frozen BEFORE the push transition — instead of fading in a beat late while
-// the E2EE decrypt runs off the main thread. It's Kulan's equivalent of Signal's local decrypted
-// render-state (GRDB) / WhatsApp's local DB: the messages are already unlocked and ready, so the
-// screen isn't empty when the push starts.
+// the E2EE decrypt runs off the main thread. It's Kulan's local decrypted render-state / local DB:
+// the messages are already unlocked and ready, so the screen isn't empty when the push starts.
 //
 // First-ever open of a chat this session is still a cold async load (nothing cached yet); every
 // reopen after is instant. Main-actor only (written from ThreadRepository on the main thread).
 final class ThreadMessageCache {
     static let shared = ThreadMessageCache()
     private init() {
-        // Background shrink (Signal's cache-evacuation idea, softened): keep the cache so reopening a
+        // Background shrink (cache-evacuation idea, softened): keep the cache so reopening a
         // chat after backgrounding is still instant, but trim each chat to ~2 screens of messages so a
         // backgrounded app isn't holding thousands of decrypted Message structs under memory/thermal
         // pressure (the SwiftUI-layout watchdog kill happened exactly there).

@@ -1,7 +1,7 @@
 import Foundation
 import FirebaseFirestore
 
-// Durable outgoing-TEXT queue (Signal's MessageSenderJobQueue, minimal form). A text send is
+// Durable outgoing-TEXT queue (a durable job queue, minimal form). A text send is
 // persisted to disk BEFORE the network call and removed only once it succeeds — so a message you
 // composed then killed/backgrounded the app on still gets sent on the next launch, instead of
 // silently vanishing with the in-memory optimistic bubble.

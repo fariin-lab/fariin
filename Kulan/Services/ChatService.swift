@@ -407,7 +407,7 @@ enum ChatService {
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
         if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url) }
 
-        // Caption travels INSIDE the image message (Signal: the caption is the message body) — sealed
+        // Caption travels INSIDE the image message (the caption is the message body) — sealed
         // exactly like a text message.
         var captionCipher = ""
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -425,10 +425,10 @@ enum ChatService {
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
         ]
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
-        if viewOnce { imgMsg["viewOnce"] = true }           // Signal-style view-once photo
+        if viewOnce { imgMsg["viewOnce"] = true }           // view-once photo
         if let ui = UIImage(data: data) {                   // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
-            // BlurHash (Signal): a ~28-char sketch of the photo, sealed like the caption, so the
+            // BlurHash: a ~28-char sketch of the photo, sealed like the caption, so the
             // recipient's bubble shows a real blurred preview before any bytes download.
             if !viewOnce, let hash = BlurHash.encode(ui) {
                 let sealed = members != nil
@@ -455,7 +455,7 @@ enum ChatService {
         try await batch.commit()
     }
 
-    /// Send 2+ photos as ONE album message (grid + one caption), like Signal/Telegram. Each photo is
+    /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
     /// E2EE'd + uploaded separately; a single message doc carries the array of {imageUrl, enc, w, h}.
     static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil) async throws {
         var members = group
@@ -486,7 +486,7 @@ enum ChatService {
             items.append(["imageUrl": url, "enc": meta.asDict, "width": Double(sz.width), "height": Double(sz.height)])
         }
 
-        // Caption sealed like a text body (Signal: one body for the album).
+        // Caption sealed like a text body (one body for the album).
         var captionCipher = ""
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
@@ -526,7 +526,7 @@ enum ChatService {
         case video(Data, thumbnail: Data, duration: Double, width: Double, height: Double)  // mp4 + poster
     }
 
-    /// Send images AND videos together as ONE album message (Signal/WhatsApp mixed grouping). Every
+    /// Send images AND videos together as ONE album message (standard mixed grouping). Every
     /// item is E2EE'd + uploaded independently, then a single doc carries the mixed array; videos
     /// store {kind:"video", imageUrl=poster, videoUrl, videoEnc, duration}. One caption, one timestamp,
     /// one delivery status — the group never splits into separate messages.
@@ -1051,7 +1051,7 @@ enum ChatService {
             .updateData(["unreadCount.\(uid)": 0])
     }
 
-    /// Manually flag a chat as unread (Telegram-style) — shows a badge until reopened.
+    /// Manually flag a chat as unread — shows a badge until reopened.
     static func markUnread(_ cid: String) async {
         try? await db.collection("conversations").document(cid)
             .updateData(["unreadCount.\(uid)": 1])
@@ -1064,7 +1064,7 @@ enum ChatService {
             .setData(["lastRead": [uid: FieldValue.serverTimestamp()]], merge: true)
     }
 
-    // Throttled read receipts (Signal's ReceiptSender debounce): the per-received-message call in an
+    // Throttled read receipts (a debounced receipt sender): the per-received-message call in an
     // open chat was one Firestore write PER message — a 20-message burst = 20 billed writes. This fires
     // immediately when idle, then suppresses further writes for 2s and sends ONE trailing write if more
     // messages arrived during the window (read state is monotonic, so the newest write covers them all).
@@ -1127,7 +1127,7 @@ enum ChatService {
             .setData(["mutedBy": [uid: until]], merge: true)
     }
 
-    /// Shared mute-duration options (Signal-style). Pass nil for "Always".
+    /// Shared mute-duration options. Pass nil for "Always".
     static func muteUntil(_ hours: Double?) -> Double {
         guard let hours else { return 9_999_999_999_999 }
         return Date().timeIntervalSince1970 * 1000 + hours * 3_600_000
@@ -1161,7 +1161,7 @@ enum ChatService {
     }
 
     /// Set the per-chat disappearing-message timer (seconds; 0 = off). Shared by both.
-    /// NEVER silent (WhatsApp rule): both sides get a centered system notice in the chat
+    /// NEVER silent (the standard rule): both sides get a centered system notice in the chat
     /// saying who changed it — one member must not be able to flip it secretly.
     static func setDisappear(_ cid: String, seconds: Int) async {
         let ref = db.collection("conversations").document(cid)
@@ -1180,7 +1180,7 @@ enum ChatService {
         let now = Date().timeIntervalSince1970 * 1000
         // Stamp block start / unblock time so the blocker hides exactly the messages
         // that arrived DURING the block — and keeps hiding them after unblock
-        // (never delivered, like WhatsApp). Older history stays visible.
+        // (never delivered, as standard messengers do). Older history stays visible.
         if value { data["blockedAt"] = [uid: now] } else { data["blockClearedAt"] = [uid: now] }
         try? await db.collection("conversations").document(cid).setData(data, merge: true)
     }

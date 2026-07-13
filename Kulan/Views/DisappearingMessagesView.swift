@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Full-screen "Disappearing Messages" picker (Telegram/Signal-style): a description, a radio list
+// Full-screen "Disappearing Messages" picker (standard style): a description, a radio list
 // of durations, and a Custom Time sub-picker. X cancels, checkmark commits the highlighted timer.
 struct DisappearingMessagesView: View {
     let cid: String
