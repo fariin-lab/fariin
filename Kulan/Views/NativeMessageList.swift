@@ -201,6 +201,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
     private var keyboardSessionWasAtBottom = false       // the show→hide session began at the bottom → end pinned
     private var geoSettleWork: DispatchWorkItem?         // trailing settle after the geometric signal goes quiet
+    private var geoRiding = false                        // geometric keyboard ride in flight → layout passes stand off
     // Selection-mode animation coordination (the reference's selectionAnimationState): the land that
     // CARRIES the checkbox change passes (even mid-motion), then further lands defer until the slide
     // animation window closes — a reconfigure mid-slide clobbered the checkbox animation.
@@ -942,7 +943,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewDidLayoutSubviews()
         // During a keyboard-synced animation the inset is owned by that UIView.animate — re-asserting it
         // instantly here snapped the content to its final spot while the keyboard was still sliding (the jump).
-        if !keyboardAnimating { updateBottomInset() }   // safe-area values are valid here — keeps the inset exact
+        if !keyboardAnimating, !geoRiding { updateBottomInset() }   // safe-area valid here; not during the keyboard ride
         // Report the GEOMETRIC nav-bar overlap (view.safeAreaInsets.top — the same reliable source the
         // insets use; the SwiftUI readers reported 0 during transitions, which put the floating date
         // pill in the status bar). Async so the SwiftUI state write never lands mid-layout.
@@ -960,12 +961,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             else { scheduleEmptyReveal() }
             return
         }
-        // Never re-pin during: the send animation, the open window, a keyboard animation, or while the USER
-        // is actively scrolling. A SwiftUI-induced layout pass mid-scroll (e.g. isAtBottom flipping near the
-        // bottom re-runs the tree) used to hit pinBottom here and YANK the user to the bottom = the scroll jump.
+        // Never re-pin during: the send animation, the open window, a keyboard animation, the geometric
+        // keyboard ride, or while the USER is actively scrolling. geoRiding is the key one for the
+        // keyboard-jump-on-open bug: without it, a layout pass mid-ride ran the OLD updateBottomInset with
+        // computeAtBottom()==false (offset hadn't followed the grown inset yet) → stickBottom false →
+        // clampOffsetIfBeyondContent left the content stranded at the top with the reserved gap below.
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
         guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !programmaticScrollAnimating,
-              !userScrolling else { return }
+              !geoRiding, !userScrolling else { return }
         if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
         else { clampOffsetIfBeyondContent() }
     }
@@ -998,6 +1001,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // at-bottom pin instantly, so the content tracks the keyboard in lockstep with what the user sees.
     func setKeyboardOverlap(_ raw: CGFloat) {
         guard abs(raw - keyboardOverlap) > 0.5 else { return }
+        geoRiding = true   // the ride owns the inset+offset until the trailing settle; layout passes stand off
         // Session bookkeeping (was previously set from the dead notification path): the keyboard session
         // "starts at the bottom" when the overlap first grows beyond the home area while at the bottom.
         if raw > view.safeAreaInsets.bottom + 10, keyboardOverlap <= view.safeAreaInsets.bottom + 10,
@@ -1021,7 +1025,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // goes quiet and lands the exact end state from the CURRENT bar value — whatever got dropped.
         geoSettleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.isDisappearing, self.didInitialScroll else { return }
+            guard let self else { return }
+            self.geoRiding = false   // ride over — layout passes may re-assert again
+            guard !self.isDisappearing, self.didInitialScroll else { return }
             let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
                 || self.collectionView.isDecelerating
             guard !userScrolling, !self.programmaticScrollAnimating else { return }
