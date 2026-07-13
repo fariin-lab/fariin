@@ -1925,7 +1925,8 @@ struct ThreadView: View {
     // DISPLAY-TIME guard for reply-quote snippets: quotes persisted BEFORE the safeText fix carry the
     // raw "kulan-…:" marker forever (they're encrypted snapshots) — map them to friendly labels when
     // rendering, so old quotes clean up too.
-    static func quoteLabel(_ t: String) -> String {
+    static func quoteLabel(_ t: String) -> String { quoteSafeLabel(t) }
+    private static func _unusedQuoteLabelBody(_ t: String) -> String {
         if t.hasPrefix(Message.contactMarker) { return "Contact" }
         if t.hasPrefix(Message.locationMarker) { return "Location" }
         if t.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Message" }
@@ -3937,7 +3938,7 @@ struct MessageBubble: View, Equatable {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(reply.authorId == AuthService.shared.uid ? "You" : nameFor(reply.authorId))
                         .font(.caption.weight(.semibold)).foregroundStyle(fg.opacity(0.9))
-                    Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : Self.quoteLabel(reply.text)))
+                    Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : quoteSafeLabel(reply.text)))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
             }
@@ -4109,4 +4110,14 @@ struct FilePreview: UIViewControllerRepresentable {
             url as NSURL
         }
     }
+}
+
+// DISPLAY-TIME guard for reply-quote snippets (file scope — used by MessageBubble AND ThreadView):
+// quotes persisted BEFORE the safeText fix carry the raw "kulan-…:" marker forever (encrypted
+// snapshots) — map them to friendly labels when rendering, so old quotes clean up too.
+func quoteSafeLabel(_ t: String) -> String {
+    if t.hasPrefix(Message.contactMarker) { return "Contact" }
+    if t.hasPrefix(Message.locationMarker) { return "Location" }
+    if t.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Message" }
+    return t
 }
