@@ -14,6 +14,7 @@ import FirebaseStorage
 struct VideoPlayerScreen: View {
     let message: Message
     let cid: String
+    var suppressDismissPan: Bool = false   // true when a native .zoom transition owns the drag-down close
 
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
@@ -108,6 +109,9 @@ struct VideoPlayerScreen: View {
         // the finger, constant 0.8 scale, direct backdrop alpha, finish-on-any-progress, 0.25s spring.
         .opacity(dismissing ? 0 : 1)
         .overlay {
+            // Native .zoom owns the close (suppressDismissPan) → the player shrinks back into its bubble
+            // via matched geometry; the custom pan is off so it can't fight it.
+            if !suppressDismissPan {
             SignalDismissHost(
                 canBegin: { !zoomed && !scrubbing },
                 media: {
@@ -124,6 +128,7 @@ struct VideoPlayerScreen: View {
                     dismissing = hidden
                 },
                 onDismiss: { dismiss() })
+            }
         }
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
         .statusBarHidden(true)

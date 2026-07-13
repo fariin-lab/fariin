@@ -491,17 +491,21 @@ struct ThreadView: View {
             Group {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
-                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
+                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
-                                    cid: cid, suppressDismissPan: false,
+                                    cid: cid, suppressDismissPan: true,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     })
                 }
             }
+            // NATIVE matched-geometry zoom (user request): drag-down close shrinks the photo back into its
+            // source bubble via Apple's zoom transition — the same close as the story viewer. The custom
+            // pan is off (suppressDismissPan: true) so it can't fight the native interactive dismiss.
+            .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         // Album gallery: swipe between all the album's photos, starting on the tapped one. No zoom hero
@@ -514,7 +518,10 @@ struct ThreadView: View {
                             })
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid)
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: true)
+                // Native matched-geometry zoom close (user request): the player shrinks back into the
+                // video bubble, same as photos.
+                .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
@@ -3617,6 +3624,9 @@ struct MessageBubble: View, Equatable {
                     }
                     .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
                     .clipped()
+                    // Native zoom hero: the player grows out of this thumbnail and the drag-down close
+                    // shrinks back into it (same as photos).
+                    .modifier(HeroSource(ns: imageNS, id: message.id))
                     .overlay {   // upload ring while sending, play disc once delivered
                         if message.sendState == .sending {
                             ZStack { Color.black.opacity(0.18); UploadingRing() }

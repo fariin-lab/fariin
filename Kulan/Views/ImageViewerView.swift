@@ -114,14 +114,19 @@ struct ImageViewerView: View {
         // 0.25s critically-damped spring). Replaces the old per-frame SwiftUI drag entirely.
         .opacity(dismissing ? 0 : 1)
         .overlay {
-            SignalDismissHost(
-                canBegin: { pageZoom <= 1.02 },
-                media: {
-                    guard let img = loaded[current] else { return nil }
-                    return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
-                },
-                onHideContent: { dismissing = $0 },
-                onDismiss: { dismiss() })
+            // When a native .zoom transition owns the drag-down close (suppressDismissPan) the photo
+            // shrinks back into its source bubble via matched geometry — no custom pan, exactly like the
+            // story close. Otherwise the in-viewer SignalDismissHost drag is used.
+            if !suppressDismissPan {
+                SignalDismissHost(
+                    canBegin: { pageZoom <= 1.02 },
+                    media: {
+                        guard let img = loaded[current] else { return nil }
+                        return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
+                    },
+                    onHideContent: { dismissing = $0 },
+                    onDismiss: { dismiss() })
+            }
         }
         // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.
         .presentationBackground(.clear)
