@@ -149,10 +149,15 @@ struct ChatImageEditor: View {
         }
     }
 
-    // Image area = the FULL screen (user request: match the multi-image editor, where the photo fills
-    // the screen and the tools/caption float OVER it — the old inset-above-the-chrome canvas read as a
-    // "half screen" editor). Canvas, drawing layer, and flatten all share this rect.
-    private func canvasArea(_ s: CGSize) -> CGSize { s }
+    // Image area = the screen MINUS the bottom chrome (tools + caption), exactly like the single VIDEO
+    // editor reserves its trim strip + caption via .safeAreaInset(edge:.bottom). The photo aspect-FITS
+    // this reduced area, so by default it's fully visible / zoomed-out (never filling under the chrome),
+    // and pinch zooms in from there — identical framing to the video editor. Canvas, drawing layer, and
+    // flatten all share this rect. (While the keyboard is up bottomChromeH is frozen, so the photo never
+    // resizes with the keyboard.)
+    private func canvasArea(_ s: CGSize) -> CGSize {
+        CGSize(width: s.width, height: max(0, s.height - bottomChromeH))
+    }
 
     // The photo aspect-FITS the canvas area — fully visible, letterboxed on black, one uniform rule
     // for every ratio (1:1, 4:5, 3:4, 2:3, 4:3, 3:2, 16:9, 9:16, 19.5:9, 20:9). Pinch zoom keeps
@@ -182,9 +187,11 @@ struct ChatImageEditor: View {
                     .frame(width: area.width, height: area.height)
             }
         }
-        // Full-screen canvas like the multi-image editor: centered, no rounded card, chrome floats over.
+        // Media sits in the area ABOVE the bottom chrome (top-anchored, like the video editor): the photo
+        // fills from the top down to just above the tools/caption, so the reserved chrome band stays clear
+        // and the two never overlap.
         .frame(width: area.width, height: area.height)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // 9:16 or taller → the long-portrait presentation (rounded, fully visible). Standard ratios unchanged.
