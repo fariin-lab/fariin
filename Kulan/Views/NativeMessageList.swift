@@ -200,6 +200,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window, reference)
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
     private var keyboardSessionWasAtBottom = false       // the show→hide session began at the bottom → end pinned
+    private var geoSettleWork: DispatchWorkItem?         // trailing settle after the geometric signal goes quiet
     // Selection-mode animation coordination (the reference's selectionAnimationState): the land that
     // CARRIES the checkbox change passes (even mid-motion), then further lands defer until the slide
     // animation window closes — a reconfigure mid-slide clobbered the checkbox animation.
@@ -1014,6 +1015,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 UIView.performWithoutAnimation { pinBottom() }
             }
         }
+        // TRAILING SETTLE (telemetry-driven: off=438 vs max=554 at rest — SwiftUI coalesces onChange and
+        // can DROP the ride's final geometry values, so the last pin ran against a mid-ride inset and the
+        // list rested ~116pt short of the bottom). Re-armed on every update; fires 0.15s after the signal
+        // goes quiet and lands the exact end state from the CURRENT bar value — whatever got dropped.
+        geoSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isDisappearing, self.didInitialScroll else { return }
+            let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
+                || self.collectionView.isDecelerating
+            guard !userScrolling, !self.programmaticScrollAnimating else { return }
+            self.updateBottomInset()
+            if self.keyboardSessionWasAtBottom {
+                UIView.performWithoutAnimation { self.pinBottom() }
+            }
+            #if DEBUG
+            self.debugKB("GEO-SETTLE")
+            #endif
+        }
+        geoSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         #if DEBUG
         debugKB("GEO")
         #endif
