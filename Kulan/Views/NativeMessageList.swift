@@ -148,6 +148,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var scrollAnimationWatchdog: Timer?
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window, reference)
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
+    private var keyboardSessionWasAtBottom = false       // the show→hide session began at the bottom → end pinned
     // Selection-mode animation coordination (the reference's selectionAnimationState): the land that
     // CARRIES the checkbox change passes (even mid-motion), then further lands defer until the slide
     // animation window closes — a reconfigure mid-slide clobbered the checkbox animation.
@@ -877,7 +878,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // reuse this instead. Cleared when the keyboard animation completes.
     private var atBottomForKeyboard: Bool?
     func setComposerBarHeight(_ h: CGFloat) {
-        guard abs(h - composerBarH) > 0.5 else { return }
+        // Reject implausible reports: the composer bar is never under ~40pt — a transient 0/near-0 from
+        // the SwiftUI reader mid-transition would zero the bottom inset and drop the last messages
+        // straight under the input field.
+        guard h > 30, abs(h - composerBarH) > 0.5 else { return }
         composerBarH = h
         updateBottomInset()
     }
@@ -901,8 +905,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // visible artifacts when it appears).
         guard shouldAnimateKeyboardChanges else { updateBottomInset(); return }
         // Capture the at-bottom truth NOW (pre-animation offsets are trustworthy; mid-flight ones are not) —
-        // every inset update inside the keyboard window reuses it.
+        // every inset update inside the keyboard window reuses it. keyboardSessionWasAtBottom survives the
+        // whole show→hide session (unlike atBottomForKeyboard, which clears per animation) — it drives the
+        // DEFINITIVE settle at keyboardDidHide.
         atBottomForKeyboard = didInitialScroll && computeAtBottom()
+        if keyboardOverlap > 0, atBottomForKeyboard == true { keyboardSessionWasAtBottom = true }
         // Animate the inset/offset change IN LOCKSTEP with the keyboard's OWN animation (duration + curve
         // straight from the notification), the way the reference does — so the messages track the keyboard
         // as it slides instead of snapping to the final position while the keyboard is still moving (the jump).
@@ -925,11 +932,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    // Keyboard fully gone: the overlap is 0 no matter what the last frame notification said.
+    // Keyboard fully gone — the AUTHORITATIVE end of the session (fires after the hide animation, the
+    // interactive drag-dismiss, or a cancelled animation alike). The animated hide path can be raced
+    // mid-flight (drag-dismiss skips offset work per the hands-off rule; a composer re-render mid-
+    // animation; a cancelled animation) — when that happened, nothing re-asserted the pin and the last
+    // bubbles rested UNDER the input field. This is the definitive settle: zero the overlap, re-derive
+    // the inset, and if the keyboard session STARTED at the bottom, end it pinned at the bottom.
     @objc private func keyboardDidHide() {
-        guard keyboardOverlap != 0 else { return }
-        keyboardOverlap = 0
-        updateBottomInset()
+        let wasAtBottomSession = keyboardSessionWasAtBottom
+        keyboardSessionWasAtBottom = false
+        if keyboardOverlap != 0 {
+            keyboardOverlap = 0
+            updateBottomInset()
+        }
+        let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+        if wasAtBottomSession, !userScrolling, !isDisappearing, didInitialScroll {
+            UIView.performWithoutAnimation { pinBottom() }
+        }
     }
 
     // Backgrounding force-dismisses the keyboard WITHOUT a frame notification. Record overlap = 0 so the
