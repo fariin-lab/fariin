@@ -291,18 +291,26 @@ struct MediaGalleryView: View {
 
     private func audioRow(_ m: Message) -> some View {
         let selected = selection.contains(m.id)
+        let me = AuthService.shared.uid ?? ""
         return HStack(spacing: 12) {
             if selecting {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22)).foregroundStyle(selected ? Color.accentColor : .secondary)
+                // Static row while selecting (no play — the whole row toggles the checkbox).
+                Image(systemName: "waveform").font(.system(size: 18)).foregroundStyle(Color.accentColor)
+                    .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Voice message").font(.system(size: 16, weight: .medium))
+                    Text(durationLabel(m.duration)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            } else {
+                // The REAL playable voice player (same one used in chat) — tap the play button to
+                // decrypt + play, scrub the waveform, change speed. (The old row was a static icon with
+                // no playback wired up at all.)
+                VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Image(systemName: "waveform").font(.system(size: 18)).foregroundStyle(Color.accentColor)
-                .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Voice message").font(.system(size: 16, weight: .medium))
-                Text(durationLabel(m.duration)).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
             Text(m.createdAt.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
