@@ -81,6 +81,29 @@ private struct RowHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+// Hardened collection view (the reference's ConversationCollectionView protections):
+// - Auto Layout transiently zeroes frames during presentation; accepting a zero size destroys the
+//   contentOffset/scroll state. Reject those values.
+// - UIScrollView's internal _adjustContentOffsetIfNecessary resets the offset to zero BEFORE the content
+//   size is established — snapping the view to the top. Reject offset resets while content is empty.
+final class HardenedCollectionView: UICollectionView {
+    override var frame: CGRect {
+        get { super.frame }
+        set { if newValue.width > 0, newValue.height > 0 { super.frame = newValue } }
+    }
+    override var bounds: CGRect {
+        get { super.bounds }
+        set { if newValue.width > 0, newValue.height > 0 { super.bounds = newValue } }
+    }
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set {
+            if contentSize.height < 1, newValue.y <= 0 { return }   // defeat pre-content zero-resets
+            super.contentOffset = newValue
+        }
+    }
+}
+
 final class MessageListController: UIViewController, UICollectionViewDelegate, UIGestureRecognizerDelegate {
     var coordinator: NativeMessageList.Coordinator!
     private var collectionView: UICollectionView!
@@ -149,7 +172,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let self, index < self.currentIds.count else { return 44 }
             return self.heights[self.currentIds[index]] ?? 44
         }
-        collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView = HardenedCollectionView(frame: view.bounds, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
         collectionView.alpha = 0   // invisible until the first render is final — never shows a mid-measure frame
         collectionView.delegate = self
@@ -377,7 +400,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // landings mid-capture mixed two layout generations = the overlapping-elements-on-screenshot bug.
     private var isInMotion: Bool {
         collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-            || sendAnimating || swipingCell != nil || Date() < captureFreezeUntil
+            || sendAnimating || swipingCell != nil || keyboardAnimating || Date() < captureFreezeUntil
+        // keyboardAnimating: the reference's canLandLoad blocks lands during the keyboard animation —
+        // a reconfigure landing mid-keyboard fights the animated inset track (visible fight/jump).
     }
 
     // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
@@ -528,14 +553,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 self.settleFlush()
             }
         } else {
-            // Land the load with ATOMIC continuity: the anchor delta rides the batch update via the
-            // layout's targetContentOffset (see ExactHeightLayout) — covers prepend, top-trim, delete,
-            // and mixed changes in one mechanism. The completion only handles intents ON TOP of
-            // continuity: a jump target riding the load, or staying pinned at the bottom.
-            layout.pendingContentOffsetAdjustment = adjustment
+            // Land the load with ATOMIC continuity (the reference's exact mechanism): the anchor delta is
+            // handed to UIKit as a UICollectionViewLayoutInvalidationContext.contentOffsetAdjustment,
+            // "just before performBatchUpdates" — UIKit applies it in the same transaction as the update,
+            // so no frame ever renders at the stale offset. Covers prepend, top-trim, delete, and mixed
+            // changes in one mechanism. The layout's targetContentOffset override remains as the fallback
+            // channel. The radar-28167779 workaround (layoutIfNeeded on the OLD data first) guarantees a
+            // clean before-state — batch updates on a layout-dirty collection view corrupt/crash.
+            collectionView.layoutIfNeeded()
+            if adjustment != 0 {
+                let ctx = UICollectionViewLayoutInvalidationContext()
+                ctx.contentOffsetAdjustment = CGPoint(x: 0, y: adjustment)
+                layout.invalidateLayout(with: ctx)
+            }
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
-                self.layout.pendingContentOffsetAdjustment = 0   // consumed (or not needed) — never goes stale
+                self.layout.pendingContentOffsetAdjustment = 0   // fallback channel — never goes stale
                 self.lastStableOffset = self.collectionView.contentOffset.y
                 if let target = scrollTarget, target != "BOTTOM",
                    let ip = self.dataSource.indexPath(for: target) {
@@ -799,6 +832,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         } completion: { _ in
             self.keyboardAnimating = false
             self.atBottomForKeyboard = nil
+            self.settleFlush()   // land anything that coalesced while the keyboard was animating
         }
     }
 
