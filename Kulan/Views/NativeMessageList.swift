@@ -139,9 +139,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var lastKnownDistanceFromBottom: CGFloat = 0 // continuity scalar, tracked on every scroll (reference)
     private var scrollWorkTimer: Timer?                  // 0.1s debounce for pagination + isAtBottom writes
     private var userScrolledSinceTimer = false           // the debounced work only pages on USER scrolls
+    // EVERY programmatic animated scroll is tracked (the reference registers them centrally): while one is
+    // in flight, no land may invalidate the layout under it. A 5s watchdog force-clears the flag if UIKit
+    // cancels the animation without a completion callback — a wedged flag would block lands forever.
+    private var programmaticScrollAnimating = false
+    private var scrollAnimationWatchdog: Timer?
+    private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window, reference)
+    private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
     var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
-    private var inTopZone = false             // debounces the load-older callback to one fire per entry
     private var lastStableOffset: CGFloat = 0 // last user/our-pin offset → screenshot-capture recovery
     private var isDisappearing = false        // swipe-back / pop in progress → freeze all content-offset reflow
 
@@ -173,6 +179,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return self.heights[self.currentIds[index]] ?? 44
         }
         collectionView = HardenedCollectionView(frame: view.bounds, collectionViewLayout: layout)
+        collectionView.isPrefetchingEnabled = false   // off until first appearance (reference: faster, jank-free open)
         collectionView.backgroundColor = .clear
         collectionView.alpha = 0   // invisible until the first render is final — never shows a mid-measure frame
         collectionView.delegate = self
@@ -400,9 +407,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // landings mid-capture mixed two layout generations = the overlapping-elements-on-screenshot bug.
     private var isInMotion: Bool {
         collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-            || sendAnimating || swipingCell != nil || keyboardAnimating || Date() < captureFreezeUntil
+            || sendAnimating || swipingCell != nil || keyboardAnimating || programmaticScrollAnimating
+            || Date() < captureFreezeUntil
         // keyboardAnimating: the reference's canLandLoad blocks lands during the keyboard animation —
         // a reconfigure landing mid-keyboard fights the animated inset track (visible fight/jump).
+        // programmaticScrollAnimating: same rule for OUR animated scrolls (jumps, pin-to-bottom glides).
+    }
+
+    // Register a programmatic animated scroll (the reference's collectionViewWillAnimate): lands defer
+    // until scrollViewDidEndScrollingAnimation, with a 5s watchdog against cancelled animations.
+    private func scrollingAnimationDidStart() {
+        programmaticScrollAnimating = true
+        scrollAnimationWatchdog?.invalidate()
+        scrollAnimationWatchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            self?.scrollingAnimationDidComplete()
+        }
+    }
+
+    private func scrollingAnimationDidComplete() {
+        scrollAnimationWatchdog?.invalidate()
+        scrollAnimationWatchdog = nil
+        programmaticScrollAnimating = false
+        settleFlush()   // land whatever coalesced during the animation (no-op when nothing pending)
     }
 
     // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
@@ -589,6 +615,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 } else if let target = scrollTarget {
                     self.scrollTo(id: target)
                 }
+                // Post-land auto-load re-check (reference: autoLoadMoreIfNecessary after the land settles,
+                // async so it's never re-entrant inside the land): a short prepend can leave the reader
+                // still within the load threshold — continue the chain instead of stalling until the next
+                // manual scroll. The 2s throttle paces it.
+                DispatchQueue.main.async { [weak self] in self?.autoLoadMoreIfNeeded() }
             }
         }
 
@@ -689,6 +720,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         isDisappearing = true
+        shouldAnimateKeyboardChanges = false   // off-screen keyboard changes apply silently (reference)
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
@@ -697,6 +729,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         isDisappearing = false
+        shouldAnimateKeyboardChanges = true            // keyboard tracking animates only once fully on screen (reference)
+        collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
         updateBottomInset()   // correct the inset if a cancelled pop / return changed the keyboard state
         // Swiping back with the KEYBOARD UP: dismiss the keyboard the moment the pop gesture begins
         // (the reference behavior) — the transition then runs against a settled layout instead of
@@ -811,6 +845,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             default: return
             }
         }
+        // Off-screen / not-yet-appeared: apply the inset change SILENTLY (the reference's
+        // shouldAnimateKeyboardChanges — animating layout on a view that isn't fully on screen leaves
+        // visible artifacts when it appears).
+        guard shouldAnimateKeyboardChanges else { updateBottomInset(); return }
         // Capture the at-bottom truth NOW (pre-animation offsets are trustworthy; mid-flight ones are not) —
         // every inset update inside the keyboard window reuses it.
         atBottomForKeyboard = didInitialScroll && computeAtBottom()
@@ -923,6 +961,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let y = max(-collectionView.adjustedContentInset.top, target)
         lastStableOffset = y   // our intentional position → screenshot recovery target
         if animated {
+            scrollingAnimationDidStart()   // lands defer until the glide completes (reference)
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: true)
         } else if abs(collectionView.contentOffset.y - y) > 0.5 {
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
@@ -958,6 +997,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                     - collectionView.adjustedContentInset.bottom)
             if visible.contains(attr.frame) { return }   // already entirely on screen → no scroll
         }
+        scrollingAnimationDidStart()   // lands defer until the jump animation completes (reference)
         collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: true)
     }
 
@@ -1071,7 +1111,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return safeDistanceFromBottom <= 44
     }
 
-    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { sendAnimating = false; settleFlush() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        sendAnimating = false
+        scrollingAnimationDidComplete()   // also runs settleFlush
+    }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate { settleFlush() }   // finger up, no fling → settled now
     }
@@ -1117,12 +1160,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // conversation tree no longer re-runs on every scroll tick near the bottom threshold.
         let atBottom = computeAtBottom()
         if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
-        // Load-older trigger — once per entry into the top zone, USER scrolls only (a programmatic/system
-        // scroll must never page history in).
-        let nearTop = collectionView.contentOffset.y <= 72
-        if nearTop && !inTopZone && userScrolledSinceTimer { coordinator.parent.onReachedTop() }
-        inTopZone = nearTop
+        // Pagination — USER scrolls only (a programmatic/system scroll must never page history in).
+        if userScrolledSinceTimer { autoLoadMoreIfNeeded() }
         userScrolledSinceTimer = false
+    }
+
+    // The reference's auto-load placement: fire when within THREE screen-heights of the top (pagination
+    // feels seamless — history is there before the user ever sees the edge), throttled to one load per 2s
+    // (their didLoadOlderRecently window). No zone-entry debounce: a short prepend leaves the reader still
+    // inside the zone, and the time throttle alone lets the chain continue until content outruns the
+    // threshold (the old once-per-entry rule stalled exactly there). The repo's own loading flag prevents
+    // concurrent loads.
+    private func autoLoadMoreIfNeeded() {
+        guard didReveal, Date() >= captureFreezeUntil else { return }
+        let threshold = max(72, collectionView.bounds.height * 3)
+        guard collectionView.contentOffset.y <= threshold,
+              Date().timeIntervalSince(lastLoadOlderAt) > 2 else { return }
+        lastLoadOlderAt = Date()
+        coordinator.parent.onReachedTop()
     }
 
     // Status-bar tap: the default scroll-to-top animation swings PAST the top then bounces back — that
@@ -1130,6 +1185,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // adjusted offset (continuity break + possible load loop — the reference documents exactly this).
     // A plain animated setContentOffset has no overshoot.
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        scrollingAnimationDidStart()
         collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: true)
         return false
     }
