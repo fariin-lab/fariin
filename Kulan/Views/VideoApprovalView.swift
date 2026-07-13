@@ -2,14 +2,56 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
+// One clip in the (multi-)video editor: local url + poster thumb + duration (both straight from the picker).
+struct ApprovalClip: Identifiable {
+    let id = UUID()
+    let url: URL
+    var thumb: UIImage?
+    var duration: Double
+}
+
 // Pre-send video editor (parity with the image editor): plays the picked video (looping within the
 // trimmed range, tap to play/pause) with a Photos-style TRIM filmstrip (drag the two handles to cut the
 // start/end), a caption field, and Send. On Send it exports just the trimmed range (or sends the original
-// untouched if nothing was trimmed). Crop / pen are a follow-up (a larger video-composition feature).
+// untouched if nothing was trimmed).
+//
+// MULTI-VIDEO MODE (user spec, reference screenshot): the SAME page — identical zoom, HD button, trim
+// strip, caption, spacing — plus a horizontal THUMBNAIL RAIL at the canvas's bottom-right showing every
+// selected video (duration badge, blue border on the current one, X to remove it). Tapping a thumb
+// switches the editor to that clip; each clip keeps its own trim. Send exports every clip.
 struct VideoApprovalView: View {
-    let url: URL
-    var onSend: (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void
+    // Per-clip trim state, stashed when switching clips so every video keeps its own cut.
+    private struct ClipTrim {
+        var duration: Double
+        var trimStart: Double
+        var trimEnd: Double
+        var videoSize: CGSize
+        var thumbnails: [UIImage]
+    }
+
+    @State private var clipList: [ApprovalClip]
+    @State private var current = 0
+    @State private var stash: [UUID: ClipTrim] = [:]
+    let onSend: (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void
+    let onSendMulti: ((_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void)?
     @Environment(\.dismiss) private var dismiss
+
+    // Single video (the existing call sites, unchanged).
+    init(url: URL, onSend: @escaping (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void) {
+        _clipList = State(initialValue: [ApprovalClip(url: url, thumb: nil, duration: 0)])
+        self.onSend = onSend
+        self.onSendMulti = nil
+    }
+
+    // Multiple videos → the same editor with the thumbnail rail.
+    init(clips: [ApprovalClip], onSendMulti: @escaping (_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void) {
+        _clipList = State(initialValue: clips)
+        self.onSend = { _, _, _ in }
+        self.onSendMulti = onSendMulti
+    }
+
+    private var activeURL: URL { clipList[current].url }
+    private var activeClipId: UUID { clipList[current].id }
 
     @State private var caption = ""
     @State private var playing = false   // PAUSED by default — plays only when the user taps play (user request)
@@ -54,9 +96,10 @@ struct VideoApprovalView: View {
             // left handle. While the user is dragging a handle/the playhead, `scrubTime` owns the position,
             // so we ignore player time then (no fight between the seek-preview and the observer).
             Group {
-                let base = TrimmingPlayerView(url: url, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
+                let base = TrimmingPlayerView(url: activeURL, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
                                               scrubTime: scrubTime,
                                               onTime: { t in if scrubTime == nil { playhead = t } })
+                    .id(activeClipId)   // switching clips rebuilds the player (the UIView holds its url)
                 if isTallVideo {
                     // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
                     // ROUNDED CORNERS hug the video itself — standard ratios keep the untouched chain.
@@ -93,8 +136,132 @@ struct VideoApprovalView: View {
         // Top bar FLOATS over the video (X · HD) instead of sitting on a black band above it — the
         // video extends up to the top, no black "header". Only the bottom chrome insets the video.
         .overlay(alignment: .top) { topBar }
+        // Thumbnail RAIL (multi-video only): bottom-right of the canvas, above the trim strip — the
+        // reference position. Hidden while the caption keyboard is up (the strip area is reclaimed).
+        .overlay(alignment: .bottomTrailing) {
+            if clipList.count > 1 && !captionFocused { thumbRail }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
-        .task { await loadVideo() }
+        .task(id: activeClipId) { await loadVideoIfNeeded() }
+    }
+
+    // MARK: - Thumbnail rail (multi-video)
+
+    private var thumbRail: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(clipList.enumerated()), id: \.element.id) { i, clip in
+                    railThumb(i, clip)
+                }
+            }
+            .padding(.top, 10)      // room for the X badge poking above the current thumb
+            .padding(.trailing, 10)
+            .padding(.leading, 4)
+        }
+        .frame(maxWidth: 292)       // ~4 thumbs; more scroll horizontally
+        .padding(.trailing, 8)
+        .padding(.bottom, 10)
+    }
+
+    @ViewBuilder private func railThumb(_ i: Int, _ clip: ApprovalClip) -> some View {
+        let isCurrent = i == current
+        Button { switchTo(i) } label: {
+            ZStack(alignment: .bottomLeading) {
+                Group {
+                    if let t = railImage(clip) {
+                        Image(uiImage: t).resizable().scaledToFill()
+                    } else {
+                        Color.gray.opacity(0.3)
+                    }
+                }
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // Duration badge (reference look: small dark capsule, bottom-left).
+                Text(railDuration(clip))
+                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .padding(4)
+            }
+            .overlay {
+                if isCurrent {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color(hex: 0x3DA1FD), lineWidth: 2.5)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                // X on the CURRENT thumb removes that video from the batch (reference behavior).
+                if isCurrent && clipList.count > 1 {
+                    Button { removeClip(i) } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 18, height: 18)
+                            .background(.black.opacity(0.72), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 7, y: -7)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func railImage(_ clip: ApprovalClip) -> UIImage? {
+        clip.thumb ?? stash[clip.id]?.thumbnails.first ?? (clip.id == activeClipId ? thumbnails.first : nil)
+    }
+
+    private func railDuration(_ clip: ApprovalClip) -> String {
+        let d: Double = {
+            if clip.id == activeClipId, duration > 0 { return trimEnd - trimStart }
+            if let s = stash[clip.id] { return s.trimEnd - s.trimStart }
+            return clip.duration
+        }()
+        let s = Int(max(0, d).rounded())
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    // MARK: - Clip switching
+
+    private func stashCurrent() {
+        guard duration > 0 else { return }
+        stash[activeClipId] = ClipTrim(duration: duration, trimStart: trimStart, trimEnd: trimEnd,
+                                       videoSize: videoSize, thumbnails: thumbnails)
+    }
+
+    private func switchTo(_ i: Int) {
+        guard i != current, clipList.indices.contains(i) else { return }
+        stashCurrent()
+        playing = false
+        scrubTime = nil
+        zoom = 1; pan = .zero
+        current = i
+        restoreOrReset(clipList[i].id)
+    }
+
+    private func restoreOrReset(_ id: UUID) {
+        if let s = stash[id] {
+            duration = s.duration; trimStart = s.trimStart; trimEnd = s.trimEnd
+            videoSize = s.videoSize; thumbnails = s.thumbnails
+        } else {
+            duration = 0; trimStart = 0; trimEnd = 0
+            videoSize = .zero; thumbnails = []
+        }
+        playhead = trimStart
+        // duration == 0 → the .task(id:) reload fetches this clip's metadata + filmstrip.
+    }
+
+    private func removeClip(_ i: Int) {
+        guard clipList.count > 1, clipList.indices.contains(i) else { return }
+        stash.removeValue(forKey: clipList[i].id)
+        clipList.remove(at: i)
+        if i == current {
+            let next = min(i, clipList.count - 1)
+            current = next
+            playing = false
+            zoom = 1; pan = .zero
+            restoreOrReset(clipList[next].id)
+        } else if i < current {
+            current -= 1
+        }
     }
 
     private var topBar: some View {
@@ -167,8 +334,15 @@ struct VideoApprovalView: View {
 
     // MARK: - Video load / export
 
+    // Per-clip load, driven by .task(id: activeClipId): a clip restored from the stash (duration > 0)
+    // skips the work; a fresh clip loads its metadata + filmstrip.
+    private func loadVideoIfNeeded() async {
+        guard duration <= 0 else { return }
+        await loadVideo()
+    }
+
     private func loadVideo() async {
-        let asset = AVURLAsset(url: url)
+        let asset = AVURLAsset(url: activeURL)
         let dur = (try? await asset.load(.duration).seconds) ?? 0
         guard dur > 0 else { return }
         // Natural (rotation-corrected) size → drives the long-portrait rounded presentation.
@@ -196,22 +370,42 @@ struct VideoApprovalView: View {
 
     private func send() {
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed else { onSend(url, cap, hd); dismiss(); return }
+        // MULTI: export every clip with ITS OWN trim (stashed per clip), deliver the batch in order.
+        if let onSendMulti {
+            stashCurrent()
+            exporting = true
+            let clips = clipList
+            let cuts = stash
+            Task {
+                var outs: [URL] = []
+                for clip in clips {
+                    if let cut = cuts[clip.id], cut.duration > 0,
+                       cut.trimStart > 0.05 || cut.trimEnd < cut.duration - 0.05 {
+                        outs.append(await exportTrimmed(url: clip.url, start: cut.trimStart, end: cut.trimEnd) ?? clip.url)
+                    } else {
+                        outs.append(clip.url)
+                    }
+                }
+                await MainActor.run { exporting = false; onSendMulti(outs, cap, hd); dismiss() }
+            }
+            return
+        }
+        guard trimmed else { onSend(activeURL, cap, hd); dismiss(); return }
         exporting = true
         Task {
-            let out = await exportTrimmed()
-            await MainActor.run { exporting = false; onSend(out ?? url, cap, hd); dismiss() }
+            let out = await exportTrimmed(url: activeURL, start: trimStart, end: trimEnd)
+            await MainActor.run { exporting = false; onSend(out ?? activeURL, cap, hd); dismiss() }
         }
     }
 
-    private func exportTrimmed() async -> URL? {
+    private func exportTrimmed(url: URL, start: Double, end: Double) async -> URL? {
         let asset = AVURLAsset(url: url)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else { return nil }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
         session.outputURL = out
         session.outputFileType = .mp4
-        session.timeRange = CMTimeRange(start: CMTime(seconds: trimStart, preferredTimescale: 600),
-                                        end: CMTime(seconds: trimEnd, preferredTimescale: 600))
+        session.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                                        end: CMTime(seconds: end, preferredTimescale: 600))
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             session.exportAsynchronously { cont.resume() }
         }

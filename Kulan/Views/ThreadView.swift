@@ -46,12 +46,27 @@ struct ThreadView: View {
     @State private var panelEditImage: EditImageWrap?   // picked FROM the attach sheet → editor OVER the sheet (X returns to it)
     @State private var panelVideoApprove: VideoWrap?    // video picked FROM the sheet → trim editor OVER the sheet (X returns to it)
     @State private var panelMediaApprove: MediaWrap?    // mixed picked FROM the sheet → pager OVER the sheet (X returns to it)
+    @State private var panelMultiVideo: MultiVideoWrap? // ALL-video multi FROM the sheet → multi-video editor over it
+    @State private var multiVideoApprove: MultiVideoWrap? // ALL-video multi (main picker) → multi-video editor
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
     struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
     struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video → approval page (caption)
+    struct MultiVideoWrap: Identifiable { let id = UUID(); let clips: [ApprovalClip] }   // ALL-video multi → single-editor chassis + rail
+
+    // A 2+ selection that is ENTIRELY videos routes to the multi-video editor (the single video editor's
+    // exact page + thumbnail rail — user spec); any mix keeps the pager.
+    static func videoClips(from items: [ApprovalMedia]) -> [ApprovalClip]? {
+        let clips = items.compactMap { item -> ApprovalClip? in
+            if case .video(_, let url, let thumb, let dur) = item {
+                return ApprovalClip(url: url, thumb: thumb, duration: dur)
+            }
+            return nil
+        }
+        return clips.count == items.count && clips.count >= 2 ? clips : nil
+    }
     // A tapped album opens a swipeable gallery of its photos (synthetic image messages), starting on
     // the tapped one.
     struct AlbumViewerWrap: Identifiable { let id = UUID(); let gallery: [Message]; let startId: String }
@@ -505,6 +520,15 @@ struct ThreadView: View {
             MediaApprovalView(items: wrap.items) { ordered, caption, hd in
                 Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
             }
+        }
+        // ALL-video multi from the main picker → the multi-video editor (single-editor page + rail).
+        .fullScreenCover(item: $multiVideoApprove) { wrap in
+            VideoApprovalView(clips: wrap.clips, onSendMulti: { urls, caption, hd in
+                Task {
+                    var cap = caption
+                    for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
+                }
+            })
         }
         .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
@@ -1450,6 +1474,8 @@ struct ThreadView: View {
                         panelEditImage = EditImageWrap(image: ui)
                     } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
                         panelVideoApprove = VideoWrap(url: url)
+                    } else if let clips = ThreadView.videoClips(from: items) {
+                        panelMultiVideo = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
                     } else {
                         panelMediaApprove = MediaWrap(items: items)
                     }
@@ -1496,6 +1522,17 @@ struct ThreadView: View {
                 Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
                 showAttachPanel = false
             }
+        }
+        // Multi-VIDEO editor OVER the sheet (all-video selections): the single video editor's exact page
+        // + the thumbnail rail. Sends each clip in order; the caption rides once, on the first.
+        .fullScreenCover(item: $panelMultiVideo) { wrap in
+            VideoApprovalView(clips: wrap.clips, onSendMulti: { urls, caption, hd in
+                Task {
+                    var cap = caption
+                    for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
+                }
+                showAttachPanel = false
+            })
         }
     }
 
@@ -2232,6 +2269,8 @@ struct ThreadView: View {
                 editImage = EditImageWrap(image: ui)
             } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
                 videoToApprove = VideoWrap(url: url)
+            } else if let clips = ThreadView.videoClips(from: items) {
+                multiVideoApprove = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
             } else {
                 mediaToApprove = MediaWrap(items: items)
             }
