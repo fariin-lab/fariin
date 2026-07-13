@@ -98,7 +98,6 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
-    @State private var navBarHeight: CGFloat = 100  // GEOMETRIC nav overlap (fed by the list controller); sane default pre-first-report
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
@@ -167,9 +166,9 @@ struct ThreadView: View {
     }
 
     // Extracted so the type-checker isn't overloaded (the inline `if` in the big chain broke the build).
-    @ViewBuilder private func topPinArea(_ proxy: ScrollViewProxy) -> some View {
+    @ViewBuilder private var topPinArea: some View {
         if !searchActive {   // search owns the top area — the pin bar hides while searching
-            pinnedBar(proxy)
+            pinnedBar
         }
     }
 
@@ -187,12 +186,6 @@ struct ThreadView: View {
             // keyboard layout.) Messages scroll beneath the blur bars, so no band.
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .overlay(alignment: .top) {
-                // Sit right below the nav bar using the SAME geometric top overlap the date pill uses
-                // (list controller's view.safeAreaInsets.top). The SwiftUI reader I tried lived inside the
-                // safe-area-ignored region and reported a wildly wrong value → the bar dropped mid-screen.
-                topPinArea(proxy).padding(.top, navBarHeight)
-            }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. Its OWN height is measured HERE (a reader outside the bar reports only the
             // home-indicator/keyboard, NOT the bar — that mistake left the list's bottom inset ~46pt so the
@@ -609,6 +602,11 @@ struct ThreadView: View {
             Button("Delete", role: .destructive) { bulkDelete() }
             Button("Cancel", role: .cancel) {}
         }
+        // Pinned-message bar: docked at the top via safeAreaInset (the SAME reliable mechanism the search
+        // bar uses) so it ALWAYS sits right below the nav bar — never mid-screen. The old approach placed it
+        // as an overlay padded by a controller-reported navBarHeight, which repeatedly came back wrong and
+        // dropped the bar into the middle of the conversation.
+        .safeAreaInset(edge: .top) { topPinArea }
         // In-chat search: a top bar replaces the nav bar; the ↑/↓ nav bar (searchNavBar) replaces the
         // composer above the keyboard.
         .safeAreaInset(edge: .top) { if searchActive { searchBar } }
@@ -794,7 +792,7 @@ struct ThreadView: View {
     }
 
     // Liquid-Glass pinned-message bar below the nav (tap to scroll to it; pin.slash to unpin).
-    @ViewBuilder private func pinnedBar(_ proxy: ScrollViewProxy) -> some View {
+    @ViewBuilder private var pinnedBar: some View {
         if !repo.pinnedMessageIds.isEmpty {
             let ids = repo.pinnedMessageIds
             let idx = min(pinIndex, ids.count - 1)
@@ -862,7 +860,7 @@ struct ThreadView: View {
             .liquidGlass(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .onTapGesture {
-                if let id = msg?.id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                if let id = msg?.id { flashAndScroll(id) }   // native list: jump+flash (proxy.scrollTo was a no-op)
                 if ids.count > 1 { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
             }
             // 20pt = the nav bar's own button inset on iOS 26 (the glass back-button circle's leading
@@ -1137,7 +1135,6 @@ struct ThreadView: View {
             },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // the only SwiftUI-fed inset; nav/home/keyboard are UIKit-geometric
-            onTopInset: { navBarHeight = $0 },      // geometric nav overlap → date pill / pinned bar position
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
