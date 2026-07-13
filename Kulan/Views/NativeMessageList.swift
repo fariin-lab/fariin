@@ -142,6 +142,44 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
     private var needsReconcileOnSettle = false // a reconcile deferred mid-motion whose heights were pre-adopted
     var initialScrollId: String?              // first-unread rowId → the FIRST open lands here (reference)
+
+    // Branch marker — compiles to a no-op outside DEBUG.
+    private func dbg(_ s: String) {
+        #if DEBUG
+        dbgBranch = s
+        debugKB("UBI")
+        #endif
+    }
+
+    #if DEBUG
+    // TEMPORARY keyboard-pipeline telemetry (Debug/preview builds only, never TestFlight/Release): a tiny
+    // on-screen readout of the inset/offset state at each keyboard stage, so a preview screenshot of the
+    // "keyboard opens but the chat doesn't scroll" bug carries the exact numbers. Remove once diagnosed.
+    private let kbDebugLabel = UILabel()
+    private var dbgBranch = "-"
+    private func debugKB(_ stage: String) {
+        kbDebugLabel.isHidden = false
+        kbDebugLabel.text = String(
+            format: " %@ | %@ \n ovl=%.0f safeB=%.0f barH=%.0f \n inset=%.0f off=%.1f max=%.1f \n dist=%.1f atB=%@ cap=%@ anim=%@ ",
+            stage, dbgBranch, keyboardOverlap, view.safeAreaInsets.bottom, composerBarH,
+            collectionView.contentInset.bottom, collectionView.contentOffset.y, maxContentOffsetY,
+            safeDistanceFromBottom, computeAtBottom() ? "Y" : "N",
+            atBottomForKeyboard.map { $0 ? "Y" : "N" } ?? "-", keyboardAnimating ? "Y" : "N")
+    }
+    private func setupKBDebug() {
+        kbDebugLabel.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        kbDebugLabel.textColor = .white
+        kbDebugLabel.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        kbDebugLabel.numberOfLines = 0
+        kbDebugLabel.isHidden = true
+        kbDebugLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(kbDebugLabel)
+        NSLayoutConstraint.activate([
+            kbDebugLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            kbDebugLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 52),
+        ])
+    }
+    #endif
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
@@ -302,6 +340,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
 
         buildDataSource()
+        #if DEBUG
+        setupKBDebug()
+        #endif
     }
 
     func setLoadingOlder(_ loading: Bool) {
@@ -950,6 +991,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let window = view.window else { return }
         let kbInView = view.convert(end, from: window.coordinateSpace)
         keyboardOverlap = max(0, view.bounds.maxY - kbInView.minY)   // 0 when hidden (frame moves offscreen)
+        #if DEBUG
+        debugKB("WC")
+        #endif
         // During an interactive pop the transition owns the geometry: record the overlap (done above) but
         // run NO inset animation — updateBottomInset is blocked during the pop and re-validated on
         // viewDidAppear / gesture end. Animating layout mid-transition was part of the swipe-back chaos.
@@ -992,6 +1036,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             self.keyboardAnimating = false
             self.atBottomForKeyboard = nil
             self.settleFlush()   // land anything that coalesced while the keyboard was animating
+            #if DEBUG
+            self.debugKB("DONE")
+            #endif
         }
     }
 
@@ -1044,20 +1091,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     //     with the inset delta, clamped to the content bounds.
     private func updateBottomInset(animated: Bool = false) {
         guard isViewLoaded else { return }
-        guard !isDisappearing else { return }
+        guard !isDisappearing else { dbg("skip-disappearing"); return }
         // (1) Interactive pop in progress → no inset work at all. A cancelled pop rebalances the appearance
         // callbacks (isDisappearing has a window there); the gesture's own state does not.
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state {
             case .possible, .failed: break
-            default: return
+            default: dbg("skip-pop"); return
             }
         }
         // .always already adds the geometric home-indicator overlap; the keyboard replaces it when up.
         let keyboardExtra = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
         let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
         let old = collectionView.contentInset.bottom
-        guard abs(old - newBottom) > 0.5 else { return }
+        guard abs(old - newBottom) > 0.5 else { dbg("skip-equal"); return }
         // Inside the keyboard window, trust the truth captured at animation START (a reply banner growing
         // the bar mid-flight would otherwise read a mid-animation offset and miss the pin).
         let wasAtBottom = atBottomForKeyboard ?? (didInitialScroll && computeAtBottom())
@@ -1071,13 +1118,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         if animated { applyInset() } else { UIView.performWithoutAnimation(applyInset) }
         // (3) Interactive keyboard drag owns the offset — hands off.
-        guard !collectionView.isDragging else { return }
-        guard didInitialScroll else { return }
+        guard !collectionView.isDragging else { dbg("skip-drag"); return }
+        guard didInitialScroll else { dbg("skip-preopen"); return }
         if wasAtBottom {
             // (4a) Was at the bottom → stay at the bottom, nothing fancier.
+            dbg(animated ? "pin-anim" : "pin")
             if animated { pinBottom() }                              // inside the keyboard animation → tracks it
             else { UIView.performWithoutAnimation { pinBottom() } }
         } else if didReveal {
+            dbg("lockstep")
             // (4b) Scrolled away → shift in lockstep with the inset change, clamped to the content bounds,
             // so the keyboard never covers the messages being read and hiding it follows them back down.
             let delta = newBottom - old
