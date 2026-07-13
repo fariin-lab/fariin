@@ -397,35 +397,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
             return
         }
 
-        // Send / receive at the bottom ANIMATES (the recipe: animated batch insert + animated scroll
-        // to bottom). Only a single genuine new row animates; multi-row chunk loads and prepends do not.
+        // Send / receive at the bottom = the reference behavior: insert the new row at its FINAL frame
+        // (no per-cell entrance transform, no scale, no fade), then an ANIMATED scroll to the bottom so
+        // the list glides up to reveal the new bubble. The bubble itself never animates — only the scroll
+        // does. Only a single genuine new row animates the scroll; multi-row chunk loads and prepends do not.
         let animate = isAppend && wasAtBottom && appendedCount == 1
         if animate {
-            // Premium send: insert the new cell instantly, land at the bottom so it's in
-            // view just above the composer, then the BUBBLE flies up out of the composer — it starts pushed
-            // down near the input field (slightly smaller) and springs to its resting position. Natural
-            // spring physics, no fade/pop.
-            sendAnimating = true
+            sendAnimating = true   // land-when-safe: no content refresh lands during the scroll animation
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self, self.collectionView.bounds.height > 0 else { self?.sendAnimating = false; return }
                 self.collectionView.layoutIfNeeded()   // exact frames for the appended row
-                let target = self.collectionView.contentSize.height - self.collectionView.bounds.height + self.collectionView.adjustedContentInset.bottom
-                let y = max(-self.collectionView.adjustedContentInset.top, target)
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
-                self.collectionView.layoutIfNeeded()
-                let ip = IndexPath(item: self.currentIds.count - 1, section: 0)
-                guard let cell = self.collectionView.cellForItem(at: ip) else { self.sendAnimating = false; return }
-                // Start it down at the composer (its own height + the composer inset below), a touch smaller.
-                let startDy = cell.bounds.height + self.collectionView.adjustedContentInset.bottom
-                cell.transform = CGAffineTransform(translationX: 0, y: startDy).scaledBy(x: 0.9, y: 0.9)
-                UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.72, initialSpringVelocity: 0.6,
-                               options: [.allowUserInteraction]) {
-                    cell.transform = .identity
-                } completion: { _ in self.sendAnimating = false; self.settleFlush() }
+                self.pinBottom(animated: true)         // animated scroll to bottom reveals the new bubble
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.sendAnimating = false
-                self?.settleFlush()
+            // If the animated scroll produces no end-callback (list was already exactly at the bottom),
+            // clear the gate so coalesced refreshes still flush.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, self.sendAnimating else { return }
+                self.sendAnimating = false
+                self.settleFlush()
             }
         } else {
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
@@ -762,7 +751,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate {
 // with no estimate → measure step, there is nothing to correct and nothing to hide.
 final class ExactHeightLayout: UICollectionViewLayout {
     var heightForItem: ((Int) -> CGFloat)?
-    var animateInserts = false            // a fade-in for a freshly inserted (sent/received) bottom cell
     // A render-state id: an O(1) identity check instead of re-stacking frames on every prepare().
     // The controller bumps this whenever ids/heights change; unchanged generation + width + count →
     // the cached frames are reused untouched (prepare() is called constantly during scrolling).
@@ -771,7 +759,6 @@ final class ExactHeightLayout: UICollectionViewLayout {
     private var frames: [CGRect] = []
     private var contentHeight: CGFloat = 0
     private(set) var layoutWidth: CGFloat = 0
-    private var inserted: Set<IndexPath> = []
     private var builtGeneration = -1
     private var builtCount = -1
 
@@ -823,21 +810,5 @@ final class ExactHeightLayout: UICollectionViewLayout {
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
         newBounds.width != layoutWidth
-    }
-
-    // Fade a freshly inserted bottom cell in (the sent/received bubble), so an animated send glides the
-    // list up while the new bubble fades — the native UIKit behaviour, no custom per-cell transforms.
-    override func prepare(forCollectionViewUpdates updateItems: [UICollectionViewUpdateItem]) {
-        super.prepare(forCollectionViewUpdates: updateItems)
-        inserted = Set(updateItems.compactMap { $0.updateAction == .insert ? $0.indexPathAfterUpdate : nil })
-    }
-    override func finalizeCollectionViewUpdates() { super.finalizeCollectionViewUpdates(); inserted = [] }
-    override func initialLayoutAttributesForAppearingItem(at ip: IndexPath) -> UICollectionViewLayoutAttributes? {
-        guard animateInserts, inserted.contains(ip), let final = layoutAttributesForItem(at: ip) else {
-            return super.initialLayoutAttributesForAppearingItem(at: ip)
-        }
-        let a = final.copy() as! UICollectionViewLayoutAttributes
-        a.alpha = 0
-        return a
     }
 }
