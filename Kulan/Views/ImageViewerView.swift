@@ -220,32 +220,11 @@ struct ImageViewerView: View {
 
     // Thumbnail strip (group context): small rounded thumbs of every image, the current one framed —
     // tap any to jump to it. Centered above the bottom bar (reference screenshot).
+    // Split into small pieces (thumbCell / thumbImage) — the inline version blew the type-checker budget.
     private var thumbStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 5) {
-                ForEach(gallery) { m in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { current = m.id }
-                    } label: {
-                        Group {
-                            if let img = loaded[m.id] {
-                                Image(uiImage: img).resizable().scaledToFill()
-                            } else {
-                                Color.white.opacity(0.15)
-                                    .task { await load(m) }   // strip thumbs load lazily like pages
-                            }
-                        }
-                        .frame(width: m.id == current ? 38 : 32, height: m.id == current ? 38 : 32)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay {
-                            if m.id == current {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(.white, lineWidth: 1.5)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
+                ForEach(gallery) { m in thumbCell(m) }
             }
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity)   // few thumbs → centered; many → scrolls
@@ -253,6 +232,30 @@ struct ImageViewerView: View {
         .frame(height: 44)
         .padding(.bottom, 8)
         .animation(.easeInOut(duration: 0.2), value: current)
+    }
+
+    private func thumbCell(_ m: Message) -> some View {
+        let isCurrent: Bool = m.id == current
+        let side: CGFloat = isCurrent ? 38 : 32
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) { current = m.id }
+        } label: {
+            thumbImage(m)
+                .frame(width: side, height: side)
+                .clipShape(shape)
+                .overlay { if isCurrent { shape.strokeBorder(Color.white, lineWidth: 1.5) } }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private func thumbImage(_ m: Message) -> some View {
+        if let img = loaded[m.id] {
+            Image(uiImage: img).resizable().scaledToFill()
+        } else {
+            Color.white.opacity(0.15)
+                .task { await load(m) }   // strip thumbs load lazily like pages
+        }
     }
 
     // Bottom toolbar: 48px real Liquid Glass circle buttons — Share · Pen (draw on it + re-send) ·
