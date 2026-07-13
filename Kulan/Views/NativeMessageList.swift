@@ -1040,11 +1040,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // shouldAnimateKeyboardChanges — animating layout on a view that isn't fully on screen leaves
         // visible artifacts when it appears).
         guard shouldAnimateKeyboardChanges else { updateBottomInset(); return }
-        // Capture the at-bottom truth NOW (pre-animation offsets are trustworthy; mid-flight ones are not) —
-        // every inset update inside the keyboard window reuses it. keyboardSessionWasAtBottom survives the
-        // whole show→hide session (unlike atBottomForKeyboard, which clears per animation) — it drives the
-        // DEFINITIVE settle at keyboardDidHide.
-        atBottomForKeyboard = didInitialScroll && computeAtBottom()
+        // Capture the at-bottom truth for this animation window. CRITICAL: honor the SESSION flag first —
+        // when the geometric bar signal has already started the ride (it fires per frame, often BEFORE
+        // this notification), a live computeAtBottom() here reads a mid-flight offset, captures FALSE, and
+        // this path then takes the lockstep branch with stale values → the ride ends SHORT of the bottom
+        // (the observed ~116pt gap above the composer). The session flag holds the pre-ride truth.
+        atBottomForKeyboard = didInitialScroll && (keyboardSessionWasAtBottom || computeAtBottom())
         if keyboardOverlap > 0, atBottomForKeyboard == true { keyboardSessionWasAtBottom = true }
         // Animate the inset/offset change IN LOCKSTEP with the keyboard's OWN animation (duration + curve
         // straight from the notification), the way the reference does — so the messages track the keyboard
