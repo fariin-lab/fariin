@@ -1138,9 +1138,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
         let old = collectionView.contentInset.bottom
         guard abs(old - newBottom) > 0.5 else { dbg("skip-equal"); return }
-        // Inside the keyboard window, trust the truth captured at animation START (a reply banner growing
-        // the bar mid-flight would otherwise read a mid-animation offset and miss the pin).
-        let wasAtBottom = atBottomForKeyboard ?? (didInitialScroll && computeAtBottom())
+        // Inside the keyboard window, trust the truth captured at SESSION START — never a mid-ride
+        // computeAtBottom(): the geometric signal steps per frame, and a step whose pin lags one frame
+        // reads "not at bottom", takes the lockstep branch, and the ride ends SHORT of the bottom (the
+        // observed gap above the composer, dist=153 at rest). keyboardSessionWasAtBottom holds for the
+        // whole ride (cleared if the user deliberately scrolls away), so every step pins exactly.
+        let wasAtBottom = atBottomForKeyboard
+            ?? (keyboardSessionWasAtBottom || (didInitialScroll && computeAtBottom()))
         let oldYOffset = collectionView.contentOffset.y
         // (2) The inset write itself must never move content: stash the offset and put it back immediately.
         let applyInset = {
