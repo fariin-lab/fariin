@@ -156,7 +156,9 @@ struct ChatImageEditor: View {
     // flatten all share this rect. (While the keyboard is up bottomChromeH is frozen, so the photo never
     // resizes with the keyboard.)
     private func canvasArea(_ s: CGSize) -> CGSize {
-        CGSize(width: s.width, height: max(0, s.height - bottomChromeH))
+        // -12: breathing gap between the photo's bottom edge and the tool row (the fitted image was
+        // touching the crop/pen/HD buttons).
+        CGSize(width: s.width, height: max(0, s.height - bottomChromeH - 12))
     }
 
     // The photo aspect-FITS the canvas area — fully visible, letterboxed on black, one uniform rule
