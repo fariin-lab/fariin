@@ -71,6 +71,8 @@ struct ThreadView: View {
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
+    enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
+    @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
     @State private var showContactShare = false      // Contacts tile → share-contact picker
     @State private var showLocationShare = false     // Location tile → Select Location map
     @State private var showFileImporter = false
@@ -497,6 +499,17 @@ struct ThreadView: View {
                 .presentationBackground(Color(.systemBackground))
         }
         .sheet(item: $comingSoon) { c in comingSoonSheet(c).presentationDetents([.fraction(0.6)]) }
+        // Call-back confirm: tapping a call-history row asks first (never dials on a stray tap).
+        .alert(pendingCallBack == .video ? "Video call" : "Voice call",
+               isPresented: Binding(get: { pendingCallBack != nil }, set: { if !$0 { pendingCallBack = nil } }),
+               presenting: pendingCallBack) { kind in
+            Button("Cancel", role: .cancel) { }
+            Button("Call") {
+                CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: kind == .video)
+            }
+        } message: { kind in
+            Text("\(kind == .video ? "Video call" : "Call") \(title)?")
+        }
         // "Select Location" map (user design): permission → GPS/pan/search → Send Location outputs the
         // coordinates, delivered as an encrypted location-card message.
         .sheet(isPresented: $showLocationShare) {
@@ -1909,26 +1922,46 @@ struct ThreadView: View {
             .padding(.vertical, 6)
     }
 
+    // DISPLAY-TIME guard for reply-quote snippets: quotes persisted BEFORE the safeText fix carry the
+    // raw "kulan-…:" marker forever (they're encrypted snapshots) — map them to friendly labels when
+    // rendering, so old quotes clean up too.
+    static func quoteLabel(_ t: String) -> String {
+        if t.hasPrefix(Message.contactMarker) { return "Contact" }
+        if t.hasPrefix(Message.locationMarker) { return "Location" }
+        if t.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Message" }
+        return t
+    }
+
     // icon, bold status, a muted subtitle (duration or "Tap to call back"), and the
     // timestamp bottom-right. Tap anywhere to call back.
     private func callRow(_ m: Message) -> some View {
         let mine = m.callerUid == me
         let missed = m.callOutcome == "missed"
         let video = m.callVideo
-        let statusText = video ? (missed ? "Missed video call" : "Video call")
-                               : (missed ? "Missed voice call" : "Voice call")
+        // WhatsApp semantics (user spec): "Missed call" (red) is ONLY for calls I RECEIVED and didn't
+        // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" —
+        // neutral colors, outgoing arrow — never red, never "tap to call back" (I was the one calling).
+        let incomingMissed = missed && !mine
+        let statusText: String = {
+            if video { return incomingMissed ? "Missed video call" : "Video call" }
+            return incomingMissed ? "Missed voice call" : "Voice call"
+        }()
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
-            if missed { return "Tap to call back · \(time)" }
+            if incomingMissed { return "Tap to call back · \(time)" }
+            if missed { return "No answer · \(time)" }            // MY unanswered outgoing call
             if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
             return "\(mine ? "Outgoing" : "Incoming") · \(time)"
         }()
-        let iconName = video ? (missed ? "video.slash.fill" : "video.fill")
-                             : (missed ? "phone.arrow.down.left" : (mine ? "phone.arrow.up.right" : "phone.arrow.down.left"))
-        let iconColor: Color = missed ? .red : (mine ? Theme.onAccent(dark) : Theme.accent(dark))
+        let iconName: String = {
+            if video { return incomingMissed ? "video.slash.fill" : "video.fill" }
+            if incomingMissed { return "phone.arrow.down.left" }
+            return mine ? "phone.arrow.up.right" : "phone.arrow.down.left"
+        }()
+        let iconColor: Color = incomingMissed ? .red : (mine ? Theme.onAccent(dark) : Theme.accent(dark))
         let circleBg: Color = mine ? Color.white.opacity(0.22)
-            : (missed ? Color.red.opacity(0.14) : Theme.accent(dark).opacity(0.14))
+            : (incomingMissed ? Color.red.opacity(0.14) : Theme.accent(dark).opacity(0.14))
 
         return HStack(spacing: 0) {
             if mine { Spacer(minLength: 60) }
@@ -1956,7 +1989,9 @@ struct ThreadView: View {
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .onTapGesture { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: video) }   // call back the same way it was placed
+            // CONFIRM before calling back (user spec): a stray tap on a call row must never place a
+            // call instantly. Native centered alert → Call / Cancel.
+            .onTapGesture { pendingCallBack = video ? .video : .voice }
             .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
         }
@@ -3902,7 +3937,7 @@ struct MessageBubble: View, Equatable {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(reply.authorId == AuthService.shared.uid ? "You" : nameFor(reply.authorId))
                         .font(.caption.weight(.semibold)).foregroundStyle(fg.opacity(0.9))
-                    Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : reply.text))
+                    Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : Self.quoteLabel(reply.text)))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
             }
