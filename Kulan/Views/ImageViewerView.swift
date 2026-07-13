@@ -141,10 +141,12 @@ struct ImageViewerView: View {
         // image editor used for fresh photos (crop, pen, HD, filters, caption — no new flow), and Send
         // delivers the edited image with everything baked in. X backs out to this viewer.
         .fullScreenCover(item: $penEdit) { wrap in
-            ChatImageEditor(source: wrap.image, startDrawing: true) { data, caption, _, viewOnce in
-                onSendEdited?(data, caption, viewOnce)
-                dismiss()   // back to the conversation, where the edited copy is sending
-            }
+            ChatImageEditor(source: wrap.image,
+                            onSend: { data, caption, _, viewOnce in
+                                onSendEdited?(data, caption, viewOnce)
+                                dismiss()   // back to the conversation, where the edited copy is sending
+                            },
+                            startDrawing: true)
         }
     }
 
