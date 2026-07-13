@@ -111,6 +111,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
     private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
+    private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     var rowSignatures: [String: String] = [:] // set before each apply — per-row content signature
     private var lastRowSigs: [String: String] = [:]  // signatures at the last apply → diff to find changed rows
     private var inTopZone = false             // debounces the load-older callback to one fire per entry
@@ -354,9 +355,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // MARK: - Land-when-safe (the land-when-safe gate)
 
     // The list is "in motion" while the user scrolls or an insert animation runs — content updates must
-    // never land during this (they invalidate the layout mid-scroll → overlap/jumps).
+    // never land during this (they invalidate the layout mid-scroll → overlap/jumps). The system's
+    // full-page screenshot capture also counts: it scrolls the list PROGRAMMATICALLY (no drag flags), so
+    // without the freeze window every gate would be open while the capture flies through the list —
+    // landings mid-capture mixed two layout generations = the overlapping-elements-on-screenshot bug.
     private var isInMotion: Bool {
-        collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating || sendAnimating
+        collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+            || sendAnimating || Date() < captureFreezeUntil
     }
 
     // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
@@ -759,25 +764,62 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // `animated`: when called from inside the keyboard's UIView.animate block, the inset + offset changes
     // are applied WITHOUT performWithoutAnimation, so they ride the keyboard's animation. Every other
     // caller (layout passes, composer resize, foreground) passes false = the original instant behavior.
+    //
+    // The BODY is the reference's exact updateContentInsets algorithm (its comments quoted where load-bearing):
+    //  1. Blocked entirely while an interactive pop gesture is active — checked via the GESTURE state, not
+    //     appearance callbacks. "When performing an interactive dismiss, safe area updates rapidly in quick
+    //     succession, which causes this method to go haywire, recomputing insets a few times and incorrectly
+    //     determining that it needs to scroll as a result." (= our swipe-back-return shift bug.)
+    //  2. Stash + restore contentOffset around the inset write — "Changing the contentInset can change the
+    //     contentOffset" (UIKit moves it on its own; uncompensated, content moves 'by itself').
+    //  3. While the user is dragging (interactive keyboard dismiss), touch NOTHING — "UIKit updates
+    //     collection view's scroll position when user drags with the keyboard."
+    //  4. At bottom → stay at bottom ("don't do any fancy math"); scrolled away → shift content in LOCKSTEP
+    //     with the inset delta, clamped to the content bounds.
     private func updateBottomInset(animated: Bool = false) {
         guard isViewLoaded else { return }
-        // While the view is disappearing (swipe-back) or backgrounded, the keyboard collapsing must NOT
-        // move the content — the shift was visible during the pop. Update nothing; viewDidAppear
-        // re-validates the inset if we come back.
         guard !isDisappearing else { return }
+        // (1) Interactive pop in progress → no inset work at all. A cancelled pop rebalances the appearance
+        // callbacks (isDisappearing has a window there); the gesture's own state does not.
+        if let pop = navigationController?.interactivePopGestureRecognizer {
+            switch pop.state {
+            case .possible, .failed: break
+            default: return
+            }
+        }
         // .always already adds the geometric home-indicator overlap; the keyboard replaces it when up.
         let keyboardExtra = max(0, keyboardOverlap - view.safeAreaInsets.bottom)
         let newBottom = composerBarH + keyboardExtra + 12   // +12: last bubble + reaction badge clear the bar
         let old = collectionView.contentInset.bottom
         guard abs(old - newBottom) > 0.5 else { return }
-        let stayAtBottom = didInitialScroll && computeAtBottom()
-        collectionView.contentInset.bottom = newBottom
-        collectionView.verticalScrollIndicatorInsets.bottom = composerBarH + keyboardExtra
-        if stayAtBottom {
+        let wasAtBottom = didInitialScroll && computeAtBottom()
+        let oldYOffset = collectionView.contentOffset.y
+        // (2) The inset write itself must never move content: stash the offset and put it back immediately.
+        let applyInset = {
+            let stash = self.collectionView.contentOffset
+            self.collectionView.contentInset.bottom = newBottom
+            self.collectionView.setContentOffset(stash, animated: false)
+            self.collectionView.verticalScrollIndicatorInsets.bottom = self.composerBarH + keyboardExtra
+        }
+        if animated { applyInset() } else { UIView.performWithoutAnimation(applyInset) }
+        // (3) Interactive keyboard drag owns the offset — hands off.
+        guard !collectionView.isDragging else { return }
+        guard didInitialScroll else { return }
+        if wasAtBottom {
+            // (4a) Was at the bottom → stay at the bottom, nothing fancier.
             if animated { pinBottom() }                              // inside the keyboard animation → tracks it
             else { UIView.performWithoutAnimation { pinBottom() } }
-        } else if newBottom < old {
-            clampOffsetIfBeyondContent()   // inset SHRANK → never rest past the end
+        } else if didReveal {
+            // (4b) Scrolled away → shift in lockstep with the inset change, clamped to the content bounds,
+            // so the keyboard never covers the messages being read and hiding it follows them back down.
+            let delta = newBottom - old
+            let minY = -collectionView.adjustedContentInset.top
+            let maxY = max(minY, collectionView.contentSize.height - collectionView.bounds.height
+                                + collectionView.adjustedContentInset.bottom)
+            let y = min(max(minY, oldYOffset + delta), maxY)
+            if abs(y - collectionView.contentOffset.y) > 0.5 {
+                collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            }
         }
     }
 
@@ -927,6 +969,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleFlush() }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state (the
+        // isAtBottom flips would re-run the tree and land reconfigures mid-capture = overlap), fire nothing.
+        if Date() < captureFreezeUntil { return }
         let atBottom = computeAtBottom()
         if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
         let userDriven = scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating
@@ -966,21 +1011,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Screenshot recovery
 
-    // iOS 26 full-page screenshots scroll the view programmatically to capture pages; if its own restore
-    // lands wrong (or our layout shifted meanwhile), the chat is left scrolled away. When the screenshot
-    // notification fires, snap back to the last position the USER (or our own pinning) put the list at.
+    // iOS 26 full-page screenshots scroll the view PROGRAMMATICALLY (no drag flags) right after the
+    // notification to capture every page. Two defenses:
+    //  1. FREEZE all landings for the capture window (captureFreezeUntil folds into isInMotion) and mute
+    //     scrollViewDidScroll side-effects — landings mid-capture mixed layout generations = overlap.
+    //  2. Snap back to the last stable offset AFTER the capture has finished (the old immediate snap-back
+    //     ran BEFORE the capture scroll and restored nothing).
     @objc func screenshotTaken() {
         guard didInitialScroll, !isDisappearing,
               !collectionView.isDragging, !collectionView.isTracking else { return }
-        DispatchQueue.main.async { [weak self] in
+        captureFreezeUntil = Date().addingTimeInterval(1.5)
+        let snapBack: () -> Void = { [weak self] in
             guard let self else { return }
             let target = self.lastStableOffset
-            guard abs(self.collectionView.contentOffset.y - target) > 4 else { return }
-            let maxY = max(-self.collectionView.adjustedContentInset.top,
-                           self.collectionView.contentSize.height - self.collectionView.bounds.height
-                               + self.collectionView.adjustedContentInset.bottom)
-            let y = min(max(-self.collectionView.adjustedContentInset.top, target), maxY)
-            self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            if abs(self.collectionView.contentOffset.y - target) > 4 {
+                let maxY = max(-self.collectionView.adjustedContentInset.top,
+                               self.collectionView.contentSize.height - self.collectionView.bounds.height
+                                   + self.collectionView.adjustedContentInset.bottom)
+                let y = min(max(-self.collectionView.adjustedContentInset.top, target), maxY)
+                self.collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            }
+        }
+        // Snap once right away (plain screenshot: no capture scroll happens) and once after the freeze
+        // (full-page capture: the system has finished flying through the list by then), then flush
+        // whatever coalesced during the freeze.
+        DispatchQueue.main.async(execute: snapBack)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.55) { [weak self] in
+            snapBack()
+            self?.settleFlush()
         }
     }
 }
