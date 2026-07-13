@@ -8,6 +8,30 @@ import UIKit
 @MainActor enum RecentsCache {
     static var assets: [PHAsset] = []
     static var albums: [AttachAlbum] = []
+    private static var warming = false
+
+    // PRE-WARM the recents so the grid is ready BEFORE the sheet ever opens. Called when the chat opens;
+    // the fetch runs off-main and the first page lands in the cache, so tapping + shows photos instantly
+    // instead of an empty sheet that fills in a beat later.
+    static func prewarm() {
+        guard assets.isEmpty, !warming else { return }
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return }
+        warming = true
+        Task.detached(priority: .userInitiated) {
+            let f = PHFetchOptions()
+            f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            f.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d",
+                                      PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+            let res = PHAsset.fetchAssets(with: f)
+            var out: [PHAsset] = []
+            let end = min(200, res.count)
+            if end > 0 {
+                res.enumerateObjects(at: IndexSet(integersIn: 0..<end), options: []) { a, _, _ in out.append(a) }
+            }
+            await MainActor.run { RecentsCache.assets = out; RecentsCache.warming = false }
+        }
+    }
 }
 
 // Standard recents strip for the attach panel: the newest camera-roll
@@ -292,8 +316,17 @@ struct AttachRecentsStrip: View {
         let res = selectedAlbum.map { PHAsset.fetchAssets(in: $0, options: f) } ?? PHAsset.fetchAssets(with: f)
         fetchResult = res
         loadedCount = 0
-        assets = []
-        appendNextPage()
+        // Build the first page and swap it in ONE assignment — never blank `assets` to [] first (that
+        // wiped the instantly-shown cache and flashed the grid empty on every open).
+        let end = min(pageSize, res.count)
+        var out: [PHAsset] = []
+        out.reserveCapacity(end)
+        if end > 0 {
+            res.enumerateObjects(at: IndexSet(integersIn: 0..<end), options: []) { a, _, _ in out.append(a) }
+        }
+        assets = out
+        loadedCount = end
+        if selectedAlbum == nil { RecentsCache.assets = out }
     }
 
     // Materialize the next page of the fetch result into the grid's array.

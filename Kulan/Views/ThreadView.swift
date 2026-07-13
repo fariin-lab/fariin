@@ -44,6 +44,8 @@ struct ThreadView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
     @State private var panelEditImage: EditImageWrap?   // picked FROM the attach sheet → editor OVER the sheet (X returns to it)
+    @State private var panelVideoApprove: VideoWrap?    // video picked FROM the sheet → trim editor OVER the sheet (X returns to it)
+    @State private var panelMediaApprove: MediaWrap?    // mixed picked FROM the sheet → pager OVER the sheet (X returns to it)
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
@@ -1410,9 +1412,10 @@ struct ThreadView: View {
                     panelEditImage = EditImageWrap(image: ui)
                 },
                 onPickVideo: { url in
-                    showAttachPanel = false
-                    // TAP a video → open the trim editor (caption/trim) before sending.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { videoToApprove = VideoWrap(url: url) }
+                    // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
+                    // the editor and lands BACK on the sheet to pick another (was closing the sheet first,
+                    // which dumped you all the way to the chat on a stray X).
+                    panelVideoApprove = VideoWrap(url: url)
                 },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
@@ -1452,16 +1455,14 @@ struct ThreadView: View {
                 },
                 onOpenMedia: { items in
                     // Tapping media while selecting → the mixed approval pager. A single item keeps its
-                    // dedicated editor (image editor / video trim editor); 2+ open the pager.
-                    showAttachPanel = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        if items.count == 1, case .image(_, let ui) = items[0] {
-                            editImage = EditImageWrap(image: ui)
-                        } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
-                            videoToApprove = VideoWrap(url: url)
-                        } else {
-                            mediaToApprove = MediaWrap(items: items)
-                        }
+                    // dedicated editor (image editor / video trim editor); 2+ open the pager. All open OVER
+                    // the media sheet (sheet stays underneath) so X returns to it instead of the chat.
+                    if items.count == 1, case .image(_, let ui) = items[0] {
+                        panelEditImage = EditImageWrap(image: ui)
+                    } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
+                        panelVideoApprove = VideoWrap(url: url)
+                    } else {
+                        panelMediaApprove = MediaWrap(items: items)
                     }
                 },
                 onCaptionFocused: { attachDetent = .large },
@@ -1490,6 +1491,20 @@ struct ThreadView: View {
         .fullScreenCover(item: $panelEditImage) { wrap in
             ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                showAttachPanel = false
+            }
+        }
+        // Single-video trim editor OVER the sheet: X returns to the sheet; Send delivers + closes the sheet.
+        .fullScreenCover(item: $panelVideoApprove) { wrap in
+            VideoApprovalView(url: wrap.url) { finalURL, caption, hd in
+                Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
+                showAttachPanel = false
+            }
+        }
+        // Mixed approval pager OVER the sheet: X returns to the sheet; Send delivers the group + closes it.
+        .fullScreenCover(item: $panelMediaApprove) { wrap in
+            MediaApprovalView(items: wrap.items) { ordered, caption, hd in
+                Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
                 showAttachPanel = false
             }
         }
