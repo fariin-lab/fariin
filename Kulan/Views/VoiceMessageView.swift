@@ -32,6 +32,11 @@ struct VoiceMessageView: View {
     let cid: String
     let isMe: Bool
     let dark: Bool
+    // Set when the player is rendered OUTSIDE a chat bubble (e.g. the "See All Media" Audio list) — on a
+    // plain page background rather than a colored accent bubble. My own notes normally tint with
+    // `onAccent` (white in light mode), which is invisible on the white gallery page; on a plain
+    // background we use the page-neutral tint instead so my sent notes are visible.
+    var plainBackground: Bool = false
     var onScrub: (Bool) -> Void = { _ in }   // forwarded to the bubble so it blocks reply-swipe while scrubbing
 
     @State private var player: AVAudioPlayer?
@@ -54,7 +59,10 @@ struct VoiceMessageView: View {
         if playing { player?.rate = rate }
     }
 
-    private var tint: Color { isMe ? Theme.onAccent(dark) : (dark ? .white : .black) }
+    private var tint: Color {
+        if plainBackground { return dark ? .white : .black }   // on the plain gallery page, never the white onAccent
+        return isMe ? Theme.onAccent(dark) : (dark ? .white : .black)
+    }
     private var durationText: String {
         let d = Int(message.duration ?? 0)
         return String(format: "%d:%02d", d / 60, d % 60)

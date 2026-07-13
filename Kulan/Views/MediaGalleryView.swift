@@ -308,7 +308,7 @@ struct MediaGalleryView: View {
                 // The REAL playable voice player (same one used in chat) — tap the play button to
                 // decrypt + play, scrub the waveform, change speed. (The old row was a static icon with
                 // no playback wired up at all.)
-                VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark)
+                VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark, plainBackground: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text(m.createdAt.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
