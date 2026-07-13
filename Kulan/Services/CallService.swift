@@ -41,6 +41,12 @@ final class CallService: NSObject {
         didSet {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
+            if state == .outgoing, cameraOn {
+                // Outgoing VIDEO call: ringback through the LOUDSPEAKER (WhatsApp) — you're looking at
+                // your preview at arm's length, not holding the phone to your ear.
+                isSpeaker = true; wantsSpeaker = true
+                try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+            }
             if state == .active {
                 if cameraOn { isSpeaker = true; wantsSpeaker = true }   // video calls default to speakerphone (like FaceTime)
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)

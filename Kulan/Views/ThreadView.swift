@@ -1328,7 +1328,14 @@ struct ThreadView: View {
         groupCallListener = Firestore.firestore().collection("groupCalls").document(cid)
             .addSnapshotListener { snap, _ in
                 let d = snap?.data()
-                groupCallActive = (d?["active"] as? Bool) ?? false
+                var active = (d?["active"] as? Bool) ?? false
+                // ZOMBIE GUARD: if the last participant crashed/force-quit, nobody wrote active=false
+                // and the "Join call" bar would show FOREVER. Ignore call docs older than 4 hours.
+                if active, let ts = d?["startedAt"] as? Timestamp,
+                   Date().timeIntervalSince(ts.dateValue()) > 4 * 3600 {
+                    active = false
+                }
+                groupCallActive = active
                 groupCallVideo = (d?["video"] as? Bool) ?? false
             }
     }
