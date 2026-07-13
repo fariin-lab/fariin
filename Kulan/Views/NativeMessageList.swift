@@ -625,6 +625,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 guard let self else { return }
                 self.layout.pendingContentOffsetAdjustment = 0   // fallback channel — never goes stale
                 self.lastStableOffset = self.collectionView.contentOffset.y
+                self.lastKnownDistanceFromBottom = self.safeDistanceFromBottom   // refresh after every land (reference)
                 if let target = scrollTarget, target != "BOTTOM",
                    let ip = self.dataSource.indexPath(for: target) {
                     // A jump RODE this load (reply/search into older history): land it POSITIONED on the
@@ -1036,6 +1037,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         } else if abs(collectionView.contentOffset.y - y) > 0.5 {
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
         }
+        lastKnownDistanceFromBottom = 0   // pinned = at the bottom; keep the continuity scalar fresh (reference)
     }
 
     // Never leave the view scrolled PAST the content: clamp the offset back onto the real content.
