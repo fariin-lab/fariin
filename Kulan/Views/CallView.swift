@@ -14,9 +14,11 @@ import WebRTC
 struct CallView: View {
     private var call = CallService.shared
     @State private var now = Date()
-    @State private var isLocalExpanded = false      // tap the PiP to swap which feed is fullscreen
-    @State private var pipOffset = CGSize.zero
-    @State private var pipBase = CGSize.zero
+    // Layout state lives in CallService so minimize/restore keeps the SAME big/small choice and tile
+    // position (the fullScreenCover destroys this view on minimize; @State here reset every time).
+    private var isLocalExpanded: Bool { get { call.isLocalExpanded } nonmutating set { call.isLocalExpanded = newValue } }
+    private var pipOffset: CGSize { get { call.pipOffset } nonmutating set { call.pipOffset = newValue } }
+    private var pipBase: CGSize { get { call.pipBase } nonmutating set { call.pipBase = newValue } }
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var statusText: String {
@@ -97,7 +99,10 @@ struct CallView: View {
             // top-left chevron-down button (so a stray swipe can never minimize/break the call).
         }
         .ignoresSafeArea()
-        .onDisappear { CallPiPController.shared.teardown() }
+        .onDisappear {
+            // Tear down native PiP only when the call is actually OVER — minimize must keep it available.
+            if call.state == .idle || call.state == .ended { CallPiPController.shared.teardown() }
+        }
     }
 
     // Invisible host whose UIView is the PiP "source view"; binds the remote track to the controller.

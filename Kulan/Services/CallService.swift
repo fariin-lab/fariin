@@ -58,6 +58,7 @@ final class CallService: NSObject {
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
                 cameraOn = false; remoteCameraOn = false; usingFrontCamera = true; startedAsVideo = false
+                isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
                 updateInCallScreenBehavior() // proximity off + allow sleep again
@@ -84,6 +85,11 @@ final class CallService: NSObject {
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
     private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
     var usingFrontCamera = true
+    // Video layout state — owned HERE so minimize/restore keeps the user's big/small choice and PiP
+    // tile position (CallView is destroyed by the cover on minimize; its @State reset every time).
+    var isLocalExpanded = false
+    var pipOffset = CGSize.zero
+    var pipBase = CGSize.zero
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
     private var videoCapturer: RTCCameraVideoCapturer?
