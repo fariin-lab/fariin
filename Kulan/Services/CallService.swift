@@ -410,7 +410,7 @@ final class CallService: NSObject {
     // dead (CallKit owns it), so the ringback started at startCall was silent. Restart it fresh on
     // the live session — but only while we're still the caller waiting for an answer (outgoing).
     func audioSessionActivated() {
-        guard state == .outgoing else { return }
+        guard state == .outgoing, calleeRinging else { return }   // honest ringback: only once they RING
         stopRingback()
         startRingback()
     }
