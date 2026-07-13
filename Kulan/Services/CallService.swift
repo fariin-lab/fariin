@@ -236,12 +236,17 @@ final class CallService: NSObject {
         localVideoTrack?.isEnabled = on
         if on {
             if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone, like FaceTime
+            // Re-tune echo cancellation for LOUDSPEAKER (the hear-your-own-voice fix): .videoChat mode
+            // engages the speakerphone-tuned voice processing. Keep the speaker override.
+            try? AVAudioSession.sharedInstance().setMode(.videoChat)
+            try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             startCameraCapture()
         } else {
             videoCapturer?.stopCapture()
-            // Both cameras now off → it's a voice call again: return to the earpiece (WhatsApp).
-            // (If the OTHER side still shows video, stay on speaker — you're still watching them.)
+            // Both cameras now off → it's a voice call again: return to the earpiece (WhatsApp) and
+            // back to the earpiece-tuned echo cancellation.
             if !remoteCameraOn && isSpeaker { toggleSpeaker() }
+            if !remoteCameraOn { try? AVAudioSession.sharedInstance().setMode(.voiceChat) }
         }
         CallKitManager.shared.updateHasVideo(on)
         broadcastCameraState()

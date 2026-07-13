@@ -120,7 +120,11 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
-        try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [])
+        // .videoChat when the camera is on: VPIO echo cancellation TUNED FOR LOUDSPEAKER (the echo-
+        // on-speaker fix big apps use); .voiceChat (earpiece-tuned) otherwise. Bluetooth allowed.
+        try? s.setCategory(.playAndRecord,
+                           mode: CallService.shared.cameraOn ? .videoChat : .voiceChat,
+                           options: [.allowBluetooth, .allowBluetoothA2DP])
         s.audioSessionDidActivate(audioSession)
         s.isAudioEnabled = true   // turn the WebRTC audio unit ON
         s.unlockForConfiguration()
@@ -142,7 +146,11 @@ extension CallKitManager: CXProviderDelegate {
     private func configureAudio() {
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
-        try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [])
+        // .videoChat when the camera is on: VPIO echo cancellation TUNED FOR LOUDSPEAKER (the echo-
+        // on-speaker fix big apps use); .voiceChat (earpiece-tuned) otherwise. Bluetooth allowed.
+        try? s.setCategory(.playAndRecord,
+                           mode: CallService.shared.cameraOn ? .videoChat : .voiceChat,
+                           options: [.allowBluetooth, .allowBluetoothA2DP])
         try? s.setMode(.voiceChat)
         s.unlockForConfiguration()
     }
