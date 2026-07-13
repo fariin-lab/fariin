@@ -665,7 +665,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let window = view.window else { return }
         let kbInView = view.convert(end, from: window.coordinateSpace)
         keyboardOverlap = max(0, view.bounds.maxY - kbInView.minY)   // 0 when hidden (frame moves offscreen)
-        updateBottomInset()
+        // Animate the inset/offset change IN LOCKSTEP with the keyboard's OWN animation (duration + curve
+        // straight from the notification), the way the reference does — so the messages track the keyboard
+        // as it slides instead of snapping to the final position while the keyboard is still moving (the jump).
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0
+        guard duration > 0 else { updateBottomInset(); return }
+        let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
+            ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
+        let options = UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16)
+        UIView.animate(withDuration: duration, delay: 0, options: [options, .beginFromCurrentState]) {
+            self.updateBottomInset(animated: true)
+            self.collectionView.layoutIfNeeded()
+        }
     }
 
     // Keyboard fully gone: the overlap is 0 no matter what the last frame notification said.
@@ -685,7 +696,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.performWithoutAnimation { updateBottomInset() }
     }
 
-    private func updateBottomInset() {
+    // `animated`: when called from inside the keyboard's UIView.animate block, the inset + offset changes
+    // are applied WITHOUT performWithoutAnimation, so they ride the keyboard's animation. Every other
+    // caller (layout passes, composer resize, foreground) passes false = the original instant behavior.
+    private func updateBottomInset(animated: Bool = false) {
         guard isViewLoaded else { return }
         // While the view is disappearing (swipe-back) or backgrounded, the keyboard collapsing must NOT
         // move the content — the shift was visible during the pop. Update nothing; viewDidAppear
@@ -699,8 +713,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let stayAtBottom = didInitialScroll && computeAtBottom()
         collectionView.contentInset.bottom = newBottom
         collectionView.verticalScrollIndicatorInsets.bottom = composerBarH + keyboardExtra
-        if stayAtBottom { UIView.performWithoutAnimation { pinBottom() } }
-        else if newBottom < old { clampOffsetIfBeyondContent() }   // inset SHRANK → never rest past the end
+        if stayAtBottom {
+            if animated { pinBottom() }                              // inside the keyboard animation → tracks it
+            else { UIView.performWithoutAnimation { pinBottom() } }
+        } else if newBottom < old {
+            clampOffsetIfBeyondContent()   // inset SHRANK → never rest past the end
+        }
     }
 
     private func pinBottom(animated: Bool = false) {
