@@ -623,7 +623,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        updateBottomInset()   // safe-area values are valid here — keeps the bottom inset exact
+        // During a keyboard-synced animation the inset is owned by that UIView.animate — re-asserting it
+        // instantly here snapped the content to its final spot while the keyboard was still sliding (the jump).
+        if !keyboardAnimating { updateBottomInset() }   // safe-area values are valid here — keeps the inset exact
         // Report the GEOMETRIC nav-bar overlap (view.safeAreaInsets.top — the same reliable source the
         // insets use; the SwiftUI readers reported 0 during transitions, which put the floating date
         // pill in the status bar). Async so the SwiftUI state write never lands mid-layout.
@@ -641,7 +643,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             else { scheduleEmptyReveal() }
             return
         }
-        guard !sendAnimating, !pendingBottomOnOpen else { return }
+        // Never re-pin during: the send animation, the open window, a keyboard animation, or while the USER
+        // is actively scrolling. A SwiftUI-induced layout pass mid-scroll (e.g. isAtBottom flipping near the
+        // bottom re-runs the tree) used to hit pinBottom here and YANK the user to the bottom = the scroll jump.
+        let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+        guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !userScrolling else { return }
         if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
         else { clampOffsetIfBeyondContent() }
     }
@@ -654,6 +660,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var lastReportedTop: CGFloat = -1
     private var composerBarH: CGFloat = 0
     private var keyboardOverlap: CGFloat = 0
+    private var keyboardAnimating = false     // a keyboard-synced inset animation is in flight — layout passes
+                                              // must NOT re-assert the inset/pin instantly and override it
     func setComposerBarHeight(_ h: CGFloat) {
         guard abs(h - composerBarH) > 0.5 else { return }
         composerBarH = h
@@ -673,10 +681,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
             ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
         let options = UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16)
+        // Guard: while this runs, a layout pass (SwiftUI re-renders the composer bar mid-keyboard) must NOT
+        // instantly re-assert the inset/pin in viewDidLayoutSubviews — that instant override was defeating
+        // the animated track and leaving the keyboard jump in place.
+        keyboardAnimating = true
         UIView.animate(withDuration: duration, delay: 0, options: [options, .beginFromCurrentState]) {
             self.updateBottomInset(animated: true)
             self.collectionView.layoutIfNeeded()
-        }
+        } completion: { _ in self.keyboardAnimating = false }
     }
 
     // Keyboard fully gone: the overlap is 0 no matter what the last frame notification said.
