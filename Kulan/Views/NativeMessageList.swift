@@ -33,7 +33,12 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released → reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
-    var composerBarHeight: CGFloat = 0         // the floating composer bar's height (the ONLY SwiftUI-fed inset)
+    var composerBarHeight: CGFloat = 0         // the floating composer bar's height (SwiftUI-measured)
+    // GEOMETRIC keyboard overlap: the composer bar's distance from the screen bottom (the bar rides the
+    // keyboard, so this IS the keyboard measurement). Telemetry proved UIKit's keyboard notifications
+    // never reach this controller in our hosting configuration — this signal replaces them, and because
+    // SwiftUI reports it per animation frame, the list tracks the keyboard in lockstep for free.
+    var keyboardOverlapFromBar: CGFloat = 0
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
@@ -57,6 +62,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.setComposerBarHeight(composerBarHeight)
+        vc.setKeyboardOverlap(keyboardOverlapFromBar)
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
@@ -984,6 +990,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard h > 30, abs(h - composerBarH) > 0.5 else { return }
         composerBarH = h
         updateBottomInset()
+    }
+
+    // The GEOMETRIC keyboard signal (root-cause fix — see keyboardOverlapFromBar on the representable).
+    // Fed per animation frame while the bar rides the keyboard: each step re-derives the inset and the
+    // at-bottom pin instantly, so the content tracks the keyboard in lockstep with what the user sees.
+    func setKeyboardOverlap(_ raw: CGFloat) {
+        guard abs(raw - keyboardOverlap) > 0.5 else { return }
+        // Session bookkeeping (was previously set from the dead notification path): the keyboard session
+        // "starts at the bottom" when the overlap first grows beyond the home area while at the bottom.
+        if raw > view.safeAreaInsets.bottom + 10, keyboardOverlap <= view.safeAreaInsets.bottom + 10,
+           didInitialScroll, computeAtBottom() {
+            keyboardSessionWasAtBottom = true
+        }
+        keyboardOverlap = raw
+        updateBottomInset()
+        // Keyboard fully down (bar back at the home area): run the definitive settle the didHide
+        // notification used to own — with notifications dead, this is the authoritative end-of-session.
+        if raw <= view.safeAreaInsets.bottom + 10, keyboardSessionWasAtBottom {
+            keyboardSessionWasAtBottom = false
+            let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+            if !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
+                UIView.performWithoutAnimation { pinBottom() }
+            }
+        }
+        #if DEBUG
+        debugKB("GEO")
+        #endif
     }
 
     @objc private func keyboardFrameWillChange(_ note: Notification) {

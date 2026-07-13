@@ -114,6 +114,7 @@ struct ThreadView: View {
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     @State private var composerBarHeight: CGFloat = 0    // measured composer BAR height (the safeAreaBar content itself)
+    @State private var keyboardOverlapFromBar: CGFloat = 0   // geometric keyboard overlap = bar's distance from screen bottom
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -220,9 +221,21 @@ struct ThreadView: View {
                     bottomBarContent
                         .background {
                             GeometryReader { geo in
-                                Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
-                                    composerBarHeight = h
-                                }
+                                Color.clear
+                                    .onChange(of: geo.size.height, initial: true) { _, h in
+                                        composerBarHeight = h
+                                    }
+                                    // GEOMETRIC keyboard source (the root-cause fix, telemetry-confirmed):
+                                    // UIKit's keyboard-frame notifications never reach the list controller
+                                    // in this hosting configuration (overlap stayed 0 with the keyboard up
+                                    // = no pin ever ran = "the chat doesn't move"). But this BAR visibly
+                                    // rides the keyboard — its bottom edge IS the keyboard's top. Feed
+                                    // that distance-from-screen-bottom as the overlap: keyboard closed →
+                                    // ≈ home-indicator (nets to 0 extra); open → the keyboard height; and
+                                    // it updates EVERY FRAME of the ride, so the list tracks in lockstep.
+                                    .onChange(of: geo.frame(in: .global).maxY, initial: true) { _, maxY in
+                                        keyboardOverlapFromBar = max(0, UIScreen.main.bounds.height - maxY)
+                                    }
                             }
                         }
                 }
@@ -1185,7 +1198,8 @@ struct ThreadView: View {
                 if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }
             },
             loadingOlder: repo.loadingOlder,
-            composerBarHeight: composerBarHeight,   // the only SwiftUI-fed inset; nav/home/keyboard are UIKit-geometric
+            composerBarHeight: composerBarHeight,   // the bar's own height (SwiftUI-measured)
+            keyboardOverlapFromBar: keyboardOverlapFromBar,   // geometric keyboard overlap (the bar rides the keyboard)
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
