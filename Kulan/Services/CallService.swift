@@ -48,7 +48,10 @@ final class CallService: NSObject {
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             }
             if state == .active {
-                if cameraOn { isSpeaker = true; wantsSpeaker = true }   // video calls default to speakerphone (like FaceTime)
+                // Video calls default to speakerphone (FaceTime). startedAsVideo covers the CALLEE in the
+                // Telegram model: their camera starts OFF on answer, but they're watching video at arm's
+                // length — audio must still go loud.
+                if cameraOn || startedAsVideo { isSpeaker = true; wantsSpeaker = true }
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // background camera pause/resume (frozen-frame fix)
@@ -533,7 +536,8 @@ final class CallService: NSObject {
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
             guard granted else { self.hangUp(); return }   // no mic -> don't start a dead call
-            self.startRingback()        // caller hears "ring… ring…" right away, like a real phone
+            // NO ringback yet - silence during "Calling…" (their phone is not ringing); the tone
+            // starts when ringingAt arrives and the label flips to "Ringing…" (WhatsApp behavior).
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
             let ref = self.db.collection("calls").document()
             self.callId = ref.documentID
@@ -636,7 +640,9 @@ final class CallService: NSObject {
                     self.otherPhotoUrl = photo.isEmpty ? nil : photo
                     self.isCaller = false
                     let isVideoCall = (d["type"] as? String == "video")
-                    self.cameraOn = isVideoCall                             // answering a video call turns my camera on
+                    // TELEGRAM MODEL: answering a video call does NOT auto-start MY camera - I see them,
+                    // they see my avatar, and MY video starts only when I tap the camera button.
+                    self.cameraOn = false
                     self.startedAsVideo = isVideoCall
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
@@ -662,7 +668,7 @@ final class CallService: NSObject {
             }
             return
         }
-        self.cameraOn = video   // a video call = my camera on when I answer
+        self.cameraOn = false   // TELEGRAM MODEL: my camera never auto-starts on answer
         self.startedAsVideo = video
         self.callId = callId
         self.otherName = name
@@ -695,8 +701,8 @@ final class CallService: NSObject {
                     guard let self else { return }
                     guard let d = snap?.data(),
                           let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
-                    self.cameraOn = (d["type"] as? String == "video")
-                    self.startedAsVideo = self.cameraOn
+                    self.startedAsVideo = (d["type"] as? String == "video")
+                    self.cameraOn = false   // TELEGRAM MODEL: my camera never auto-starts on answer
                     if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
                     self.completeAnswer(ref: ref, offerSdp: sdp)
                 }
@@ -743,6 +749,7 @@ final class CallService: NSObject {
             // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…".
             if self.isCaller, d["ringingAt"] != nil, !self.calleeRinging, self.state == .outgoing {
                 self.calleeRinging = true
+                self.startRingback()   // HONEST ringback: the tone starts only when their phone RINGS
             }
             // Caller applies the answer once it arrives → connected.
             if self.isCaller, let answer = d["answer"] as? [String: String], let sdp = answer["sdp"],
