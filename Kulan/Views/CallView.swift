@@ -373,6 +373,8 @@ struct AudioRoutePicker: UIViewRepresentable {
 struct CallContainer<Content: View>: View {
     @ViewBuilder var content: Content
     private var call: CallService { CallService.shared }
+    @ObservedObject private var group = GroupCallService.shared
+    @State private var showGroupRestore = false   // bar tap re-presents the group call UI
 
     private var isActive: Bool {
         switch call.state {
@@ -391,6 +393,29 @@ struct CallContainer<Content: View>: View {
                     }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+            // ONGOING GROUP CALL, swiped down: a live call (mic possibly hot) must NEVER be invisible.
+            // Green return bar at root level — tap re-presents the group call screen from HERE, so it
+            // works from any screen, not just the chat that started it.
+            if group.isActive && group.minimized {
+                HStack(spacing: 8) {
+                    Image(systemName: group.isVideo ? "video.fill" : "phone.fill")
+                        .font(.system(size: 13, weight: .bold))
+                    Text(group.callTitle.isEmpty ? "Group call" : group.callTitle)
+                        .font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                    Spacer()
+                    Text("Return to call").font(.system(size: 13, weight: .semibold)).opacity(0.9)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).frame(height: 40)
+                .frame(maxWidth: .infinity)
+                .background(Color.green)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    group.minimized = false
+                    showGroupRestore = true
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
             content
         }
         .fullScreenCover(isPresented: Binding(
@@ -399,6 +424,7 @@ struct CallContainer<Content: View>: View {
         )) {
             CallView()
         }
+        .fullScreenCover(isPresented: $showGroupRestore) { GroupCallView() }
     }
 }
 

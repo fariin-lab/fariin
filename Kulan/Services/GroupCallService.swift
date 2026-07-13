@@ -21,6 +21,7 @@ final class GroupCallService: ObservableObject {
     @Published var micOn = true
     @Published var cameraOn = false
     @Published var connecting = false
+    @Published var minimized = false        // swiped down → CallContainer shows the return bar
     @Published var callTitle = ""
 
     var isActive: Bool { activeCid != nil }
@@ -72,5 +73,6 @@ final class GroupCallService: ObservableObject {
                 .setData(["active": false], merge: true)
         }
         activeCid = nil; micOn = true; cameraOn = false; isVideo = false; callTitle = ""
+        minimized = false
     }
 }
