@@ -3100,7 +3100,6 @@ struct MessageBubble: View, Equatable {
     // modes, so the text/glyphs are always WHITE.
     private var onMyBubble: Color { .white }
 
-    @State private var quoteFillWidth: CGFloat = 0   // reply quote fills the bubble's content width (never a tiny box)
     @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
     @State private var notFoundUser = false       // @username tapped but no such user
     @AppStorage("readReceipts") private var readReceiptsPref = true
@@ -3784,24 +3783,24 @@ struct MessageBubble: View, Equatable {
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else {
-            VStack(alignment: .leading, spacing: 4) {
-                // The reply quote FILLS the bubble's content width (measured below) instead of hugging its
-                // own short text — so a one-character reply no longer collapses into a tiny box above a
-                // wide message. Width-only (height unchanged), so it never disturbs the row layout. The
-                // width = the widest element (usually the body), so a long reply still widens the bubble.
-                replyQuote.frame(width: quoteFillWidth > 0 ? quoteFillWidth : nil, alignment: .leading)
+            // Single-column Grid (the reference structure, ONE layout pass): the column hugs the WIDEST
+            // row (usually the body text), and the reply quote's maxWidth:.infinity fills that column —
+            // so a one-character reply never collapses into a tiny box above a wide message, and a long
+            // quote still widens the bubble. This replaces the measured quoteFillWidth preference, which
+            // broke inside the hosted cells (state reset on reconfigure + the pre-measured first pass
+            // rendered before the measurement existed → the tiny box came back).
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 4) {
+                GridRow { replyQuote.frame(maxWidth: .infinity, alignment: .leading) }
                 // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
                 if let link = firstLinkURL {
-                    LinkPreviewCard(url: link, isMe: isMe, dark: dark)
-                        .onTapGesture { _ = routeTappedURL(link) }
+                    GridRow {
+                        LinkPreviewCard(url: link, isMe: isMe, dark: dark)
+                            .onTapGesture { _ = routeTappedURL(link) }
+                    }
                 }
                 // Text + time laid out in a real HStack so the time can never overlap the words.
-                bodyLine
+                GridRow { bodyLine }
             }
-            .background(GeometryReader { g in
-                Color.clear.preference(key: QuoteFillWidthKey.self, value: g.size.width)
-            })
-            .onPreferenceChange(QuoteFillWidthKey.self) { quoteFillWidth = $0 }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -3969,11 +3968,14 @@ struct MessageBubble: View, Equatable {
                     Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : quoteSafeLabel(reply.text)))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
+                // MINIMUM quote width (reference behavior): a one-character quote never renders as a tiny
+                // box, even in media/voice bubbles where there's no wide body to stretch to. Leading-aligned
+                // so the accent line, name, and snippet stay put regardless of content length.
+                .frame(minWidth: 150, alignment: .leading)
             }
             .padding(.horizontal, 8).padding(.vertical, 5)
-            // Hug the quote's own content (name + snippet), truncating a long snippet at the bubble width.
-            // The old maxWidth:.infinity ballooned the WHOLE bubble to full width even for a tiny reply (the
-            // big empty space). No width frame → hugs when short, truncates when long. The standard look.
+            // In the text bubble the Grid stretches this to the bubble's content width (fill); elsewhere it
+            // hugs content with the minWidth floor above. Long snippets truncate at the bubble width.
             // Tint the quote box with the (contrasting) text color so it's always visible —
             // the old white tint vanished on the white "mine" bubble in dark mode.
             .background(fg.opacity(0.12))
@@ -4143,13 +4145,6 @@ struct FilePreview: UIViewControllerRepresentable {
 // DISPLAY-TIME guard for reply-quote snippets (file scope — used by MessageBubble AND ThreadView):
 // quotes persisted BEFORE the safeText fix carry the raw "kulan-…:" marker forever (encrypted
 // snapshots) — map them to friendly labels when rendering, so old quotes clean up too.
-// Measures a reply bubble's content width so the reply quote can fill it (never a tiny box under a wide
-// message). Max-reduce: the widest element (the message body) wins.
-struct QuoteFillWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
 func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.contactMarker) { return "Contact" }
     if t.hasPrefix(Message.locationMarker) { return "Location" }
