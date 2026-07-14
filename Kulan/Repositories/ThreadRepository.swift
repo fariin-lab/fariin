@@ -83,10 +83,19 @@ final class ThreadRepository {
     /// Stored (not computed) so every read in one render is the same snapshot and we
     /// don't re-filter per row.
     private(set) var items: [Message] = []
+    // One-producer discipline (Signal model): the repo publishes derived lookups ONCE per data change,
+    // instead of every consumer re-deriving them per render/per cell. indexById kills the O(n) scans the
+    // row builder / swipe gate / date pill did per call; itemsVersion lets the view cache per-emission
+    // work (row signatures) instead of recomputing it on every SwiftUI body run.
+    private(set) var indexById: [String: Int] = [:]
+    private(set) var itemsVersion = 0
     private func refreshItems() {
         let echoed = Set(messages.compactMap { $0.clientId })
         items = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
             .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
+        indexById = Dictionary(items.enumerated().map { ($0.element.rowId, $0.offset) },
+                               uniquingKeysWith: { a, _ in a })
+        itemsVersion += 1
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }

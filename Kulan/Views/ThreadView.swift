@@ -1159,24 +1159,44 @@ struct ThreadView: View {
     // read tick, pinned, album count. The native list reconfigures a visible row ONLY when its signature
     // changes — so the constant presence/typing/read re-renders of ThreadView's body don't reconfigure
     // (re-render) every visible bubble = no flashing.
+    // Per-emission signature cache (Signal's one-producer discipline): the BASE signatures are computed
+    // once per repo emission / read-cutoff / pin change and reused across every SwiftUI body re-run —
+    // the old computed property re-hashed every message's text on EVERY body run (typing flags, presence
+    // dots, keyboard focus…), pure churn during exactly the moments that need main-thread headroom.
+    // A plain class box: not observed state, mutating it never re-runs the body.
+    private final class SignatureCache {
+        var key = ""
+        var base: [String: String] = [:]
+    }
+    private let sigCache = SignatureCache()
+
     private var rowSignatures: [String: String] {
         let readCutoff = repo.otherLastReadMillis
         let pins = repo.pinnedMessageIds
-        var out: [String: String] = [:]
-        out.reserveCapacity(repo.items.count)
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))"
+        if sigCache.key != key {
+            var out: [String: String] = [:]
+            out.reserveCapacity(repo.items.count)
+            for m in repo.items {
+                let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
+                let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)"
+            }
+            sigCache.key = key
+            sigCache.base = out
+        }
+        // Fast path (the overwhelmingly common state): no selection, no highlight → the cached base IS
+        // the signature set. The suffixes below exist because:
+        //  • SELECTION must be in the signature: the row renders a checkbox (and dims) in select mode —
+        //    without it the visible rows never reconfigured and checkboxes were missing (308 bug).
+        //  • HIGHLIGHT must be in the signature: the jump-to flash renders via isHighlighted — without a
+        //    signature change the target row never reconfigured (the "jump didn't work" bug).
+        if !selecting && highlightId == nil { return sigCache.base }
+        var out = sigCache.base
         for m in repo.items {
-            let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
-            let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
-            // SELECTION must be in the signature: the row renders a checkbox (and dims) in select mode.
-            // Without it, entering select mode didn't change any signature → the list skipped reconfiguring
-            // the visible rows → the checkboxes never appeared until a scroll dequeued a fresh cell (the
-            // intermittent "missing checkbox / missing message" bug in 308).
             let sel = selecting ? (selectedIds.contains(m.id) ? "S1" : "S0") : "S-"
-            // HIGHLIGHT must be in the signature: the jump-to flash (reply/pin/search) renders via
-            // isHighlighted, and without a signature change the target row never reconfigured — the
-            // scroll landed but the flash never showed (looked like the jump "didn't work").
             let hl = m.id == highlightId ? "H1" : "H0"
-            out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(sel)|\(hl)"
+            out[m.rowId] = (out[m.rowId] ?? "") + "|\(sel)|\(hl)"
         }
         return out
     }
@@ -1192,7 +1212,7 @@ struct ThreadView: View {
     private func uikitBubbleModel(for rowId: String) -> UIKitBubbleModel? {
         guard Self.useUIKitBubbles else { return nil }
         guard !isGroup, !selecting, chatColorSpec == nil,
-              let idx = repo.items.firstIndex(where: { $0.rowId == rowId }) else { return nil }
+              let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         guard !shouldShowDate(at: idx) else { return nil }             // date-header rows render the pill in SwiftUI
         let m = repo.items[idx]
         guard m.id != highlightId, m.sendState == nil,                 // delivered only
@@ -1234,7 +1254,7 @@ struct ThreadView: View {
             rowIds: repo.items.map { $0.rowId },
             rowSignatures: rowSignatures,   // per-row content signature → list reconfigures only changed rows
             row: { id in
-                guard let idx = repo.items.firstIndex(where: { $0.rowId == id }) else { return AnyView(EmptyView()) }
+                guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
                     Task {
                         await repo.ensureLoaded(jid)
@@ -1263,9 +1283,11 @@ struct ThreadView: View {
                 guard idx < msgs.count else { return nil }
                 return repo.items.first { $0.id == msgs[idx].id }?.rowId
             }(),
-            canSwipeReply: { id in repo.items.first(where: { $0.rowId == id })?.sendState == nil },
+            canSwipeReply: { id in
+                repo.indexById[id].map { repo.items[$0].sendState == nil } ?? false
+            },
             onSwipeReply: { id in
-                if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }
+                if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
             },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
@@ -1275,7 +1297,7 @@ struct ThreadView: View {
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
             // the scroll callback. We only hand it a pure rowId → day-label mapping; no SwiftUI state is
             // written on scroll, so scrolling never re-runs the conversation tree.
-            dayLabelFor: { id in repo.items.first(where: { $0.rowId == id }).map { dayLabel($0.createdAt) } }
+            dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } }
         )
     }
 
