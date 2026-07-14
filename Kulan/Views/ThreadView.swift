@@ -670,6 +670,11 @@ struct ThreadView: View {
     }
 
     var body: some View {
+        // READ-RECEIPT LIVE FIX: read otherLastReadMillis DIRECTLY in the body so a live read update re-runs
+        // the view. It's otherwise only read inside the rowSignatures helper — and unlike pins/reactions
+        // (read directly in the body), that wasn't enough to refresh the tick, so my ✓ stayed single until a
+        // full reload. This body-level read makes the tick flip to ✓✓ the moment the other person reads.
+        let _ = repo.otherLastReadMillis
         threadContent
         // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
