@@ -1300,6 +1300,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 swipingCell = nil; swipingId = nil; return
             }
             swipingCell = cell; swipingId = id; swipeTriggered = false
+            // LOCK vertical scrolling for the duration of the reply-swipe (user request): the swipe owns the
+            // touch, the conversation must not scroll up/down at the same time. Disabling the collection
+            // view's own scroll cancels any in-flight vertical pan; our swipePan is a separate recognizer so
+            // it keeps tracking. Restored on end/cancel.
+            collectionView.isScrollEnabled = false
             addSwipeArrow(for: cell)
         case .changed:
             guard let cell = swipingCell else { return }
@@ -1322,6 +1327,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 swipeTriggered = false
             }
         case .ended, .cancelled, .failed:
+            collectionView.isScrollEnabled = true   // swipe over → vertical scrolling allowed again
             let fire = swipeTriggered ? swipingId : nil
             resetSwipe(animated: true, velocity: g.velocity(in: collectionView).x)
             if let id = fire { onSwipeReply(id) }
