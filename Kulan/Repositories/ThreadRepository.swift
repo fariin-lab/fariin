@@ -49,6 +49,7 @@ final class ThreadRepository {
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private(set) var didInitialLoad = false
 
+    private(set) var convLoaded = false   // first conversation-doc snapshot landed (block state is real)
     var otherTyping = false
     var typingNames: [String] = []   // group: who is currently typing
     private var typingExpiry: Timer? // incoming typing self-clears after 15s — a crashed sender's flag can't stick
@@ -136,6 +137,7 @@ final class ThreadRepository {
         convListener = db.collection("conversations").document(cid)
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self else { return }
+                self.convLoaded = true
                 let d = snap?.data()
                 // Typing + lastRead are hot fields (fire on every keystroke / incoming
                 // message) but never change which messages are visible — update directly,
@@ -324,7 +326,13 @@ final class ThreadRepository {
         // SERVER for this. A from-cache/resync snapshot can transiently omit a doc that still exists;
         // deleting on it made the message vanish for a few seconds until the next full snapshot re-added
         // it ("gone then comes back"). Cache snapshots may still ADD/UPDATE (below), just never DELETE.
-        if !fromCache, let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
+        if !fromCache, docs.isEmpty {
+            // The SERVER says the collection is now EMPTY (everything deleted for everyone / the
+            // disappearing sweep finished on the other device). The cutoff loop below is skipped when
+            // there's no oldest doc, which used to keep every cached message alive — and re-persist the
+            // ghosts to the warm cache, so even reopening showed a fully-deleted conversation forever.
+            byId.removeAll(); rawReactions.removeAll()
+        } else if !fromCache, let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
             for (id, m) in byId where m.createdAt >= cutoff && !windowIds.contains(id) {
                 byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
             }
@@ -370,11 +378,16 @@ final class ThreadRepository {
     // deletion yanked the viewport ("the conversation scrolls back while I read old messages"). Trimming
     // resumes as soon as they return to the bottom, so the memory cap still holds over time.
     var readerAwayFromBottom = false
+    // True while ensureLoaded pages toward a jump target: the jump can start FROM the bottom (the
+    // scroll hasn't happened yet, so readerAwayFromBottom is still false), and a live commit mid-loop
+    // used to trim away the very pages the jump just loaded — the loop re-paged, the trim re-dropped,
+    // and the jump silently failed after burning its page budget (audit M7).
+    private var jumpPagingInFlight = false
 
     // LRU-drop the OLDEST messages once the window blows past the high-water mark (the standard 500-cap).
     // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
     private func trimWindowIfNeeded() {
-        guard !readerAwayFromBottom else { return }
+        guard !readerAwayFromBottom, !jumpPagingInFlight else { return }
         guard byId.count > windowHighWater else { return }
         let sorted = byId.values.sorted { $0.createdAt < $1.createdAt }
         for m in sorted.prefix(sorted.count - windowCap) {
@@ -466,6 +479,8 @@ final class ThreadRepository {
     // far above the current window), or we run out of history. Bounded so a bad id can't loop forever.
     @MainActor
     func ensureLoaded(_ messageId: String, maxPages: Int = 12) async {   // 12×40 ≈ the window cap — never page unbounded history into memory
+        jumpPagingInFlight = true
+        defer { jumpPagingInFlight = false }
         var pages = 0
         while !items.contains(where: { $0.id == messageId }) && canLoadOlder && pages < maxPages {
             await withCheckedContinuation { cont in loadOlder { cont.resume() } }
