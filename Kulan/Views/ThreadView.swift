@@ -492,20 +492,23 @@ struct ThreadView: View {
             Group {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
-                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
+                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
-                                    cid: cid, suppressDismissPan: true,
+                                    cid: cid, suppressDismissPan: false,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     })
                 }
             }
-            // NATIVE matched-geometry zoom (user request): drag-down close shrinks the photo back into its
-            // source bubble via Apple's zoom transition — the same close as the story viewer. The custom
-            // pan is off (suppressDismissPan: true) so it can't fight the native interactive dismiss.
+            // Zoom transition = the hero OPEN (photo grows from its bubble) and the button-close shrink
+            // back into it. The DRAG-down close is NOT the zoom transition's (its pan moved the whole
+            // card — chrome and all — over a moving page; user rejected that): SignalDismissHost owns the
+            // drag (suppressDismissPan: false) — chrome hides instantly, ONLY the photo follows the
+            // finger, the page behind never moves. The zoom transition's own pan/pinch are disabled
+            // inside SignalDismissHost so the two can never fight.
             .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
@@ -519,9 +522,10 @@ struct ThreadView: View {
                             })
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: true)
-                // Native matched-geometry zoom close (user request): the player shrinks back into the
-                // video bubble, same as photos.
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
+                // Zoom = hero open + button-close shrink into the bubble. The drag-down close is the
+                // media-only pan (same as photos): chrome hides instantly, only the video moves, the
+                // page behind stays fixed. The zoom transition's own pan is disabled in SignalDismissHost.
                 .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).

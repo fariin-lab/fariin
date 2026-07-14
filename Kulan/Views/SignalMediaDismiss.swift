@@ -59,6 +59,30 @@ struct SignalDismissHost: UIViewRepresentable {
             let g = DirectionalPanGestureRecognizer(direction: .vertical, target: self, action: #selector(handle(_:)))
             g.delegate = self
             vc.view.addGestureRecognizer(g)
+            // The viewer may be presented with a native .zoom transition (hero open from the bubble).
+            // That transition installs its OWN interactive-dismiss pan/pinch on the presentation chain,
+            // and that drag moves the WHOLE card — chrome, thumbnails, everything — over a moving
+            // presenter (the user rejected exactly this). Disable those so THIS pan is the only dismiss
+            // drag: only the media copy moves, the page behind never does. The zoom OPEN animation and
+            // the programmatic shrink-into-bubble close are untouched — they're the animator, not the
+            // gesture. Run again after the presentation settles: the system can attach its gestures late.
+            neutralizeSystemDismissGestures()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                self?.neutralizeSystemDismissGestures()
+            }
+        }
+
+        // Walk from the presented root up through the presentation container views and disable every
+        // pan/pinch that isn't ours. Scroll views (zoom, pager, thumb strip) keep their pans — those
+        // live on the scroll views themselves, deeper in the hierarchy, never on this chain.
+        private func neutralizeSystemDismissGestures() {
+            var v: UIView? = root
+            while let cur = v {
+                for g in cur.gestureRecognizers ?? [] where !(g is DirectionalPanGestureRecognizer) {
+                    if g is UIPanGestureRecognizer || g is UIPinchGestureRecognizer { g.isEnabled = false }
+                }
+                v = cur.superview
+            }
         }
 
         // Coexist with the pager + zoom scroll views (coordinated via delegation the same way);
