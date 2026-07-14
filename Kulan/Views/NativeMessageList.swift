@@ -264,13 +264,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The earlier fully-manual .never + SwiftUI GeometryReader insets desynced during keyboard
         // transitions (readers reporting late/0 → top inset 0 → bubbles under the header).
         collectionView.contentInsetAdjustmentBehavior = .always
-        // TOP + BOTTOM edge-effects: iOS 26 native SOFT fade. The bottom softly frosts the messages as they
-        // scroll UNDER the composer (what the user asked for — you see the content, dimmed, like the nav bar
-        // does at the top — with no hard border/seam). It was previously OFF because the OLD huge bottom
-        // inset (composer+keyboard, ~400pt) made the gradient bleed far up into the chat; now the inset is a
-        // static 12pt (the composer height comes from the safe area), so the fade is bounded to the bar.
+        // BOTTOM edge-effect OFF: the user wants the messages fully CLEAR/raw under the composer (no frost,
+        // no dimming). Hiding it removes the native soft fade so content stays sharp right up to the pills.
         if #available(iOS 26.0, *) {
-            collectionView.bottomEdgeEffect.style = .soft
+            collectionView.bottomEdgeEffect.isHidden = true
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -960,10 +957,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // Keep the bottom edge-effect on the SOFT style (UIKit can reset it) — softly frosts messages under
-        // the composer with no hard seam.
-        if #available(iOS 26.0, *), collectionView.bottomEdgeEffect.style != .soft {
-            collectionView.bottomEdgeEffect.style = .soft
+        // Keep the bottom edge-effect OFF (UIKit can reset it) — content stays fully clear/raw under the composer.
+        if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
+            collectionView.bottomEdgeEffect.isHidden = true
         }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now

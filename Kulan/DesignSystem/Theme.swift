@@ -93,17 +93,14 @@ extension View {
         }
     }
 
-    /// Native-style composer: a native iOS 26 blur bar (`safeAreaBar`) that the message list scrolls
-    /// UNDER (ThreadView runs the list full-bleed with .ignoresSafeArea(.bottom) and feeds the composer
-    /// height back as the list's manual bottom inset). Because messages are always behind the blur, it
-    /// reads seamless with no band — exactly like the header. safeAreaInset fallback for older OSes.
+    /// Composer dock. Uses `safeAreaInset` (NOT `safeAreaBar`) so the bar paints NO blur/material of its own
+    /// — the user wants the messages fully CLEAR/raw under the input, only the glass pills floating over
+    /// them; safeAreaBar's built-in blur bar was what dimmed/covered the content. safeAreaInset still grows
+    /// the bottom safe area and rides the keyboard, so the native content-inset (.always) keyboard model
+    /// is unchanged.
     @ViewBuilder
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
-        if #available(iOS 26.0, *) {
-            self.safeAreaBar(edge: .bottom, content: content)
-        } else {
-            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
-        }
+        self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
     }
 }
 
