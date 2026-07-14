@@ -74,22 +74,26 @@ struct ImageViewerView: View {
     // Single-image entry (existing call sites): a one-page gallery.
     init(message: Message, cid: String, suppressDismissPan: Bool = false,
          telegramSourceRect: CGRect? = nil,
-         onSendEdited: ((Data, String, Bool) -> Void)? = nil) {
+         onSendEdited: ((Data, String, Bool) -> Void)? = nil,
+         onDeleteForMe: ((Message) -> Void)? = nil) {
         self.gallery = [message]; self.cid = cid
         self.suppressDismissPan = suppressDismissPan
         self.telegramSourceRect = telegramSourceRect
         self.onSendEdited = onSendEdited
+        self.onDeleteForMe = onDeleteForMe
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
     init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false,
          telegramSourceRect: CGRect? = nil,
-         onSendEdited: ((Data, String, Bool) -> Void)? = nil) {
+         onSendEdited: ((Data, String, Bool) -> Void)? = nil,
+         onDeleteForMe: ((Message) -> Void)? = nil) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
         self.suppressDismissPan = suppressDismissPan
         self.telegramSourceRect = telegramSourceRect
         self.onSendEdited = onSendEdited
+        self.onDeleteForMe = onDeleteForMe
         _current = State(initialValue: message.id)
     }
 

@@ -542,7 +542,7 @@ struct ThreadView: View {
     // Release build) once the delete-option alerts were added. AnyView between the halves resets the
     // opaque-type complexity — behavior unchanged.
     private var threadPickers: some View {
-        AnyView(threadPickersB)
+        AnyView(threadPickersD)
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { data in if let ui = UIImage(data: data) { editImage = EditImageWrap(image: ui) } }
                 .ignoresSafeArea()
@@ -685,6 +685,11 @@ struct ThreadView: View {
         } message: { kind in
             Text("\(kind == .video ? "Video call" : "Call") \(title)?")
         }
+    }
+
+    // Fourth slice of the picker chain (location onward), joined via an erased boundary.
+    private var threadPickersC: some View {
+        AnyView(threadPickersB)
         // "Select Location" map (user design): permission → GPS/pan/search → Send Location outputs the
         // coordinates, delivered as an encrypted location-card message.
         .sheet(isPresented: $showLocationShare) {
@@ -726,6 +731,11 @@ struct ThreadView: View {
         // and since file content scrolls, swipe-down scrolled the text instead of dismissing ("can't
         // close it"). PDFs get the same sheet look instead of a bare full page.
         .sheet(item: $filePreview) { FilePreviewSheet(url: $0.url) }
+    }
+
+    // Fifth slice of the picker chain (link/not-found/pdf/reaction/forward/group/info), erased boundary.
+    private var threadPickersD: some View {
+        AnyView(threadPickersC)
         // ONE link-confirm + one not-found alert for the whole conversation (hoisted out of every bubble:
         // ~40 live cells each carried their own presentation machinery, anchored inside recyclable cells).
         .confirmationDialog("Open link?",
