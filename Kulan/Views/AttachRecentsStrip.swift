@@ -292,7 +292,10 @@ struct AttachRecentsStrip: View {
             Color.clear.aspectRatio(1, contentMode: .fit)
                 .overlay {
                     VStack(spacing: 6) {
-                        Image(systemName: "camera.fill").font(.system(size: 21, weight: .medium))
+                        // The app's OWN camera icon (ic_camera SVG — same one the composer uses),
+                        // not the SF Symbol (user spec 2026-07-14).
+                        Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 26, height: 26)
                         Text("Camera").font(.system(size: 11, weight: .medium))
                     }
                     .foregroundStyle(.primary)
