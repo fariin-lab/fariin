@@ -19,6 +19,10 @@ struct ChatImageEditor: View {
     // pop the PRESENTING screen instead. Mirrors ChatCropView's inline mode.
     var inline: Bool = false
     var onClose: (() -> Void)? = nil
+    // false when presented OVER the media sheet: Send must NOT dismiss this editor itself — the caller
+    // closes the SHEET, which takes the whole stack down in ONE motion. Self-dismissing first revealed
+    // the sheet for a beat before it closed (the flash the user reported).
+    var selfDismissOnSend: Bool = true
     @Environment(\.dismiss) private var dismiss
 
     private func close() { if inline { onClose?() } else { dismiss() } }
@@ -378,7 +382,7 @@ struct ChatImageEditor: View {
     private func send() {
         let data = flatten()
         onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd, viewOnce)
-        dismiss()
+        if selfDismissOnSend { dismiss() }
     }
 
     // Edit-only: hand the flattened (cropped + drawn) image back to the multi-image screen.

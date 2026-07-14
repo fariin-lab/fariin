@@ -34,20 +34,27 @@ struct VideoApprovalView: View {
     @State private var stash: [UUID: ClipTrim] = [:]
     let onSend: (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void
     let onSendMulti: ((_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void)?
+    // false when presented OVER the media sheet: the caller closes the sheet (whole stack, one motion);
+    // self-dismissing first flashed the sheet for a beat before it closed.
+    let selfDismissOnSend: Bool
     @Environment(\.dismiss) private var dismiss
 
     // Single video (the existing call sites, unchanged).
-    init(url: URL, onSend: @escaping (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void) {
+    init(url: URL, onSend: @escaping (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void,
+         selfDismissOnSend: Bool = true) {
         _clipList = State(initialValue: [ApprovalClip(url: url, thumb: nil, duration: 0)])
         self.onSend = onSend
         self.onSendMulti = nil
+        self.selfDismissOnSend = selfDismissOnSend
     }
 
     // Multiple videos → the same editor with the thumbnail rail.
-    init(clips: [ApprovalClip], onSendMulti: @escaping (_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void) {
+    init(clips: [ApprovalClip], onSendMulti: @escaping (_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void,
+         selfDismissOnSend: Bool = true) {
         _clipList = State(initialValue: clips)
         self.onSend = { _, _, _ in }
         self.onSendMulti = onSendMulti
+        self.selfDismissOnSend = selfDismissOnSend
     }
 
     private var activeURL: URL { clipList[current].url }
@@ -386,15 +393,15 @@ struct VideoApprovalView: View {
                         outs.append(clip.url)
                     }
                 }
-                await MainActor.run { exporting = false; onSendMulti(outs, cap, hd); dismiss() }
+                await MainActor.run { exporting = false; onSendMulti(outs, cap, hd); if selfDismissOnSend { dismiss() } }
             }
             return
         }
-        guard trimmed else { onSend(activeURL, cap, hd); dismiss(); return }
+        guard trimmed else { onSend(activeURL, cap, hd); if selfDismissOnSend { dismiss() }; return }
         exporting = true
         Task {
             let out = await exportTrimmed(url: activeURL, start: trimStart, end: trimEnd)
-            await MainActor.run { exporting = false; onSend(out ?? activeURL, cap, hd); dismiss() }
+            await MainActor.run { exporting = false; onSend(out ?? activeURL, cap, hd); if selfDismissOnSend { dismiss() } }
         }
     }
 

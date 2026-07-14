@@ -146,12 +146,16 @@ struct ImageViewerView: View {
         // image editor used for fresh photos (crop, pen, HD, filters, caption — no new flow), and Send
         // delivers the edited image with everything baked in. X backs out to this viewer.
         .fullScreenCover(item: $penEdit) { wrap in
+            // selfDismissOnSend: false — the editor must NOT dismiss itself on Send: that revealed THIS
+            // viewer for a few seconds ("a second image preview page") before it closed. dismiss() on the
+            // viewer takes the whole stack (viewer + editor) down in one motion instead.
             ChatImageEditor(source: wrap.image,
                             onSend: { data, caption, _, viewOnce in
                                 onSendEdited?(data, caption, viewOnce)
                                 dismiss()   // back to the conversation, where the edited copy is sending
                             },
-                            startDrawing: true)
+                            startDrawing: true,
+                            selfDismissOnSend: false)
         }
     }
 

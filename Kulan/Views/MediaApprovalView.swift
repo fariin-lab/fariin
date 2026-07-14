@@ -40,6 +40,9 @@ enum ApprovalMedia: Identifiable {
 struct MediaApprovalView: View {
     @State var items: [ApprovalMedia]
     var onSend: (_ ordered: [SendMedia], _ caption: String, _ hd: Bool) -> Void   // ORDERED mixed group
+    // false when presented OVER the media sheet: the caller closes the sheet (whole stack, one motion);
+    // self-dismissing first flashed the sheet for a beat before it closed.
+    var selfDismissOnSend: Bool = true
     @Environment(\.dismiss) private var dismiss
 
     @State private var page = 0
@@ -425,7 +428,7 @@ struct MediaApprovalView: View {
             await MainActor.run {
                 exporting = false
                 onSend(ordered, cap, hd)
-                dismiss()
+                if selfDismissOnSend { dismiss() }
             }
         }
     }

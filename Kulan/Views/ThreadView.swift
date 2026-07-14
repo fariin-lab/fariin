@@ -1593,25 +1593,34 @@ struct ThreadView: View {
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
         // AND closes the sheet, landing in the chat.
+        // Send from an editor OVER the sheet: the editor does NOT self-dismiss (selfDismissOnSend: false);
+        // closing the SHEET tears down the whole stack in one motion. When the editor dismissed itself
+        // first, the sheet re-appeared for a beat before closing (the flash the user reported).
         .fullScreenCover(item: $panelEditImage) { wrap in
-            ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
-                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
-                showAttachPanel = false
-            }
+            ChatImageEditor(source: wrap.image,
+                            onSend: { data, caption, _, viewOnce in
+                                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+                                showAttachPanel = false
+                            },
+                            selfDismissOnSend: false)
         }
         // Single-video trim editor OVER the sheet: X returns to the sheet; Send delivers + closes the sheet.
         .fullScreenCover(item: $panelVideoApprove) { wrap in
-            VideoApprovalView(url: wrap.url) { finalURL, caption, hd in
-                Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
-                showAttachPanel = false
-            }
+            VideoApprovalView(url: wrap.url,
+                              onSend: { finalURL, caption, hd in
+                                  Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
+                                  showAttachPanel = false
+                              },
+                              selfDismissOnSend: false)
         }
         // Mixed approval pager OVER the sheet: X returns to the sheet; Send delivers the group + closes it.
         .fullScreenCover(item: $panelMediaApprove) { wrap in
-            MediaApprovalView(items: wrap.items) { ordered, caption, hd in
-                Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
-                showAttachPanel = false
-            }
+            MediaApprovalView(items: wrap.items,
+                              onSend: { ordered, caption, hd in
+                                  Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
+                                  showAttachPanel = false
+                              },
+                              selfDismissOnSend: false)
         }
         // Multi-VIDEO editor OVER the sheet (all-video selections): the single video editor's exact page
         // + the thumbnail rail. Sends each clip in order; the caption rides once, on the first.
@@ -1622,7 +1631,7 @@ struct ThreadView: View {
                     for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
                 }
                 showAttachPanel = false
-            })
+            }, selfDismissOnSend: false)
         }
     }
 
