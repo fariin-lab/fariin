@@ -594,6 +594,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pending = pendingIdsApply {
             pendingIdsApply = nil
             apply(rowIds: pending, scrollTarget: nil)
+            // The land may have STARTED an animation (send glide) — continuing into the reconfigure
+            // work below would land content mid-animation, the exact violation the gate exists to
+            // prevent (audit S3). The pending flags survive; the animation's completion re-settles.
+            guard !isInMotion else { return }
         }
         // A message arrived at the bottom mid-scroll: pin now (only if the reader is still at the bottom).
         if needsPinOnSettle {
@@ -614,8 +618,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if needsReconcileOnSettle { needsReconcileOnSettle = false; reconcile() }
             return
         }
-        needsReconcileOnSettle = false   // refreshVisible re-measures + reconciles as needed
+        // An owed reconcile may cover a DIFFERENT row than the refresh target (audit M11: a uikit
+        // dequeue adopted a corrected height for row X while a reaction changed row A — refreshing A
+        // never relaid-out X, so cached heights and frames diverged permanently). Honor it explicitly.
+        let owedReconcile = needsReconcileOnSettle
+        needsReconcileOnSettle = false
         refreshVisible(target)
+        if owedReconcile { DispatchQueue.main.async { [weak self] in self?.reconcile() } }
     }
 
     // Split ids into (reconfigure, reload): a row whose RENDER ROUTE flipped since it was last configured
@@ -713,14 +722,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             refreshVisible(changed)
             return
         }
-        lastRowSigs = rowSignatures   // ids changed (append/prepend/trim): reseed signatures for the new set
-
-        // At-bottom INTENT from every truth source, not just live geometry (Signal reads its latched
+        // At-bottom INTENT from the latch, not just live geometry (Signal reads its latched
         // lastKnownDistanceFromBottom): a land during the keyboard's native ride reads mid-flight
         // geometry and answered "not at bottom" — the own-send glide then silently skipped ("sometimes
-        // sending doesn't scroll"). stickBottom holds the pre-resize truth; the latch holds the last
-        // at-rest truth (kept fresh on every scroll tick, so a reader in history can't false-positive).
-        let wasAtBottom = computeAtBottom() || stickBottom || lastKnownDistanceFromBottom <= 44
+        // sending doesn't scroll"). The latch is refreshed on every scroll tick, so a reader in history
+        // can't false-positive. stickBottom was REMOVED from this union (audit S1): it refreshes only on
+        // layout passes, which don't happen during quiet reading — a stale TRUE from minutes ago made a
+        // deferred arrival glide the reader to the bottom at settle (the reading-yank, via a new door).
+        let wasAtBottom = computeAtBottom() || lastKnownDistanceFromBottom <= 44
         // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
@@ -763,6 +772,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // visibleBefore list above is for the scroll ANCHOR, not for content coverage.
         let liveIds = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
         let contentChanged = liveIds.filter { ids.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
+        // Reseed AFTER the diff above (audit S2): the reseed used to run at the TOP of this path, so
+        // contentChanged compared the new signatures against themselves and was empty by construction —
+        // a read-tick/reaction arriving IN THE SAME Firestore batch as a new message (the normal case in
+        // an active chat) never repainted. This mechanism was born dead; the diff now sees real changes.
+        lastRowSigs = rowSignatures
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         for id in contentChanged { heights[id] = measure(id, width: width) }   // changed content → fresh height
@@ -816,7 +830,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // (no per-cell entrance transform, no scale, no fade), then an ANIMATED scroll to the bottom so
         // the list glides up to reveal the new bubble. The bubble itself never animates — only the scroll
         // does. Only a single genuine new row animates the scroll; multi-row chunk loads and prepends do not.
-        let animate = isAppend && wasAtBottom && appendedCount == 1
+        // scrollTarget == nil: a jump riding this load must never be swallowed by the glide branch
+        // (audit M9: a reply-quote jump landing with a fresh append glided to the bottom instead, and
+        // the one-shot target was already cleared — the jump was gone for good).
+        let animate = isAppend && wasAtBottom && appendedCount == 1 && scrollTarget == nil
         if animate {
             sendAnimating = true   // land-when-safe: no content refresh lands during the scroll animation
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
@@ -912,6 +929,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     private func reflowAppended(_ ids: [String]) {
+        // Dispatched one runloop after apply — squarely inside the send glide (audit M10): a reconfigure
+        // + heights mutation mid-animation renders new-height content in old frames. Defer to settle;
+        // pendingSettleHeights re-measures exactly these rows there.
+        if isInMotion {
+            ids.forEach { pendingSettleHeights.insert($0) }
+            needsRefreshOnSettle = true
+            return
+        }
         var snap = dataSource.snapshot()
         let present = ids.filter { snap.itemIdentifiers.contains($0) }
         guard !present.isEmpty else { return }
@@ -1431,17 +1456,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // animated glide to the exact bottom (the old ScrollViewProxy path was a no-op on this list).
         if id == "BOTTOM" { pinBottom(animated: true); return }
         guard let ip = dataSource.indexPath(for: id) else { return }
-        if let attr = collectionView.layoutAttributesForItem(at: ip) {
-            let visible = CGRect(x: 0,
-                                 y: collectionView.contentOffset.y + collectionView.adjustedContentInset.top,
-                                 width: collectionView.bounds.width,
-                                 height: collectionView.bounds.height
-                                    - collectionView.adjustedContentInset.top
-                                    - collectionView.adjustedContentInset.bottom)
-            if visible.contains(attr.frame) { return }   // already entirely on screen → no scroll
-        }
+        guard let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
+        let visible = CGRect(x: 0,
+                             y: collectionView.contentOffset.y + collectionView.adjustedContentInset.top,
+                             width: collectionView.bounds.width,
+                             height: collectionView.bounds.height
+                                - collectionView.adjustedContentInset.top
+                                - collectionView.adjustedContentInset.bottom)
+        if visible.contains(attr.frame) { return }   // already entirely on screen → no scroll
+        // Compute the clamped centered target OURSELVES (frames are exact): scrollToItem clamps
+        // internally, and a clamp that lands on the current offset animates nothing — no end callback,
+        // 5s wedge of the programmatic-scroll flag freezing every land (audit S4).
+        let centered = attr.frame.midY - collectionView.bounds.height / 2
+        let targetY = min(max(minContentOffsetY, centered), maxContentOffsetY)
+        guard abs(targetY - collectionView.contentOffset.y) > 0.5 else { return }
         scrollingAnimationDidStart()   // lands defer until the jump animation completes (reference)
-        collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: true)
+        collectionView.setContentOffset(CGPoint(x: 0, y: targetY), animated: true)
     }
 
     // MARK: - Swipe to reply (single pan; the reference model)
@@ -1682,6 +1712,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // Scrolled away from the bottom mid-keyboard-session → the definitive settle at keyboardDidHide
             // must NOT yank the reader back down (they left the bottom deliberately, keyboard up).
             if keyboardSessionWasAtBottom, safeDistanceFromBottom > 44 { keyboardSessionWasAtBottom = false }
+            // stickBottom is otherwise only recomputed on LAYOUT passes, which don't run during quiet
+            // reading — invalidate it the moment the user scrolls away so no stale TRUE survives (S1).
+            if stickBottom, safeDistanceFromBottom > 44 { stickBottom = false }
         }
         // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
         // 0.1s one-shot timer on the COMMON runloop mode (fires during scrolling) — the reference model:
@@ -1735,6 +1768,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // adjusted offset (continuity break + possible load loop — the reference documents exactly this).
     // A plain animated setContentOffset has no overshoot.
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        // Already at the top → an animated no-op scroll never fires its end callback, wedging the
+        // programmatic-scroll flag for the full 5s watchdog and freezing every land (audit S4).
+        guard abs(collectionView.contentOffset.y - minContentOffsetY) > 0.5 else { return false }
         scrollingAnimationDidStart()
         collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: true)
         return false
