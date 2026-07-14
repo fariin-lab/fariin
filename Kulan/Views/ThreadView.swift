@@ -373,7 +373,13 @@ struct ThreadView: View {
             // yanked the viewport while reading history) — pause it whenever they're away from the bottom.
             .onChange(of: isAtBottom) { _, atB in repo.readerAwayFromBottom = !atB }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
-            .onChange(of: repo.pinnedMessageIds) { _, ids in pinIndex = max(0, ids.count - 1) }
+            .onChange(of: repo.pinnedMessageIds) { _, ids in
+                pinIndex = max(0, ids.count - 1)
+                // The bar's height is reported by a GeometryReader ON the bar — when the last pin is
+                // removed the bar unmounts and nothing reports 0, so the floating date pill stayed at
+                // the lowered position forever (user report). Reset explicitly.
+                if ids.isEmpty { pinBarHeight = 0 }
+            }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
             .onChange(of: repo.otherTyping) { _, t in
                 // Typing indicator appears while at the bottom → reveal it (the reference auto-scrolls for
