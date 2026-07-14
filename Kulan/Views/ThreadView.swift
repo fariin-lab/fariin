@@ -149,19 +149,19 @@ struct ThreadView: View {
         var newestCreatedAt = Date.distantPast
         var seeded = false
     }
-    private let arrivalState = ArrivalState()
+    @State private var arrivalState = ArrivalState()
 
     // One drain per chat OPEN, not per onAppear (audit S5): returning from an in-chat profile push
     // re-fired the drain while the original send was still in flight → duplicate server doc + the
     // recipient's unread badge over-counted by one, permanently.
     private final class DrainGate { var done = false }
-    private let drainGate = DrainGate()
+    @State private var drainGate = DrainGate()
 
     // Typing hygiene (audit M6): onChange(of: input) can't tell a keystroke from a programmatic
     // assignment, and independent setTyping Tasks could land out of order (remote "typing…" stuck
     // for the 15s expiry). suppressNext skips one onChange; chain serializes the writes.
     private final class TypingBox { var suppressNext = false; var chain: Task<Void, Never>? }
-    private let typingBox = TypingBox()
+    @State private var typingBox = TypingBox()
 
     private func setInputSilently(_ s: String) {
         typingBox.suppressNext = true
@@ -344,7 +344,10 @@ struct ThreadView: View {
                 guard !fresh.isEmpty else { return }
                 let incoming = fresh.filter { $0.authorId != me }
                 // My own send ALWAYS glides to the newest message — even when I was reading history.
-                if fresh.contains(where: { $0.authorId == me }) && !isAtBottom {
+                // sendState != nil = the OPTIMISTIC insert (the actual send action). The server echo
+                // arrives with a slightly different timestamp and must not re-trigger the glide if the
+                // user scrolled away in the meantime.
+                if fresh.contains(where: { $0.authorId == me && $0.sendState != nil }) && !isAtBottom {
                     nativeScrollTarget = "BOTTOM"
                 } else if !incoming.isEmpty && !isAtBottom {
                     newWhileAway += incoming.count   // per message, not per batch
@@ -1279,7 +1282,7 @@ struct ThreadView: View {
         var key = ""
         var base: [String: String] = [:]
     }
-    private let sigCache = SignatureCache()
+    @State private var sigCache = SignatureCache()
 
     private var rowSignatures: [String: String] {
         let readCutoff = repo.otherLastReadMillis
@@ -1337,7 +1340,7 @@ struct ThreadView: View {
         var key = ""
         var models: [String: UIKitBubbleModel] = [:]
     }
-    private let uikitModelCache = UikitModelCache()
+    @State private var uikitModelCache = UikitModelCache()
 
     private var uikitModels: [String: UIKitBubbleModel] {
         // Search highlights text inside SwiftUI bubbles; selection/custom-color/group cases render
