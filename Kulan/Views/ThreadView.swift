@@ -203,24 +203,19 @@ struct ThreadView: View {
             // (build-292 model). Ignoring the bottom/keyboard safe area is exactly what forced the buggy
             // manual-inset path that double-counted the keyboard and stranded the content high with a gap.
             .ignoresSafeArea(.container, edges: .top)
+            // Jump-to-bottom chevron as a FLOATING OVERLAY (not inside the bar). It MUST NOT live in the
+            // composer safeAreaBar: the bar now feeds the content inset, so a button that appears/disappears
+            // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
+            // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
+            // the composer, rides the keyboard) and is fully tappable (padding, not offset).
+            .overlay(alignment: .bottomTrailing) { jumpToBottomButton.padding(.bottom, 10) }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
-            // scroll under it. Its OWN height is measured HERE (a reader outside the bar reports only the
-            // home-indicator/keyboard, NOT the bar — that mistake left the list's bottom inset ~46pt so the
-            // last messages sat behind the composer).
+            // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
             .floatingBottomBar {
                 // THE REFERENCE MODEL — NO background at all. The iOS-26 input toolbar is a
                 // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
                 // controls themselves are Liquid Glass, blurring what passes directly under THEM.
-                // Our pills already are native glassEffect in a GlassEffectContainer — every
-                // full-width rectangle tried behind them created the boundary that read as "the border".
-                VStack(spacing: 0) {
-                    // Jump-to-bottom arrow STACKED above the composer, INSIDE the bar's bounds — an
-                    // offset overlay rendered outside the bar was visible but not hit-testable (the
-                    // "arrow not working" bug). As bar content it's fully tappable + rides the keyboard.
-                    HStack { Spacer(); jumpToBottomButton }
-                        .padding(.bottom, 10)
-                    bottomBarContent
-                }
+                bottomBarContent
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
