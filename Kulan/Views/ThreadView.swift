@@ -196,13 +196,13 @@ struct ThreadView: View {
             // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
             messagesLayer(proxy)
-            // Full-bleed under the NAV BAR only (frosted nav over scrolling messages). The BOTTOM safe area
-            // is intentionally NOT ignored: the composer's `safeAreaBar` grows the bottom safe area — and,
-            // when the keyboard opens, rides it so the safe area becomes composer+keyboard. The list's
-            // `contentInsetAdjustmentBehavior = .always` folds that into the content inset automatically
-            // (build-292 model). Ignoring the bottom/keyboard safe area is exactly what forced the buggy
-            // manual-inset path that double-counted the keyboard and stranded the content high with a gap.
-            .ignoresSafeArea(.container, edges: .top)
+            // Full-bleed under BOTH bars, SYMMETRICALLY. The top already ran under the nav (messages render
+            // behind it, frosted) — the bottom must do the SAME so messages + wallpaper render UNDER the
+            // composer instead of stopping above it (that gap = the plain white app background showing = the
+            // "white composer" bug). The UIKit view still sees the real bottom safe area (composer safeAreaBar
+            // + keyboard) exactly like it sees the top nav inset, so `.always` folds it and the newest message
+            // still rests clear of the composer — same mechanism as the top, just mirrored.
+            .ignoresSafeArea(.container, edges: [.top, .bottom])
             // Jump-to-bottom chevron as a FLOATING OVERLAY (not inside the bar). It MUST NOT live in the
             // composer safeAreaBar: the bar now feeds the content inset, so a button that appears/disappears
             // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
