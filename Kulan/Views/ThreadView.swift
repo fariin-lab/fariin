@@ -141,6 +141,38 @@ struct ThreadView: View {
     // Telegram-style media open/close TEST (Settings > Privacy): the tapped photo/video springs from
     // the bubble rect instead of the system zoom transition.
     @AppStorage("telegramMediaOpen") private var telegramMediaOpen = false
+    @AppStorage("readReceipts") private var readReceiptsOn = true   // feeds the uikit tick + its cache key
+
+    // Arrival high-water mark (audit S6): per-message arrival classification, not per-batch. A class
+    // box — mutating it never re-runs the body.
+    private final class ArrivalState {
+        var newestCreatedAt = Date.distantPast
+        var seeded = false
+    }
+    private let arrivalState = ArrivalState()
+
+    // One drain per chat OPEN, not per onAppear (audit S5): returning from an in-chat profile push
+    // re-fired the drain while the original send was still in flight → duplicate server doc + the
+    // recipient's unread badge over-counted by one, permanently.
+    private final class DrainGate { var done = false }
+    private let drainGate = DrainGate()
+
+    // Typing hygiene (audit M6): onChange(of: input) can't tell a keystroke from a programmatic
+    // assignment, and independent setTyping Tasks could land out of order (remote "typing…" stuck
+    // for the 15s expiry). suppressNext skips one onChange; chain serializes the writes.
+    private final class TypingBox { var suppressNext = false; var chain: Task<Void, Never>? }
+    private let typingBox = TypingBox()
+
+    private func setInputSilently(_ s: String) {
+        typingBox.suppressNext = true
+        input = s
+    }
+
+    private func broadcastTyping(_ v: Bool) {
+        let prev = typingBox.chain
+        let c = cid
+        typingBox.chain = Task { await prev?.value; await ChatService.setTyping(c, v) }
+    }
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
@@ -285,30 +317,41 @@ struct ThreadView: View {
             }
             // Interactive keyboard dismiss on drag is handled in UIKit (collectionView.keyboardDismissMode
             // = .interactive); the SwiftUI modifier here was a no-op on the representable.
-            .onChange(of: repo.items.count) { old, new in
-                guard new > old else { return }
-                let mine = repo.items.last?.authorId == me
+            // Keyed on itemsVersion, not count (audit S6): a trim-neutral emission (new message + LRU
+            // drop in one commit) left the count unchanged, so its arrival was invisible to receipts,
+            // badges, and the own-send glide.
+            .onChange(of: repo.itemsVersion) { _, _ in
+                // PER-MESSAGE classification (audit S6): the old handler classified the whole batch by
+                // its LAST author — their message + my echo in one Firestore commit read as "mine", so
+                // the read receipt was skipped (a standing contributor to the tick complaints), and a
+                // 3-message burst counted as "1" on the jump button. Fresh = genuinely newer than the
+                // newest we'd seen (prepends of old history never count).
+                let newestBefore = arrivalState.newestCreatedAt
+                let seeded = arrivalState.seeded
+                arrivalState.seeded = true
+                if let newest = repo.items.last?.createdAt, newest > arrivalState.newestCreatedAt {
+                    arrivalState.newestCreatedAt = newest
+                }
                 if !settled {
-                    // INITIAL LOAD (clean): pin to the OPEN ANCHOR (the saved in-session spot,
-                    // else the newest) as cache→live chunks land. NON-animated + still under the reveal
-                    // veil, so it's invisible — no wiggle. Applies even with unread messages: the unread
-                    // divider is only a marker you scroll up to, it never steals the open position. (The
-                    // old code relied on defaultScrollAnchor here, which drifted off the bottom as chunks
-                    // landed — that was the "opens in the middle" bug.)
+                    // INITIAL LOAD (clean): pin to the OPEN ANCHOR as cache→live chunks land — invisible
+                    // under the reveal veil. (proxy path retained from the pre-native list.)
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
-                } else if mine {
-                    // My own send ALWAYS glides to the newest message — even when I was reading history.
-                    // (At the bottom the list's insert animation already lands there; this covers the
-                    // scrolled-up case the old ScrollViewProxy pin could no longer reach.)
-                    if !isAtBottom { nativeScrollTarget = "BOTTOM" }
-                } else if !isAtBottom {
-                    newWhileAway += 1
+                    return
+                }
+                guard seeded else { return }   // first emission just seeds the high-water mark
+                let fresh = repo.items.filter { $0.createdAt > newestBefore }
+                guard !fresh.isEmpty else { return }
+                let incoming = fresh.filter { $0.authorId != me }
+                // My own send ALWAYS glides to the newest message — even when I was reading history.
+                if fresh.contains(where: { $0.authorId == me }) && !isAtBottom {
+                    nativeScrollTarget = "BOTTOM"
+                } else if !incoming.isEmpty && !isAtBottom {
+                    newWhileAway += incoming.count   // per message, not per batch
                 }
                 // Read receipts: only for INCOMING messages the user can actually see (at the bottom) —
-                // never for own sends, never while scrolled up reading history (audit: receipts were
-                // sent for messages the user hadn't seen).
-                if !mine && isAtBottom && !repo.iBlocked {
+                // never while scrolled up reading history. Own sends in the same batch no longer mask them.
+                if !incoming.isEmpty && isAtBottom && !repo.iBlocked {
                     ChatService.markReadThrottled(cid)
                     // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
                     // badge goes stale if the app is killed while this chat is still open.
@@ -794,7 +837,13 @@ struct ThreadView: View {
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
-            Task { await drainSendQueue() }              // re-drive any text send lost to an app kill
+            // ONE drain per chat open (audit S5): onAppear also fires returning from an in-chat push,
+            // and a re-drive racing the still-in-flight original produced a duplicate server doc and
+            // over-counted the recipient's unread badge.
+            if !drainGate.done {
+                drainGate.done = true
+                Task { await drainSendQueue() }          // re-drive any text send lost to an app kill
+            }
             // No recorder.prepare() here: it triggered the mic-permission prompt the moment ANY
             // chat opened. Permission is asked on the first real hold (requestAndStart), and the
             // session re-warms itself after each record (AudioRecorder.reset → prepare).
@@ -806,7 +855,9 @@ struct ThreadView: View {
                 recordLocked = true
             }
             // Restore an unsent draft (local-only). Never clobber text already being typed.
-            if input.isEmpty { input = Drafts.shared.text(cid) }
+            // SILENTLY (audit M6): the programmatic set used to fire the typing broadcast — opening a
+            // chat with a parked draft showed "typing…" to the other person with zero keystrokes.
+            if input.isEmpty { setInputSilently(Drafts.shared.text(cid)) }
             // Unread count from the cached conversation — only used to place the unread-divider
             // MARKER now (we always open at the bottom, so it no longer drives the scroll position).
             unreadOnOpen = cachedConv?.unread(me) ?? 0
@@ -828,6 +879,14 @@ struct ThreadView: View {
                     await MainActor.run { unreadOnOpen = n }
                 }
                 await ChatService.resetUnread(cid)
+                // Wait for the REAL block state before stamping a read receipt (audit M8): iBlocked
+                // defaults to false and the conv listener has only just attached — a blocked contact
+                // received a receipt on open despite every other call site gating on iBlocked.
+                var waited = 0
+                while !repo.convLoaded, waited < 20 {   // ≤2s; then proceed on best-known state
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    waited += 1
+                }
                 if !repo.iBlocked { await ChatService.markRead(cid) }
             }
         }
@@ -835,7 +894,7 @@ struct ThreadView: View {
             repo.stop()
             groupCallListener?.remove(); groupCallListener = nil
             AppRouter.shared.activeChatId = nil
-            Task { await ChatService.setTyping(cid, false) }
+            broadcastTyping(false)
             // Messages that arrived while the chat was OPEN were read live but only onAppear reset
             // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
             Task { await ChatService.resetUnread(cid) }
@@ -845,6 +904,8 @@ struct ThreadView: View {
             if recorder.isRecording && !recordLocked {
                 recorder.cancel()
                 recordDrag = .zero; holdStarted = false
+                recordCancelArmed = false   // audit: a stale armed flag silently discarded the NEXT
+                                            // stationary-hold voice note on release
             }
         }
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
@@ -1223,14 +1284,22 @@ struct ThreadView: View {
     private var rowSignatures: [String: String] {
         let readCutoff = repo.otherLastReadMillis
         let pins = repo.pinnedMessageIds
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))"
+        // Audit M3: the active search term must be a signature input — visible rows never repainted
+        // their in-text match highlight as the query changed (only the jumped-to row, via highlightId).
+        let term = searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
+        // Audit M2: viewedOnceTick keys the cache so consuming a view-once photo repaints its bubble.
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
             for m in repo.items {
                 let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
                 let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)"
+                // View-once consumption (audit M2) — the bubble flips to "Viewed" only via reconfigure.
+                let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
+                // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
+                let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -1274,7 +1343,9 @@ struct ThreadView: View {
         // Search highlights text inside SwiftUI bubbles; selection/custom-color/group cases render
         // SwiftUI-only — in those states everything routes SwiftUI (empty dict).
         guard Self.useUIKitBubbles, !isGroup, !selecting, chatColorSpec == nil, !searchActive else { return [:] }
-        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")"
+        // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache —
+        // toggling the pref (or a block-state change) left uikit rows showing stale ticks.
+        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)"
         if uikitModelCache.key == key { return uikitModelCache.models }
         var out: [String: UIKitBubbleModel] = [:]
         for m in repo.items {
@@ -1371,9 +1442,11 @@ struct ThreadView: View {
             : .init(topLeading: first ? big : small, topTrailing: big, bottomLeading: last ? big : small, bottomTrailing: big)
         let tick: UIKitBubbleModel.Tick
         if isMe {
-            let read = repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
-            let pref = (UserDefaults.standard.object(forKey: "readReceipts") as? Bool) ?? true
-            tick = (read && pref) ? .read : .sent
+            // Parity with the SwiftUI path (audit M5): a blocked contact's lastRead is ignored there
+            // (otherLastRead passed as 0 when iBlocked) — the uikit tick must match, or a blocked chat
+            // shows ✓✓ on text rows and ✓ on media rows, and a route flip visibly demotes the tick.
+            let read = !repo.iBlocked && repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
+            tick = (read && readReceiptsOn) ? .read : .sent
         } else { tick = .none }
 
         return UIKitBubbleModel(
@@ -1470,7 +1543,7 @@ struct ThreadView: View {
     // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit — they
     // can't both be active, or send would commit the edit and silently drop the reply.
     private func beginReply(to m: Message) {
-        if editingMessage != nil { editingMessage = nil; input = Drafts.shared.text(cid) }
+        if editingMessage != nil { editingMessage = nil; setInputSilently(Drafts.shared.text(cid)) }
         withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
         inputFocused = true   // replying = you're about to type → open the keyboard
     }
@@ -1971,8 +2044,8 @@ struct ThreadView: View {
         // Native: the bubble just appears (no custom spring), like a plain list insert.
         let clientId = UUID().uuidString
         repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply, sendState: .sending))
+        broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typing…")
         Task {
-            await ChatService.setTyping(cid, false)
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions)
         }
     }
@@ -2772,7 +2845,7 @@ struct ThreadView: View {
 
     private func cancelEdit() {
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
-        input = Drafts.shared.text(cid)   // bring back whatever was drafted before the edit began
+        setInputSilently(Drafts.shared.text(cid))   // bring back whatever was drafted before the edit began (no phantom typing)
         inputFocused = false
     }
 
@@ -2787,7 +2860,7 @@ struct ThreadView: View {
             Task { try? await ChatService.editMessage(cid: cid, messageId: e.id, newText: newText, group: isGroup ? groupMembers : nil) }
         }
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
-        input = Drafts.shared.text(cid)   // the pre-edit draft (if any) was never sent — restore it
+        setInputSilently(Drafts.shared.text(cid))   // the pre-edit draft (if any) was never sent — restore it (no phantom typing)
         inputFocused = false
     }
 
@@ -2992,11 +3065,13 @@ struct ThreadView: View {
             .padding(.leading, 14)
             .padding(.vertical, 9)   // single-line field height ~40 to match the + button
             .onChange(of: input) { _, v in
+                // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
+                if typingBox.suppressNext { typingBox.suppressNext = false; return }
                 // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
                 let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 if now != typingSent {
                     typingSent = now
-                    Task { await ChatService.setTyping(cid, now) }
+                    broadcastTyping(now)   // serialized — writes can't land out of order
                 }
                 // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
                 // in the field), so a parked draft doesn't show "typing…" forever on the other side.
@@ -3005,7 +3080,7 @@ struct ThreadView: View {
                     let work = DispatchWorkItem {
                         guard typingSent else { return }
                         typingSent = false
-                        Task { await ChatService.setTyping(cid, false) }
+                        broadcastTyping(false)
                     }
                     typingIdleStop = work
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
