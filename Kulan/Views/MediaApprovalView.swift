@@ -281,6 +281,13 @@ struct MediaApprovalView: View {
                     guard items.indices.contains(p) else { return }
                     withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(items[p].id, anchor: .center) }
                 }
+                // INITIAL position too: the rail opens scrolled to its END (trailing alignment), so when
+                // the active page is early in the batch its highlighted thumb sat off-screen left — the
+                // "I can't see the active one" report. Center it on appear, no animation.
+                .onAppear {
+                    guard items.indices.contains(page) else { return }
+                    proxy.scrollTo(items[page].id, anchor: .center)
+                }
         }
     }
 
