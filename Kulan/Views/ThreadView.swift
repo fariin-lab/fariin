@@ -4192,30 +4192,38 @@ struct MessageBubble: View, Equatable {
             // quote still widens the bubble. This replaces the measured quoteFillWidth preference, which
             // broke inside the hosted cells (state reset on reconfigure + the pre-measured first pass
             // rendered before the measurement existed → the tiny box came back).
-            // BUBBLE SIZING FIX (user spec 2026-07-14: "bubble size is wrong, quote size is correct"):
-            // fixedSize(horizontal) makes the Grid hug its widest row instead of accepting the full
-            // proposed width — the quote row's maxWidth:.infinity had made the whole Grid greedy, so
-            // EVERY reply bubble stretched to the 72% cap with a large empty area beside short text.
-            // The QUOTE ITSELF IS UNTOUCHED: it still fills the (now hugged) bubble width via its inner
-            // .infinity, and its 150pt minimum floor still applies. The row caps just keep long text
-            // wrapping at the same 72% bubble limit as before.
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 4) {
-                GridRow {
-                    replyQuote
-                        .frame(maxWidth: .infinity, alignment: .leading)              // fill the hugged column (unchanged look)
-                        .frame(maxWidth: maxBubbleWidth - 30, alignment: .leading)    // bubble cap (30 = h-padding)
-                }
-                // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
+            // SIGNAL'S QUOTE/BUBBLE SIZING MODEL (verified from CVComponentMessage + ManualStackView
+            // source): MEASURE every part at its NATURAL width (quote truncates when long), the bubble
+            // hugs the WIDEST part; RENDER with fill — the quote stretches to that hugged width.
+            // In SwiftUI: an invisible natural-width TEMPLATE defines the hug (it wraps normally at the
+            // proposed 72% cap, so long text + the timestamp reservation behave exactly like a plain
+            // bubble — the fixedSize attempt fed the text its UNWRAPPED ideal, which clipped it and
+            // painted the time over the words); the VISIBLE copy overlays it and fills. The overlay
+            // cannot influence the host's size, so nothing is greedy. Quote internals untouched; its
+            // one-line snippet keeps template and visible heights identical.
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote   // NATURAL width — measurement only (its 150pt floor applies)
                 if let link = firstLinkURL {
-                    GridRow {
+                    LinkPreviewCard(url: link, isMe: isMe, dark: dark)
+                }
+                bodyLine     // natural width, wraps at the proposed bubble cap
+            }
+            .opacity(0)                       // template: measured, never seen
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    replyQuote.frame(maxWidth: .infinity, alignment: .leading)   // FILL the hugged width
+                    // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
+                    if let link = firstLinkURL {
                         LinkPreviewCard(url: link, isMe: isMe, dark: dark)
                             .onTapGesture { _ = routeTappedURL(link) }
                     }
+                    // Text + time: the invisible trailing reservation + overlaid time (Signal does the
+                    // same body/footer overlap) — wraps correctly because the host measured naturally.
+                    bodyLine
                 }
-                // Text + time laid out in a real HStack so the time can never overlap the words.
-                GridRow { bodyLine.frame(maxWidth: maxBubbleWidth - 30, alignment: .leading) }
             }
-            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
