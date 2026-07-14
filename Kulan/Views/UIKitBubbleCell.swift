@@ -84,6 +84,10 @@ final class UIKitBubbleView: UIView {
             .foregroundColor: m.isMe ? BubblePalette.myText : BubblePalette.receivedText,
         ])
         let spacer = NSTextAttachment()
+        // EXPLICIT empty image: an attachment with a nil image renders a "missing attachment"
+        // artifact — a thin line exactly across the timestamp area (user screenshot). An empty
+        // UIImage draws nothing; the bounds still reserve the meta's width on the last line.
+        spacer.image = UIImage()
         spacer.bounds = CGRect(x: 0, y: 0, width: metaWidth(m) + BubblePalette.metaGap, height: 1)
         out.append(NSAttributedString(attachment: spacer))
         return out

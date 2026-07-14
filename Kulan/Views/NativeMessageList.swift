@@ -1534,9 +1534,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Context menu (UIKit-routed rows — identical native lift/menu as the SwiftUI .contextMenu)
 
+    // MODERN API (iOS 16+): UIKit calls the PLURAL method on current SDKs — implementing only the
+    // deprecated single-item variant meant uikit-routed rows never showed a menu at all (the "long-press
+    // on my message not working" report; SwiftUI rows kept working via their own .contextMenu).
+    func collectionView(_ collectionView: UICollectionView,
+                        contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let ip = indexPaths.first else { return nil }
+        return contextMenuConfig(at: ip)
+    }
+
+    // Deprecated single-item variant kept as a belt-and-braces fallback for any path that still asks it.
     func collectionView(_ collectionView: UICollectionView,
                         contextMenuConfigurationForItemAt indexPath: IndexPath,
                         point: CGPoint) -> UIContextMenuConfiguration? {
+        contextMenuConfig(at: indexPath)
+    }
+
+    private func contextMenuConfig(at indexPath: IndexPath) -> UIContextMenuConfiguration? {
         guard let id = dataSource.itemIdentifier(for: indexPath), uikitModels[id] != nil,
               let menu = uikitMenu(id) else { return nil }   // SwiftUI rows: their own .contextMenu owns it
         return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { _ in menu }
