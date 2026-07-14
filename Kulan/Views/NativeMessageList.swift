@@ -1185,8 +1185,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // computeAtBottom()==false (offset hadn't followed the grown inset yet) → stickBottom false →
         // clampOffsetIfBeyondContent left the content stranded at the top with the reserved gap below.
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+        // swipingCell: the reply swipe DISABLES the scroll pan, so isTracking goes false mid-touch and
+        // a layout pass then passed this guard — the stickBottom pin snapped the content to the exact
+        // bottom UNDER the swipe (the "bubbles below do a small jump while I swipe" report).
         guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !programmaticScrollAnimating,
-              !geoRiding, !userScrolling else { return }
+              !geoRiding, !userScrolling, swipingCell == nil else { return }
         if stickBottom {
             // Keyboard/composer resize → stay pinned. When this layout pass runs INSIDE the keyboard's
             // own animation transaction (safe-area growth animates with the keyboard slide), let the pin
