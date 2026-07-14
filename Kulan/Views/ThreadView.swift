@@ -4114,8 +4114,19 @@ struct MessageBubble: View, Equatable {
             // quote still widens the bubble. This replaces the measured quoteFillWidth preference, which
             // broke inside the hosted cells (state reset on reconfigure + the pre-measured first pass
             // rendered before the measurement existed → the tiny box came back).
+            // BUBBLE SIZING FIX (user spec 2026-07-14: "bubble size is wrong, quote size is correct"):
+            // fixedSize(horizontal) makes the Grid hug its widest row instead of accepting the full
+            // proposed width — the quote row's maxWidth:.infinity had made the whole Grid greedy, so
+            // EVERY reply bubble stretched to the 72% cap with a large empty area beside short text.
+            // The QUOTE ITSELF IS UNTOUCHED: it still fills the (now hugged) bubble width via its inner
+            // .infinity, and its 150pt minimum floor still applies. The row caps just keep long text
+            // wrapping at the same 72% bubble limit as before.
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 4) {
-                GridRow { replyQuote.frame(maxWidth: .infinity, alignment: .leading) }
+                GridRow {
+                    replyQuote
+                        .frame(maxWidth: .infinity, alignment: .leading)              // fill the hugged column (unchanged look)
+                        .frame(maxWidth: maxBubbleWidth - 30, alignment: .leading)    // bubble cap (30 = h-padding)
+                }
                 // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
                 if let link = firstLinkURL {
                     GridRow {
@@ -4124,8 +4135,9 @@ struct MessageBubble: View, Equatable {
                     }
                 }
                 // Text + time laid out in a real HStack so the time can never overlap the words.
-                GridRow { bodyLine }
+                GridRow { bodyLine.frame(maxWidth: maxBubbleWidth - 30, alignment: .leading) }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
