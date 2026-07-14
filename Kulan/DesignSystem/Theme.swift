@@ -93,14 +93,20 @@ extension View {
         }
     }
 
-    /// Composer dock. Uses `safeAreaInset` (NOT `safeAreaBar`) so the bar paints NO blur/material of its own
-    /// — the user wants the messages fully CLEAR/raw under the input, only the glass pills floating over
-    /// them; safeAreaBar's built-in blur bar was what dimmed/covered the content. safeAreaInset still grows
-    /// the bottom safe area and rides the keyboard, so the native content-inset (.always) keyboard model
-    /// is unchanged.
+    /// Composer dock (build-292 model): `safeAreaBar` floats the composer OVER the messages so the content
+    /// and the chat wallpaper scroll UNDER it (Telegram/iMessage look) — the input reads as floating on top
+    /// of the conversation, not sitting on a solid strip. `safeAreaInset` was WRONG here: it reserves a
+    /// strip and pushes content ABOVE it, so behind the composer there was only the plain (white) app
+    /// background instead of the wallpaper/messages. safeAreaBar still grows the bottom safe area and rides
+    /// the keyboard, so the native content-inset (.always) keyboard model is unchanged. safeAreaInset is the
+    /// pre-iOS-26 fallback.
     @ViewBuilder
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
-        self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
+        if #available(iOS 26.0, *) {
+            self.safeAreaBar(edge: .bottom, content: content)
+        } else {
+            self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
+        }
     }
 }
 
