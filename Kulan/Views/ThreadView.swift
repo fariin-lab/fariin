@@ -1142,7 +1142,10 @@ struct ThreadView: View {
                 .padding(.vertical, 8)
         }
         if msg.id == firstUnreadId { unreadDivider }
-        if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil {
+        if let pin = msg.pinNotice {
+            // Telegram-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
+            pinNoticeRow(msg, pin).id(msg.id)
+        } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil {
             // A reserved kulan-…: payload we can't render as a card — either a newer app version's
             // feature OR a malformed known marker. Either way show the system notice, NEVER the raw
             // marker text.
@@ -1181,13 +1184,7 @@ struct ThreadView: View {
                     else { viewerVideo = m }
                 },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
-                onPin: { m in
-                    if repo.pinnedMessageIds.contains(m.id) {
-                        Task { await ChatService.removePinnedMessage(cid, m.id) }
-                    } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
-                        Task { await ChatService.addPinnedMessage(cid, m.id) }
-                    }   // already at the pin max → ignore
-                },
+                onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
                 onSelect: { m in withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
                 onInfo: { infoTarget = $0 },
@@ -1386,10 +1383,7 @@ struct ThreadView: View {
         let isPinned = repo.pinnedMessageIds.contains(m.id)
         items.append(UIAction(title: isPinned ? "Unpin" : "Pin",
                               image: UIImage(systemName: isPinned ? "pin.slash" : "pin")) { _ in
-            if isPinned { Task { await ChatService.removePinnedMessage(cid, m.id) } }
-            else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
-                Task { await ChatService.addPinnedMessage(cid, m.id) }
-            }
+            togglePin(m)
         })
         items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
             UIPasteboard.general.string = m.text
@@ -1527,6 +1521,36 @@ struct ThreadView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             withAnimation(.easeIn(duration: 0.25)) { if jumpToast == msg { jumpToast = nil } }
         }
+    }
+
+    // Pin/unpin + the Telegram-style in-chat notice. E2EE-SAFE: the snippet rides the ENCRYPTED text
+    // pipeline as a feature marker (a plaintext system message would leak content to the server).
+    // Older builds render the unknown marker as the graceful "newer version" notice.
+    private func togglePin(_ m: Message) {
+        if repo.pinnedMessageIds.contains(m.id) {
+            Task { await ChatService.removePinnedMessage(cid, m.id) }   // Telegram posts no unpin notice
+        } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
+            Task {
+                await ChatService.addPinnedMessage(cid, m.id)
+                try? await ChatService.sendText(
+                    cid: cid,
+                    text: Message.pinMarkerText(messageId: m.id, label: Self.pinLabel(m)),
+                    group: isGroup ? groupMembers : nil)
+            }
+        }   // already at the pin max → ignore
+    }
+
+    // The notice's label, composed by the PINNER (who has the plaintext): a short quoted snippet for
+    // text, a friendly noun for media — mirrors Telegram exactly.
+    static func pinLabel(_ m: Message) -> String {
+        if m.isImage || m.isAlbum { return "a photo" }
+        if m.isVideo { return "a video" }
+        if m.isAudio { return "a voice message" }
+        if m.isFile { return "a file" }
+        if m.isGif { return "a GIF" }
+        let t = m.safeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return "a message" }
+        return t.count > 20 ? "\"\(t.prefix(20))…\"" : "\"\(t)\""
     }
 
     private func flashAndScroll(_ id: String) {
@@ -2331,6 +2355,24 @@ struct ThreadView: View {
     }
 
     // Centered gray system event ("X added Y", "Z left", "renamed to…") — group only.
+    // Telegram-style pin notice: "X pinned "snippet…"" / "X pinned a photo" — the system-row capsule
+    // with the pinner's name bolded; tapping jumps to the pinned message (pages history in if needed).
+    private func pinNoticeRow(_ m: Message, _ pin: PinNoticeCard) -> some View {
+        Button { jumpTo(pin.messageId) } label: {
+            (Text(m.authorId == me ? "You" : personName(m.authorId)).fontWeight(.semibold)
+                + Text(" pinned \(pin.label)"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                .background(Theme.received(dark).opacity(0.7), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+    }
+
     private func systemRow(_ m: Message) -> some View {
         Text(m.text)
             .font(.system(size: 12, weight: .medium))
@@ -4616,6 +4658,7 @@ struct FilePreview: UIViewControllerRepresentable {
 func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.contactMarker) { return "Contact" }
     if t.hasPrefix(Message.locationMarker) { return "Location" }
+    if t.hasPrefix(Message.pinMarker) { return "📌 Pinned a message" }
     if t.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Message" }
     return t
 }

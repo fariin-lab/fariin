@@ -543,13 +543,37 @@ extension Message {
     }
 }
 
+// MARK: - Pinned-message notice (Telegram-style "X pinned …" row in the chat). E2EE-SAFE: the
+// snippet rides the ENCRYPTED text pipeline as a feature marker — a plaintext system message would
+// leak message content to the server.
+
+struct PinNoticeCard {
+    let messageId: String   // the pinned message → the notice is tappable (jump to it)
+    let label: String       // "\"snippet…\"" or "a photo" / "a voice message" / …
+}
+
+extension Message {
+    static let pinMarker = "kulan-pinned:"
+    /// "kulan-pinned:<messageId>|<label>" (label last — may contain any characters).
+    var pinNotice: PinNoticeCard? {
+        guard text.hasPrefix(Self.pinMarker) else { return nil }
+        let parts = text.dropFirst(Self.pinMarker.count)
+            .split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return PinNoticeCard(messageId: String(parts[0]), label: String(parts[1]))
+    }
+    static func pinMarkerText(messageId: String, label: String) -> String {
+        "\(pinMarker)\(messageId)|\(label)"
+    }
+}
+
 // MARK: - Forward compatibility: structured feature payloads share the reserved "kulan-<feature>:"
 // namespace over the text pipeline. A build that does NOT recognize a given feature (e.g. a stable
 // version receiving a payload from a newer beta) renders it as a system "sent with a newer version"
 // notice instead of the raw marker text. When you add a NEW feature marker, add its prefix to
 // `knownFeatureMarkers` so THIS version keeps rendering it normally.
 extension Message {
-    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker]
+    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker, pinMarker]
 
     /// True when the text uses the reserved kulan-feature namespace with a feature this build doesn't
     /// know — i.e. it was sent by a newer app version. Matched strictly (`^kulan-<name>:`) so ordinary
@@ -574,6 +598,7 @@ extension Message {
     var safeText: String {
         if contactCard != nil { return "Contact" }
         if locationCard != nil { return "Location" }
+        if pinNotice != nil { return "Pinned a message" }
         if isUnsupportedFeature { return "Message from a newer version" }
         if isFeatureMarker { return "Message" }   // malformed known marker → never leak the raw payload
         return text
