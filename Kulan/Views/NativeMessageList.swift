@@ -1483,8 +1483,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if g === doubleTapGesture {
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
-                  let id = dataSource.itemIdentifier(for: ip) else { return false }
-            return uikitModels[id] != nil   // uikit rows only — SwiftUI rows own their taps
+                  let id = dataSource.itemIdentifier(for: ip), uikitModels[id] != nil else { return false }
+            // The BUBBLE only, not the full-width row (audit: double-tapping the empty area beside a
+            // uikit bubble hearted it; SwiftUI rows react on the bubble content only).
+            guard let cell = collectionView.cellForItem(at: ip) as? UIKitBubbleCell else { return false }
+            let p = collectionView.convert(loc, to: cell.previewBubble)
+            return cell.previewBubble.bounds.contains(p)
         }
         guard g === swipePan else { return true }
         if isSelecting { return false }                            // selection mode: rows toggle, never reply-swipe

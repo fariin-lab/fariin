@@ -63,6 +63,12 @@ final class UIKitBubbleView: UIView {
         textLabel.numberOfLines = 0
         addSubview(textLabel)
         addSubview(metaLabel)
+        // Audit M4: configure() resolves the dynamic colors to STATIC CGColors/attributed runs, so a
+        // light↔dark switch left every visible uikit bubble in the old palette (mixed-palette chat next
+        // to the adapting SwiftUI rows) until recycle. Re-resolve on trait change.
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: UIKitBubbleView, _) in
+            if let m = self.model { self.configure(m) }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
 
