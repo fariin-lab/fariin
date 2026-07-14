@@ -428,6 +428,13 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         imageView.image = image
         imageView.sizeToFit()
         scrollView?.updateZoomScaleForLayout()
+        // A swapped image starts at FIT. The zoom RANGE is recomputed above, but the old absolute
+        // zoomScale survived the swap — when a pen bake had changed the image's pixel size, the stale
+        // scale no longer meant "fit", so finishing a crop landed visibly zoomed in (user report).
+        // setZoomScale fires scrollViewDidZoom → re-centers + reports onZoom, same as a manual zoom-out.
+        if let sv = scrollView, sv.zoomScale != sv.minimumZoomScale {
+            sv.setZoomScale(sv.minimumZoomScale, animated: false)
+        }
     }
 
     override func viewDidLoad() {

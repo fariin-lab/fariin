@@ -210,10 +210,10 @@ struct MediaApprovalView: View {
         Button(action: action) {
             Group {
                 if let label { Text(label).font(.system(size: 13, weight: .bold)) }
-                else { Image(systemName: icon).font(.system(size: 17, weight: .medium)) }
+                else { Image(systemName: icon).font(.system(size: 16, weight: .medium)) }
             }
             .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
-            .frame(width: 44, height: 44)
+            .frame(width: 40, height: 40)   // 40px tools (user spec, was 44)
             .liquidGlass(Circle(), interactive: true)
             .contentShape(Circle())
         }

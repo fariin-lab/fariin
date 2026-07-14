@@ -128,12 +128,13 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
-                // Selected count — BLUE glass circle with a white number (user spec; was clear glass).
+                // Selected count — REAL Liquid Glass circle (user spec 2026-07-14; the blue-tinted glass
+                // read as a flat solid button). Same clear interactive glass as the X on the left.
                 if !selectedIds.isEmpty {
                     Text("\(selectedIds.count)")
-                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.primary)
                         .frame(width: 48, height: 48)
-                        .liquidGlass(Circle(), interactive: false, tint: Theme.defaultBubble(false))
+                        .liquidGlass(Circle(), interactive: true)
                 }
             }
         }
@@ -469,7 +470,9 @@ struct AttachRecentsStrip: View {
             await MainActor.run {
                 loadingPick = false
                 if out.isEmpty { return }
-                selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
+                // KEEP the selection (user spec): the pager/editor opens OVER this sheet, and X returns
+                // here — clearing on open forced re-selecting everything after a preview round-trip.
+                // A SEND from the pager closes the whole sheet, which resets this state naturally.
                 onOpenMedia(out)
             }
         }
