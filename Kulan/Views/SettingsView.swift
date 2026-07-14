@@ -381,17 +381,11 @@ struct PrivacySettingsView: View {
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
     @AppStorage("shareLastSeen") private var shareLastSeen = true
-    @AppStorage("telegramChatEngine") private var telegramEngine = false
     var body: some View {
         List {
             // (The standard message list is now THE list — the experimental toggle and the old
-            // SwiftUI fallback were removed 2026-07-11 per user decision.)
-            Section {
-                Toggle(isOn: $telegramEngine) { Label("Telegram Chat Engine", systemImage: "paperplane") }.tint(.green)
-            } footer: {
-                Text("Experimental side-by-side test: conversations open with a Telegram-style engine (inverted UIKit list, lockstep keyboard). Text, replies and photos only — voice notes, attachments, reactions and the editor need the standard engine. Turn off to switch back instantly.")
-            }
-
+            // SwiftUI fallback were removed 2026-07-11 per user decision. The 2026-07-14
+            // Telegram-engine test toggle was likewise removed after the comparison.)
             Section {
                 Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)
                 Toggle(isOn: $typingIndicators) { Label("Typing Indicators", systemImage: "ellipsis.bubble") }.tint(.green)

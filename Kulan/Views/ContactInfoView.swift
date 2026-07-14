@@ -159,10 +159,10 @@ struct ContactInfoView: View {
             }
             .navigationDestination(item: $openGroup) { g in
                 let me = AuthService.shared.uid ?? ""
-                ConversationRoute(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
+                ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
             }
             .navigationDestination(isPresented: $openChat) {
-                ConversationRoute(cid: cid, title: name, photoUrl: photoUrl)
+                ThreadView(cid: cid, title: name, photoUrl: photoUrl)
             }
             .navigationDestination(isPresented: $showVerify) {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)

@@ -638,8 +638,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // mechanism for prepend, top-trim, delete, and any mixed change; no post-completion offset fixing,
         // so no frame ever renders at the stale offset.
         let beforeY = frameMinY(for: currentIds)
-        let visibleBefore = collectionView.indexPathsForVisibleItems.sorted()
-            .compactMap { dataSource.itemIdentifier(for: $0) }
+        // Anchor candidates come from the TRUE viewport (not the pre-rendered overflow): the continuity
+        // adjustment keeps the anchor row visually still, so the anchor must be a row the user can see.
+        let visibleBefore = viewportIndexPaths().compactMap { dataSource.itemIdentifier(for: $0) }
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids —
         // a dirty layout preparing after the mutation would mix old counts with new heights (garbage
         // before-state under the batch update, corrupting the continuity adjustment).
@@ -771,21 +772,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         var snap = dataSource.snapshot()
         let present = ids.filter { snap.itemIdentifiers.contains($0) }
         guard !present.isEmpty else { return }
-        // Re-measure too (not just re-flow text): a freshly sent image/video/album can land before its
-        // exact box height is settled, so re-measure at the final width and relayout if it changed —
-        // otherwise the next bubble overlaps the media.
-        var heightChanged = false
+        // Re-measure: a freshly sent image/video/album can land before its exact box height is settled —
+        // re-measure at the final width and relayout if it changed, otherwise the next bubble overlaps
+        // the media. ONE-SHEET RULE: reconfigure ONLY the rows whose height actually changed. Plain text
+        // lands at its final wrap already (the hostWidth pin makes the first wrap the final wrap), so
+        // reconfiguring it here just re-rendered the new bubble alone one beat after it appeared — the
+        // one visible "independent element" moment left on every send.
+        var changed: [String] = []
         if collectionView.bounds.width > 0 {
             for id in present {
                 let h = measure(id, width: collectionView.bounds.width)
                 if let old = heights[id], abs(old - h) <= 2 { continue }   // same tolerance as everywhere
                 heights[id] = h
-                heightChanged = true
+                changed.append(id)
             }
         }
-        snap.reconfigureItems(present)
+        guard !changed.isEmpty else { return }
+        snap.reconfigureItems(changed)
         dataSource.apply(snap, animatingDifferences: false) { [weak self] in
-            if heightChanged { self?.reconcile() }
+            self?.reconcile()
         }
     }
 
@@ -832,6 +837,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !didReveal, collectionView.bounds.height > 0 else { return }
         didReveal = true
         collectionView.alpha = 1
+        // First frame is on screen — from here on, keep an extra viewport of rows rendered on each side
+        // so scrolling always reveals already-rendered bubbles (the connected-sheet feel). The neighbor
+        // rows render right now, during the post-open idle, not later mid-scroll.
+        layout.overdrawEnabled = true
+        DispatchQueue.main.async { [weak self] in self?.layout.invalidateLayout() }
     }
 
     // Empty on first layout (cold decrypt in flight): reveal WITH content if it lands within ~0.6s (via the
@@ -847,8 +857,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Scroll continuity (anchor / restore) — the anti-jump idea, our implementation
 
+    // Index paths of cells actually INSIDE the viewport. The layout keeps an extra viewport of cells
+    // alive above and below for the connected-sheet pre-render, so indexPathsForVisibleItems includes
+    // off-screen rows — anchors and the date pill must never pick one of those.
+    private func viewportIndexPaths() -> [IndexPath] {
+        collectionView.indexPathsForVisibleItems
+            .filter { ip in
+                guard let f = collectionView.layoutAttributesForItem(at: ip)?.frame else { return false }
+                return f.maxY > collectionView.bounds.minY && f.minY < collectionView.bounds.maxY
+            }
+            .sorted()
+    }
+
     private func captureTopAnchor() -> (id: String, distanceFromTop: CGFloat)? {
-        guard let ip = collectionView.indexPathsForVisibleItems.min(),
+        guard let ip = viewportIndexPaths().first,
               let id = dataSource.itemIdentifier(for: ip),
               let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
         return (id, attr.frame.minY - collectionView.contentOffset.y)
@@ -1424,7 +1446,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Topmost visible row → the floating date pill (UIKit, updated in place — NO SwiftUI write).
         // Only on real user scrolls, so the programmatic open/pin never flashes the pill.
         if userDriven {
-            let top = collectionView.indexPathsForVisibleItems.min().flatMap { dataSource.itemIdentifier(for: $0) }
+            let top = viewportIndexPaths().first.flatMap { dataSource.itemIdentifier(for: $0) }
             updateDatePill(topId: top)
         }
     }
@@ -1571,9 +1593,18 @@ final class ExactHeightLayout: UICollectionViewLayout {
 
     override var collectionViewContentSize: CGSize { CGSize(width: layoutWidth, height: contentHeight) }
 
+    // ONE-CONNECTED-SHEET (the Telegram model): keep a full viewport of rows rendered ABOVE and BELOW
+    // the visible rect, so every bubble is already fully rendered before it scrolls on screen. Without
+    // this, each hosted bubble builds its SwiftUI at the moment it enters the viewport — bubbles pop in
+    // one at a time behind the moving sheet, which reads as independent elements instead of one surface.
+    // Gated until after the first reveal so the carefully-tuned instant open never pays the extra cells.
+    var overdrawEnabled = false
+
     override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        let overdraw = overdrawEnabled ? (collectionView?.bounds.height ?? 0) : 0
+        let expanded = rect.insetBy(dx: 0, dy: -overdraw)
         var result: [UICollectionViewLayoutAttributes] = []
-        for i in frames.indices where frames[i].intersects(rect) {
+        for i in frames.indices where frames[i].intersects(expanded) {
             let a = UICollectionViewLayoutAttributes(forCellWith: IndexPath(item: i, section: 0))
             a.frame = frames[i]
             result.append(a)

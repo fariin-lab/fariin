@@ -980,7 +980,7 @@ struct ChatsView: View {
             // identity — a new chat can never inherit the previous chat's @State
             // (repo/cid), which was the cross-routing bug.
             .navigationDestination(for: ChatTarget.self) { t in
-                ConversationRoute(cid: t.id, title: t.name, photoUrl: t.photo)
+                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo)
                     .id(t.id)
             }
             .sheet(isPresented: $showNew) {
@@ -1161,7 +1161,7 @@ struct ArchivedChatsView: View {
             .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Search archived")
             .navigationDestination(for: ChatTarget.self) { t in
-                ConversationRoute(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
+                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
             .fullScreenCover(item: $viewerGroup) { g in
                 StoryViewer(group: g, ownSwipeDismiss: true,   // no zoom hero on this cover -> library pan closes
