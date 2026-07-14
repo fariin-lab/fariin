@@ -117,6 +117,7 @@ struct ThreadView: View {
     // composer's own inset isn't folded — so we measure the bar height and feed it as extra bottom clearance
     // (so the newest message clears the bar). Not a keyboard signal; the keyboard comes from .always.
     @State private var composerBarHeight: CGFloat = 0
+    @State private var pinBarHeight: CGFloat = 0   // pinned-message bar height → floating date pill drops below it
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -187,6 +188,15 @@ struct ThreadView: View {
     @ViewBuilder private var topPinArea: some View {
         if !searchActive {   // search owns the top area — the pin bar hides while searching
             pinnedBar
+                // Measure the pin bar's height and feed it to the list so the floating date pill drops BELOW
+                // it (Signal behavior). 0 when nothing is pinned (pinnedBar is empty) → the pill stays put.
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
+                            pinBarHeight = h
+                        }
+                    }
+                }
         }
     }
 
@@ -1244,6 +1254,7 @@ struct ThreadView: View {
             },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
+            topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from

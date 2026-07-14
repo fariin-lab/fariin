@@ -41,6 +41,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // the list is full-bleed UNDER the composer, so the composer's own safe-area inset is NOT folded by
     // .always (only the keyboard is). Keyboard stays native; this just adds the static bar height.
     var composerBarHeight: CGFloat = 0
+    // Height of the top overlay (pinned-message bar) the list runs UNDER. The floating date pill drops below
+    // it so it isn't hidden behind the pin (Signal behavior). 0 → pill sits at its normal top position.
+    var topOverlayHeight: CGFloat = 0
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
@@ -65,6 +68,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.loadViewIfNeeded()
         vc.uikitBubble = uikitBubble
         vc.setComposerBarHeight(composerBarHeight)
+        vc.setTopOverlayHeight(topOverlayHeight)
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
@@ -239,6 +243,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // fades ~1.2s after scrolling stops. This is what removes the per-scroll SwiftUI round-trip.
     var dayLabelFor: (String) -> String? = { _ in nil }
     private let datePill = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    private var datePillTop: NSLayoutConstraint!   // top constant grows by the pinned-bar height when pinned
+    private var topOverlayHeight: CGFloat = 0
     private let dateLabel = UILabel()
     private var dateFadeWork: DispatchWorkItem?
     private var lastDateId: String?
@@ -320,9 +326,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         dateLabel.translatesAutoresizingMaskIntoConstraints = false
         datePill.contentView.addSubview(dateLabel)
         view.addSubview(datePill)
+        // Stored so the pill can drop BELOW the pinned-message bar when one appears (setTopOverlayHeight).
+        datePillTop = datePill.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6)
         NSLayoutConstraint.activate([
             datePill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            datePill.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
+            datePillTop,
             datePill.heightAnchor.constraint(equalToConstant: 30),
             dateLabel.centerYAnchor.constraint(equalTo: datePill.contentView.centerYAnchor),
             dateLabel.leadingAnchor.constraint(equalTo: datePill.contentView.leadingAnchor, constant: 14),
@@ -995,6 +1003,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // banner growing the composer bar) can't trust computeAtBottom() — the offset is mid-flight — so they
     // reuse this instead. Cleared when the keyboard animation completes.
     private var atBottomForKeyboard: Bool?
+    // The floating date pill normally sits just under the nav bar (safe-area top + 6). When a pinned-message
+    // bar is showing, the list runs UNDER it, so the pill would hide behind the pin — drop it below the bar.
+    func setTopOverlayHeight(_ h: CGFloat) {
+        guard abs(h - topOverlayHeight) > 0.5, datePillTop != nil else { return }
+        topOverlayHeight = h
+        datePillTop.constant = 6 + h
+    }
+
     func setComposerBarHeight(_ h: CGFloat) {
         // Reject implausible reports: the composer bar is never under ~40pt — a transient 0/near-0 from
         // the SwiftUI reader mid-transition would zero the bottom inset and drop the last messages
