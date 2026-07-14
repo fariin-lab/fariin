@@ -244,6 +244,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // instance, which can't switch renderers.
     private var configuredRoutes: [String: Bool] = [:]
     private var doubleTapGesture: UITapGestureRecognizer!
+    private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
+    private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
     private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
@@ -312,6 +314,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         doubleTapGesture.numberOfTapsRequired = 2
         doubleTapGesture.delegate = self
         collectionView.addGestureRecognizer(doubleTapGesture)
+
+        // PASSIVE long-press observer (never consumes touches, recognizes alongside everything): marks
+        // the context-menu lift window so isInMotion defers content lands during it — a reconfigure
+        // landing mid-lift replaced the menu's source view (flickering / vanishing long-press menu).
+        holdPress = UILongPressGestureRecognizer(target: self, action: #selector(handleHoldWindow(_:)))
+        holdPress.minimumPressDuration = 0.25
+        holdPress.cancelsTouchesInView = false
+        holdPress.delegate = self
+        collectionView.addGestureRecognizer(holdPress)
 
         // Off-screen sizer, in the hierarchy (0-alpha) so it inherits traits for accurate measurement.
         // CRITICAL: it must NOT reserve safe area. It's a child of this controller, and once the list runs
@@ -540,6 +551,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
             || sendAnimating || swipingCell != nil || keyboardAnimating || programmaticScrollAnimating
             || selectionAnimationState == .animating || Date() < captureFreezeUntil
+            || Date() < interactionHoldUntil
+        // interactionHoldUntil: a finger is (or just was) held down long on a row — the context-menu
+        // lift window. A reconfigure landing mid-lift replaced the menu's source view under it
+        // (flicker / dismissed menu). Passive hold recognizer below; lands defer to settle like
+        // every other motion.
         // keyboardAnimating: the reference's canLandLoad blocks lands during the keyboard animation —
         // a reconfigure landing mid-keyboard fights the animated inset track (visible fight/jump).
         // programmaticScrollAnimating: same rule for OUR animated scrolls (jumps, pin-to-bottom glides).
@@ -696,6 +712,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Anchor candidates come from the TRUE viewport (not the pre-rendered overflow): the continuity
         // adjustment keeps the anchor row visually still, so the anchor must be a row the user can see.
         let visibleBefore = viewportIndexPaths().compactMap { dataSource.itemIdentifier(for: $0) }
+        // CONTINUITY INVARIANT (the auto-scroll-while-reading fix): capture the top viewport rows and
+        // exactly where they sit on screen. After the land, the first survivor is VERIFIED — if any
+        // mechanism moved it (a dropped contentOffsetAdjustment, a trim, anything), the offset is
+        // corrected in the same breath. Signal treats reading position as an invariant to enforce,
+        // not an adjustment to hope for; several anchors so a trimmed/deleted top row falls through
+        // to the next one instead of giving up.
+        let continuityAnchors: [(id: String, distanceFromTop: CGFloat)] = visibleBefore.prefix(6).compactMap { id in
+            guard let ip = dataSource.indexPath(for: id),
+                  let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
+            return (id, attr.frame.minY - collectionView.contentOffset.y)
+        }
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids —
         // a dirty layout preparing after the mutation would mix old counts with new heights (garbage
         // before-state under the batch update, corrupting the continuity adjustment).
@@ -812,6 +839,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                     if let target = scrollTarget, target == "BOTTOM" { self.pinBottom(animated: true) }
                 } else if let target = scrollTarget {
                     self.scrollTo(id: target)
+                } else if !wasAtBottom, !continuityAnchors.isEmpty {
+                    // ENFORCE the continuity invariant: the reader's top row must sit exactly where it
+                    // sat before the land. The atomic contentOffsetAdjustment above is the primary
+                    // mechanism; this catches ANY case it missed (dropped adjustment on a prepend →
+                    // every page-in of history knocked the reader a full page toward the newest =
+                    // "the conversation scrolls back while I read"; a window-trim deleting the anchor;
+                    // any future mechanism failure). First surviving anchor wins; correction is exact
+                    // and non-animated, in the same runloop as the land.
+                    self.collectionView.layoutIfNeeded()
+                    for a in continuityAnchors {
+                        guard let ip = self.dataSource.indexPath(for: a.id),
+                              let attr = self.layout.layoutAttributesForItem(at: ip) else { continue }
+                        let expected = attr.frame.minY - a.distanceFromTop
+                        let clamped = min(max(self.minContentOffsetY, expected), self.maxContentOffsetY)
+                        if abs(self.collectionView.contentOffset.y - clamped) > 2 {
+                            self.collectionView.setContentOffset(CGPoint(x: 0, y: clamped), animated: false)
+                            self.lastStableOffset = clamped
+                            self.lastKnownDistanceFromBottom = self.safeDistanceFromBottom
+                        }
+                        break
+                    }
                 }
                 // Post-land auto-load re-check (reference: autoLoadMoreIfNecessary after the land settles,
                 // async so it's never re-entrant inside the land): a short prepend can leave the reader
@@ -1380,9 +1428,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // Coexist with the collection view's own scroll pan (the list scrolls vertically, we translate a cell
     // horizontally — different axes, no conflict). shouldBegin already gates us to horizontal-left.
+    // holdPress is a PASSIVE observer — it must never block the SwiftUI context-menu press or anything else.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        g === swipePan
+        g === swipePan || g === holdPress
+    }
+
+    @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
+        switch g.state {
+        case .began:
+            interactionHoldUntil = .distantFuture
+        case .ended, .cancelled, .failed:
+            // Keep the gate up briefly past the lift-off: the menu presentation is still settling.
+            interactionHoldUntil = Date().addingTimeInterval(1.0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) { [weak self] in self?.settleFlush() }
+        default: break
+        }
     }
 
     @objc private func handleSwipePan(_ g: UIPanGestureRecognizer) {

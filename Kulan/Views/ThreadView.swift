@@ -136,6 +136,8 @@ struct ThreadView: View {
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
     @State private var isAtBottom = true
     @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left
+    @State private var tappedLink: URL?                 // link tapped in a bubble → ONE screen-level confirm
+    @State private var tappedUserNotFound = false       // @username tapped but no such user (screen-level alert)
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
@@ -305,6 +307,9 @@ struct ThreadView: View {
                 }
             }
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
+            // The window trim must never delete the rows the reader is currently viewing (that deletion
+            // yanked the viewport while reading history) — pause it whenever they're away from the bottom.
+            .onChange(of: isAtBottom) { _, atB in repo.readerAwayFromBottom = !atB }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
             .onChange(of: repo.pinnedMessageIds) { _, ids in pinIndex = max(0, ids.count - 1) }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
@@ -622,6 +627,18 @@ struct ThreadView: View {
             handlePickedFile(result)
         }
         .sheet(item: $filePreview) { FilePreview(url: $0.url).ignoresSafeArea() }
+        // ONE link-confirm + one not-found alert for the whole conversation (hoisted out of every bubble:
+        // ~40 live cells each carried their own presentation machinery, anchored inside recyclable cells).
+        .confirmationDialog("Open link?",
+                            isPresented: Binding(get: { tappedLink != nil },
+                                                 set: { if !$0 { tappedLink = nil } }),
+                            titleVisibility: .visible, presenting: tappedLink) { url in
+            Button("Open") { UIApplication.shared.open(url) }
+            Button("Cancel", role: .cancel) {}
+        } message: { url in Text(url.absoluteString) }
+        .alert("Sorry, this user doesn't seem to exist.", isPresented: $tappedUserNotFound) {
+            Button("OK", role: .cancel) {}
+        }
         .fullScreenCover(item: $pdfDoc) { PDFViewerSheet(url: $0.url, title: $0.title) }
     }
 
@@ -1082,6 +1099,8 @@ struct ThreadView: View {
                 },
                 onReport: { reportTarget = $0 },
                 onReactMore: { morePickerTarget = $0 },
+                onConfirmLink: { tappedLink = $0 },
+                onUserNotFound: { tappedUserNotFound = true },
                 isGroup: isGroup,
                 onTapReactions: { reactorsTarget = msg },
                 onTapSender: { uid in
@@ -1108,7 +1127,7 @@ struct ThreadView: View {
             .equatable()
             .padding(.top, topGap(at: index))
             .id(msg.id)
-            .onAppear { visibleRows.ids.insert(msg.id); persistScrollPosition() }
+            .onAppear { visibleRows.ids.insert(msg.id); schedulePersistScrollPosition() }
             .onDisappear { visibleRows.ids.remove(msg.id) }
             .transition(.identity)
             .modifier(SelectableRow(selecting: selecting, selected: selectedIds.contains(msg.id),
@@ -2317,6 +2336,15 @@ struct ThreadView: View {
     // Remember (in RAM) where we're looking so reopening this chat lands here. Only after the open
     // has SETTLED — during the load we're programmatically pinning, and saving then would feed the
     // pin back into itself. Called from row/BOTTOM onAppear only (teardown-safe).
+    // Trailing-debounced save (0.5s after the last row appearance): per-appearance saves ran an O(n)
+    // scan + a store write on every scroll tick — pure churn during scrolling (anti-Signal pattern).
+    private func schedulePersistScrollPosition() {
+        visibleRows.persistWork?.cancel()
+        let work = DispatchWorkItem { persistScrollPosition() }
+        visibleRows.persistWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
     private func persistScrollPosition() {
         guard revealed, settled else { return }
         if isAtBottom {
@@ -3328,6 +3356,11 @@ struct MessageBubble: View, Equatable {
     var onEdit: (Message) -> Void = { _ in }
     var onReport: (Message) -> Void = { _ in }
     var onReactMore: (Message) -> Void = { _ in }
+    // Link/username taps route UP to the screen (ONE dialog at ThreadView level) instead of every
+    // bubble carrying its own confirmationDialog + alert: ~40 live cells each configured presentation
+    // machinery, and a dialog anchored inside a recycled cell could be torn down under the user.
+    var onConfirmLink: (URL) -> Void = { _ in }
+    var onUserNotFound: () -> Void = {}
     var isGroup: Bool = false   // drives per-sender name labels above others' bubbles in groups
     var onTapReactions: () -> Void = {}
     var onTapSender: (String) -> Void = { _ in }
@@ -3366,8 +3399,6 @@ struct MessageBubble: View, Equatable {
     // modes, so the text/glyphs are always WHITE.
     private var onMyBubble: Color { .white }
 
-    @State private var pendingLink: URL?          // web link tapped -> "Open link?" confirm
-    @State private var notFoundUser = false       // @username tapped but no such user
     @AppStorage("readReceipts") private var readReceiptsPref = true
 
     private var myUid: String { AuthService.shared.uid ?? "" }
@@ -3492,12 +3523,12 @@ struct MessageBubble: View, Equatable {
                     AppRouter.shared.pendingChatPhoto = u.photoUrl
                     AppRouter.shared.pendingChatId = ChatService.convId(myUid, u.id)
                 } else {
-                    notFoundUser = true
+                    onUserNotFound()
                 }
             }
             return .handled
         }
-        pendingLink = url
+        onConfirmLink(url)
         return .handled
     }
 
@@ -3627,18 +3658,10 @@ struct MessageBubble: View, Equatable {
                         .onTapGesture { onTapSender(message.authorId) }
                 }
                 content
-                    // Tappable links/usernames inside the bubble route through here.
+                    // Tappable links/usernames inside the bubble route through here. The "Open link?"
+                    // confirm + user-not-found alert are presented ONCE at the ThreadView level (via
+                    // onConfirmLink/onUserNotFound) — not per bubble.
                     .environment(\.openURL, OpenURLAction { url in routeTappedURL(url) })
-                    .confirmationDialog("Open link?",
-                                        isPresented: Binding(get: { pendingLink != nil },
-                                                             set: { if !$0 { pendingLink = nil } }),
-                                        titleVisibility: .visible, presenting: pendingLink) { url in
-                        Button("Open") { UIApplication.shared.open(url) }
-                        Button("Cancel", role: .cancel) {}
-                    } message: { url in Text(url.absoluteString) }
-                    .alert("Sorry, this user doesn't seem to exist.", isPresented: $notFoundUser) {
-                        Button("OK", role: .cancel) {}
-                    }
                     // REAL native iOS context menu (user decision 2026-07-11): Apple handles the lift +
                     // blur + spring. No custom overlay. Reactions live in the "React…" item (opens the
                     // emoji picker) since Apple gives no public API to attach a reaction bar to it.

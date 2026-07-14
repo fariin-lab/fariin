@@ -365,9 +365,16 @@ final class ThreadRepository {
         if changed { refreshItems() }
     }
 
+    // True while the reader is AWAY from the bottom (reading history) — fed by the view. The trim must
+    // never run then: it LRU-drops the OLDEST rows, which are exactly the rows under the reader — the
+    // deletion yanked the viewport ("the conversation scrolls back while I read old messages"). Trimming
+    // resumes as soon as they return to the bottom, so the memory cap still holds over time.
+    var readerAwayFromBottom = false
+
     // LRU-drop the OLDEST messages once the window blows past the high-water mark (the standard 500-cap).
     // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
     private func trimWindowIfNeeded() {
+        guard !readerAwayFromBottom else { return }
         guard byId.count > windowHighWater else { return }
         let sorted = byId.values.sorted { $0.createdAt < $1.createdAt }
         for m in sorted.prefix(sorted.count - windowCap) {

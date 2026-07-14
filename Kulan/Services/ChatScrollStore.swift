@@ -25,4 +25,11 @@ final class ChatScrollStore {
 // Reference box so per-row onAppear/onDisappear can update the visible-id set WITHOUT invalidating
 // the SwiftUI body on every scroll tick (the same non-invalidating-box trick used elsewhere for
 // gesture-adjacent flags). Reset per ThreadView instance.
-final class VisibleRowsBox { var ids: Set<String> = [] }
+final class VisibleRowsBox {
+    var ids: Set<String> = []
+    // Debounce for persisting the reading position: rows fire onAppear for EVERY row that scrolls in
+    // (and the list keeps an extra viewport pre-rendered), so saving per-appearance meant an O(n) scan
+    // plus a store write on every scroll tick — main-thread churn during exactly the frames that need
+    // headroom. One trailing save 0.5s after the last appearance is just as durable.
+    var persistWork: DispatchWorkItem?
+}
