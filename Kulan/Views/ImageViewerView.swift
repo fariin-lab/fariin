@@ -64,6 +64,10 @@ struct ImageViewerView: View {
     // Pen edit → full editor → SEND: wired by the conversation (nil in profile/gallery contexts, where
     // there's no send pipeline — the pen button hides there). (data, caption, viewOnce).
     var onSendEdited: ((Data, String, Bool) -> Void)? = nil
+    // Delete-for-me (local hide) wired by the conversation — nil in profile/gallery contexts, where the
+    // trash offers only Delete for Everyone (own media). When present, the viewer offers BOTH options
+    // like the message bubble's delete.
+    var onDeleteForMe: ((Message) -> Void)? = nil
     private struct PenEditWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var penEdit: PenEditWrap?
 
@@ -169,8 +173,20 @@ struct ImageViewerView: View {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
         .alert("Delete this photo?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) {
-                Task { await ChatService.deleteMessage(cid: cid, messageId: message.id); await MainActor.run { dismiss() } }
+            // Same options as the message bubble's delete (user report: the photo delete offered only
+            // one option). Own photo → Everyone + Me; Delete for Me hides locally via the conversation.
+            if isMine {
+                Button("Delete for Everyone", role: .destructive) {
+                    Task { await ChatService.deleteMessage(cid: cid, messageId: message.id); await MainActor.run { dismiss() } }
+                }
+            }
+            if let onDeleteForMe {
+                Button("Delete for Me", role: .destructive) { onDeleteForMe(message); dismiss() }
+            } else if !isMine {
+                // Fallback (no repo wired): received photo hides locally.
+                Button("Delete for Me", role: .destructive) {
+                    HiddenMessages.hide(message.id); dismiss()
+                }
             }
             Button("Cancel", role: .cancel) {}
         }

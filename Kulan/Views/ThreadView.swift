@@ -566,7 +566,8 @@ struct ThreadView: View {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid, suppressDismissPan: false,
-                                    telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil)
+                                    telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
+                                    onDeleteForMe: { m in repo.hideForMe(m.id) })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
@@ -575,7 +576,8 @@ struct ThreadView: View {
                                     telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
-                                    })
+                                    },
+                                    onDeleteForMe: { m in repo.hideForMe(m.id) })
                 }
             }
             // Zoom transition = the hero OPEN (photo grows from its bubble) and the button-close shrink
@@ -598,7 +600,8 @@ struct ThreadView: View {
                             in: wrap.gallery, cid: cid, suppressDismissPan: false,
                             onSendEdited: { data, caption, viewOnce in
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
-                            })
+                            },
+                            onDeleteForMe: { m in repo.hideForMe(m.id) })
             .navigationTransition(.zoom(sourceID: wrap.startId, in: imageViewerNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
@@ -762,7 +765,13 @@ struct ThreadView: View {
         }
         .alert("Delete \(selectedIds.count) message\(selectedIds.count == 1 ? "" : "s")?",
                isPresented: $showBulkDeleteConfirm) {
-            Button("Delete", role: .destructive) { bulkDelete() }
+            // Same options as the single-message delete (user report: bulk delete offered only one
+            // option). "Delete for Everyone" shows when the selection contains any of my own messages
+            // (it removes mine for everyone and hides the rest locally); "Delete for Me" hides all locally.
+            if selectionHasMine {
+                Button("Delete for Everyone", role: .destructive) { bulkDelete(everyone: true) }
+            }
+            Button("Delete for Me", role: .destructive) { bulkDelete(everyone: false) }
             Button("Cancel", role: .cancel) {}
         }
         // Pinned-message bar: docked at the top via safeAreaInset (the SAME reliable mechanism the search
@@ -1588,13 +1597,19 @@ struct ThreadView: View {
         inputFocused = true   // replying = you're about to type → open the keyboard
     }
 
-    // My own messages → delete-for-everyone; others → hide-for-me (same rules as the single delete).
-    private func bulkDelete() {
+    // Does the current selection include any of MY messages (→ "Delete for Everyone" is offered)?
+    private var selectionHasMine: Bool {
+        repo.items.contains { selectedIds.contains($0.id) && $0.authorId == me }
+    }
+
+    // everyone == true: my messages are removed for everyone, others hidden locally (mixed selection).
+    // everyone == false: every selected message is hidden locally only (Delete for Me).
+    private func bulkDelete(everyone: Bool) {
         let ids = selectedIds
         Task {
             for id in ids {
                 guard let m = repo.items.first(where: { $0.id == id }) else { continue }
-                if m.authorId == me { await ChatService.deleteMessage(cid: cid, messageId: id) }
+                if everyone && m.authorId == me { await ChatService.deleteMessage(cid: cid, messageId: id) }
                 else { await MainActor.run { repo.hideForMe(id) } }
             }
         }
