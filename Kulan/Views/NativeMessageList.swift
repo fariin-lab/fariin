@@ -264,12 +264,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The earlier fully-manual .never + SwiftUI GeometryReader insets desynced during keyboard
         // transitions (readers reporting late/0 → top inset 0 → bubbles under the header).
         collectionView.contentInsetAdjustmentBehavior = .always
-        // TOP edge-effect: iOS 26 native default (soft fade under the system nav bar — correct there).
-        // BOTTOM edge-effect: OFF — its progressive blur spans a TALL gradient region tied to the big
-        // bottom inset, bleeding way up into the conversation (blurred bubbles far above the composer).
-        // The composer's frost is the bar's own bounded native material instead (ThreadView).
+        // TOP + BOTTOM edge-effects: iOS 26 native SOFT fade. The bottom softly frosts the messages as they
+        // scroll UNDER the composer (what the user asked for — you see the content, dimmed, like the nav bar
+        // does at the top — with no hard border/seam). It was previously OFF because the OLD huge bottom
+        // inset (composer+keyboard, ~400pt) made the gradient bleed far up into the chat; now the inset is a
+        // static 12pt (the composer height comes from the safe area), so the fade is bounded to the bar.
         if #available(iOS 26.0, *) {
-            collectionView.bottomEdgeEffect.isHidden = true
+            collectionView.bottomEdgeEffect.style = .soft
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -959,9 +960,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // Keep the bottom edge-effect off (UIKit can reset it) — its tall gradient bled into the chat.
-        if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
-            collectionView.bottomEdgeEffect.isHidden = true
+        // Keep the bottom edge-effect on the SOFT style (UIKit can reset it) — softly frosts messages under
+        // the composer with no hard seam.
+        if #available(iOS 26.0, *), collectionView.bottomEdgeEffect.style != .soft {
+            collectionView.bottomEdgeEffect.style = .soft
         }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
