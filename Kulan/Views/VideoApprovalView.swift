@@ -165,7 +165,7 @@ struct VideoApprovalView: View {
             .padding(.trailing, 10)
             .padding(.leading, 4)
         }
-        .frame(maxWidth: 292)       // ~4 thumbs; more scroll horizontally
+        .frame(maxWidth: 252)       // ~4 of the 48px thumbs; more scroll horizontally
         .padding(.trailing, 8)
         .padding(.bottom, 10)
     }
@@ -181,18 +181,19 @@ struct VideoApprovalView: View {
                         Color.gray.opacity(0.3)
                     }
                 }
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(width: 48, height: 48)   // 48px thumbs (user spec 2026-07-14: "make small";
+                                                // matches the mixed pager's rail)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 // Duration badge (reference look: small dark capsule, bottom-left).
                 Text(railDuration(clip))
-                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 1.5)
                     .background(.black.opacity(0.55), in: Capsule())
-                    .padding(4)
+                    .padding(3)
             }
             .overlay {
                 if isCurrent {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Color(hex: 0x3DA1FD), lineWidth: 2.5)
                 }
             }
@@ -298,7 +299,17 @@ struct VideoApprovalView: View {
         VStack(spacing: 12) {
             // Trim bar HIDES while the caption keyboard is up (user request; matches the multi pager) —
             // typing needs the space, and trimming while typing isn't a real flow.
-            if !thumbnails.isEmpty && duration > 0 && !captionFocused { trimStrip }
+            if !captionFocused {
+                if !thumbnails.isEmpty && duration > 0 {
+                    trimStrip
+                } else {
+                    // RESERVE the strip's slot while the filmstrip loads: the strip appearing LATE grew
+                    // the bottom inset after the first frame, so the video fitted BIG first and re-fitted
+                    // smaller a beat later (the "zoom out is coming late" report). The image editor never
+                    // did this because its chrome height is known synchronously — now this one is too.
+                    Color.clear.frame(height: stripHeight)
+                }
+            }
             captionBar
         }
         .padding(.bottom, 8)
