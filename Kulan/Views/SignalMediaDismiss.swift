@@ -152,11 +152,12 @@ struct SignalDismissHost: UIViewRepresentable {
                 // dragged past the dismiss threshold OR flung downward fast; otherwise CANCEL and spring
                 // it back to exactly where it came from. This is what lets you drag down, change your
                 // mind, drag back up, and fully recover — the net downward offset is what counts, so
-                // dragging back above the threshold cancels.
+                // dragging back above the threshold cancels. The release velocity is handed to the
+                // spring either way, so the motion CONTINUES the finger instead of restarting from zero.
                 if o.y > Self.completionDistance || v.y > Self.completionVelocity {
-                    finish(offset: o)
+                    finish(offset: o, velocity: v)
                 } else {
-                    cancel()
+                    cancel(velocity: v)
                 }
 
             case .cancelled, .failed:
@@ -167,42 +168,62 @@ struct SignalDismissHost: UIViewRepresentable {
             }
         }
 
-        // Dismiss (0.25s, damping 1): the backdrop is already clear past the threshold (the chat shows
-        // behind), so the copy fades out from RIGHT WHERE IT WAS RELEASED with a small continued drift +
-        // shrink — never the old full-height downward slide ("continues moving downward"). Then dismiss.
-        private func finish(offset o: CGPoint) {
+        // Normalized spring velocity (UISpringTimingParameters expects velocity as a FRACTION of the
+        // remaining travel per second) so the animation takes over at exactly the finger's speed.
+        private static func springVelocity(_ v: CGPoint, from: CGPoint, to: CGPoint) -> CGVector {
+            let dx = to.x - from.x, dy = to.y - from.y
+            return CGVector(dx: abs(dx) > 1 ? v.x / dx : 0, dy: abs(dy) > 1 ? v.y / dy : 0)
+        }
+
+        // Dismiss (damping 1): the backdrop is already clear past the threshold (the chat shows behind),
+        // so the copy fades out from RIGHT WHERE IT WAS RELEASED with a small continued drift + shrink —
+        // seeded with the release velocity so it carries the finger's motion. Then dismiss.
+        private func finish(offset o: CGPoint, velocity: CGPoint = .zero) {
             guard let c = container else { return }
             active = false
-            UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
-                           options: [.curveEaseInOut]) {
-                c.center = CGPoint(x: self.fromFrame.midX + o.x, y: self.fromFrame.midY + o.y + 40)
+            let target = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y + 40)
+            let spring = UISpringTimingParameters(dampingRatio: 1,
+                                                  initialVelocity: Self.springVelocity(velocity, from: c.center, to: target))
+            let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
+            animator.addAnimations {
+                c.center = target
                 c.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
                 c.alpha = 0
                 c.layer.shadowOpacity = 0
                 self.backdrop?.alpha = 0
-            } completion: { _ in
+            }
+            animator.addCompletion { _ in
                 self.parent.onDismiss()
                 // The presentation tears everything down with the cover.
             }
+            animator.startAnimation()
         }
 
-        // Cancel: the same critically-damped spring back home, then restore the live content.
-        private func cancel() {
+        // Cancel: a critically-damped spring back home that CONTINUES the release velocity (Signal's
+        // interactive-dismiss recovery), then restore the live content. Signal animates center +
+        // transform only — the old path also animated the FRAME while the transform was mid-flight,
+        // and frame math under a non-identity transform is what made the snap-back visibly choppy.
+        private func cancel(velocity: CGPoint = .zero) {
             active = false
             guard let c = container else { parent.onHideContent(false); return }
-            UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
-                           options: [.curveEaseInOut]) {
+            let home = CGPoint(x: fromFrame.midX, y: fromFrame.midY)
+            let spring = UISpringTimingParameters(dampingRatio: 1,
+                                                  initialVelocity: Self.springVelocity(velocity, from: c.center, to: home))
+            let animator = UIViewPropertyAnimator(duration: 0.35, timingParameters: spring)
+            animator.addAnimations {
+                c.center = home
                 c.transform = .identity
-                c.frame = self.fromFrame
                 c.layer.shadowOpacity = 0
                 self.backdrop?.alpha = 1
-            } completion: { _ in
+            }
+            animator.addCompletion { _ in
                 self.parent.onHideContent(false)
                 c.removeFromSuperview()
                 self.backdrop?.removeFromSuperview()
                 self.container = nil
                 self.backdrop = nil
             }
+            animator.startAnimation()
         }
     }
 }
