@@ -1123,7 +1123,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
         guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !programmaticScrollAnimating,
               !geoRiding, !userScrolling else { return }
-        if stickBottom { UIView.performWithoutAnimation { pinBottom() } }   // keyboard/composer resize → stay pinned
+        if stickBottom {
+            // Keyboard/composer resize → stay pinned. When this layout pass runs INSIDE the keyboard's
+            // own animation transaction (safe-area growth animates with the keyboard slide), let the pin
+            // INHERIT it: the offset then rides the keyboard with Apple's exact curve, in lockstep — the
+            // suppressed pin snapped the messages to their final spot in one frame while the keyboard was
+            // still sliding (the "jump on keyboard open"). Outside an animation (cold passes), the
+            // suppression stays: an animated pin there would drift visibly for no reason.
+            if UIView.inheritedAnimationDuration > 0 { pinBottom() }
+            else { UIView.performWithoutAnimation { pinBottom() } }
+        }
         else { clampOffsetIfBeyondContent() }
     }
 
