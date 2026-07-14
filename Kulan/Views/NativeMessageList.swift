@@ -260,7 +260,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // scrollViewDidScroll — NOT via a SwiftUI binding. Shows the topmost visible row's day while scrolling,
     // fades ~1.2s after scrolling stops. This is what removes the per-scroll SwiftUI round-trip.
     var dayLabelFor: (String) -> String? = { _ in nil }
-    private let datePill = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    // REAL Liquid Glass (user spec 2026-07-14): UIGlassEffect is UIKit's native iOS 26 glass — the
+    // thin-material blur read as a flat pill next to the app's glass chrome.
+    private let datePill: UIVisualEffectView = {
+        if #available(iOS 26.0, *) { return UIVisualEffectView(effect: UIGlassEffect()) }
+        return UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    }()
     private var datePillTop: NSLayoutConstraint!   // top constant grows by the pinned-bar height when pinned
     private var topOverlayHeight: CGFloat = 0
     private let dateLabel = UILabel()

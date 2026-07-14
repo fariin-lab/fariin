@@ -1528,7 +1528,9 @@ struct ThreadView: View {
     private func flashAndScroll(_ id: String) {
         nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
         highlightId = id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+        // Signal's found-result emphasis: the mark stays a couple of seconds so the eye can land on it,
+        // then fades smoothly (the bubble's own 0.4s ease drives the fade).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
             if highlightId == id { withAnimation { highlightId = nil } }
         }
     }
@@ -1649,11 +1651,11 @@ struct ThreadView: View {
             await repo.ensureLoaded(id)   // page older history in until the match is in the window
             await MainActor.run {
                 guard seq == searchJumpSeq else { return }   // a newer jump superseded this one
-                // The native list keys cells by rowId (clientId ?? id). Own sent messages keep a clientId, so
-                // scrolling by the raw message id found no cell → no scroll. Translate id → rowId. (No
-                // full-bubble flash for search; the term stays highlighted in-text. A deleted match simply
-                // no-ops — the id resolves to no row, the same graceful degradation.)
-                nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id
+                // SIGNAL'S RESULT NAVIGATION (user spec): jump to the match AND mark the found bubble —
+                // the emphasis stays ~2s so the eye can land on which result was found, then fades
+                // smoothly. flashAndScroll also translates id → rowId (the native list keys by rowId;
+                // a deleted match resolves to no row and gracefully no-ops).
+                flashAndScroll(id)
             }
         }
     }
@@ -3872,7 +3874,7 @@ struct MessageBubble: View, Equatable {
             .frame(maxWidth: maxBubbleWidth, alignment: isMe ? .trailing : .leading)
             if !isMe { Spacer(minLength: 0) }
         }
-        .animation(.easeInOut(duration: 0.25), value: isHighlighted)
+        .animation(.easeInOut(duration: 0.4), value: isHighlighted)   // smooth found-result fade (Signal-like)
         // Swipe-to-reply is handled by the ONE pan gesture on the collection view (NativeMessageList),
         // not a per-bubble SwiftUI drag — a single recognizer that never fights the scroll.
     }
