@@ -254,6 +254,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private weak var swipingCell: UICollectionViewCell?
     private var swipingId: String?
     private var swipeArrow: UIImageView?
+    private var swipeSnapshot: UIView?   // static bitmap moved during the swipe; the live cell stays put
     private var swipeTriggered = false         // crossed the reply threshold this drag (haptic + fire on release)
 
     // Floating date pill (the sticky day header), rendered in UIKit and updated directly from
@@ -1599,26 +1600,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // touch, the conversation must not scroll up/down at the same time. Disabling the collection
             // view's own scroll cancels any in-flight vertical pan; our swipePan is a separate recognizer so
             // it keeps tracking. Restored on end/cancel.
-            // STASH + RESTORE the offset around the toggle: setting isScrollEnabled=false makes UIKit
-            // re-clamp contentOffset, and off an exact row boundary (the normal case) that clamp shifted
-            // the whole list up by ~a row when the swipe began (user before/after screenshots). Writing
-            // the offset back immediately makes the toggle a no-op for position.
             let stash = collectionView.contentOffset
             collectionView.isScrollEnabled = false
             collectionView.setContentOffset(stash, animated: false)
-            layout.frozen = true   // lock every frame for the swipe — only this cell's transform moves
+            layout.frozen = true
+            // ROOT-CAUSE FIX (user-confirmed: reply/image/video bubbles moved during a swipe, native text
+            // bubbles did not — because those three are SwiftUI-hosted cells and transforming a live
+            // UIHostingConfiguration cell lets its SwiftUI re-layout, which UIKit answers with a self-size
+            // that nudges neighbors). We now move a STATIC SNAPSHOT of the cell instead of the live cell:
+            // a bitmap can't re-layout, and the real cell stays untouched at its exact frame, so nothing
+            // else can shift. Native text cells were already stable, so this only changes the hosted ones.
+            if let snap = cell.snapshotView(afterScreenUpdates: false) {
+                snap.frame = cell.frame
+                collectionView.addSubview(snap)
+                cell.contentView.isHidden = true   // the snapshot stands in for it during the swipe
+                swipeSnapshot = snap
+            }
             addSwipeArrow(for: cell)
         case .changed:
-            guard let cell = swipingCell else { return }
+            guard swipingCell != nil else { return }
             if VoiceScrubState.active { resetSwipe(animated: false); return }   // waveform took over mid-drag
             // 1:1 with the finger to the threshold, then RUBBER-BAND (drag past -70 moves at 1/4 speed,
             // capped) — attached-to-the-finger up close, physical resistance past the commit point.
             let t = min(0, g.translation(in: collectionView).x)
             let tx = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)
-            // Transform the CELL itself — the proven path (the send animation moved cells this way).
-            // Transforming the hosted contentView had its transform fought by the SwiftUI hosting layout,
-            // which is why the bubble barely moved ("stays fixed, no feedback").
-            cell.transform = CGAffineTransform(translationX: tx, y: 0)
+            // Translate the SNAPSHOT (a bitmap — no SwiftUI re-layout), not the live cell.
+            swipeSnapshot?.transform = CGAffineTransform(translationX: tx, y: 0)
             let progress = min(1, abs(tx) / 50)
             swipeArrow?.alpha = progress
             swipeArrow?.transform = CGAffineTransform(scaleX: 0.6 + 0.4 * progress, y: 0.6 + 0.4 * progress)
@@ -1738,16 +1745,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                 // recycle, normal end) — clearing frozen only in .ended could wedge it (agent finding)
         let cell = swipingCell
         let arrow = swipeArrow
-        swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false
-        let reset = { cell?.transform = .identity; arrow?.alpha = 0 }
+        let snap = swipeSnapshot
+        swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeSnapshot = nil; swipeTriggered = false
+        // Spring the SNAPSHOT back, then remove it and un-hide the real cell (which never moved).
+        let reset = { snap?.transform = .identity; arrow?.alpha = 0 }
+        let finish = {
+            arrow?.removeFromSuperview()
+            snap?.removeFromSuperview()
+            cell?.contentView.isHidden = false
+            cell?.transform = .identity   // belt-and-suspenders in case an old path left one
+        }
         if animated {
             // Seed the spring with the release velocity so a fast flick snaps back livelier than a slow let-go.
-            let distance = abs(cell?.transform.tx ?? 0)
+            let distance = abs(snap?.transform.tx ?? 0)
             let v = distance > 0 ? min(3, abs(velocity) / max(1, distance)) : 0.4
             UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: v,
-                           options: [.allowUserInteraction], animations: reset) { _ in arrow?.removeFromSuperview() }
+                           options: [.allowUserInteraction], animations: reset) { _ in finish() }
         } else {
-            reset(); arrow?.removeFromSuperview()
+            reset(); finish()
         }
     }
 
