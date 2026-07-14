@@ -1144,7 +1144,7 @@ struct ThreadView: View {
         if msg.id == firstUnreadId { unreadDivider }
         if let pin = msg.pinNotice {
             // Telegram-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
-            pinNoticeRow(msg, pin).id(msg.id)
+            pinNoticeRow(msg, pin, jumpTo: jumpTo).id(msg.id)
         } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil {
             // A reserved kulan-…: payload we can't render as a card — either a newer app version's
             // feature OR a malformed known marker. Either way show the system notice, NEVER the raw
@@ -2357,7 +2357,8 @@ struct ThreadView: View {
     // Centered gray system event ("X added Y", "Z left", "renamed to…") — group only.
     // Telegram-style pin notice: "X pinned "snippet…"" / "X pinned a photo" — the system-row capsule
     // with the pinner's name bolded; tapping jumps to the pinned message (pages history in if needed).
-    private func pinNoticeRow(_ m: Message, _ pin: PinNoticeCard) -> some View {
+    private func pinNoticeRow(_ m: Message, _ pin: PinNoticeCard,
+                              jumpTo: @escaping (String) -> Void) -> some View {
         Button { jumpTo(pin.messageId) } label: {
             (Text(m.authorId == me ? "You" : personName(m.authorId)).fontWeight(.semibold)
                 + Text(" pinned \(pin.label)"))
