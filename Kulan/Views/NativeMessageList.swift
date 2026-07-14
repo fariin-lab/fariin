@@ -379,6 +379,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // composer — the build-325 report.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
                                                name: UIResponder.keyboardDidHideNotification, object: nil)
+        // The CLOSE is owned by ONE animation (Signal's model): riding the close via per-layout-pass
+        // pins mis-landed — the chat dropped too far (composer partially under the bottom area) and
+        // only the did-hide settle corrected it a beat later (the user-reported late snap). WillHide
+        // pins ONCE to the final resting position with the keyboard's own duration+curve, while
+        // keyboardAnimating makes every per-pass pin stand off.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)),
+                                               name: UIResponder.keyboardWillHideNotification, object: nil)
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -1347,6 +1354,36 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // animation; a cancelled animation) — when that happened, nothing re-asserted the pin and the last
     // bubbles rested UNDER the input field. This is the definitive settle: zero the overlap, re-derive
     // the inset, and if the keyboard session STARTED at the bottom, end it pinned at the bottom.
+    // ONE owned close animation (the keyboard's exact duration + curve): pins to the FINAL resting
+    // offset in a single transaction. keyboardAnimating gates the per-pass pins (viewDidLayoutSubviews)
+    // and the land gate (isInMotion) for the whole ride; the completion settles exactly and flushes.
+    @objc private func keyboardWillHide(_ note: Notification) {
+        guard shouldAnimateKeyboardChanges, didInitialScroll, !isDisappearing else { return }
+        // Never fight an interactive pop (its own rule set) or an active user drag.
+        if let pop = navigationController?.interactivePopGestureRecognizer {
+            switch pop.state { case .possible, .failed: break; default: return }
+        }
+        let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+        guard !userScrolling else { return }
+        // Only when the session should END pinned: at the bottom now, or the session started there.
+        guard computeAtBottom() || keyboardSessionWasAtBottom || lastKnownDistanceFromBottom <= 44 else { return }
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
+            ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
+        guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
+        keyboardAnimating = true
+        UIView.animate(withDuration: duration, delay: 0,
+                       options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
+                                 .beginFromCurrentState, .allowUserInteraction]) {
+            self.collectionView.layoutIfNeeded()   // safe-area final values are in the model by now
+            self.pinBottom()
+        } completion: { _ in
+            self.keyboardAnimating = false
+            UIView.performWithoutAnimation { self.pinBottom() }   // exact settle — no late corrector
+            self.settleFlush()
+        }
+    }
+
     @objc private func keyboardDidHide() {
         keyboardSessionWasAtBottom = false
         atBottomForKeyboard = nil   // session over — never let a stale capture drive later inset updates
