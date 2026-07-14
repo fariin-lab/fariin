@@ -149,13 +149,13 @@ struct AttachRecentsStrip: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
-                // Selected count — REAL Liquid Glass circle (user spec 2026-07-14; the blue-tinted glass
-                // read as a flat solid button). Same clear interactive glass as the X on the left.
+                // Selected count — BLUE Liquid Glass (user spec 2026-07-14 evening: "make blue, don't
+                // remove liquid glass"): interactive glass WITH the bubble-blue tint + white number.
                 if !selectedIds.isEmpty {
                     Text("\(selectedIds.count)")
-                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.primary)
+                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 48, height: 48)
-                        .liquidGlass(Circle(), interactive: true)
+                        .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
                 }
             }
         }
