@@ -88,6 +88,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
         // history (ensureLoaded → prepend), apply's async completion restored the pre-load offset AFTER the
         // scroll had already run — stomping the jump ("reply/search jump doesn't work").
         vc.apply(rowIds: rowIds, scrollTarget: scrollTarget)
+        // Belt-and-braces from the 325 field failure: push geometry-neutral model changes (read ticks)
+        // STRAIGHT onto the visible uikit cells — even if the reconfigure chain misses, ticks repaint.
+        vc.repaintUikitCells()
         if scrollTarget != nil {
             DispatchQueue.main.async { scrollTarget = nil }   // one-shot
         }
@@ -1504,6 +1507,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         img.frame = CGRect(x: cell.frame.maxX - 36, y: cell.frame.midY - 9, width: 20, height: 18)
         collectionView.addSubview(img)
         swipeArrow = img
+    }
+
+    // Direct repaint of visible uikit cells from the frozen model dict (geometry-neutral changes only —
+    // the cell itself gates on that). Runs on every SwiftUI update; a no-op when nothing changed.
+    func repaintUikitCells() {
+        guard !uikitModels.isEmpty else { return }
+        for ip in collectionView.indexPathsForVisibleItems {
+            guard let id = dataSource.itemIdentifier(for: ip),
+                  let m = uikitModels[id],
+                  let cell = collectionView.cellForItem(at: ip) as? UIKitBubbleCell else { continue }
+            cell.repaintIfMetaChanged(m)
+        }
     }
 
     @objc private func handleDoubleTap(_ g: UITapGestureRecognizer) {

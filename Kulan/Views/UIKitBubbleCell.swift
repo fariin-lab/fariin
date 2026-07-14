@@ -201,6 +201,21 @@ final class UIKitBubbleCell: UICollectionViewCell {
         setNeedsLayout()
     }
 
+    // DIRECT repaint channel (belt-and-braces from the build-325 field failure, where read ticks on
+    // uikit rows did not refresh on device even though the diffable reconfigure chain looks correct):
+    // the controller pushes the fresh model straight onto visible cells on every update. Gated to
+    // GEOMETRY-NEUTRAL changes only (tick / time / radii — same text, same spacing): a height-changing
+    // update must go through the measured reload path or the bubble would repaint at a stale frame.
+    // The soft cross-dissolve mirrors the SwiftUI meta's 0.25s tick fade.
+    func repaintIfMetaChanged(_ m: UIKitBubbleModel) {
+        guard let old = model, m != old,
+              m.text == old.text, m.edited == old.edited, m.topSpacing == old.topSpacing else { return }
+        UIView.transition(with: contentView, duration: 0.25, options: [.transitionCrossDissolve]) {
+            self.configure(m)
+            self.layoutIfNeeded()
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         if let m = model { bubbleView.layout(in: contentView.bounds, model: m) }
