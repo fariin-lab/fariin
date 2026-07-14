@@ -1051,14 +1051,13 @@ struct ThreadView: View {
     @ViewBuilder
     private func rowView(at index: Int, _ msg: Message, jumpTo: @escaping (String) -> Void) -> some View {
         if shouldShowDate(at: index) {
-            // Inline day separator: a centered, translucent rounded pill (matches the
-            // floating sticky date header).
+            // Inline day separator: REAL Liquid Glass capsule (user spec 2026-07-14; was a flat
+            // ultraThinMaterial pill).
             Text(dayLabel(msg.createdAt))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 12).padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
+                .liquidGlass(Capsule(), interactive: false)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
         }
