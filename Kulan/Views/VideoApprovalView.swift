@@ -131,6 +131,19 @@ struct VideoApprovalView: View {
                 )
                 .onTapGesture(count: 2) { withAnimation(.easeInOut(duration: 0.2)) { zoom = zoom > 1 ? 1 : 2; if zoom <= 1 { pan = .zero } } }
                 .onTapGesture { if captionFocused { captionFocused = false } else { playing.toggle() } }
+                // SWIPE between clips (user report: the mixed editor pages by swipe, this one only via
+                // rail taps). Horizontal-dominant swipe at rest switches clip; disabled while zoomed
+                // (the pan owns the drag there) and for single clips.
+                .simultaneousGesture(
+                    zoomed || clipList.count < 2 ? nil : DragGesture(minimumDistance: 30)
+                        .onEnded { g in
+                            let dx = g.translation.width, dy = g.translation.height
+                            guard abs(dx) > abs(dy) * 1.5, abs(dx) > 60 else { return }
+                            let next = dx < 0 ? current + 1 : current - 1
+                            guard clipList.indices.contains(next) else { return }
+                            withAnimation(.easeInOut(duration: 0.2)) { switchTo(next) }
+                        }
+                )
             if !playing && scrubTime == nil {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
