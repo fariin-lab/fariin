@@ -209,7 +209,7 @@ struct ThreadView: View {
             // the bars. The pinned-message bar floats as a top overlay, positioned below the header.
             // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
-            messagesLayer(proxy)
+            messagesLayerErased(proxy)
             // Full-bleed under BOTH bars, SYMMETRICALLY. The top already ran under the nav (messages render
             // behind it, frosted) — the bottom must do the SAME so messages + wallpaper render UNDER the
             // composer instead of stopping above it (that gap = the plain white app background showing = the
@@ -246,6 +246,11 @@ struct ThreadView: View {
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
     }
+
+    // Type-erase the heavy messages chain at the scrollStack boundary: the chain's opaque type grew past
+    // the type-checker's budget ("unable to type-check this expression in reasonable time") when another
+    // onChange was added. AnyView resets the complexity scrollStack sees; one wrapper, no behavior change.
+    private func messagesLayerErased(_ proxy: ScrollViewProxy) -> AnyView { AnyView(messagesLayer(proxy)) }
 
     // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
     @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
