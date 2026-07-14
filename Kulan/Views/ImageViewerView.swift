@@ -53,6 +53,11 @@ struct ImageViewerView: View {
     let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
     let suppressDismissPan: Bool        // true when a native zoom transition owns the drag-down close
+    // Telegram-style open/close TEST (Settings > Privacy): non-nil = the tapped bubble's screen rect.
+    // The viewer then presents with NO system transition; an image copy springs from this rect to
+    // fullscreen (and back into it on close) — Telegram's gallery animation.
+    var telegramSourceRect: CGRect? = nil
+    @StateObject private var tg = TGOpenState()
     @State private var current: String  // id of the page being shown
     @Environment(\.dismiss) private var dismiss
 
@@ -64,18 +69,22 @@ struct ImageViewerView: View {
 
     // Single-image entry (existing call sites): a one-page gallery.
     init(message: Message, cid: String, suppressDismissPan: Bool = false,
+         telegramSourceRect: CGRect? = nil,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil) {
         self.gallery = [message]; self.cid = cid
         self.suppressDismissPan = suppressDismissPan
+        self.telegramSourceRect = telegramSourceRect
         self.onSendEdited = onSendEdited
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
     init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false,
+         telegramSourceRect: CGRect? = nil,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
         self.suppressDismissPan = suppressDismissPan
+        self.telegramSourceRect = telegramSourceRect
         self.onSendEdited = onSendEdited
         _current = State(initialValue: message.id)
     }
@@ -99,7 +108,30 @@ struct ImageViewerView: View {
         return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? ""
     }
     private var dateLine: String { message.createdAt.formatted(date: .numeric, time: .shortened) }
-    private var chromeVisible: Bool { !chromeHidden && !dismissing }
+    private var chromeVisible: Bool { !chromeHidden && !dismissing && !tgHidden }
+
+    // ── Telegram-style open/close (test toggle) ──
+    // Live content stays hidden while the copy animates (open not finished, or close in flight).
+    private var tgHidden: Bool { telegramSourceRect != nil && !tg.live }
+    // The copy the animation moves: the loaded page, else the bubble's already-decoded cache entry.
+    private var tgCopyImage: UIImage? {
+        loaded[current] ?? message.imageUrl.flatMap { DiskImageCache.shared.memoryImage($0) }
+    }
+    @ViewBuilder private var tgZoomOverlay: some View {
+        if let src = telegramSourceRect, !tg.live, let img = tgCopyImage {
+            TGMediaZoomLayer(image: img, source: src, expanded: tg.expanded)
+        }
+    }
+    // Header X: Telegram mode flies the copy back into the bubble, then dismisses with no animation
+    // (the copy IS the animation). Normal mode keeps the plain dismiss (zoom transition or slide).
+    private func closeViewer() {
+        if telegramSourceRect != nil {
+            tg.close { withoutPresentationAnimation { dismiss() } }
+        } else { dismiss() }
+    }
+    private func instantDismiss() {
+        if telegramSourceRect != nil { withoutPresentationAnimation { dismiss() } } else { dismiss() }
+    }
 
     var body: some View {
         // Split into pagerLayer/chromeLayer — the inline body blew the type-checker budget.
@@ -112,22 +144,25 @@ struct ImageViewerView: View {
         // presented root; on begin this live content hides ONCE and a lightweight image copy moves 1:1
         // with the finger (constant 0.8 scale cock, direct backdrop alpha, finish-on-any-progress,
         // 0.25s critically-damped spring). Replaces the old per-frame SwiftUI drag entirely.
-        .opacity(dismissing ? 0 : 1)
+        .opacity(dismissing || tgHidden ? 0 : 1)
         .overlay {
             // When a native .zoom transition owns the drag-down close (suppressDismissPan) the photo
             // shrinks back into its source bubble via matched geometry — no custom pan, exactly like the
             // story close. Otherwise the in-viewer SignalDismissHost drag is used.
             if !suppressDismissPan {
                 SignalDismissHost(
-                    canBegin: { pageZoom <= 1.02 },
+                    canBegin: { pageZoom <= 1.02 && !tgHidden },
                     media: {
                         guard let img = loaded[current] else { return nil }
                         return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
                     },
                     onHideContent: { dismissing = $0 },
-                    onDismiss: { dismiss() })
+                    onDismiss: { instantDismiss() })
             }
         }
+        // Telegram-mode open/close copy: springs from the bubble rect to fullscreen and back.
+        .overlay { tgZoomOverlay }
+        .onAppear { if telegramSourceRect != nil { tg.open() } }
         // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.
         .presentationBackground(.clear)
         .alert("Couldn't save photo", isPresented: $saveError) {
@@ -216,7 +251,7 @@ struct ImageViewerView: View {
     // Floating Liquid Glass header: back · You/name + date · "…" menu (Go to Chat / Save Image / Delete).
     private var header: some View {
         HStack(alignment: .center) {
-            glassButton("chevron.left") { dismiss() }
+            glassButton("chevron.left") { closeViewer() }
             Spacer()
             VStack(spacing: 1) {
                 Text(senderName).font(.subheadline.weight(.semibold))

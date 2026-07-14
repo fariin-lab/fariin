@@ -381,11 +381,18 @@ struct PrivacySettingsView: View {
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
     @AppStorage("shareLastSeen") private var shareLastSeen = true
+    @AppStorage("telegramMediaOpen") private var telegramMediaOpen = false
     var body: some View {
         List {
             // (The standard message list is now THE list — the experimental toggle and the old
             // SwiftUI fallback were removed 2026-07-11 per user decision. The 2026-07-14
             // Telegram-engine test toggle was likewise removed after the comparison.)
+            Section {
+                Toggle(isOn: $telegramMediaOpen) { Label("Telegram Media Open", systemImage: "photo.on.rectangle.angled") }.tint(.green)
+            } footer: {
+                Text("Experimental test: photos and videos open from the message bubble with Telegram's animation (the image itself springs to full screen and flies back on close) instead of the system zoom. Applies to single photo/video taps in chats. Turn off to compare.")
+            }
+
             Section {
                 Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)
                 Toggle(isOn: $typingIndicators) { Label("Typing Indicators", systemImage: "ellipsis.bubble") }.tint(.green)

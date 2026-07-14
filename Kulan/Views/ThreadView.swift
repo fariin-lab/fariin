@@ -138,6 +138,9 @@ struct ThreadView: View {
     @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left
     @State private var tappedLink: URL?                 // link tapped in a bubble → ONE screen-level confirm
     @State private var tappedUserNotFound = false       // @username tapped but no such user (screen-level alert)
+    // Telegram-style media open/close TEST (Settings > Privacy): the tapped photo/video springs from
+    // the bubble rect instead of the system zoom transition.
+    @AppStorage("telegramMediaOpen") private var telegramMediaOpen = false
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
@@ -510,12 +513,14 @@ struct ThreadView: View {
             Group {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
-                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
+                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: false,
+                                    telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil)
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
                                     cid: cid, suppressDismissPan: false,
+                                    telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     })
@@ -527,7 +532,9 @@ struct ThreadView: View {
             // drag (suppressDismissPan: false) — chrome hides instantly, ONLY the photo follows the
             // finger, the page behind never moves. The zoom transition's own pan/pinch are disabled
             // inside SignalDismissHost so the two can never fight.
-            .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
+            // TELEGRAM-OPEN TEST: when the toggle is on, the system transition is skipped entirely —
+            // the animating copy (springing from the bubble rect) is the whole open/close.
+            .modifier(ConditionalZoomTransition(enabled: !telegramMediaOpen, sourceID: msg.id, ns: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
         // Album gallery: swipe between all the album's photos, starting on the tapped one. SAME native
@@ -543,11 +550,13 @@ struct ThreadView: View {
             .navigationTransition(.zoom(sourceID: wrap.startId, in: imageViewerNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false,
+                              telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil)
                 // Zoom = hero open + button-close shrink into the bubble. The drag-down close is the
                 // media-only pan (same as photos): chrome hides instantly, only the video moves, the
                 // page behind stays fixed. The zoom transition's own pan is disabled in SignalDismissHost.
-                .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
+                // Telegram-open test ON → skip the system transition; the poster copy is the animation.
+                .modifier(ConditionalZoomTransition(enabled: !telegramMediaOpen, sourceID: msg.id, ns: imageViewerNS))
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
@@ -1093,9 +1102,16 @@ struct ThreadView: View {
                     AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
                     AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
                 },
-                onTapImage: { viewerImage = $0 },
+                onTapImage: { m in
+                    // Telegram-open test: present with NO system animation — the copy IS the animation.
+                    if telegramMediaOpen { withoutPresentationAnimation { viewerImage = m } }
+                    else { viewerImage = m }
+                },
                 onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
-                onTapVideo: { viewerVideo = $0 },
+                onTapVideo: { m in
+                    if telegramMediaOpen { withoutPresentationAnimation { viewerVideo = m } }
+                    else { viewerVideo = m }
+                },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in
                     if repo.pinnedMessageIds.contains(m.id) {
@@ -3848,6 +3864,7 @@ struct MessageBubble: View, Equatable {
                     // Native zoom hero: the player grows out of this thumbnail and the drag-down close
                     // shrinks back into it (same as photos).
                     .modifier(HeroSource(ns: imageNS, id: message.id))
+                    .modifier(MediaRectReporter(id: message.id))   // Telegram-open test: live bubble rect
                     .overlay {   // upload ring while sending, play disc once delivered
                         if message.sendState == .sending {
                             ZStack { Color.black.opacity(0.18); UploadingRing() }
@@ -3998,6 +4015,7 @@ struct MessageBubble: View, Equatable {
                     // Native zoom hero (same mechanism as the story close): the viewer grows out of this
                     // bubble and the drag-down dismiss shrinks back into it, following the finger.
                     .modifier(HeroSource(ns: imageNS, id: message.id))
+                    .modifier(MediaRectReporter(id: message.id))   // Telegram-open test: live bubble rect
                     .overlay {   // clean upload indicator (ring in a frosted disc)
                         if message.sendState == .sending {
                             ZStack {
