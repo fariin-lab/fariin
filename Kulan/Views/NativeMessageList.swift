@@ -588,6 +588,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // the instant scrolling stopped = the flash/flicker at scroll end.
     private func settleFlush() {
         guard !isInMotion else { return }
+        // A load that arrived mid-motion lands FIRST, now that the list is at rest (Signal's model:
+        // loads land only when scrolling settles, so continuity math always runs against a resting
+        // list). Its own completion handles pinning/continuity; the flush work below then proceeds.
+        if let pending = pendingIdsApply {
+            pendingIdsApply = nil
+            apply(rowIds: pending, scrollTarget: nil)
+        }
         // A message arrived at the bottom mid-scroll: pin now (only if the reader is still at the bottom).
         if needsPinOnSettle {
             needsPinOnSettle = false
@@ -652,8 +659,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Apply
 
+    // Signal's land gate applies to LOADS too (their loads build async and land only when scrolling
+    // settles): an ids-change landing mid-drag/mid-fling is the worst moment — the continuity
+    // compensation runs against a moving list and any miss fights the finger. Deferred lands coalesce
+    // (.lastOnly) and flush from settleFlush. Jumps (scrollTarget) are exempt: they TAKE OVER the scroll.
+    private var pendingIdsApply: [String]?
+
     func apply(rowIds ids: [String], scrollTarget: String? = nil) {
         let width = collectionView.bounds.width
+
+        if didInitialScroll, ids != currentIds, scrollTarget == nil, isInMotion {
+            pendingIdsApply = ids   // latest wins; flushed on settle
+            return
+        }
+        pendingIdsApply = nil       // an immediate land supersedes anything deferred (ids are the latest)
 
         guard ids != currentIds else {
             // A jump with no data change (target already in the loaded window): scroll now. scrollToItem
@@ -696,7 +715,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         lastRowSigs = rowSignatures   // ids changed (append/prepend/trim): reseed signatures for the new set
 
-        let wasAtBottom = computeAtBottom()
+        // At-bottom INTENT from every truth source, not just live geometry (Signal reads its latched
+        // lastKnownDistanceFromBottom): a land during the keyboard's native ride reads mid-flight
+        // geometry and answered "not at bottom" — the own-send glide then silently skipped ("sometimes
+        // sending doesn't scroll"). stickBottom holds the pre-resize truth; the latch holds the last
+        // at-rest truth (kept fresh on every scroll tick, so a reader in history can't false-positive).
+        let wasAtBottom = computeAtBottom() || stickBottom || lastKnownDistanceFromBottom <= 44
         // A bottom-append (send / receive) = the new list STARTS WITH the entire old list.
         let isAppend = !currentIds.isEmpty && ids.count > currentIds.count
             && Array(ids.prefix(currentIds.count)) == currentIds
@@ -808,16 +832,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 self.settleFlush()
             }
         } else {
-            // Land the load with ATOMIC continuity (the reference's exact mechanism): the anchor delta is
-            // handed to UIKit as a UICollectionViewLayoutInvalidationContext.contentOffsetAdjustment,
-            // "just before performBatchUpdates" — UIKit applies it in the same transaction as the update,
-            // so no frame ever renders at the stale offset. Covers prepend, top-trim, delete, and mixed
-            // changes in one mechanism. The layout's targetContentOffset override remains as the fallback
-            // channel. (The radar-28167779 layoutIfNeeded ran BEFORE the heights/ids mutation above.)
+            // Land the load with ATOMIC continuity via the layout's targetContentOffset override: UIKit
+            // consults it DURING the batch update this apply performs, and answers proposed + delta —
+            // the offset shift lands in the same transaction as the content change, so no frame ever
+            // renders at the stale offset. This channel existed since the continuity rebuild but was
+            // NEVER FED (only zeroed and read — dead code): the only live mechanism was a pre-apply
+            // invalidation-context adjustment whose timing Signal's own source calls "delicate… must be
+            // done just before performBatchUpdates" — in our diffable setup a SwiftUI layout pass could
+            // run between the invalidation and the update and consume/misapply it. That dropped
+            // compensation shoved a history reader a full page toward the newest messages on EVERY
+            // page-in (the auto-scroll-while-reading bug). finalizeCollectionViewUpdates resets it
+            // one-shot; the post-land verification below remains as the last-resort net.
             if adjustment != 0 {
-                let ctx = UICollectionViewLayoutInvalidationContext()
-                ctx.contentOffsetAdjustment = CGPoint(x: 0, y: adjustment)
-                layout.invalidateLayout(with: ctx)
+                layout.pendingContentOffsetAdjustment = adjustment
             }
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 guard let self else { return }
