@@ -1204,10 +1204,96 @@ struct ThreadView: View {
     // UIKit bubble migration (stage 1): resolve a NATIVE model for a message the UIKit path fully supports —
     // plain 1:1 delivered text, default bubble color, no adornments. Any special case returns nil and the
     // message keeps its SwiftUI cell, so no feature is lost while the surface is progressively migrated.
-    // Master switch for the UIKit bubble path. OFF: a sizing mismatch between the native cell's measured
-    // and rendered height corrupted the layout (content stranded at the top with a gap) when native and
-    // SwiftUI cells were mixed. Re-enable only after the UIKit measurement is proven to equal the render.
-    private static let useUIKitBubbles = false
+    // ON (Signal-stability push 2026-07-14). The original stranded-layout failure was a ROUTING RACE:
+    // measure() and the cell provider each called the live resolver, so a state flip between them could
+    // measure a row as UIKit but render it as SwiftUI (different heights → corrupted layout). Routing is
+    // now a FROZEN per-apply snapshot dictionary — measure and render can never disagree — and a route
+    // flip reloads (re-dequeues) the row instead of reconfiguring it. Long-press menu + double-tap react
+    // have native UIKit equivalents, so no interaction is lost.
+    private static let useUIKitBubbles = true
+
+    // Per-emission cache of the UIKit-routable models (same discipline as the signature cache): resolved
+    // once per data/read/highlight change, NOT on every body run.
+    private final class UikitModelCache {
+        var key = ""
+        var models: [String: UIKitBubbleModel] = [:]
+    }
+    private let uikitModelCache = UikitModelCache()
+
+    private var uikitModels: [String: UIKitBubbleModel] {
+        // Search highlights text inside SwiftUI bubbles; selection/custom-color/group cases render
+        // SwiftUI-only — in those states everything routes SwiftUI (empty dict).
+        guard Self.useUIKitBubbles, !isGroup, !selecting, chatColorSpec == nil, !searchActive else { return [:] }
+        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")"
+        if uikitModelCache.key == key { return uikitModelCache.models }
+        var out: [String: UIKitBubbleModel] = [:]
+        for m in repo.items {
+            if let model = uikitBubbleModel(for: m.rowId) { out[m.rowId] = model }
+        }
+        uikitModelCache.key = key
+        uikitModelCache.models = out
+        return out
+    }
+
+    // Long-press menu for UIKit-routed rows — the SAME native menu (same items, same order, same
+    // conditions) the SwiftUI .contextMenu builds, restricted to what a plain 1:1 delivered text
+    // message can do (no Save Image / Info — those never apply to this row class).
+    private func uikitMenu(for rowId: String) -> UIMenu? {
+        guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
+        let m = repo.items[idx]
+        var items: [UIMenuElement] = []
+        items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
+            beginReply(to: m)
+        })
+        items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
+            morePickerTarget = m
+        })
+        if m.authorId == me, Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
+            items.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { _ in
+                withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
+                input = m.text
+                inputFocused = true
+            })
+        }
+        let isPinned = repo.pinnedMessageIds.contains(m.id)
+        items.append(UIAction(title: isPinned ? "Unpin" : "Pin",
+                              image: UIImage(systemName: isPinned ? "pin.slash" : "pin")) { _ in
+            if isPinned { Task { await ChatService.removePinnedMessage(cid, m.id) } }
+            else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
+                Task { await ChatService.addPinnedMessage(cid, m.id) }
+            }
+        })
+        items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
+            UIPasteboard.general.string = m.text
+        })
+        items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
+            forwardTarget = m
+        })
+        items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+        })
+        let destructive: UIAction = m.authorId == me
+            ? UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                pendingDelete = m
+            }
+            : UIAction(title: "Report", image: UIImage(systemName: "flag"), attributes: .destructive) { _ in
+                reportTarget = m
+            }
+        items.append(UIMenu(options: .displayInline, children: [destructive]))   // the divider + Delete/Report
+        return UIMenu(children: items)
+    }
+
+    // Double-tap quick heart on a UIKit-routed row — mirrors the SwiftUI bubble's double-tap gesture.
+    private func uikitQuickReact(_ rowId: String) {
+        guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
+        let m = repo.items[idx]
+        guard m.sendState == nil else { return }
+        let emoji: String? = m.reactions[me] == "❤️" ? nil : "❤️"
+        Task {
+            await ChatService.setReaction(cid: cid, messageId: m.id, emoji: emoji,
+                                          toAuthor: m.authorId, group: isGroup ? groupMembers : nil)
+        }
+    }
 
     private func uikitBubbleModel(for rowId: String) -> UIKitBubbleModel? {
         guard Self.useUIKitBubbles else { return nil }
@@ -1268,8 +1354,11 @@ struct ThreadView: View {
                     }
                 }).padding(.horizontal, 12))
             },
-            // UIKit bubble migration (stage 1): plain 1:1 delivered text renders as a native UIKit cell.
-            uikitBubble: { id in uikitBubbleModel(for: id) },
+            // UIKit bubble migration: plain 1:1 delivered text renders as a native UIKit cell. The models
+            // are a frozen per-emission snapshot (routing can never flip between measure and render).
+            uikitModels: uikitModels,
+            uikitMenu: { id in uikitMenu(for: id) },
+            onUikitDoubleTap: { id in uikitQuickReact(id) },
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
             // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread

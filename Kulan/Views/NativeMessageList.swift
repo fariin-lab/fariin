@@ -24,10 +24,14 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in order (Message.rowId)
     var rowSignatures: [String: String] = [:]  // per-row CONTENT signature → same-ids apply reconfigures ONLY changed rows
     var row: (String) -> AnyView               // ThreadView builds the full row (date/divider/bubble) for an id
-    // UIKit bubble migration: for a message the native path fully supports (stage 1: plain 1:1 delivered
-    // text), ThreadView returns a resolved model and the row renders as a UIKit cell — no SwiftUI, no
-    // per-cell animation/re-measure during scroll. nil → the SwiftUI `row` is used (every other case).
-    var uikitBubble: (String) -> UIKitBubbleModel? = { _ in nil }
+    // UIKit bubble migration: messages the native path fully supports (plain 1:1 delivered text) render
+    // as UIKit cells — no SwiftUI, no per-cell animation/re-measure during scroll. The models arrive as a
+    // SNAPSHOT DICTIONARY resolved once per body run (not a live closure): measure() and the cell
+    // provider read the same frozen routing, so a state flip can never route a row differently between
+    // its measurement and its render (the mismatch that stranded the layout when this path first ran).
+    var uikitModels: [String: UIKitBubbleModel] = [:]
+    var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
+    var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
     var onReachedTop: () -> Void               // near-top -> page older
     var selecting: Bool = false                // selection mode — drives the selection-animation land gate
     // The reference's initial scroll position: when the conversation has unread messages, the FIRST open
@@ -66,7 +70,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
-        vc.uikitBubble = uikitBubble
+        vc.uikitModels = uikitModels   // BEFORE apply: measure + cell provider see the same frozen routing
+        vc.uikitMenu = uikitMenu
+        vc.onUikitDoubleTap = onUikitDoubleTap
         vc.setComposerBarHeight(composerBarHeight)
         vc.setTopOverlayHeight(topOverlayHeight)
         vc.setSelecting(selecting)
@@ -230,7 +236,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // fought the scroll pan and jittered). Callbacks are fed from SwiftUI.
     var canSwipeReply: (String) -> Bool = { _ in false }
     var onSwipeReply: (String) -> Void = { _ in }
-    var uikitBubble: (String) -> UIKitBubbleModel? = { _ in nil }   // non-nil → native UIKit cell for this id
+    var uikitModels: [String: UIKitBubbleModel] = [:]   // frozen routing snapshot (set before every apply)
+    var uikitMenu: (String) -> UIMenu? = { _ in nil }
+    var onUikitDoubleTap: (String) -> Void = { _ in }
+    // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
+    // route needs reloadItems (re-dequeue the other cell class) — reconfigureItems reuses the same cell
+    // instance, which can't switch renderers.
+    private var configuredRoutes: [String: Bool] = [:]
+    private var doubleTapGesture: UITapGestureRecognizer!
     private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
@@ -292,6 +305,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swipePan = UIPanGestureRecognizer(target: self, action: #selector(handleSwipePan(_:)))
         swipePan.delegate = self
         collectionView.addGestureRecognizer(swipePan)
+
+        // Double-tap quick-react for UIKit-routed rows (the SwiftUI rows carry their own gesture).
+        // Gated in gestureRecognizerShouldBegin to uikit cells only, so SwiftUI cells never see it.
+        doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTapGesture.numberOfTapsRequired = 2
+        doubleTapGesture.delegate = self
+        collectionView.addGestureRecognizer(doubleTapGesture)
 
         // Off-screen sizer, in the hierarchy (0-alpha) so it inherits traits for accurate measurement.
         // CRITICAL: it must NOT reserve safe area. It's a child of this controller, and once the list runs
@@ -383,13 +403,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         // Native UIKit bubble registration (the migration path).
         uikitReg = UICollectionView.CellRegistration<UIKitBubbleCell, String> { [weak self] cell, _, id in
-            if let m = self?.uikitBubble(id) { cell.configure(m) }
+            guard let self, let m = self.uikitModels[id] else { return }
+            cell.configure(m)
+            // Safety net: UIKit cells never report a rendered height (they can't drift on their own),
+            // but an OFFSCREEN content change can leave a stale cached height. Verify at dequeue —
+            // one cheap text measure — and reconcile if the cache drifted.
+            if let cached = self.heights[id], self.collectionView.bounds.width > 0 {
+                let h = UIKitBubbleView.sizes(m, width: self.collectionView.bounds.width).cell.height
+                if abs(cached - h) > 2 {
+                    self.heights[id] = h
+                    DispatchQueue.main.async { [weak self] in self?.reconcile() }
+                }
+            }
         }
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] cv, ip, id in
             guard let self else { return UICollectionViewCell() }
             // ROUTER: native UIKit cell when the message is supported (plain 1:1 delivered text), else the
             // SwiftUI hosting cell — so scrolling the common case is a rigid UIKit surface and no feature is lost.
-            if self.uikitBubble(id) != nil {
+            // Routing reads the FROZEN snapshot dict (same source measure() used), never live view state.
+            let isUikit = self.uikitModels[id] != nil
+            self.configuredRoutes[id] = isUikit
+            if isUikit {
                 return cv.dequeueConfiguredReusableCell(using: self.uikitReg, for: ip, item: id)
             }
             return cv.dequeueConfiguredReusableCell(using: self.reg, for: ip, item: id)
@@ -406,8 +440,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Exact height of a row for the given width, measured off-screen. Deterministic for every bubble type
     // (heights come from stored dimensions / fixed frames), so this equals the on-screen render.
     private func measure(_ id: String, width: CGFloat) -> CGFloat {
-        // Native UIKit bubble: deterministic UIKit measurement (matches the cell's own layout exactly).
-        if let m = uikitBubble(id), width > 0 {
+        // Native UIKit bubble: deterministic UIKit measurement (matches the cell's own layout exactly —
+        // same sizes() function, same frozen model the cell provider will configure with).
+        if let m = uikitModels[id], width > 0 {
             return UIKitBubbleView.sizes(m, width: width).cell.height
         }
         // Measure EXACTLY as the cell renders: the cell wraps its content in `.frame(width: hostWidth)`,
@@ -551,6 +586,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         refreshVisible(target)
     }
 
+    // Split ids into (reconfigure, reload): a row whose RENDER ROUTE flipped since it was last configured
+    // (uikit ↔ SwiftUI — e.g. a plain text message gained a reaction) must be RELOADED so the other cell
+    // class is dequeued; reconfigureItems reuses the same cell instance, which can't switch renderers.
+    private func splitByRouteFlip(_ ids: [String]) -> (reconfigure: [String], reload: [String]) {
+        var reconf: [String] = [], reload: [String] = []
+        for id in ids {
+            let newRoute = uikitModels[id] != nil
+            if let old = configuredRoutes[id], old != newRoute { reload.append(id) } else { reconf.append(id) }
+        }
+        return (reconf, reload)
+    }
+
     // Re-measure + reconfigure the on-screen rows (single sizer authority, >2pt tolerance), then relayout
     // once if any height actually changed — position preserved (pin bottom / top anchor).
     private func refreshVisible(_ subset: [String]? = nil) {
@@ -570,7 +617,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
         var snapshot = dataSource.snapshot()
-        snapshot.reconfigureItems(target)
+        let split = splitByRouteFlip(target)
+        if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
+        if !split.reload.isEmpty { snapshot.reloadItems(split.reload) }
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             if heightChanged { self?.reconcile() }
         }
@@ -649,14 +698,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Content changes that BATCH with an ids change (a reaction/read-tick arriving in the same repo
         // emission as a new message — constant with Firestore listener batches) must still reconfigure:
         // diffable apply does NOT touch rows present in both snapshots, and the old reseed silently
-        // dropped them (stale bubbles until cell recycle).
-        let contentChanged = visibleBefore.filter { ids.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
+        // dropped them (stale bubbles until cell recycle). Checked across ALL live cells (including the
+        // overdrawn pre-rendered ones) so no configured cell is ever left stale — the viewport-only
+        // visibleBefore list above is for the scroll ANCHOR, not for content coverage.
+        let liveIds = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        let contentChanged = liveIds.filter { ids.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         for id in contentChanged { heights[id] = measure(id, width: width) }   // changed content → fresh height
         if ids.count < currentIds.count {   // rows left (trim/delete): drop their cached heights too
             let keep = Set(ids)
             heights = heights.filter { keep.contains($0.key) }
+            configuredRoutes = configuredRoutes.filter { keep.contains($0.key) }
         }
         let afterY = frameMinY(for: ids)
 
@@ -682,7 +735,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(ids, toSection: 0)
-        if !contentChanged.isEmpty { snapshot.reconfigureItems(contentChanged) }   // C2: batched content lands too
+        if !contentChanged.isEmpty {   // C2: batched content lands too (route flips re-dequeue)
+            let split = splitByRouteFlip(contentChanged)
+            if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
+            if !split.reload.isEmpty { snapshot.reloadItems(split.reload) }
+        }
         currentIds = ids
         layout.generation += 1   // ids/heights changed → next prepare() rebuilds frames (O(1) check otherwise)
 
@@ -1294,6 +1351,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // and a right-swipe (interactive pop) is untouched. This is what makes one pan safe where N SwiftUI
     // drags were not: the scroll gesture keeps every vertical drag.
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g === doubleTapGesture {
+            let loc = g.location(in: collectionView)
+            guard let ip = collectionView.indexPathForItem(at: loc),
+                  let id = dataSource.itemIdentifier(for: ip) else { return false }
+            return uikitModels[id] != nil   // uikit rows only — SwiftUI rows own their taps
+        }
         guard g === swipePan else { return true }
         if isSelecting { return false }                            // selection mode: rows toggle, never reply-swipe
         if VoiceScrubState.active { return false }                 // waveform scrub owns the touch
@@ -1370,6 +1433,48 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         img.frame = CGRect(x: cell.frame.maxX - 36, y: cell.frame.midY - 9, width: 20, height: 18)
         collectionView.addSubview(img)
         swipeArrow = img
+    }
+
+    @objc private func handleDoubleTap(_ g: UITapGestureRecognizer) {
+        guard g.state == .ended else { return }
+        let loc = g.location(in: collectionView)
+        guard let ip = collectionView.indexPathForItem(at: loc),
+              let id = dataSource.itemIdentifier(for: ip), uikitModels[id] != nil else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onUikitDoubleTap(id)
+    }
+
+    // MARK: - Context menu (UIKit-routed rows — identical native lift/menu as the SwiftUI .contextMenu)
+
+    func collectionView(_ collectionView: UICollectionView,
+                        contextMenuConfigurationForItemAt indexPath: IndexPath,
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let id = dataSource.itemIdentifier(for: indexPath), uikitModels[id] != nil,
+              let menu = uikitMenu(id) else { return nil }   // SwiftUI rows: their own .contextMenu owns it
+        return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { _ in menu }
+    }
+
+    // Lift ONLY the bubble (rounded to its exact corner path) — the default would lift the whole
+    // full-width transparent cell.
+    private func bubbleTargetedPreview(at indexPath: IndexPath) -> UITargetedPreview? {
+        guard let cell = collectionView.cellForItem(at: indexPath) as? UIKitBubbleCell else { return nil }
+        let bubble = cell.previewBubble
+        let params = UIPreviewParameters()
+        params.backgroundColor = .clear
+        if let path = bubble.lastCornerPath { params.visiblePath = path }
+        return UITargetedPreview(view: bubble, parameters: params)
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        contextMenuConfiguration configuration: UIContextMenuConfiguration,
+                        highlightPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
+        bubbleTargetedPreview(at: indexPath)
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        contextMenuConfiguration configuration: UIContextMenuConfiguration,
+                        dismissalPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
+        bubbleTargetedPreview(at: indexPath)
     }
 
     // The swiped cell scrolled off and is being RECYCLED for another row: kill the swipe immediately —

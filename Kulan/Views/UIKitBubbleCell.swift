@@ -55,6 +55,7 @@ final class UIKitBubbleView: UIView {
     private let textLabel = UILabel()
     private let metaLabel = UILabel()
     private var model: UIKitBubbleModel?
+    private(set) var lastCornerPath: UIBezierPath?   // exact bubble outline → context-menu lift preview
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -147,7 +148,9 @@ final class UIKitBubbleView: UIView {
         let y = m.topSpacing
         frame = CGRect(x: x, y: y, width: bubble.width, height: bubble.height)
         bubbleLayer.frame = self.bounds
-        bubbleLayer.path = Self.cornerPath(bubble, m.radii).cgPath
+        let path = Self.cornerPath(bubble, m.radii)
+        bubbleLayer.path = path.cgPath
+        lastCornerPath = path
         textLabel.frame = CGRect(x: BubblePalette.hPad, y: BubblePalette.vPad,
                                  width: bubble.width - BubblePalette.hPad * 2,
                                  height: bubble.height - BubblePalette.vPad * 2)
@@ -182,6 +185,7 @@ final class UIKitBubbleView: UIView {
 final class UIKitBubbleCell: UICollectionViewCell {
     private let bubbleView = UIKitBubbleView()
     private var model: UIKitBubbleModel?
+    var previewBubble: UIKitBubbleView { bubbleView }   // context-menu lift target
 
     override init(frame: CGRect) {
         super.init(frame: frame)
