@@ -140,7 +140,6 @@ struct ThreadView: View {
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
     @Namespace private var imageViewerNS                      // native zoom hero for photo bubbles → viewer
-    @Namespace private var attachNS                           // native zoom: media sheet grows from the "+" button
     @State private var replyStoryAnchorId = ""                // the tapped quote's anchor (per-message unique)
     @State private var newWhileAway = 0
     @State private var unreadOnOpen = 0
@@ -568,10 +567,11 @@ struct ThreadView: View {
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
-                // NATIVE zoom presentation (user request): the sheet GROWS out of the "+" button and
-                // shrinks back into it on dismiss — Apple's own transition (same mechanism as the photo
-                // viewer hero), no custom animation. The "+" button is the matchedTransitionSource.
-                .navigationTransition(.zoom(sourceID: "attach-plus", in: attachNS))
+                // TELEGRAM MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
+                // Telegram's attachment menu is a spring bottom sheet — it slides up from the bottom
+                // edge with a quick spring, drags between part/full height, and a downward drag or flick
+                // dismisses it. That is EXACTLY the native sheet-with-detents behavior, so the system
+                // presentation owns it: no transition override. (The zoom morph fought the detent snap.)
         }
         .sheet(item: $comingSoon) { c in comingSoonSheet(c).presentationDetents([.fraction(0.6)]) }
         // Call-back confirm: tapping a call-history row asks first (never dials on a stray tap).
@@ -2757,9 +2757,6 @@ struct ThreadView: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 .tint(.primary)
-                // Source anchor for the native zoom presentation: the media sheet grows FROM this button
-                // and returns INTO it on dismiss (Apple's transition, no custom animation).
-                .matchedTransitionSource(id: "attach-plus", in: attachNS)
                 .transition(.scale.combined(with: .opacity))   // smooth fade/scale out when recording starts
             }
 
