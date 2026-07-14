@@ -697,7 +697,11 @@ struct ThreadView: View {
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             handlePickedFile(result)
         }
-        .sheet(item: $filePreview) { FilePreview(url: $0.url).ignoresSafeArea() }
+        // Full SHEET page (user spec): rounded top + grabber + a real close button. The old
+        // .ignoresSafeArea stretched the preview edge-to-edge, hiding the grabber and any Done chrome —
+        // and since file content scrolls, swipe-down scrolled the text instead of dismissing ("can't
+        // close it"). PDFs get the same sheet look instead of a bare full page.
+        .sheet(item: $filePreview) { FilePreviewSheet(url: $0.url) }
         // ONE link-confirm + one not-found alert for the whole conversation (hoisted out of every bubble:
         // ~40 live cells each carried their own presentation machinery, anchored inside recyclable cells).
         .confirmationDialog("Open link?",
@@ -4566,6 +4570,29 @@ struct PreviewFile: Identifiable { let id = UUID(); let url: URL }
 struct PDFDocWrap: Identifiable { let id = UUID(); let url: URL; let title: String }
 
 // Native document preview (QuickLook) for a received file.
+// The document preview as a proper SHEET page: rounded top, visible grabber, and a glass close
+// button (QuickLook's own Done bar doesn't render inside a plain sheet, and the scrolling content
+// eats the swipe-down — the bare preview was unclosable).
+struct FilePreviewSheet: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        FilePreview(url: url)
+            .overlay(alignment: .topTrailing) {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                        .frame(width: 40, height: 40)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10).padding(.trailing, 12)
+            }
+            .presentationDragIndicator(.visible)
+    }
+}
+
 struct FilePreview: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> QLPreviewController {
