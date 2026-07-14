@@ -1137,13 +1137,14 @@ struct ThreadView: View {
     @ViewBuilder
     private func rowView(at index: Int, _ msg: Message, jumpTo: @escaping (String) -> Void) -> some View {
         if shouldShowDate(at: index) {
-            // Inline day separator: REAL Liquid Glass capsule (user spec 2026-07-14; was a flat
-            // ultraThinMaterial pill).
+            // Inline day separator: translucent pill. NOT Liquid Glass (user clarified 2026-07-14:
+            // only the TOP floating "Today" pill is glass — the in-chat separators keep this look).
             Text(dayLabel(msg.createdAt))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 12).padding(.vertical, 5)
-                .liquidGlass(Capsule(), interactive: false)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
         }
