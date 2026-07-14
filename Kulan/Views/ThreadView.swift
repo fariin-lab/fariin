@@ -4232,8 +4232,10 @@ struct MessageBubble: View, Equatable {
                             .onTapGesture { _ = routeTappedURL(link) }
                     }
                     // Text + time: the invisible trailing reservation + overlaid time (Signal does the
-                    // same body/footer overlap) — wraps correctly because the host measured naturally.
-                    bodyLine
+                    // same body/footer overlap). FILLED like the quote (user report): when the QUOTE
+                    // drives the bubble width, an unstretched body line kept its trailing edge — and the
+                    // time — mid-bubble; filling anchors the time to the bubble's right edge, always.
+                    bodyLine.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.horizontal, 15)
