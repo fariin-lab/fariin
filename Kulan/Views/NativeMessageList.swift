@@ -1373,18 +1373,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
         guard !userScrolling else { return }
-        // Only when the session should END pinned: at the bottom now, or the session started there.
-        guard computeAtBottom() || keyboardSessionWasAtBottom || lastKnownDistanceFromBottom <= 44 else { return }
+        // Only when at the bottom now (agent finding: the lastKnownDistanceFromBottom<=44 OR term
+        // re-introduced the stale-latch risk and computeAtBottom already covers the real case; the
+        // keyboardSessionWasAtBottom term is dead in the native model). computeAtBottom alone is correct.
+        guard computeAtBottom() else { return }
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
             ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
-        // ROOT CAUSE of "content drops under the composer for 1-2s then snaps back": willHide fires
-        // BEFORE the safe area updates, so adjustedContentInset.bottom still includes the keyboard.
-        // pinBottom() read that stale (too-large) inset and scrolled a full keyboard-height too far down
-        // (under the composer); only the didHide settle — after the safe area finally shrank — corrected
-        // it, a beat later. Instead follow the keyboard down by its OWN height: the content's resting
-        // offset drops by exactly the keyboard height, computed with ZERO dependence on the inset timing.
+        // "content drops under the composer for 1-2s then snaps back": willHide fires BEFORE the safe
+        // area updates, so a pinBottom() here read a stale inset and left the offset wrong until the
+        // didHide settle corrected it a beat later. Instead follow the keyboard down by its OWN height:
+        // the content's resting offset drops by exactly the keyboard height, computed with ZERO
+        // dependence on the (not-yet-updated) inset. At the bottom this lands exactly on the no-keyboard
+        // resting offset (verified: current == contentSize-bounds+(bar+12+kb); minus kb == bar+12).
         let kbHeight: CGFloat = {
             if let begin = (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue,
                let win = view.window {
@@ -1413,6 +1415,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             keyboardOverlap = 0
             updateBottomInset()
         }
+        // Don't fight the owned willHide close animation (agent finding: didHide lacked this guard that
+        // every other pin site has; harmless only because didHide normally posts after the animation).
+        guard !keyboardAnimating else { return }
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
         // Also hands-off while a programmatic jump animates (tapping a reply quote dismisses the keyboard
         // AND starts a jump — the definitive pin was cancelling the jump and wedging its animation flag).
@@ -1729,6 +1734,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     private func resetSwipe(animated: Bool, velocity: CGFloat = 0) {
+        layout.frozen = false   // choke point for EVERY teardown path (VoiceScrub abort, didEndDisplaying
+                                // recycle, normal end) — clearing frozen only in .ended could wedge it (agent finding)
         let cell = swipingCell
         let arrow = swipeArrow
         swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false

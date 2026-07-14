@@ -3717,10 +3717,32 @@ struct MessageBubble: View, Equatable {
             .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
     }
 
+    // Signal's footer rule: the timestamp shares the message's LAST line when it fits, else drops to
+    // its OWN line. The inline invisible spacer below reserves the trailing room for the fit case; when
+    // the widest unbreakable word leaves no room for the time (a long word / gibberish token that fills
+    // the bubble width), the reservation can't push it — the time then painted OVER the text (user
+    // report). This detects that case deterministically (UIKit text measurement, no SwiftUI feedback)
+    // and forces the time onto its own line.
+    private var metaNeedsOwnLine: Bool {
+        let textAvail = maxBubbleWidth - 30   // bubble horizontal padding
+        let bodyFont = UIFont.systemFont(ofSize: 17)
+        let metaFont = UIFont.systemFont(ofSize: 10)
+        var metaStr = message.edited ? "edited " : ""
+        metaStr += timeString
+        var metaW = (metaStr as NSString).size(withAttributes: [.font: metaFont]).width
+        if isMe { metaW += 16 }   // tick glyph + gaps
+        metaW += 8                // gap between the last word and the time
+        let longestWord = message.text.split(whereSeparator: { $0.isWhitespace })
+            .map { (String($0) as NSString).size(withAttributes: [.font: bodyFont]).width }.max() ?? 0
+        return longestWord + metaW > textAvail
+    }
+
     // A Text that renders IDENTICALLY to metaRow (edited? · time · tick?) but is drawn clear — used only
     // to reserve the trailing space on the message's last line. Same fonts/symbols → widths match exactly.
+    // A leading newline drops the reservation (and thus the overlaid time) to its own line when the text
+    // leaves no room for it on the last line.
     private var metaPlaceholder: Text {
-        var t = Text("  ")   // small gap between the words and the time (matches the HStack spacing)
+        var t = Text(metaNeedsOwnLine ? "\n  " : "  ")   // own line for long text; else a small gap
         if message.edited { t = t + Text("edited ").italic() }
         t = t + Text(timeString)
         if isMe { t = t + Text(" ") + Text(Image(systemName: "checkmark.circle.fill")) }
