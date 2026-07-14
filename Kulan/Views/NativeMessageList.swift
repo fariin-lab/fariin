@@ -357,8 +357,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             dateLabel.trailingAnchor.constraint(equalTo: datePill.contentView.trailingAnchor, constant: -14),
         ])
 
-        // Keyboard is handled NATIVELY now (safeAreaBar + .always fold; see updateBottomInset) — no keyboard
-        // notification observers. The list stays pinned across the keyboard resize via stickBottom.
+        // Keyboard is handled NATIVELY (safeAreaBar + .always fold; see updateBottomInset) — no keyboard
+        // FRAME observers (those double-counted the keyboard). The one exception is the DID-HIDE settle:
+        // it fires AFTER the hide animation, so it can't fight the ride, and it's the definitive "end the
+        // close pinned" pass. Without it (the observer was dropped in the native-model revert while its
+        // handler stayed behind, unregistered) a close could rest with the last messages half under the
+        // composer — the build-325 report.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
+                                               name: UIResponder.keyboardDidHideNotification, object: nil)
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -1228,7 +1234,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // bubbles rested UNDER the input field. This is the definitive settle: zero the overlap, re-derive
     // the inset, and if the keyboard session STARTED at the bottom, end it pinned at the bottom.
     @objc private func keyboardDidHide() {
-        let wasAtBottomSession = keyboardSessionWasAtBottom
         keyboardSessionWasAtBottom = false
         atBottomForKeyboard = nil   // session over — never let a stale capture drive later inset updates
         if keyboardOverlap != 0 {
@@ -1238,7 +1243,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
         // Also hands-off while a programmatic jump animates (tapping a reply quote dismisses the keyboard
         // AND starts a jump — the definitive pin was cancelling the jump and wedging its animation flag).
-        if wasAtBottomSession, !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
+        // Gate on the LIVE at-bottom truth, not the old session flag: the frame-notification path that
+        // used to maintain that flag is gone (native model), so the flag was permanently false and this
+        // settle never ran — the close could rest with the last bubble half under the composer. If the
+        // reader is near the bottom (≤44pt — exactly the "partially hidden" case) end the close pinned;
+        // a reader deep in history is untouched.
+        if !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll, computeAtBottom() {
             UIView.performWithoutAnimation { pinBottom() }
         }
     }

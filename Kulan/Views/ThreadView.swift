@@ -1204,13 +1204,13 @@ struct ThreadView: View {
     // UIKit bubble migration (stage 1): resolve a NATIVE model for a message the UIKit path fully supports —
     // plain 1:1 delivered text, default bubble color, no adornments. Any special case returns nil and the
     // message keeps its SwiftUI cell, so no feature is lost while the surface is progressively migrated.
-    // ON (Signal-stability push 2026-07-14). The original stranded-layout failure was a ROUTING RACE:
-    // measure() and the cell provider each called the live resolver, so a state flip between them could
-    // measure a row as UIKit but render it as SwiftUI (different heights → corrupted layout). Routing is
-    // now a FROZEN per-apply snapshot dictionary — measure and render can never disagree — and a route
-    // flip reloads (re-dequeues) the row instead of reconfiguring it. Long-press menu + double-tap react
-    // have native UIKit equivalents, so no interaction is lost.
-    private static let useUIKitBubbles = true
+    // OFF again (build 325 field report, 2026-07-14): with the path live, read ticks on uikit-routed
+    // rows did NOT refresh on device (chat list showed ✓✓ while the conversation bubble stayed ✓ — the
+    // reconfigure chain works on paper but not on the phone), alongside under-composer and scroll-back
+    // reports. The 325 infrastructure (frozen routing snapshot, route-flip reloads, native menu,
+    // double-tap) is sound and stays — re-enable only after the tick-reconfigure failure is reproduced
+    // and fixed with on-device debugging.
+    private static let useUIKitBubbles = false
 
     // Per-emission cache of the UIKit-routable models (same discipline as the signature cache): resolved
     // once per data/read/highlight change, NOT on every body run.
