@@ -842,14 +842,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                     if let target = scrollTarget, target == "BOTTOM" { self.pinBottom(animated: true) }
                 } else if let target = scrollTarget {
                     self.scrollTo(id: target)
-                } else if !wasAtBottom, !continuityAnchors.isEmpty {
+                } else if !wasAtBottom, !continuityAnchors.isEmpty, !self.collectionView.isTracking {
                     // ENFORCE the continuity invariant: the reader's top row must sit exactly where it
                     // sat before the land. The atomic contentOffsetAdjustment above is the primary
                     // mechanism; this catches ANY case it missed (dropped adjustment on a prepend →
                     // every page-in of history knocked the reader a full page toward the newest =
                     // "the conversation scrolls back while I read"; a window-trim deleting the anchor;
                     // any future mechanism failure). First surviving anchor wins; correction is exact
-                    // and non-animated, in the same runloop as the land.
+                    // and non-animated, in the same runloop as the land. NOT while the finger is down:
+                    // the live pan re-derives the offset from its own baseline every tick and would
+                    // overwrite the correction — the two would visibly fight. (Deceleration is fine.)
                     self.collectionView.layoutIfNeeded()
                     for a in continuityAnchors {
                         guard let ip = self.dataSource.indexPath(for: a.id),
