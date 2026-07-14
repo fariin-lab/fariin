@@ -2991,9 +2991,19 @@ struct ThreadView: View {
                     // Fully resign the composer keyboard BEFORE opening the sheet, so iOS doesn't remember
                     // it as first responder and briefly RESTORE the keyboard when the sheet closes (the
                     // flash before the image editor opens).
+                    let keyboardWasUp = inputFocused
                     inputFocused = false
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    showAttachPanel = true
+                    if keyboardWasUp {
+                        // Let the keyboard-HIDE animation start first: presenting in the same instant made
+                        // iOS serialize the animations (sheet first), so the chat + composer stayed lifted
+                        // at keyboard height under the open sheet and only settled once the presentation
+                        // finished (the "still up, closes late" report). A few frames later, both run
+                        // concurrently — keyboard slides down while the sheet slides up.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { showAttachPanel = true }
+                    } else {
+                        showAttachPanel = true
+                    }
                 } label: {
                     Image(systemName: sendingPhoto ? "ellipsis" : "plus")
                         .font(.system(size: 20, weight: .regular))
