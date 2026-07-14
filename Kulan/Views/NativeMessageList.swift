@@ -1382,29 +1382,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
             ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
-        // "content drops under the composer for 1-2s then snaps back": willHide fires BEFORE the safe
-        // area updates, so a pinBottom() here read a stale inset and left the offset wrong until the
-        // didHide settle corrected it a beat later. Instead follow the keyboard down by its OWN height:
-        // the content's resting offset drops by exactly the keyboard height, computed with ZERO
-        // dependence on the (not-yet-updated) inset. At the bottom this lands exactly on the no-keyboard
-        // resting offset (verified: current == contentSize-bounds+(bar+12+kb); minus kb == bar+12).
-        let kbHeight: CGFloat = {
-            if let begin = (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue,
-               let win = view.window {
-                let f = view.convert(begin, from: win.coordinateSpace)
-                return max(0, min(f.height, view.bounds.maxY - f.minY))   // on-screen portion only
-            }
-            return keyboardOverlap
-        }()
-        let targetY = max(minContentOffsetY, collectionView.contentOffset.y - kbHeight)
+        _ = curveRaw
+        // ROOT CAUSE of "content drops under the composer for 1-2s then snaps back" (still present on
+        // 330 with the previous willHide animation): the NATIVE model already animates the content down
+        // on close — the composer safeAreaBar rides the keyboard down and `.always` folds the shrinking
+        // safe area into the content inset, which UIKit animates. My willHide ALSO animated the offset,
+        // so TWO owners fought over contentOffset → the drop-then-snap. The fix is to move the offset
+        // NOWHERE here — only mark keyboardAnimating so viewDidLayoutSubviews' per-pass pins stand off
+        // for the duration, letting the single native animation land cleanly. didHide is the backstop.
         keyboardAnimating = true
-        UIView.animate(withDuration: duration, delay: 0,
-                       options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
-                                 .beginFromCurrentState, .allowUserInteraction]) {
-            self.collectionView.contentOffset.y = targetY   // follow the keyboard down; no stale-inset pin
-        } completion: { _ in
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.02) { [weak self] in
+            guard let self else { return }
             self.keyboardAnimating = false
-            UIView.performWithoutAnimation { self.pinBottom() }   // exact settle — no late corrector
             self.settleFlush()
         }
     }
