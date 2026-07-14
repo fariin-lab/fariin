@@ -1580,7 +1580,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // touch, the conversation must not scroll up/down at the same time. Disabling the collection
             // view's own scroll cancels any in-flight vertical pan; our swipePan is a separate recognizer so
             // it keeps tracking. Restored on end/cancel.
+            // STASH + RESTORE the offset around the toggle: setting isScrollEnabled=false makes UIKit
+            // re-clamp contentOffset, and off an exact row boundary (the normal case) that clamp shifted
+            // the whole list up by ~a row when the swipe began (user before/after screenshots). Writing
+            // the offset back immediately makes the toggle a no-op for position.
+            let stash = collectionView.contentOffset
             collectionView.isScrollEnabled = false
+            collectionView.setContentOffset(stash, animated: false)
             addSwipeArrow(for: cell)
         case .changed:
             guard let cell = swipingCell else { return }
@@ -1603,7 +1609,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 swipeTriggered = false
             }
         case .ended, .cancelled, .failed:
-            collectionView.isScrollEnabled = true   // swipe over → vertical scrolling allowed again
+            let stash = collectionView.contentOffset   // re-enabling scroll also re-clamps → hold position
+            collectionView.isScrollEnabled = true      // swipe over → vertical scrolling allowed again
+            collectionView.setContentOffset(stash, animated: false)
             let fire = swipeTriggered ? swipingId : nil
             resetSwipe(animated: true, velocity: g.velocity(in: collectionView).x)
             if let id = fire { onSwipeReply(id) }
