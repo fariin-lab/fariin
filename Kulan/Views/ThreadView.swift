@@ -537,7 +537,43 @@ struct ThreadView: View {
         } message: { Text("Allow microphone access in Settings to record voice messages.") }
     }
 
+    // Split into two halves at an erased boundary: this modifier chain (~28 covers/sheets/alerts on one
+    // expression) blew the compiler's type-check budget ("unable to type-check in reasonable time",
+    // Release build) once the delete-option alerts were added. AnyView between the halves resets the
+    // opaque-type complexity — behavior unchanged.
     private var threadPickers: some View {
+        AnyView(threadPickersB)
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { data in if let ui = UIImage(data: data) { editImage = EditImageWrap(image: ui) } }
+                .ignoresSafeArea()
+        }
+        .fullScreenCover(item: $editImage) { wrap in
+            ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
+                // Caption travels INSIDE the image message (one bubble).
+                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
+            }
+        }
+        .fullScreenCover(item: $mediaToApprove) { wrap in
+            // Mixed approval pager (images + videos, per-item edit, one caption, one send). EVERYTHING
+            // selected — photos AND videos, in order — is delivered as ONE album message group,
+            // with one caption. A single lone image/video keeps its dedicated fast path.
+            MediaApprovalView(items: wrap.items) { ordered, caption, hd in
+                Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
+            }
+        }
+        // ALL-video multi from the main picker → the multi-video editor (single-editor page + rail).
+        .fullScreenCover(item: $multiVideoApprove) { wrap in
+            VideoApprovalView(clips: wrap.clips, onSendMulti: { urls, caption, hd in
+                Task {
+                    var cap = caption
+                    for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
+                }
+            })
+        }
+    }
+
+    // First half of the picker chain (story/image/video viewers, camera source, etc.).
+    private var threadPickersA: some View {
         threadCovers
         .fullScreenCover(item: $storyToOpen) { g in
             // FULLY NATIVE (user's final call): the zoom hero anchors on the tapped reply-quote
@@ -591,6 +627,12 @@ struct ThreadView: View {
             .modifier(ConditionalZoomTransition(enabled: !telegramMediaOpen, sourceID: msg.id, ns: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
+    }
+
+    // Third slice of the picker chain (album/video viewers onward), joined to threadPickersA via an
+    // erased boundary so neither half exceeds the type-check budget.
+    private var threadPickersB: some View {
+        AnyView(threadPickersA)
         // Album gallery: swipe between all the album's photos, starting on the tapped one. SAME native
         // zoom hero as single photos (user spec): each album CELL is a matchedTransitionSource with the
         // synthetic per-item id, so the viewer grows out of the tapped tile and the button-close shrinks
@@ -618,33 +660,6 @@ struct ThreadView: View {
             VideoApprovalView(url: wrap.url) { finalURL, caption, hd in
                 Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
             }
-        }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { data in if let ui = UIImage(data: data) { editImage = EditImageWrap(image: ui) } }
-                .ignoresSafeArea()
-        }
-        .fullScreenCover(item: $editImage) { wrap in
-            ChatImageEditor(source: wrap.image) { data, caption, _, viewOnce in
-                // Caption travels INSIDE the image message (one bubble).
-                Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
-            }
-        }
-        .fullScreenCover(item: $mediaToApprove) { wrap in
-            // Mixed approval pager (images + videos, per-item edit, one caption, one send). EVERYTHING
-            // selected — photos AND videos, in order — is delivered as ONE album message group,
-            // with one caption. A single lone image/video keeps its dedicated fast path.
-            MediaApprovalView(items: wrap.items) { ordered, caption, hd in
-                Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
-            }
-        }
-        // ALL-video multi from the main picker → the multi-video editor (single-editor page + rail).
-        .fullScreenCover(item: $multiVideoApprove) { wrap in
-            VideoApprovalView(clips: wrap.clips, onSendMulti: { urls, caption, hd in
-                Task {
-                    var cap = caption
-                    for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
-                }
-            })
         }
         .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
