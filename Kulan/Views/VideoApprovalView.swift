@@ -135,7 +135,7 @@ struct VideoApprovalView: View {
                 // rail taps). Horizontal-dominant swipe at rest switches clip; disabled while zoomed
                 // (the pan owns the drag there) and for single clips.
                 .simultaneousGesture(
-                    zoomed || clipList.count < 2 ? nil : DragGesture(minimumDistance: 30)
+                    max(1, zoom * pinch) > 1.01 || clipList.count < 2 ? nil : DragGesture(minimumDistance: 30)
                         .onEnded { g in
                             let dx = g.translation.width, dy = g.translation.height
                             guard abs(dx) > abs(dy) * 1.5, abs(dx) > 60 else { return }
