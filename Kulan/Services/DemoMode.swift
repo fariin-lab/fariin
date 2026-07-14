@@ -93,7 +93,9 @@ enum DemoMode {
         func t(_ s: Double) -> Date { n.addingTimeInterval(s) }
         switch cid {
         case "demo-kasim":
-            return [
+            // 60 generated history bubbles BEFORE the curated tail — enough depth to genuinely test
+            // scrolling, history paging feel, cluster spacing, and date pills in the browser preview.
+            return history(cid, me: me, other: "demo-kasim", endingAt: t(-9000)) + [
                 Message(demoId: "\(cid)-0", from: "demo-kasim", "Bro did you finish the design? 👀", t(-8000)),
                 Message(demoId: "\(cid)-1", from: me, "Almost! Sending you a preview now", t(-7900)),
                 Message(demoImage: "\(cid)-2", from: me,
@@ -145,6 +147,35 @@ enum DemoMode {
         default:
             return []
         }
+    }
+
+    // 60 deterministic history messages ending just before `endingAt`: clustered senders (runs of 2-4),
+    // varied lengths (one-worders up to multi-line), occasional hour-plus gaps so cluster spacing and
+    // time grouping render like a real chat. Pure text — the point is scroll depth, not media.
+    private static func history(_ cid: String, me: String, other: String, endingAt: Date) -> [Message] {
+        let lines = [
+            "hey", "you around?", "yeah what's up", "check this out when you get a sec",
+            "lol no way 😂", "I told you it would work", "ok ok you were right",
+            "did you watch the game last night? that last goal was unreal, I was screaming",
+            "haha same, the whole building heard me",
+            "send me the file when you can", "on it", "done ✅", "you're the best 🙌",
+            "what time tomorrow?", "let's say 6", "works for me",
+            "bro I just found the best shawarma place, we HAVE to go — the garlic sauce alone is worth the trip across town, I'm not even exaggerating",
+            "say less, I'm in", "🤝", "wait actually can we do thursday instead?",
+            "thursday's fine", "cool cool", "how's the family?", "all good alhamdulillah, yours?",
+            "same same", "ok gotta run, talk later", "later 👋", "yo", "??", "one sec",
+        ]
+        var out: [Message] = []
+        var time = endingAt.addingTimeInterval(-36000)   // ~10h of history before the curated tail
+        for i in 0..<60 {
+            // Sender clusters: runs of 2-4 from the same side (varied by index math, deterministic).
+            let run = 2 + (i / 4) % 3
+            let from = ((i / run) % 2 == 0) ? other : me
+            // Occasional big gaps → time/cluster breaks; otherwise a quick back-and-forth cadence.
+            time = time.addingTimeInterval(i % 9 == 0 ? 3600 : Double(90 + (i % 5) * 45))
+            out.append(Message(demoId: "\(cid)-h\(i)", from: from, lines[i % lines.count], time))
+        }
+        return out
     }
 
     // MARK: - Local image rendering (gradient + label → JPEG bytes / cached URL)
