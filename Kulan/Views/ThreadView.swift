@@ -530,14 +530,17 @@ struct ThreadView: View {
             .navigationTransition(.zoom(sourceID: msg.id, in: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
-        // Album gallery: swipe between all the album's photos, starting on the tapped one. No zoom hero
-        // (album cells share a bubble, so there's no single source rect); drag-down closes the photo only.
+        // Album gallery: swipe between all the album's photos, starting on the tapped one. SAME native
+        // zoom hero as single photos (user spec): each album CELL is a matchedTransitionSource with the
+        // synthetic per-item id, so the viewer grows out of the tapped tile and the button-close shrinks
+        // back into it. The drag-down close stays media-only via SignalDismissHost.
         .fullScreenCover(item: $albumViewer) { wrap in
             ImageViewerView(message: wrap.gallery.first { $0.id == wrap.startId } ?? wrap.gallery[0],
                             in: wrap.gallery, cid: cid, suppressDismissPan: false,
                             onSendEdited: { data, caption, viewOnce in
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                             })
+            .navigationTransition(.zoom(sourceID: wrap.startId, in: imageViewerNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
@@ -4213,6 +4216,10 @@ struct MessageBubble: View, Equatable {
             }
         }
         .contentShape(Rectangle())
+        // Each album CELL is its own zoom-hero source (same native transition as single photos/videos —
+        // user spec). The synthetic per-item ids ("<msgId>-<i>") match the viewer covers' sourceIDs; the
+        // +N cell taps through its own visible cell, so every open has a real source.
+        .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
         .onTapGesture { if message.sendState == nil { openAlbumItem(i) } }
     }
 

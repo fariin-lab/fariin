@@ -28,7 +28,8 @@ struct ChatImageEditor: View {
     private func close() { if inline { onClose?() } else { dismiss() } }
 
     @State private var viewOnce = false   // view-once: recipient can open the photo exactly once
-    @State private var penHue = 0.0       // palette slider (0 = white end)
+    @State private var penHue = 0.01      // palette slider (0 = white end); default RED (user spec
+                                          // 2026-07-14) — 0.01 = the red start of the rainbow band
     @State private var isHighlighter = false
     @State private var penWidth: CGFloat = 6
     @State private var showCrop = false
