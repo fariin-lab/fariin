@@ -166,7 +166,7 @@ struct ChatSearchView: View {
             .toolbar(.hidden, for: .navigationBar)   // no top nav bar -> search field anchors at the BOTTOM (above keyboard), consistently
             .background { SearchCancelWatcher(canReturn: { trimmed.isEmpty && path.isEmpty }, onCancel: onCancel) }
             .navigationDestination(for: ChatTarget.self) { t in
-                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
+                ConversationRoute(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
         }
         .searchable(text: $query,
