@@ -37,8 +37,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released → reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
-    // (Keyboard is native now — the composer safeAreaBar grows the bottom safe area and .always folds it;
-    // no keyboard signal is passed in. See updateBottomInset.)
+    // Composer bar height (SwiftUI-measured). Extra bottom clearance so the newest message clears the bar:
+    // the list is full-bleed UNDER the composer, so the composer's own safe-area inset is NOT folded by
+    // .always (only the keyboard is). Keyboard stays native; this just adds the static bar height.
+    var composerBarHeight: CGFloat = 0
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area — reliable)
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
@@ -62,6 +64,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.uikitBubble = uikitBubble
+        vc.setComposerBarHeight(composerBarHeight)
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
@@ -1183,7 +1186,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        let newBottom: CGFloat = 12
+        // Composer bar height + Signal's small gap. The bar height must be added HERE because the list runs
+        // full-bleed under the composer, so .always does NOT fold the composer's safe-area inset (it only
+        // folds the keyboard, which is un-ignored). Without the bar height the newest message slides under
+        // the input. The keyboard clearance still rides on top of this via .always — no double count.
+        let newBottom: CGFloat = composerBarH + 12
         guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
         UIView.performWithoutAnimation {
             let stash = collectionView.contentOffset

@@ -113,8 +113,10 @@ struct ThreadView: View {
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
-    // (Keyboard is handled natively now: the composer safeAreaBar grows the bottom safe area and the list's
-    // .always adjustment folds it in — no measured bar height / geometric signal needed.)
+    // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
+    // composer's own inset isn't folded — so we measure the bar height and feed it as extra bottom clearance
+    // (so the newest message clears the bar). Not a keyboard signal; the keyboard comes from .always.
+    @State private var composerBarHeight: CGFloat = 0
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -216,6 +218,18 @@ struct ThreadView: View {
                 // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
                 // controls themselves are Liquid Glass, blurring what passes directly under THEM.
                 bottomBarContent
+                    // Measure the composer bar's height and feed it to the list as extra bottom clearance.
+                    // Because the list is full-bleed under the composer (.ignoresSafeArea(.container,.bottom)),
+                    // the composer's own safe-area inset is NO LONGER folded in — so without this the newest
+                    // message slides UNDER the bar. The keyboard still comes from the (un-ignored) keyboard
+                    // safe area via .always, so this only adds the static bar height, no double-count.
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
+                                composerBarHeight = h
+                            }
+                        }
+                    }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
@@ -1229,6 +1243,7 @@ struct ThreadView: View {
                 if let m = repo.items.first(where: { $0.rowId == id }) { beginReply(to: m) }
             },
             loadingOlder: repo.loadingOlder,
+            composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
