@@ -1379,12 +1379,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
             ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
+        // ROOT CAUSE of "content drops under the composer for 1-2s then snaps back": willHide fires
+        // BEFORE the safe area updates, so adjustedContentInset.bottom still includes the keyboard.
+        // pinBottom() read that stale (too-large) inset and scrolled a full keyboard-height too far down
+        // (under the composer); only the didHide settle — after the safe area finally shrank — corrected
+        // it, a beat later. Instead follow the keyboard down by its OWN height: the content's resting
+        // offset drops by exactly the keyboard height, computed with ZERO dependence on the inset timing.
+        let kbHeight: CGFloat = {
+            if let begin = (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue,
+               let win = view.window {
+                let f = view.convert(begin, from: win.coordinateSpace)
+                return max(0, min(f.height, view.bounds.maxY - f.minY))   // on-screen portion only
+            }
+            return keyboardOverlap
+        }()
+        let targetY = max(minContentOffsetY, collectionView.contentOffset.y - kbHeight)
         keyboardAnimating = true
         UIView.animate(withDuration: duration, delay: 0,
                        options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
                                  .beginFromCurrentState, .allowUserInteraction]) {
-            self.collectionView.layoutIfNeeded()   // safe-area final values are in the model by now
-            self.pinBottom()
+            self.collectionView.contentOffset.y = targetY   // follow the keyboard down; no stale-inset pin
         } completion: { _ in
             self.keyboardAnimating = false
             UIView.performWithoutAnimation { self.pinBottom() }   // exact settle — no late corrector
@@ -1587,6 +1601,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let stash = collectionView.contentOffset
             collectionView.isScrollEnabled = false
             collectionView.setContentOffset(stash, animated: false)
+            layout.frozen = true   // lock every frame for the swipe — only this cell's transform moves
             addSwipeArrow(for: cell)
         case .changed:
             guard let cell = swipingCell else { return }
@@ -1609,6 +1624,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 swipeTriggered = false
             }
         case .ended, .cancelled, .failed:
+            layout.frozen = false   // swipe over → layout may respond again
             let stash = collectionView.contentOffset   // re-enabling scroll also re-clamps → hold position
             collectionView.isScrollEnabled = true      // swipe over → vertical scrolling allowed again
             collectionView.setContentOffset(stash, animated: false)
@@ -1900,9 +1916,15 @@ final class ExactHeightLayout: UICollectionViewLayout {
     private(set) var layoutWidth: CGFloat = 0
     private var builtGeneration = -1
     private var builtCount = -1
+    // FROZEN during a reply swipe (bug: neighbor bubbles moved vertically while swiping): a horizontal
+    // gesture has no reason to change any frame, so the layout is fully locked — prepare() keeps the
+    // existing frames, bounds changes don't invalidate. The only thing that moves is the swiped cell's
+    // transform, applied directly by the controller.
+    var frozen = false
 
     override func prepare() {
         super.prepare()
+        if frozen { return }   // keep the current frames untouched for the whole swipe
         guard let cv = collectionView else { return }
         // CRASH GUARD (build 283 SIGABRT): before the FIRST snapshot lands, the diffable data source
         // reports ZERO sections — asking numberOfItems(inSection: 0) then trips UIKit's internal
@@ -1957,7 +1979,17 @@ final class ExactHeightLayout: UICollectionViewLayout {
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
-        newBounds.width != layoutWidth
+        if frozen { return false }   // never re-stack during a swipe
+        return newBounds.width != layoutWidth
+    }
+
+    // AUTHORITATIVE heights: never let a cell self-size and override our pre-measured frames. A
+    // UIHostingConfiguration cell reports a preferred size on any re-layout (including the transform
+    // applied during a reply swipe) — answering false here means those reports can never shift a
+    // neighbor. Our own late-height path (reportHeight → reconcile) remains the only height authority.
+    override func shouldInvalidateLayout(forPreferredLayoutAttributes preferredAttributes: UICollectionViewLayoutAttributes,
+                                         withOriginalAttributes originalAttributes: UICollectionViewLayoutAttributes) -> Bool {
+        false
     }
 
     // ===== Scroll continuity (the reference model) =====
