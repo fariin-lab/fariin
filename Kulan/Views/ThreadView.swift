@@ -252,8 +252,9 @@ struct ThreadView: View {
     // onChange was added. AnyView resets the complexity scrollStack sees; one wrapper, no behavior change.
     private func messagesLayerErased(_ proxy: ScrollViewProxy) -> AnyView { AnyView(messagesLayer(proxy)) }
 
-    // The message list plus its full modifier chain, extracted so scrollStack's type-check stays bounded.
-    @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
+    // First half of the messages chain (list + reveal + arrival handling), extracted so each half's
+    // type-check stays bounded. messagesLayer stacks the remaining handlers on the erased boundary.
+    @ViewBuilder private func messagesLayerCore(_ proxy: ScrollViewProxy) -> some View {
             listContainer(proxy)
             // Appear fully-formed: the cache chunk lands DURING the push transition
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
@@ -311,6 +312,13 @@ struct ThreadView: View {
                     Task { await ChatService.resetUnread(cid) }
                 }
             }
+            // (chain continues in messagesLayer below — split at this erased boundary for the type-checker)
+    }
+
+    // Second half of the messages chain. messagesLayer grew past the compiler's type-check budget as ONE
+    // expression; the erased AnyView boundary between the halves resets the opaque-type complexity.
+    @ViewBuilder private func messagesLayer(_ proxy: ScrollViewProxy) -> some View {
+        AnyView(messagesLayerCore(proxy))
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
             // The window trim must never delete the rows the reader is currently viewing (that deletion
             // yanked the viewport while reading history) — pause it whenever they're away from the bottom.
