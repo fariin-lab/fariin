@@ -10,9 +10,26 @@ import UIKit
     static var albums: [AttachAlbum] = []
     private static var warming = false
 
+    // Thumbnail pre-cache (the "images coming late" fix): the grid tiles' DECODED images, warmed before
+    // the sheet opens. The asset-list prewarm alone still left every tile decoding its thumbnail AFTER
+    // it appeared — the grid showed placeholders that filled in a beat later. The caching manager holds
+    // the decoded thumbs so tiles render instantly. Request params MUST match precache params for hits.
+    static let thumbs = PHCachingImageManager()
+    static let thumbSize = CGSize(width: 300, height: 300)
+    static let thumbOptions: PHImageRequestOptions = {
+        let o = PHImageRequestOptions()
+        o.deliveryMode = .opportunistic   // fast first, sharp after
+        o.resizeMode = .fast
+        o.isNetworkAccessAllowed = true
+        return o
+    }()
+    static func precache(_ list: [PHAsset]) {
+        thumbs.startCachingImages(for: list, targetSize: thumbSize, contentMode: .aspectFill, options: thumbOptions)
+    }
+
     // PRE-WARM the recents so the grid is ready BEFORE the sheet ever opens. Called when the chat opens;
-    // the fetch runs off-main and the first page lands in the cache, so tapping + shows photos instantly
-    // instead of an empty sheet that fills in a beat later.
+    // the fetch runs off-main and the first page + its thumbnails land in the cache, so tapping + shows
+    // photos instantly instead of an empty sheet that fills in a beat later.
     static func prewarm() {
         guard assets.isEmpty, !warming else { return }
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -29,7 +46,11 @@ import UIKit
             if end > 0 {
                 res.enumerateObjects(at: IndexSet(integersIn: 0..<end), options: []) { a, _, _ in out.append(a) }
             }
-            await MainActor.run { RecentsCache.assets = out; RecentsCache.warming = false }
+            await MainActor.run {
+                RecentsCache.assets = out
+                RecentsCache.precache(Array(out.prefix(60)))   // first ~2 screens of thumbs, decoded + ready
+                RecentsCache.warming = false
+            }
         }
     }
 }
@@ -328,6 +349,8 @@ struct AttachRecentsStrip: View {
         assets = out
         loadedCount = end
         if selectedAlbum == nil { RecentsCache.assets = out }
+        // Warm the new page's thumbnails (album switches included) so tiles never fill in late.
+        RecentsCache.precache(Array(out.prefix(60)))
     }
 
     // Materialize the next page of the fetch result into the grid's array.
@@ -343,6 +366,7 @@ struct AttachRecentsStrip: View {
         loadedCount = end
         // Cache the Recents first page so the NEXT sheet open renders instantly (no empty flash).
         if selectedAlbum == nil, loadedCount <= pageSize { RecentsCache.assets = assets }
+        RecentsCache.precache(Array(out.prefix(60)))   // warm the incoming page's thumbs ahead of display
     }
 
     // Called as thumbnails appear: nearing the end of the loaded window → page in the next batch.
@@ -658,13 +682,11 @@ private struct RecentThumb: View {
                 .buttonStyle(.plain)
             }
             .task(id: asset.localIdentifier) {
-            let o = PHImageRequestOptions()
-            o.deliveryMode = .opportunistic   // fast blurry first, sharp after
-            o.resizeMode = .fast
-            o.isNetworkAccessAllowed = true
-            PHImageManager.default().requestImage(for: asset,
-                                                  targetSize: CGSize(width: 300, height: 300),
-                                                  contentMode: .aspectFill, options: o) { img, _ in
+            // Request through the CACHING manager with the exact precache params: pre-warmed thumbs
+            // return instantly (the "images coming late" fix); anything not warmed loads as before.
+            RecentsCache.thumbs.requestImage(for: asset,
+                                             targetSize: RecentsCache.thumbSize,
+                                             contentMode: .aspectFill, options: RecentsCache.thumbOptions) { img, _ in
                 if let img { image = img }
             }
         }

@@ -778,6 +778,7 @@ struct ThreadView: View {
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
+            RecentsCache.prewarm()   // fetch + decode the media sheet's first thumbs NOW, before + is tapped
             Task {
                 // Only needed when this chat wasn't in the cached list (no sync count above).
                 if cachedConv == nil {
