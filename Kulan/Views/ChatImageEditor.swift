@@ -267,8 +267,14 @@ struct ChatImageEditor: View {
                 // Edit-only (opened straight into pen from the multi-image screen): finishing the drawing
                 // returns the photo immediately — no extra editor page in between.
                 Button { if editOnly { returnEdited() } else { bakeDrawing(); isDrawing = false } } label: {
-                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                    // BLUR material (user spec 2026-07-14): over the pen bar's pure-black band, Liquid
+                    // Glass has nothing to refract and rendered as a flat gray disc — the frosted
+                    // material reads as a real blur button and marks the confirm action.
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .environment(\.colorScheme, .dark)   // frosted-dark look on the black band
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
