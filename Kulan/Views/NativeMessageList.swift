@@ -255,6 +255,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var swipingId: String?
     private var swipeArrow: UIImageView?
     private var swipeSnapshot: UIView?   // static bitmap moved during the swipe; the live cell stays put
+    private weak var swipeHiddenCell: UICollectionViewCell?   // cell whose contentView is hidden pending un-hide
     private var swipeTriggered = false         // crossed the reply threshold this drag (haptic + fire on release)
 
     // Floating date pill (the sticky day header), rendered in UIKit and updated directly from
@@ -1394,6 +1395,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.02) { [weak self] in
             guard let self else { return }
             self.keyboardAnimating = false
+            // DEFINITIVE end-of-close settle (agent finding: the didHide backstop was raced out by the
+            // keyboardAnimating guard, so the close leaned solely on the native clamp with no guaranteed
+            // correction). We ENTERED willHide only when at the bottom, so pin to bottom now — a no-op if
+            // the native clamp already landed right, an instant correction if it under-landed (a small
+            // gap). Non-animated, fired just after the keyboard animation ends → no visible motion.
+            let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
+                || self.collectionView.isDecelerating
+            if !userScrolling, !self.programmaticScrollAnimating, !self.isDisappearing, self.didInitialScroll {
+                UIView.performWithoutAnimation { self.pinBottom() }
+            }
             self.settleFlush()
         }
     }
@@ -1599,11 +1610,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // that nudges neighbors). We now move a STATIC SNAPSHOT of the cell instead of the live cell:
             // a bitmap can't re-layout, and the real cell stays untouched at its exact frame, so nothing
             // else can shift. Native text cells were already stable, so this only changes the hosted ones.
+            // Clean up any still-in-flight swipe (a fast re-swipe within the 0.4s spring): un-hide the
+            // previous cell and drop its lingering snapshot BEFORE snapshotting the new one, so we never
+            // snapshot a cell whose contentView is still hidden (agent finding: rare blank-ghost race).
+            swipeHiddenCell?.contentView.isHidden = false
+            swipeHiddenCell = nil
+            swipeSnapshot?.removeFromSuperview()
+            swipeSnapshot = nil
             if let snap = cell.snapshotView(afterScreenUpdates: false) {
                 snap.frame = cell.frame
+                snap.isUserInteractionEnabled = false   // never swallow a tap during spring-back
                 collectionView.addSubview(snap)
                 cell.contentView.isHidden = true   // the snapshot stands in for it during the swipe
                 swipeSnapshot = snap
+                swipeHiddenCell = cell
             }
             addSwipeArrow(for: cell)
         case .changed:
@@ -1738,11 +1758,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeSnapshot = nil; swipeTriggered = false
         // Spring the SNAPSHOT back, then remove it and un-hide the real cell (which never moved).
         let reset = { snap?.transform = .identity; arrow?.alpha = 0 }
-        let finish = {
+        let finish = { [weak self] in
             arrow?.removeFromSuperview()
             snap?.removeFromSuperview()
             cell?.contentView.isHidden = false
             cell?.transform = .identity   // belt-and-suspenders in case an old path left one
+            if self?.swipeHiddenCell === cell { self?.swipeHiddenCell = nil }
         }
         if animated {
             // Seed the spring with the release velocity so a fast flick snaps back livelier than a slow let-go.
