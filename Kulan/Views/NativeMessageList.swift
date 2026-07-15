@@ -1387,44 +1387,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard computeAtBottom() else { return }
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
-        let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 7
-        // ROOT CAUSE of "content drops behind the composer for ~1s then snaps back up" (DEEP dive): on
-        // CLOSE there are TWO owners of contentOffset.y and they fight. Owner A = UIKit's `.always` fold:
-        // as the keyboard safe area shrinks, adjustedContentInset.bottom drops by kb, so the old at-bottom
-        // offset now exceeds maxContentOffsetY and UIKit CLAMPS the offset down by kb — an active mover our
-        // `keyboardAnimating` flag CANNOT gate. Owner B (my previous willHide) ALSO animated the offset down
-        // by kb on its own curve. The two disagree mid-flight → content dips UNDER the composer, then a
-        // completion pinBottom() forces the final offset ~a beat later = the visible snap-up. (keyboardWill-
-        // Show has no twin: on OPEN the inset GROWS, and UIKit does NOT auto-scroll when the bottom inset
-        // grows, so the fold is PASSIVE and willShow is the sole owner. Mirroring open onto close was
-        // doomed — it added a 2nd active owner.) FIX = make close a single owner: SUPPRESS the fold for the
-        // duration (contentInsetAdjustmentBehavior = .never) and carry the keyboard as a MANUAL bottom inset
-        // equal to the current folded inset (so nothing changes at this instant — no start-jump), then
-        // animate the manual inset AND the offset down by kb TOGETHER. With the fold off there is no second
-        // clamp to fight; the content rides down once and lands above the composer, no correction needed.
-        guard let begin = (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue,
-              let win = view.window else { return }
-        let f = view.convert(begin, from: win.coordinateSpace)
-        let kb = max(0, view.bounds.maxY - f.minY)   // on-screen keyboard height at the start of the hide
-        guard kb > 1 else { return }
+        // ROOT CAUSE of "content drops behind the composer for ~1s then comes back up" — now proven by the
+        // math, after THREE failed interfering fixes (333 deferred pin, 335 explicit offset+inset animation):
+        // the native `.always` fold ALONE lands the close correctly. At the bottom with the keyboard up,
+        // maxContentOffsetY = contentSize + (composer + kb) − bounds. On close the keyboard safe area shrinks
+        // by kb, so adjustedContentInset.bottom drops by kb, maxContentOffsetY drops by kb, and UIKit clamps
+        // the at-bottom offset down by kb — the last bubble ends exactly `composer` above the view bottom =
+        // just above the composer. Crucially the fold runs inside the keyboard's OWN animation transaction,
+        // on the SAME timeline as the composer safeAreaBar riding the keyboard down, so the two are in sync.
+        // Every version that DROPPED added a SECOND mover on a DIFFERENT timeline (a deferred pinBottom; an
+        // explicit contentOffset animation; the per-pass stickBottom pins) → a transient desync = the drop-
+        // then-return. FIX = STOP interfering: no offset animation, no inset swap, no pin. Only raise
+        // keyboardAnimating so the per-pass stickBottom pins in viewDidLayoutSubviews (a second mover) stand
+        // down for the fold's duration; clear it just after the keyboard is gone. The fold owns the close.
         keyboardAnimating = true
-        let baseBottom = composerBarH + 12            // the resting, keyboard-down inset updateBottomInset uses
-        // Swap the folded keyboard inset for an equal MANUAL inset, preserving the offset across the swap
-        // (changing contentInset can move contentOffset — stash + restore).
-        let stash = collectionView.contentOffset
-        collectionView.contentInsetAdjustmentBehavior = .never
-        collectionView.contentInset.bottom = baseBottom + kb   // == the old adjusted bottom (composer + keyboard)
-        collectionView.setContentOffset(stash, animated: false)
-        let targetY = max(minContentOffsetY, stash.y - kb)     // == the new bottom once the inset loses kb
-        UIView.animate(withDuration: duration, delay: 0,
-                       options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
-                                 .beginFromCurrentState, .allowUserInteraction]) {
-            self.collectionView.contentInset.bottom = baseBottom   // shrink the inset by kb…
-            self.collectionView.contentOffset.y = targetY          // …and follow it down by kb, in lockstep
-        } completion: { _ in
-            self.collectionView.contentInsetAdjustmentBehavior = .always   // keyboard gone → the fold re-adds 0
-            self.keyboardAnimating = false
-            self.settleFlush()
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
+            self?.keyboardAnimating = false
         }
     }
 
@@ -1536,10 +1514,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the input. The keyboard clearance still rides on top of this via .always — no double count.
         let newBottom: CGFloat = composerBarH + 12
         guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
+        // Signal's rule: at the bottom → STAY at the bottom; scrolled away → hold position. When the composer
+        // gets SHORTER at the bottom (the reply bar is cancelled, keyboard still up), the vacated space must
+        // be filled by following the content DOWN — otherwise a blank gap is left between the last message and
+        // the input bar (user report). We only do this for a SHRINK while at the bottom and NOT mid-keyboard
+        // animation (the keyboard fold owns the offset then); every other case keeps the stash/restore that
+        // preserves a history reader's position.
+        let followDown = newBottom < collectionView.contentInset.bottom
+            && !keyboardAnimating && didReveal && computeAtBottom()
         UIView.performWithoutAnimation {
             let stash = collectionView.contentOffset
-            collectionView.contentInset.bottom = newBottom   // never moves content: stash + restore the offset
-            collectionView.setContentOffset(stash, animated: false)
+            collectionView.contentInset.bottom = newBottom
+            if followDown {
+                pinBottom()   // move to the new bottom → fills the vacated reply-bar space
+            } else {
+                collectionView.setContentOffset(stash, animated: false)   // never moves content: stash + restore
+            }
         }
     }
 
