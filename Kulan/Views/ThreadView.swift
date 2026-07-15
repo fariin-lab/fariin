@@ -1746,19 +1746,25 @@ struct ThreadView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
-        // Avatar + name as a NATIVE .topBarLeading toolbar item, left-aligned right after the back chevron
-        // (the .principal title slot CENTERS it, which the user rejected — "avatar and name is center, go
-        // back old one"). SwiftUI owns the slot so there's no NavTitleView titleView-mutation CPU loop.
-        // Rendered as PLAIN content (not a Button) + onTapGesture so iOS 26 does NOT wrap it in a Liquid
-        // Glass pill (flat old look). Tapping opens contact/group info (closing the keyboard first).
-        ToolbarItem(placement: .topBarLeading) {
-            headerLabel
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    inputFocused = false
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    showContactInfo = true
-                }
+        // Avatar + name in the NATIVE .principal (title) slot so it SLIDES with the swipe-back like the old
+        // build-341 header did — but FORCED left-aligned: the title slot centers its content by default (the
+        // user rejected centered), so we widen it to the full title area and push the label to the leading
+        // edge with a trailing Spacer. This is the SAFE way to get left-aligned + sliding: SwiftUI owns the
+        // slot, unlike the old NavTitleView which set navigationItem.titleView directly and fought the
+        // NavigationStack reconciler in a 71% CPU loop that hung the app. Plain content (no Button) = no iOS
+        // 26 Liquid Glass pill; only the label is tappable (Spacer isn't) so it can't eat the call buttons.
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 0) {
+                headerLabel
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        inputFocused = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                        showContactInfo = true
+                    }
+                Spacer(minLength: 0)
+            }
+            .frame(width: max(0, UIScreen.main.bounds.width - 150), alignment: .leading)
         }
         // iOS 26 wraps toolbar items in a Liquid Glass pill by default; opt the header OUT so the avatar+name
         // reads as a flat title like before (user: "make it how it was"). Applied to the ToolbarItem (it's
