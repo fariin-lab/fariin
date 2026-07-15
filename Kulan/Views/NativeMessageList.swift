@@ -172,33 +172,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         #endif
     }
 
-    // RELEASE-VISIBLE (works in TestFlight) TEMPORARY diagnostic for the keyboard-close drop bug — its OWN
-    // label, separate from the DEBUG-only kbDebugLabel below (which is compiled out of Release, the reason
-    // build 339 failed to archive). Remove once diagnosed. kbClose* capture the offset/inset trajectory.
-    private let diagLabel = UILabel()
-    private var kbCloseTracking = false
-    private var kbCloseMinOff: CGFloat = 0
-    private var kbCloseMaxOff: CGFloat = 0
-    private func kbSnap() -> String {
-        String(format: "off=%.0f ins=%.0f max=%.0f h=%.0f", collectionView.contentOffset.y,
-               collectionView.adjustedContentInset.bottom, maxContentOffsetY, collectionView.bounds.height)
-    }
-    private func kbShow(_ s: String) { diagLabel.isHidden = false; diagLabel.text = s }
-    private func setupDiag() {
-        diagLabel.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
-        diagLabel.textColor = .white
-        diagLabel.backgroundColor = UIColor.systemRed.withAlphaComponent(0.9)
-        diagLabel.numberOfLines = 0
-        diagLabel.isHidden = true
-        diagLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(diagLabel)
-        NSLayoutConstraint.activate([
-            diagLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            diagLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -8),
-            diagLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 52),
-        ])
-    }
-
     #if DEBUG
     // TEMPORARY keyboard-pipeline telemetry (Debug/preview builds only, never TestFlight/Release): a tiny
     // on-screen readout of the inset/offset state at each keyboard stage, so a preview screenshot of the
@@ -439,7 +412,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
 
         buildDataSource()
-        setupDiag()   // RELEASE-visible temp diagnostic (keyboard-close drop)
         #if DEBUG
         setupKBDebug()
         #endif
@@ -1406,12 +1378,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // offset in a single transaction. keyboardAnimating gates the per-pass pins (viewDidLayoutSubviews)
     // and the land gate (isInMotion) for the whole ride; the completion settles exactly and flushes.
     @objc private func keyboardWillHide(_ note: Notification) {
-        // TEMP diagnostic: capture the close trajectory (WH → lowest during fold → DH → +1.3s).
-        kbCloseTracking = true
-        kbCloseMinOff = collectionView.contentOffset.y
-        kbCloseMaxOff = collectionView.contentOffset.y
-        let dbgScroll = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        kbShow("WH \(kbSnap())\natB=\(computeAtBottom()) drag=\(dbgScroll) anim=\(shouldAnimateKeyboardChanges)")
         guard shouldAnimateKeyboardChanges, didInitialScroll, !isDisappearing else { return }
         // Never fight an interactive pop (its own rule set) or an active user drag.
         if let pop = navigationController?.interactivePopGestureRecognizer {
@@ -1511,19 +1477,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // hands-off during a user scroll or a programmatic jump (tapping a reply quote dismisses the keyboard
         // AND starts a jump — pinning would cancel it). A reader deep in history never set the flag, so is
         // untouched. Non-animated: a no-op if the fold landed clean, an instant correction if it did not.
-        let dbgPinned = wasCloseFromBottom && !userScrolling && !programmaticScrollAnimating && !isDisappearing && didInitialScroll
-        if dbgPinned {
+        if wasCloseFromBottom, !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
             UIView.performWithoutAnimation { pinBottom() }
         }
         settleFlush()   // land any messages that arrived and were deferred during the close window
-        // TEMP diagnostic: finalize the close trajectory and re-check 1.3s later (the "comes back up" window).
-        kbCloseTracking = false
-        let base = "DH \(kbSnap())\nlow=\(Int(kbCloseMinOff)) high=\(Int(kbCloseMaxOff)) fromBot=\(wasCloseFromBottom) pin=\(dbgPinned)"
-        kbShow(base)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak self] in
-            guard let self else { return }
-            self.kbShow(base + "\n+1.3s \(self.kbSnap())")
-        }
     }
 
     // Backgrounding force-dismisses the keyboard WITHOUT a frame notification. Record overlap = 0 so the
@@ -1918,11 +1875,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleFlush() }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // TEMP diagnostic: track the lowest/highest offset during a keyboard close.
-        if kbCloseTracking {
-            kbCloseMinOff = min(kbCloseMinOff, scrollView.contentOffset.y)
-            kbCloseMaxOff = max(kbCloseMaxOff, scrollView.contentOffset.y)
-        }
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state (the
         // isAtBottom flips would re-run the tree and land reconfigures mid-capture = overlap), fire nothing.
         if Date() < captureFreezeUntil { return }
