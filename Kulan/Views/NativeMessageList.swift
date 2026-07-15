@@ -1225,6 +1225,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTopInset: ((CGFloat) -> Void)?      // ThreadView positions the date pill / pinned bar with this
     private var lastReportedTop: CGFloat = -1
     private var composerBarH: CGFloat = 0
+    private var restingComposerBarH: CGFloat = 0   // composerBarH measured while the keyboard is DOWN (its FULL
+                                                   // height incl. home indicator) — used during a close, when the
+                                                   // live measure lags ~34pt short and the last bubble dips.
+    private var keyboardUp = false                 // true between keyboardWillShow and keyboardDidHide
     private var keyboardOverlap: CGFloat = 0
     private var keyboardAnimating = false     // a keyboard-synced inset animation is in flight — layout passes
                                               // must NOT re-assert the inset/pin instantly and override it
@@ -1270,6 +1274,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // straight under the input field.
         guard h > 30, abs(h - composerBarH) > 0.5 else { return }
         composerBarH = h
+        // Remember the composer's FULL height (with home indicator) measured while the keyboard is DOWN. During
+        // a keyboard close the live measure lags ~34pt short (no home-indicator space until the keyboard is
+        // fully gone), and updateBottomInset uses this resting value so the clearance stays correct — else the
+        // last bubble dips behind the composer for a beat (the drop-then-recover, proven by the diagnostic:
+        // inset 66 during the close → 100 at rest).
+        if !keyboardUp { restingComposerBarH = h }
         updateBottomInset()
     }
 
@@ -1465,6 +1475,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // duration + curve, so the bubbles glide up in lockstep with the keyboard (not a snap). Only fires
     // when at the bottom; keyboardAnimating gates the per-pass stickBottom pin for the whole ride.
     @objc private func keyboardWillShow(_ note: Notification) {
+        keyboardUp = true   // composer measures its keyboard-up (short) height from here until didHide
         guard shouldAnimateKeyboardChanges, didInitialScroll, !isDisappearing else { return }
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
@@ -1503,6 +1514,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     @objc private func keyboardDidHide() {
+        keyboardUp = false          // keyboard fully gone → the composer will re-measure its full (resting) height
         keyboardSessionWasAtBottom = false
         atBottomForKeyboard = nil   // session over — never let a stale capture drive later inset updates
         if keyboardOverlap != 0 {
@@ -1558,7 +1570,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // full-bleed under the composer, so .always does NOT fold the composer's safe-area inset (it only
         // folds the keyboard, which is un-ignored). Without the bar height the newest message slides under
         // the input. The keyboard clearance still rides on top of this via .always — no double count.
-        let newBottom: CGFloat = composerBarH + 12
+        // DURING a keyboard close (the layout drive is running) the live composerBarH lags ~34pt short, which
+        // reserves too little clearance and dips the last bubble behind the composer. Use the resting (full)
+        // height then, so the clearance is already correct as the frame grows back. Every other time use the
+        // live value (keyboard-up layout is unchanged).
+        let barH = (kbCloseLink != nil && restingComposerBarH > composerBarH) ? restingComposerBarH : composerBarH
+        let newBottom: CGFloat = barH + 12
         guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
         // Signal's rule: at the bottom → STAY at the bottom; scrolled away → hold position. When the composer
         // gets SHORTER at the bottom (the reply bar is cancelled, keyboard still up), the vacated space must

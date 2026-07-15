@@ -1760,6 +1760,9 @@ struct ThreadView: View {
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     showContactInfo = true
                 }
+                // iOS 26 wraps toolbar items in a Liquid Glass pill by default; opt this one OUT so the
+                // avatar+name reads as a flat title like before (user: "make it how it was").
+                .sharedBackgroundVisibility(.hidden)
         }
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
