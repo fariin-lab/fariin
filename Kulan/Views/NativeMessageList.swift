@@ -1221,6 +1221,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var keyboardOverlap: CGFloat = 0
     private var keyboardAnimating = false     // a keyboard-synced inset animation is in flight — layout passes
                                               // must NOT re-assert the inset/pin instantly and override it
+    private var keyboardCloseFromBottom = false   // set in willHide when the close started at the bottom; tells
+                                                  // keyboardDidHide to pin to the bottom even if the fold under-lands
     // At-bottom truth CAPTURED when the keyboard animation starts. Mid-animation inset updates (the reply
     // banner growing the composer bar) can't trust computeAtBottom() — the offset is mid-flight — so they
     // reuse this instead. Cleared when the keyboard animation completes.
@@ -1387,22 +1389,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard computeAtBottom() else { return }
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
-        // ROOT CAUSE of "content drops behind the composer for ~1s then comes back up" — now proven by the
-        // math, after THREE failed interfering fixes (333 deferred pin, 335 explicit offset+inset animation):
-        // the native `.always` fold ALONE lands the close correctly. At the bottom with the keyboard up,
-        // maxContentOffsetY = contentSize + (composer + kb) − bounds. On close the keyboard safe area shrinks
-        // by kb, so adjustedContentInset.bottom drops by kb, maxContentOffsetY drops by kb, and UIKit clamps
-        // the at-bottom offset down by kb — the last bubble ends exactly `composer` above the view bottom =
-        // just above the composer. Crucially the fold runs inside the keyboard's OWN animation transaction,
-        // on the SAME timeline as the composer safeAreaBar riding the keyboard down, so the two are in sync.
-        // Every version that DROPPED added a SECOND mover on a DIFFERENT timeline (a deferred pinBottom; an
-        // explicit contentOffset animation; the per-pass stickBottom pins) → a transient desync = the drop-
-        // then-return. FIX = STOP interfering: no offset animation, no inset swap, no pin. Only raise
-        // keyboardAnimating so the per-pass stickBottom pins in viewDidLayoutSubviews (a second mover) stand
-        // down for the fold's duration; clear it just after the keyboard is gone. The fold owns the close.
+        // ROOT CAUSE of "content drops behind the composer for ~1s then comes back up" — proven by the math
+        // after THREE failed interfering fixes (333 deferred pin, 335 explicit offset+inset animation): the
+        // native `.always` fold rides the close in the keyboard's OWN transaction, in sync with the composer
+        // safeAreaBar. Every version that DROPPED added a SECOND mover on a DIFFERENT timeline (deferred pin;
+        // explicit offset animation; per-pass stickBottom pins) → transient desync. So DON'T interfere DURING
+        // the fold: no offset animation, no inset swap, no per-pass pin. keyboardAnimating stands the per-pass
+        // pins down for the fold's duration. BUT the fold does not always land pixel-perfect (that's why the
+        // keyboardDidHide backstop exists), so we must NOT bet everything on it: keyboardDidHide (fires when
+        // the keyboard is fully gone) clears the gate and does ONE non-animated corrective pin to the bottom
+        // + a settleFlush. keyboardCloseFromBottom carries the pre-fold "we were at the bottom" truth so that
+        // pin still fires if the fold under-lands (which makes the live computeAtBottom read false).
         keyboardAnimating = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
-            self?.keyboardAnimating = false
+        keyboardCloseFromBottom = true
+        // Fallback ONLY (keyboardDidHide is the normal clear+settle): if the hide is interrupted/cancelled and
+        // didHide never posts, don't leave the per-pass pins gated forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.3) { [weak self] in
+            guard let self, self.keyboardAnimating else { return }
+            self.keyboardAnimating = false
+            self.keyboardCloseFromBottom = false
+            self.settleFlush()
         }
     }
 
@@ -1454,20 +1460,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             keyboardOverlap = 0
             updateBottomInset()
         }
-        // Don't fight the owned willHide close animation (agent finding: didHide lacked this guard that
-        // every other pin site has; harmless only because didHide normally posts after the animation).
-        guard !keyboardAnimating else { return }
+        // AUTHORITATIVE end of the close: the keyboard is fully gone and the native fold has finished. This is
+        // the BACKSTOP the pure-native close (keyboardWillHide) deliberately relies on — the fold rides the
+        // content down cleanly during the animation, and here we make the FINAL position exact. Clear the gate
+        // FIRST (willHide only raised it to stand the per-pass pins down for the fold; there is no animation to
+        // fight now), then do ONE non-animated corrective pin + a settleFlush.
+        let wasCloseFromBottom = keyboardCloseFromBottom
+        keyboardCloseFromBottom = false
+        keyboardAnimating = false   // authoritative clear (the willHide fallback timer becomes a no-op)
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        // Also hands-off while a programmatic jump animates (tapping a reply quote dismisses the keyboard
-        // AND starts a jump — the definitive pin was cancelling the jump and wedging its animation flag).
-        // Gate on the LIVE at-bottom truth, not the old session flag: the frame-notification path that
-        // used to maintain that flag is gone (native model), so the flag was permanently false and this
-        // settle never ran — the close could rest with the last bubble half under the composer. If the
-        // reader is near the bottom (≤44pt — exactly the "partially hidden" case) end the close pinned;
-        // a reader deep in history is untouched.
-        if !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll, computeAtBottom() {
+        // Pin to the bottom when the close STARTED at the bottom — using the captured truth, NOT the live
+        // computeAtBottom(): if the fold under-lands (a gap above the composer) the live read is >44 = false,
+        // and gating on it would leave the gap uncorrected (the exact hole the verification pass found). Also
+        // hands-off during a user scroll or a programmatic jump (tapping a reply quote dismisses the keyboard
+        // AND starts a jump — pinning would cancel it). A reader deep in history never set the flag, so is
+        // untouched. Non-animated: a no-op if the fold landed clean, an instant correction if it did not.
+        if wasCloseFromBottom, !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
             UIView.performWithoutAnimation { pinBottom() }
         }
+        settleFlush()   // land any messages that arrived and were deferred during the close window
     }
 
     // Backgrounding force-dismisses the keyboard WITHOUT a frame notification. Record overlap = 0 so the
