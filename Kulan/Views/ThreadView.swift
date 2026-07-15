@@ -1746,14 +1746,15 @@ struct ThreadView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
-        // Avatar + name as a NATIVE left toolbar item (replaces the old NavTitleView titleView-mutation that
-        // fought SwiftUI's NavigationStack and looped the CPU). .topBarLeading places it right after the back
-        // chevron = the same left-aligned look, but SwiftUI owns the slot so there is no redisplay loop.
-        // Rendered as PLAIN content (not a Button) + an onTapGesture, so iOS 26 does NOT wrap it in a Liquid
-        // Glass pill (Buttons get the glass; plain title-style content does not — user wants the old flat look).
-        // Tapping opens the contact/group info (closing the keyboard first so it doesn't linger behind).
-        ToolbarItem(placement: .topBarLeading) {
+        // Avatar + name in the NATIVE .principal (title) slot — SwiftUI owns it (no NavTitleView titleView
+        // mutation, so no CPU redisplay loop) AND, being the title slot, it SLIDES/cross-fades with the
+        // interactive swipe-back like the old version did (a .topBarLeading item stayed static during the
+        // pop — the user's "avatar+name don't follow the page when I swipe"). frame(maxWidth:.infinity,
+        // alignment:.leading) keeps it left-aligned right after the back chevron. Rendered as PLAIN content
+        // (not a Button) + onTapGesture so iOS 26 does NOT wrap it in a Liquid Glass pill (flat old look).
+        ToolbarItem(placement: .principal) {
             headerLabel
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     inputFocused = false
@@ -4453,7 +4454,7 @@ struct MessageBubble: View, Equatable {
     // Portrait card for the stacked-album look (4:5, capped to the bubble width).
     private var albumCardSize: CGSize {
         let w = min(maxBubbleWidth * 0.70, 228)
-        return CGSize(width: w, height: (w * 1.30).rounded())
+        return CGSize(width: w, height: (w * 1.16).rounded())
     }
 
     // ONE photo card: image cropped to Apple continuous ("squircle") rounded corners, NO border, with a soft
@@ -4492,7 +4493,10 @@ struct MessageBubble: View, Equatable {
         let s = albumCardSize
         ZStack {
             if n <= 2 {
-                if n == 2 { albumCard(1, s).rotationEffect(.degrees(7)).offset(x: 18, y: 6) }
+                // Peek the back card INWARD (away from the screen edge the bubble hugs) so its tilted
+                // corner is never clipped: my messages hug the right → back card leans left; received hug
+                // the left → back card leans right.
+                if n == 2 { albumCard(1, s).rotationEffect(.degrees(isMe ? -7 : 7)).offset(x: isMe ? -18 : 18, y: 6) }
                 albumCard(0, s)
             } else if n == 3 {
                 // Loose organic fan (reference): two cards spread UP-and-OUT behind, tilted; the front card

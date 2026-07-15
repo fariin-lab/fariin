@@ -412,7 +412,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
 
         buildDataSource()
-        setupDiag()   // TEMP keyboard-close diagnostic (Release-visible)
         #if DEBUG
         setupKBDebug()
         #endif
@@ -1149,7 +1148,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
         stickBottom = didInitialScroll && !pendingBottomOnOpen && !sendAnimating
             && !programmaticScrollAnimating && computeAtBottom()   // never re-pin under an in-flight jump
-        if dbgKbTracking, stickBottom { dbgStick += 1 }   // TEMP: stickBottom captured TRUE this pass
         // Keep the registration's width pin fresh: cells configured during this pass read hostWidth.
         if collectionView.bounds.width > 0 { hostWidth = collectionView.bounds.width }
         // Width change (rotation / split view): every measured height is width-dependent — drop + re-measure,
@@ -1201,11 +1199,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // swipingCell: the reply swipe DISABLES the scroll pan, so isTracking goes false mid-touch and
         // a layout pass then passed this guard — the stickBottom pin snapped the content to the exact
         // bottom UNDER the swipe (the "bubbles below do a small jump while I swipe" report).
-        if dbgKbTracking { dbgLayouts += 1 }   // TEMP: a layout pass reached the pin gate during the close
         guard !sendAnimating, !pendingBottomOnOpen, !keyboardAnimating, !programmaticScrollAnimating,
               !geoRiding, !userScrolling, swipingCell == nil else { return }
         if stickBottom {
-            if dbgKbTracking { dbgPins += 1 }   // TEMP: the pin actually ran this pass
             // Keyboard/composer resize → stay pinned. When this layout pass runs INSIDE the keyboard's
             // own animation transaction (safe-area growth animates with the keyboard slide), let the pin
             // INHERIT it: the offset then rides the keyboard with Apple's exact curve, in lockstep — the
@@ -1234,28 +1230,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                               // must NOT re-assert the inset/pin instantly and override it
     private var kbCloseLink: CADisplayLink?       // drives layout each frame during the keyboard CLOSE so the
     private var kbCloseDriveUntil = Date.distantPast  // stickBottom pin actually runs (composer SwiftUI bar doesn't trigger it)
-    // TEMP diagnostic (Release-visible) for the keyboard-close drop: capture the trajectory SILENTLY during the
-    // close (no label update mid-fold, so the readout can't MASK the drop like the old box did) and show it ONCE
-    // ~1.5s later. Remove once diagnosed.
-    let diagLabel = UILabel()
-    private var dbgKbTracking = false
-    private var dbgWH = ""
-    private var dbgMinOff: CGFloat = 0, dbgMaxOff: CGFloat = 0, dbgMinIns: CGFloat = .greatestFiniteMagnitude
-    private var dbgTicks = 0, dbgLayouts = 0, dbgPins = 0, dbgStick = 0
-    private func setupDiag() {
-        diagLabel.font = .monospacedSystemFont(ofSize: 10, weight: .bold)
-        diagLabel.textColor = .white
-        diagLabel.backgroundColor = UIColor.systemRed.withAlphaComponent(0.9)
-        diagLabel.numberOfLines = 0
-        diagLabel.isHidden = true
-        diagLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(diagLabel)
-        NSLayoutConstraint.activate([
-            diagLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
-            diagLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -6),
-            diagLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 50),
-        ])
-    }
     // At-bottom truth CAPTURED when the keyboard animation starts. Mid-animation inset updates (the reply
     // banner growing the composer bar) can't trust computeAtBottom() — the offset is mid-flight — so they
     // reuse this instead. Cleared when the keyboard animation completes.
@@ -1438,18 +1412,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // computeAtBottom() each pass and is cleared on scroll-away (scrollViewDidScroll), so a reader who
         // flicks UP into history during the fold is never pinned — that's the "scroll up → auto-scroll down"
         // yank fixed by the same mechanism.
-        // TEMP diagnostic: start SILENT capture of the close trajectory (shown once ~1.5s later).
-        dbgKbTracking = true
-        dbgTicks = 0; dbgLayouts = 0; dbgPins = 0; dbgStick = 0
-        dbgMinOff = collectionView.contentOffset.y; dbgMaxOff = collectionView.contentOffset.y
-        dbgMinIns = collectionView.adjustedContentInset.bottom
-        dbgWH = "WH off=\(Int(collectionView.contentOffset.y)) ins=\(Int(collectionView.adjustedContentInset.bottom)) max=\(Int(maxContentOffsetY)) h=\(Int(collectionView.bounds.height)) atB=\(computeAtBottom())"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            self.dbgKbTracking = false
-            self.diagLabel.isHidden = false
-            self.diagLabel.text = "\(self.dbgWH)\nmin off=\(Int(self.dbgMinOff)) max off=\(Int(self.dbgMaxOff)) minIns=\(Int(self.dbgMinIns))\nend off=\(Int(self.collectionView.contentOffset.y)) ins=\(Int(self.collectionView.adjustedContentInset.bottom)) max=\(Int(self.maxContentOffsetY)) h=\(Int(self.collectionView.bounds.height))\nticks=\(self.dbgTicks) layouts=\(self.dbgLayouts) stick=\(self.dbgStick) pins=\(self.dbgPins)"
-        }
         startKeyboardCloseLayoutDrive(duration + 0.55)
     }
 
@@ -1464,7 +1426,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         kbCloseLink = link
     }
     @objc private func kbCloseLayoutTick() {
-        dbgTicks += 1   // TEMP diagnostic
         guard !isDisappearing, Date() < kbCloseDriveUntil else {
             kbCloseLink?.invalidate(); kbCloseLink = nil; return
         }
@@ -1925,12 +1886,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleFlush() }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // TEMP diagnostic: track the offset range + smallest inset seen during the keyboard close.
-        if dbgKbTracking {
-            dbgMinOff = min(dbgMinOff, scrollView.contentOffset.y)
-            dbgMaxOff = max(dbgMaxOff, scrollView.contentOffset.y)
-            dbgMinIns = min(dbgMinIns, scrollView.adjustedContentInset.bottom)
-        }
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state (the
         // isAtBottom flips would re-run the tree and land reconfigures mid-capture = overlap), fire nothing.
         if Date() < captureFreezeUntil { return }
