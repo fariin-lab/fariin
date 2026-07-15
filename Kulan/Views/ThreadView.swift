@@ -3615,6 +3615,7 @@ struct MessageBubble: View, Equatable {
     private var onMyBubble: Color { .white }
 
     @AppStorage("readReceipts") private var readReceiptsPref = true
+    @State private var dragX: CGFloat = 0   // swipe-to-reply offset (SwiftUI bubbles move INSIDE the cell)
 
     private var myUid: String { AuthService.shared.uid ?? "" }
     private var myReaction: String? { message.reactions[myUid] }
@@ -3968,6 +3969,36 @@ struct MessageBubble: View, Equatable {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         onReact(myReaction == "❤️" ? nil : "❤️")
                     })
+                    // SWIPE-TO-REPLY (build-285 model, restored): move the bubble via SwiftUI .offset
+                    // INSIDE the cell — the cell frame never changes, so neighbors can't drift and
+                    // nothing duplicates. Only SwiftUI-hosted bubbles (reply/image/video/etc.) render
+                    // MessageBubble; native text cells keep the UIKit pan. The reply arrow sits in the
+                    // vacated space (added after the offset so it stays put).
+                    .offset(x: dragX)
+                    .overlay(alignment: .trailing) {
+                        Image(systemName: "arrowshape.turn.up.left.fill")
+                            .font(.system(size: 15)).foregroundStyle(.secondary)
+                            .opacity(Double(min(abs(min(dragX, 0)) / 50, 1)))
+                            .padding(.trailing, -24)
+                    }
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 18)
+                            .onChanged { v in
+                                guard message.sendState == nil, !VoiceScrubState.active else { return }
+                                guard abs(v.translation.width) > abs(v.translation.height) else { return }   // horizontal only
+                                if v.translation.width < 0 {
+                                    let t = v.translation.width
+                                    dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
+                                }
+                            }
+                            .onEnded { _ in
+                                if !VoiceScrubState.active, dragX <= -50 {
+                                    onReply(message)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                }
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { dragX = 0 }
+                            }
+                    )
                 reactionBadges
                     .animation(.spring(response: 0.35, dampingFraction: 0.6), value: message.reactions)   // pop in/out
                 if isMe && message.sendState == .failed {

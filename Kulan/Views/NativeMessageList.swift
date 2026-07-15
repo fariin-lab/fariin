@@ -1561,6 +1561,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let loc = swipePan.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc),
               let id = dataSource.itemIdentifier(for: ip), canSwipeReply(id) else { return false }
+        // The UIKit pan ONLY drives NATIVE text cells (which transform cleanly). SwiftUI-hosted cells
+        // (reply/image/video) handle their own swipe via a SwiftUI .offset INSIDE the bubble — the
+        // build-285 approach that moves the content within the cell, so the cell frame never changes
+        // and neighbors can't drift (transforming a hosted cell was the regression → neighbor drift +
+        // the snapshot's duplication).
+        guard uikitModels[id] != nil else { return false }
         return true
     }
 
