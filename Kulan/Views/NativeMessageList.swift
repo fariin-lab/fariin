@@ -172,13 +172,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         #endif
     }
 
-    #if DEBUG
-    // TEMPORARY keyboard-pipeline telemetry (Debug/preview builds only, never TestFlight/Release): a tiny
-    // on-screen readout of the inset/offset state at each keyboard stage, so a preview screenshot of the
-    // "keyboard opens but the chat doesn't scroll" bug carries the exact numbers. Remove once diagnosed.
-    private let kbDebugLabel = UILabel()
-    private var dbgBranch = "-"
-    // TEMP diagnostic for the keyboard-close drop bug: capture the offset/inset trajectory across a close.
+    // RELEASE-VISIBLE (works in TestFlight) TEMPORARY diagnostic for the keyboard-close drop bug — its OWN
+    // label, separate from the DEBUG-only kbDebugLabel below (which is compiled out of Release, the reason
+    // build 339 failed to archive). Remove once diagnosed. kbClose* capture the offset/inset trajectory.
+    private let diagLabel = UILabel()
     private var kbCloseTracking = false
     private var kbCloseMinOff: CGFloat = 0
     private var kbCloseMaxOff: CGFloat = 0
@@ -186,7 +183,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         String(format: "off=%.0f ins=%.0f max=%.0f h=%.0f", collectionView.contentOffset.y,
                collectionView.adjustedContentInset.bottom, maxContentOffsetY, collectionView.bounds.height)
     }
-    private func kbShow(_ s: String) { kbDebugLabel.isHidden = false; kbDebugLabel.text = s }
+    private func kbShow(_ s: String) { diagLabel.isHidden = false; diagLabel.text = s }
+    private func setupDiag() {
+        diagLabel.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
+        diagLabel.textColor = .white
+        diagLabel.backgroundColor = UIColor.systemRed.withAlphaComponent(0.9)
+        diagLabel.numberOfLines = 0
+        diagLabel.isHidden = true
+        diagLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(diagLabel)
+        NSLayoutConstraint.activate([
+            diagLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            diagLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -8),
+            diagLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 52),
+        ])
+    }
+
+    #if DEBUG
+    // TEMPORARY keyboard-pipeline telemetry (Debug/preview builds only, never TestFlight/Release): a tiny
+    // on-screen readout of the inset/offset state at each keyboard stage, so a preview screenshot of the
+    // "keyboard opens but the chat doesn't scroll" bug carries the exact numbers. Remove once diagnosed.
+    private let kbDebugLabel = UILabel()
+    private var dbgBranch = "-"
     private func debugKB(_ stage: String) {
         kbDebugLabel.isHidden = false
         kbDebugLabel.text = String(
@@ -421,6 +439,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
 
         buildDataSource()
+        setupDiag()   // RELEASE-visible temp diagnostic (keyboard-close drop)
         #if DEBUG
         setupKBDebug()
         #endif
