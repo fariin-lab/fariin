@@ -3909,6 +3909,15 @@ struct MessageBubble: View, Equatable {
                         .onTapGesture { onTapSender(message.authorId) }
                 }
                 content
+                    // Jump-to flash: a brief dim pulse using the bubble's OWN shape + cluster corners, so
+                    // it covers exactly the bubble with no generic-rounded-rect over/under-hang (user
+                    // report). On content (not the outer row) so it hugs the bubble and rides the swipe
+                    // offset; reactions/sender-name stay un-dimmed like Signal.
+                    .overlay(
+                        UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)
+                            .fill(Color.primary.opacity(isHighlighted ? 0.18 : 0))
+                            .allowsHitTesting(false)
+                    )
                     // Tappable links/usernames inside the bubble route through here. The "Open link?"
                     // confirm + user-not-found alert are presented ONCE at the ThreadView level (via
                     // onConfirmLink/onUserNotFound) — not per bubble.
@@ -4017,14 +4026,8 @@ struct MessageBubble: View, Equatable {
                     .padding(.top, 1)
                 }
             }
-            // Jump-to flash: a brief dim pulse over THE BUBBLE CONTENT ONLY (the photo /
-            // voice note / text bubble itself). Applied BEFORE the maxWidth frame so it hugs the actual
-            // content — the old row-level background painted a full-width block behind the whole row.
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.primary.opacity(isHighlighted ? 0.18 : 0))
-                    .allowsHitTesting(false)
-            )
+            // (Jump-to flash moved onto `content` above so it uses the bubble's exact shape + cluster
+            // corners — this row-level generic rounded rect over/under-hung the actual bubble.)
             .frame(maxWidth: maxBubbleWidth, alignment: isMe ? .trailing : .leading)
             if !isMe { Spacer(minLength: 0) }
         }
