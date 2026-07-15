@@ -1746,15 +1746,13 @@ struct ThreadView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
-        // Avatar + name in the NATIVE .principal (title) slot — SwiftUI owns it (no NavTitleView titleView
-        // mutation, so no CPU redisplay loop) AND, being the title slot, it SLIDES/cross-fades with the
-        // interactive swipe-back like the old version did (a .topBarLeading item stayed static during the
-        // pop — the user's "avatar+name don't follow the page when I swipe"). frame(maxWidth:.infinity,
-        // alignment:.leading) keeps it left-aligned right after the back chevron. Rendered as PLAIN content
-        // (not a Button) + onTapGesture so iOS 26 does NOT wrap it in a Liquid Glass pill (flat old look).
-        ToolbarItem(placement: .principal) {
+        // Avatar + name as a NATIVE .topBarLeading toolbar item, left-aligned right after the back chevron
+        // (the .principal title slot CENTERS it, which the user rejected — "avatar and name is center, go
+        // back old one"). SwiftUI owns the slot so there's no NavTitleView titleView-mutation CPU loop.
+        // Rendered as PLAIN content (not a Button) + onTapGesture so iOS 26 does NOT wrap it in a Liquid
+        // Glass pill (flat old look). Tapping opens contact/group info (closing the keyboard first).
+        ToolbarItem(placement: .topBarLeading) {
             headerLabel
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     inputFocused = false
