@@ -1665,9 +1665,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // capped) — attached-to-the-finger up close, physical resistance past the commit point.
             let t = min(0, g.translation(in: collectionView).x)
             let tx = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)
-            // Translate the live cell (the snapshot approach duplicated the content via the frosted header
-            // re-exposing it — reverted). The self-size override + frozen layout keep neighbors stable.
-            cell.transform = CGAffineTransform(translationX: tx, y: 0)
+            // Move the BUBBLE VIEW inside the cell, NOT the cell (Signal's principle, same as the SwiftUI
+            // .offset path the media/reply bubbles use): the cell's frame never changes, so the collection
+            // view has nothing to react to and the neighbors above/below stay frozen. Transforming the
+            // whole CELL was what nudged them (the text-only jump the user isolated).
+            (cell as? UIKitBubbleCell)?.previewBubble.transform = CGAffineTransform(translationX: tx, y: 0)
             let progress = min(1, abs(tx) / 50)
             swipeArrow?.alpha = progress
             swipeArrow?.transform = CGAffineTransform(scaleX: 0.6 + 0.4 * progress, y: 0.6 + 0.4 * progress)
@@ -1788,10 +1790,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let cell = swipingCell
         let arrow = swipeArrow
         swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false
-        let reset = { cell?.transform = .identity; arrow?.alpha = 0 }
+        // Reset the BUBBLE VIEW's transform (we now move the bubble inside the cell, not the cell).
+        let bubble = (cell as? UIKitBubbleCell)?.previewBubble
+        let reset = { bubble?.transform = .identity; cell?.transform = .identity; arrow?.alpha = 0 }
         if animated {
             // Seed the spring with the release velocity so a fast flick snaps back livelier than a slow let-go.
-            let distance = abs(cell?.transform.tx ?? 0)
+            let distance = abs(bubble?.transform.tx ?? 0)
             let v = distance > 0 ? min(3, abs(velocity) / max(1, distance)) : 0.4
             UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: v,
                            options: [.allowUserInteraction], animations: reset) { _ in arrow?.removeFromSuperview() }
