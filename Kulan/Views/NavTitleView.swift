@@ -37,6 +37,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         private let container = TitleContainerView()
         private weak var target: UIViewController?
         private var observation: NSKeyValueObservation?
+        private var reassertScheduled = false   // coalesces KVO re-asserts so they can't storm the bar
 
         init(onTap: @escaping () -> Void) {
             self.onTap = onTap
@@ -73,11 +74,28 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             assertTitleView()
             applyBlurAppearance(to: vc)
             // SwiftUI re-manages the navigationItem on its own update cycles and clears titleView
-            // (the "avatar+name sometimes gone" flicker). Observe it and immediately put ours back.
+            // (the "avatar+name sometimes gone" flicker). Observe it and put ours back — but ASYNC and
+            // coalesced (never synchronously from inside the KVO). Re-asserting synchronously here set
+            // titleView mid-redisplay, which re-triggered _redisplayItems while SwiftUI's own nav-item
+            // reconcile was still clearing it → a synchronous ping-pong that burned 10s of CPU in nav-bar
+            // layout during a push and tripped the 0x8BADF00D scene-update watchdog (device crash). One
+            // deferred re-assert per runloop tick lets SwiftUI's redisplay finish first, so the war can't
+            // form — at worst a one-frame flicker, never a hang.
             if observation == nil, let item = target?.navigationItem {
                 observation = item.observe(\.titleView, options: [.new]) { [weak self] _, _ in
-                    self?.assertTitleView()
+                    self?.scheduleAssertTitleView()
                 }
+            }
+        }
+
+        // Coalesced, asynchronous re-assert: many titleView clears within one SwiftUI update collapse to a
+        // single deferred put-back on the next runloop tick, breaking the synchronous redisplay storm.
+        private func scheduleAssertTitleView() {
+            guard !reassertScheduled else { return }
+            reassertScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                self?.reassertScheduled = false
+                self?.assertTitleView()
             }
         }
 
