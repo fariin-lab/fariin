@@ -4452,8 +4452,8 @@ struct MessageBubble: View, Equatable {
     // their cells; the caption rides below in the SAME bubble (handled by the album branch).
     // Portrait card for the stacked-album look (4:5, capped to the bubble width).
     private var albumCardSize: CGSize {
-        let w = min(maxBubbleWidth * 0.62, 205)
-        return CGSize(width: w, height: (w * 1.28).rounded())
+        let w = min(maxBubbleWidth * 0.70, 228)
+        return CGSize(width: w, height: (w * 1.30).rounded())
     }
 
     // ONE photo card: image cropped to Apple continuous ("squircle") rounded corners, NO border, with a soft
@@ -4468,7 +4468,7 @@ struct MessageBubble: View, Equatable {
                         .foregroundStyle(.white.opacity(0.95)).shadow(color: .black.opacity(0.4), radius: 3)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
             .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
             .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
     }
