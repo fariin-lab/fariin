@@ -3975,12 +3975,6 @@ struct MessageBubble: View, Equatable {
                     // MessageBubble; native text cells keep the UIKit pan. The reply arrow sits in the
                     // vacated space (added after the offset so it stays put).
                     .offset(x: dragX)
-                    .overlay(alignment: .trailing) {
-                        Image(systemName: "arrowshape.turn.up.left.fill")
-                            .font(.system(size: 15)).foregroundStyle(.secondary)
-                            .opacity(Double(min(abs(min(dragX, 0)) / 50, 1)))
-                            .padding(.trailing, -24)
-                    }
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 18)
                             .onChanged { v in
@@ -4022,8 +4016,16 @@ struct MessageBubble: View, Equatable {
             if !isMe { Spacer(minLength: 0) }
         }
         .animation(.easeInOut(duration: 0.4), value: isHighlighted)   // smooth found-result fade (Signal-like)
-        // Swipe-to-reply is handled by the ONE pan gesture on the collection view (NativeMessageList),
-        // not a per-bubble SwiftUI drag — a single recognizer that never fights the scroll.
+        // Reply arrow at a FIXED spot inside the right edge (not riding the bubble → never off-screen).
+        // It fades/scales in with the swipe distance and is revealed in the gap the bubble vacates.
+        .overlay(alignment: .trailing) {
+            Image(systemName: "arrowshape.turn.up.left.fill")
+                .font(.system(size: 16)).foregroundStyle(.secondary)
+                .opacity(Double(min(abs(min(dragX, 0)) / 50, 1)))
+                .scaleEffect(0.7 + 0.3 * min(abs(min(dragX, 0)) / 50, 1))
+                .padding(.trailing, 14)   // consistent inset from the screen's right edge, always visible
+                .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder private var content: some View {
