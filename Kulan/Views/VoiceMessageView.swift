@@ -347,15 +347,16 @@ struct WaveformBars: View {
                 }
             }
             .contentShape(Rectangle())
-            // SEEK IS TAP-ONLY. The old drag-scrub (DragGesture minDistance 0) fired on the first pixel of
-            // ANY touch and synchronously set VoiceScrubState.active so the bubble's reply-swipe would BAIL
-            // — but the waveform covers most of the voice bubble, so that made voice bubbles "laggy / hard
-            // to swipe / fighting the gesture" (user report): the scrub always stole the touch before the
-            // reply could start. A spatial TAP seeks to the tapped position without ever claiming a drag, so
-            // the reply-swipe on a voice bubble is now smooth, stable and independent of playback — exactly
-            // like a text bubble. (onScrub kept for API compatibility; it no longer fires, so VoiceScrubState
-            // never blocks the reply.)
-            .gesture(SpatialTapGesture().onEnded { v in
+            // SEEK IS TAP-ONLY, and the tap is SIMULTANEOUS so it never captures the pan. The old drag-scrub
+            // (DragGesture minDistance 0) claimed the touch and tracked ALL movement — including VERTICAL — so
+            // resting a finger on the waveform (which covers most of the voice bubble) BLOCKED chat scrolling
+            // AND made the reply-swipe bail (user reports: "voice blocks scrolling", "laggy / hard to swipe").
+            // A spatial tap only recognizes a stationary tap: a vertical drag fails it → the collection view's
+            // pan scrolls; a horizontal drag fails it → the bubble's reply-swipe runs; a stationary tap seeks.
+            // simultaneousGesture guarantees it co-exists with (never pre-empts) the scroll pan and the reply
+            // swipe — exactly why the original used simultaneousGesture. (onScrub is now unused; VoiceScrubState
+            // never gets set, so it never blocks the reply.)
+            .simultaneousGesture(SpatialTapGesture().onEnded { v in
                 onSeek(Double(v.location.x / max(1, geo.size.width)))
             })
         }
