@@ -4495,9 +4495,11 @@ struct MessageBubble: View, Equatable {
                 if n == 2 { albumCard(1, s).rotationEffect(.degrees(7)).offset(x: 18, y: 6) }
                 albumCard(0, s)
             } else if n == 3 {
-                albumCard(1, s).rotationEffect(.degrees(-9)).offset(x: -28, y: 8)
-                albumCard(2, s).rotationEffect(.degrees(9)).offset(x: 28, y: 8)
-                albumCard(0, s)                                    // front, center, on top
+                // Loose organic fan (reference): two cards spread UP-and-OUT behind, tilted; the front card
+                // sits lower-center with a slight lean, overlapping both.
+                albumCard(1, s).rotationEffect(.degrees(-14)).offset(x: -30, y: -14)   // back left
+                albumCard(2, s).rotationEffect(.degrees(8)).offset(x: 34, y: -6)       // back right
+                albumCard(0, s).rotationEffect(.degrees(3)).offset(x: 2, y: 16)        // front, on top
             } else {
                 let visible = min(n, 4)
                 ForEach(Array((1..<visible).reversed()), id: \.self) { i in
@@ -4509,8 +4511,8 @@ struct MessageBubble: View, Equatable {
                 albumCard(0, s)                                    // front, on top
             }
         }
-        .padding(.horizontal, n <= 2 ? 14 : 34)   // room for the tilt/peek so it isn't clipped
-        .padding(.vertical, 12)
+        .padding(.horizontal, n <= 2 ? 16 : 46)   // room for the tilt/peek so it isn't clipped by neighbors
+        .padding(.vertical, n <= 2 ? 12 : 30)
         .contentShape(Rectangle())
         .onTapGesture { if message.sendState == nil { openAlbumItem(0) } }
     }
