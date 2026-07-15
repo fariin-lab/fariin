@@ -4456,12 +4456,11 @@ struct MessageBubble: View, Equatable {
         return CGSize(width: w, height: (w * 1.28).rounded())
     }
 
-    // ONE photo card: image cropped to a rounded rect inside a white matte border, with a soft shadow so the
-    // cards read as physical prints. Each card is its own zoom-hero source (matches the viewer covers).
+    // ONE photo card: image cropped to Apple continuous ("squircle") rounded corners, NO border, with a soft
+    // shadow so the stacked cards separate. Each card is its own zoom-hero source (matches the viewer covers).
     private func albumCard(_ i: Int, _ size: CGSize) -> some View {
         albumImage(i)
             .frame(width: size.width, height: size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay {
                 if albumItemIsVideo(i) {
                     Image(systemName: "play.circle.fill")
@@ -4469,10 +4468,8 @@ struct MessageBubble: View, Equatable {
                         .foregroundStyle(.white.opacity(0.95)).shadow(color: .black.opacity(0.4), radius: 3)
                 }
             }
-            .padding(5)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .shadow(color: .black.opacity(0.28), radius: 8, x: 0, y: 4)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
             .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
     }
 
