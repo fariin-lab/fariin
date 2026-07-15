@@ -1386,29 +1386,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // keyboardSessionWasAtBottom term is dead in the native model). computeAtBottom alone is correct.
         guard computeAtBottom() else { return }
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
-        let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int)
-            ?? Int(UIView.AnimationCurve.easeInOut.rawValue)
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
-        _ = curveRaw
-        // ROOT CAUSE of "content drops under the composer for 1-2s then snaps back" (still present on
-        // 330 with the previous willHide animation): the NATIVE model already animates the content down
-        // on close — the composer safeAreaBar rides the keyboard down and `.always` folds the shrinking
-        // safe area into the content inset, which UIKit animates. My willHide ALSO animated the offset,
-        // so TWO owners fought over contentOffset → the drop-then-snap. The fix is to move the offset
-        // NOWHERE here — only mark keyboardAnimating so viewDidLayoutSubviews' per-pass pins stand off
-        // for the duration, letting the single native animation land cleanly. didHide is the backstop.
+        let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 7
+        // ROOT CAUSE of "content drops under the composer for ~1s then snaps back up": the previous
+        // willHide moved the offset NOWHERE and leaned on the native fold + a pinBottom() deferred to
+        // duration+0.02. On device the native fold DROPPED the content under the composer and only the
+        // late pin yanked it back — the exact 1s lag the user sees. keyboardWillShow does NOT have this
+        // bug because it OWNS its animation (rides the offset UP by the keyboard height in lockstep). The
+        // fix is the mirror image: ride the offset DOWN by the keyboard height over the keyboard's own
+        // duration + curve, so the bubbles track the keyboard down and land exactly above the composer —
+        // one owner, no late correction. (kb comes from the BEGIN frame: on a hide the end frame is
+        // off-screen below, so the on-screen height lives in the begin frame.)
+        guard let begin = (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue,
+              let win = view.window else { return }
+        let f = view.convert(begin, from: win.coordinateSpace)
+        let kb = max(0, view.bounds.maxY - f.minY)   // on-screen keyboard height at the start of the hide
+        guard kb > 1 else { return }
+        let targetY = max(minContentOffsetY, collectionView.contentOffset.y - kb)
         keyboardAnimating = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.02) { [weak self] in
-            guard let self else { return }
+        UIView.animate(withDuration: duration, delay: 0,
+                       options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
+                                 .beginFromCurrentState, .allowUserInteraction]) {
+            self.collectionView.contentOffset.y = targetY
+        } completion: { _ in
             self.keyboardAnimating = false
-            // DEFINITIVE end-of-close settle (agent finding: the didHide backstop was raced out by the
-            // keyboardAnimating guard, so the close leaned solely on the native clamp with no guaranteed
-            // correction). We ENTERED willHide only when at the bottom, so pin to bottom now — a no-op if
-            // the native clamp already landed right, an instant correction if it under-landed (a small
-            // gap). Non-animated, fired just after the keyboard animation ends → no visible motion.
-            let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
+            // Settle to the exact bottom once the inset has finished shrinking — a no-op if the ride
+            // landed right, a tiny non-animated correction otherwise.
+            let scrolling = self.collectionView.isDragging || self.collectionView.isTracking
                 || self.collectionView.isDecelerating
-            if !userScrolling, !self.programmaticScrollAnimating, !self.isDisappearing, self.didInitialScroll {
+            if !scrolling, !self.programmaticScrollAnimating, !self.isDisappearing, self.didInitialScroll {
                 UIView.performWithoutAnimation { self.pinBottom() }
             }
             self.settleFlush()
