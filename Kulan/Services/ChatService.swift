@@ -640,6 +640,10 @@ enum ChatService {
         }
 
         let msgRef = convRef.collection("messages").document()
+        // Persist the plaintext I just recorded under the FINAL message id, so once the optimistic bubble
+        // reconciles to this Firestore doc, playing my OWN note hits the cache instantly — no download +
+        // decrypt round-trip (user report: my sent voice note spun on "loading" when I tried to play it).
+        AudioCache.store(data, for: msgRef.documentID)
         let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).m4a.enc")
         let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
         _ = try await ref.putDataAsync(cipher, metadata: sm)

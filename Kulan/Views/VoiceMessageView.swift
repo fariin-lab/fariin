@@ -109,6 +109,10 @@ struct VoiceMessageView: View {
                         .buttonStyle(.plain)
                     }
                 }
+                // Pin the meta row to the waveform's fixed width so the bubble NEVER changes size when the
+                // speed toggle appears on first play (user report: bubble widened after playback). The
+                // waveform is already fixed at 158, so a matching row keeps the whole VStack rock-solid.
+                .frame(width: 158, alignment: .leading)
             }
         }
         .onAppear {
