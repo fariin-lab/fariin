@@ -640,10 +640,12 @@ enum ChatService {
         }
 
         let msgRef = convRef.collection("messages").document()
-        // Persist the plaintext I just recorded under the FINAL message id, so once the optimistic bubble
-        // reconciles to this Firestore doc, playing my OWN note hits the cache instantly — no download +
-        // decrypt round-trip (user report: my sent voice note spun on "loading" when I tried to play it).
+        // Persist the plaintext I just recorded so playing my OWN note NEVER downloads+decrypts (the
+        // "loading" spin). Store under BOTH keys the bubble can be identified by: the FINAL message id
+        // (== the server doc id the reconciled bubble carries) AND the clientId (the optimistic bubble,
+        // and a belt in case reconcile timing differs). VoiceMessageView.load() checks both.
         AudioCache.store(data, for: msgRef.documentID)
+        if let clientId { AudioCache.store(data, for: clientId) }
         let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).m4a.enc")
         let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
         _ = try await ref.putDataAsync(cipher, metadata: sm)

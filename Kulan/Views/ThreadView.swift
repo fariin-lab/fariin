@@ -4046,11 +4046,24 @@ struct MessageBubble: View, Equatable {
 
     @ViewBuilder private var content: some View {
         if message.isAudio {
-            VStack(alignment: .leading, spacing: 4) {
-                replyQuote
+            // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
+            // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
+            // inside a 158-wide frame narrower than the waveform, so it can NEVER widen the bubble. The real
+            // culprit was the `HStack { Spacer(minLength:0); metaRow }` I added for the timestamp: a greedy
+            // Spacer inside the bubble. Its ideal width is 0 (first layout hugs 212), but on the cell
+            // RECONFIGURE that fires when `player != nil` flips true on the first play, SwiftUI re-resolved
+            // the Spacer toward the proposed maxBubbleWidth → that one bubble bloomed and ate the gap to its
+            // neighbors. (Media bubbles never bloom because their metaRow is an .overlay, which doesn't
+            // affect size.) Fix = pin the column to the known 212 and drop the Spacer: no flexible child
+            // left to re-resolve, so the bubble is provably 212 before/during/after playback. metaRow
+            // right-aligns via the VStack's .trailing alignment; the fixed frame also clamps replyQuote's
+            // fill so nothing can bloom.
+            VStack(alignment: .trailing, spacing: 4) {
+                replyQuote.frame(maxWidth: .infinity, alignment: .leading)
                 VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState → the reply pan yields
-                HStack(spacing: 0) { Spacer(minLength: 0); metaRow }   // time+tick on voice (was missing)
+                metaRow   // time+tick, right-aligned; NO greedy Spacer (that was the bloom vector)
             }
+            .frame(width: 212, alignment: .leading)
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))

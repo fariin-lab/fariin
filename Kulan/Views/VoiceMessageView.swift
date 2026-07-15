@@ -193,7 +193,13 @@ struct VoiceMessageView: View {
         }
         // PERSISTENT cache hit → play from the local file instantly, no download, no decrypt (survives
         // relaunch + scroll-away). This is the fix for "voice notes re-download every launch".
-        if let local = AudioCache.url(for: message.id) {
+        // Try the message id first (server id == the docID we stored under at send time), then the
+        // clientId as a belt: my OWN just-sent note is cached under BOTH at send time, so it plays
+        // instantly no matter whether the optimistic bubble has already reconciled to the server id yet.
+        // Without this, a reconciled own-note fell through to the download+decrypt path below and span on
+        // "loading" (user report: "when I send a voice then try to play it just loads").
+        if let local = AudioCache.url(for: message.id)
+            ?? message.clientId.flatMap({ AudioCache.url(for: $0) }) {
             try? AVAudioSession.sharedInstance().setCategory(.playback)
             try? AVAudioSession.sharedInstance().setActive(true)
             player = try? AVAudioPlayer(contentsOf: local)
