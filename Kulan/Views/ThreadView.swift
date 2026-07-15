@@ -4203,35 +4203,28 @@ struct MessageBubble: View, Equatable {
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
-            // Album (2+ photos as ONE message): a grid + one caption.
-            VStack(alignment: .leading, spacing: 0) {
-                albumGrid
+            // PREMIUM STACKED / FANNED CARDS (replaces the old mosaic grid): the album's photos float on the
+            // wallpaper as overlapping white-bordered cards — 2–3 fan out, 4+ form a deck with a
+            // "You sent N photos" header. Tapping opens the full-screen swipeable gallery (openAlbumItem).
+            let n = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
+            VStack(alignment: isMe ? .trailing : .leading, spacing: 5) {
+                if n >= 4 {
+                    Text(isMe ? "You sent \(n) photos" : "\(n) photos")
+                        .font(.system(size: 13)).foregroundStyle(.secondary).padding(.horizontal, 8)
+                }
+                albumStack(n)
+                    .overlay {
+                        if message.sendState == .sending {
+                            ZStack { Color.black.opacity(0.18); UploadingRing() }
+                                .frame(width: albumCardSize.width, height: albumCardSize.height)
+                                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        }
+                    }
                 if !message.text.isEmpty {
-                    HStack(alignment: .bottom, spacing: 6) {
-                        Text(message.text).font(.system(size: 17))   // same as a normal message (caption text is never shrunk)
-                            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
-                        metaRow.padding(.bottom, 1)   // time on EVERY bubble
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    Text(message.text).font(.system(size: 17))
+                        .foregroundStyle(dark ? .white : .black).padding(.horizontal, 8)
                 }
-            }
-            .frame(width: albumWidth)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-            .overlay {
-                if message.sendState == .sending {
-                    ZStack {
-                        Color.black.opacity(0.18)
-                        UploadingRing()
-                    }
-                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if message.text.isEmpty {
-                    metaRow.padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
-                }
+                metaRow.padding(.horizontal, 8)   // time + delivery status
             }
         } else if message.isImage, message.viewOnce {
             // View-once photo: never rendered inline — a "① Photo" pill. The recipient taps it
@@ -4457,6 +4450,74 @@ struct MessageBubble: View, Equatable {
     // Album MOSAIC (not a uniform grid): 2 = side-by-side (or stacked when the shots are
     // wide), 3 = one large + two stacked, 4 = 2×2, 5+ = 2×2 with a "+N" on the last. Photos crop-to-fill
     // their cells; the caption rides below in the SAME bubble (handled by the album branch).
+    // Portrait card for the stacked-album look (4:5, capped to the bubble width).
+    private var albumCardSize: CGSize {
+        let w = min(maxBubbleWidth * 0.62, 205)
+        return CGSize(width: w, height: (w * 1.28).rounded())
+    }
+
+    // ONE photo card: image cropped to a rounded rect inside a white matte border, with a soft shadow so the
+    // cards read as physical prints. Each card is its own zoom-hero source (matches the viewer covers).
+    private func albumCard(_ i: Int, _ size: CGSize) -> some View {
+        albumImage(i)
+            .frame(width: size.width, height: size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay {
+                if albumItemIsVideo(i) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: min(size.width, size.height) * 0.22))
+                        .foregroundStyle(.white.opacity(0.95)).shadow(color: .black.opacity(0.4), radius: 3)
+                }
+            }
+            .padding(5)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .shadow(color: .black.opacity(0.28), radius: 8, x: 0, y: 4)
+            .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
+    }
+
+    // The image/poster content of an album item (local optimistic bytes, else the decrypted remote photo).
+    @ViewBuilder private func albumImage(_ i: Int) -> some View {
+        if !message.localAlbum.isEmpty, message.localAlbum.indices.contains(i), let ui = UIImage(data: message.localAlbum[i]) {
+            Image(uiImage: ui).resizable().scaledToFill()
+        } else if message.album.indices.contains(i) {
+            let it = message.album[i]
+            SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)
+        } else {
+            Rectangle().fill(Color.gray.opacity(0.18))
+        }
+    }
+
+    // Stacked / fanned cards. 2–3 photos FAN OUT (front card centered, the rest tilted behind, peeking left/
+    // right); 4+ form a DECK (up to 4 cards, subtle alternating rotation + outward offset for depth). Front
+    // card is always the first photo, on top. Tapping the stack opens the full album gallery.
+    @ViewBuilder private func albumStack(_ n: Int) -> some View {
+        let s = albumCardSize
+        ZStack {
+            if n <= 2 {
+                if n == 2 { albumCard(1, s).rotationEffect(.degrees(7)).offset(x: 18, y: 6) }
+                albumCard(0, s)
+            } else if n == 3 {
+                albumCard(1, s).rotationEffect(.degrees(-9)).offset(x: -28, y: 8)
+                albumCard(2, s).rotationEffect(.degrees(9)).offset(x: 28, y: 8)
+                albumCard(0, s)                                    // front, center, on top
+            } else {
+                let visible = min(n, 4)
+                ForEach(Array((1..<visible).reversed()), id: \.self) { i in
+                    let dir: CGFloat = (i % 2 == 1) ? -1 : 1
+                    albumCard(i, s)
+                        .rotationEffect(.degrees(Double(dir) * (5 + Double(i) * 1.5)))
+                        .offset(x: dir * CGFloat(16 + i * 5), y: CGFloat(-6 - i * 2))
+                }
+                albumCard(0, s)                                    // front, on top
+            }
+        }
+        .padding(.horizontal, n <= 2 ? 14 : 34)   // room for the tilt/peek so it isn't clipped
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .onTapGesture { if message.sendState == nil { openAlbumItem(0) } }
+    }
+
     @ViewBuilder private var albumGrid: some View {
         let n = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
         let W = albumWidth
