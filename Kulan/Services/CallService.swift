@@ -599,6 +599,17 @@ final class CallService: NSObject {
         ringingWatcher?.remove()
         ringingWatcher = db.collection("calls").document(id).addSnapshotListener { [weak self] snap, _ in
             guard let self, let d = snap?.data() else { return }
+            // GHOST-CALL GUARD: a VoIP push can ring this phone because its push token is still listed under a
+            // DIFFERENT account (a sign-out cleanup that didn't complete). If the call's callee is NOT the
+            // account currently signed in HERE, it isn't for us — end it so it stops ringing. Self-heals stale
+            // tokens no matter why the token wasn't removed. Only when `me` is known (auth restored), so a
+            // legit call is never killed during a cold launch before auth loads.
+            if !self.me.isEmpty, self.state == .incoming,
+               let callee = d["callee"] as? String, !callee.isEmpty, callee != self.me {
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                self.remoteEnded(reason: .hangup)   // ends the CallKit ring on this device
+                return
+            }
             if (d["status"] as? String) == "ended", self.state == .incoming {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
                 self.remoteEnded(reason: EndReason(rawValue: d["endReason"] as? String ?? "") ?? .hangup)

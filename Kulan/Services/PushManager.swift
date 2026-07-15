@@ -169,11 +169,20 @@ enum Push {
     static func unregister() async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let doc = Firestore.firestore().collection("users").document(uid)
-        if let token = Messaging.messaging().fcmToken {
-            try? await doc.updateData(["fcmTokens": FieldValue.arrayRemove([token])])
-        }
-        if let voip = latestVoipToken {
-            try? await doc.updateData(["voipTokens": FieldValue.arrayRemove([voip])])
+        var updates: [String: Any] = [:]
+        if let token = Messaging.messaging().fcmToken { updates["fcmTokens"] = FieldValue.arrayRemove([token]) }
+        if let voip = latestVoipToken { updates["voipTokens"] = FieldValue.arrayRemove([voip]) }
+        guard !updates.isEmpty else { return }
+        // ONE atomic write, RETRIED. The old code swallowed failures (try?), so a transient blip at sign-out
+        // left this phone's tokens under the signed-out account → calls to it kept ringing this phone after
+        // switching accounts (ghost calls). Retry so the removal actually lands. (CallService.watchRingingCancel
+        // is the belt: it ends any call whose callee isn't the account signed in here.)
+        for attempt in 0..<3 {
+            do { try await doc.updateData(updates); return }
+            catch {
+                if attempt == 2 { return }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
         }
     }
 }
