@@ -3718,6 +3718,18 @@ struct MessageBubble: View, Equatable {
             .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
     }
 
+    // Same as bodyLine but the TEXT fills the hugged column FIRST, so the overlaid time anchors to the
+    // bubble's right edge — not the text's natural right edge. Used only in the reply-quote layout, where
+    // the QUOTE can drive the bubble wider than the body: with plain bodyLine the time landed mid-bubble
+    // (user report: reply timestamp not right-aligned). The frame's .infinity is clamped by the overlay's
+    // offered width (= the template's hugged bubble width), so long text still wraps at the bubble cap.
+    private var bodyLineFilled: some View {
+        (bodyText + metaPlaceholder.foregroundColor(.clear))
+            .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+    }
+
     // Signal's footer rule: the timestamp shares the message's LAST line when it fits, else drops to
     // its OWN line. The inline invisible spacer below reserves the trailing room for the fit case; when
     // the widest unbreakable word leaves no room for the time (a long word / gibberish token that fills
@@ -4033,6 +4045,7 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState → the reply pan yields
+                HStack(spacing: 0) { Spacer(minLength: 0); metaRow }   // time+tick on voice (was missing)
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
@@ -4064,6 +4077,7 @@ struct MessageBubble: View, Equatable {
                 .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                 .contentShape(Rectangle())
                 .onTapGesture { if message.sendState == nil { onOpenFile(message) } }   // only opened files
+                HStack(spacing: 0) { Spacer(minLength: 0); metaRow }   // time+tick on files (was missing)
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -4079,6 +4093,10 @@ struct MessageBubble: View, Equatable {
                         // (context menu) and swipe-to-reply never engaged over it. A clear, hit-testable
                         // overlay makes SwiftUI own the region; touches then reach the ancestor gestures.
                         .overlay(Color.clear.contentShape(Rectangle()))
+                        .overlay(alignment: .bottomTrailing) {
+                            metaRow.padding(.horizontal, 7).padding(.vertical, 3)   // time+tick over the gif (was missing)
+                                .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
+                        }
                 }
             }
         } else if message.isVideo {
@@ -4384,7 +4402,7 @@ struct MessageBubble: View, Equatable {
                     // same body/footer overlap). FILLED like the quote (user report): when the QUOTE
                     // drives the bubble width, an unstretched body line kept its trailing edge — and the
                     // time — mid-bubble; filling anchors the time to the bubble's right edge, always.
-                    bodyLine.frame(maxWidth: .infinity, alignment: .leading)
+                    bodyLineFilled
                 }
             }
             .padding(.horizontal, 15)
