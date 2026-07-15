@@ -1749,14 +1749,17 @@ struct ThreadView: View {
         // Avatar + name as a NATIVE left toolbar item (replaces the old NavTitleView titleView-mutation that
         // fought SwiftUI's NavigationStack and looped the CPU). .topBarLeading places it right after the back
         // chevron = the same left-aligned look, but SwiftUI owns the slot so there is no redisplay loop.
-        // Tapping it opens the contact/group info (closing the keyboard first so it doesn't linger behind).
+        // Rendered as PLAIN content (not a Button) + an onTapGesture, so iOS 26 does NOT wrap it in a Liquid
+        // Glass pill (Buttons get the glass; plain title-style content does not — user wants the old flat look).
+        // Tapping opens the contact/group info (closing the keyboard first so it doesn't linger behind).
         ToolbarItem(placement: .topBarLeading) {
-            Button {
-                inputFocused = false
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                showContactInfo = true
-            } label: { headerLabel }
-            .buttonStyle(.plain)
+            headerLabel
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    inputFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    showContactInfo = true
+                }
         }
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
