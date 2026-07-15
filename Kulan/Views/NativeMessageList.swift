@@ -1388,35 +1388,42 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
         let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 7
-        // ROOT CAUSE of "content drops under the composer for ~1s then snaps back up": the previous
-        // willHide moved the offset NOWHERE and leaned on the native fold + a pinBottom() deferred to
-        // duration+0.02. On device the native fold DROPPED the content under the composer and only the
-        // late pin yanked it back — the exact 1s lag the user sees. keyboardWillShow does NOT have this
-        // bug because it OWNS its animation (rides the offset UP by the keyboard height in lockstep). The
-        // fix is the mirror image: ride the offset DOWN by the keyboard height over the keyboard's own
-        // duration + curve, so the bubbles track the keyboard down and land exactly above the composer —
-        // one owner, no late correction. (kb comes from the BEGIN frame: on a hide the end frame is
-        // off-screen below, so the on-screen height lives in the begin frame.)
+        // ROOT CAUSE of "content drops behind the composer for ~1s then snaps back up" (DEEP dive): on
+        // CLOSE there are TWO owners of contentOffset.y and they fight. Owner A = UIKit's `.always` fold:
+        // as the keyboard safe area shrinks, adjustedContentInset.bottom drops by kb, so the old at-bottom
+        // offset now exceeds maxContentOffsetY and UIKit CLAMPS the offset down by kb — an active mover our
+        // `keyboardAnimating` flag CANNOT gate. Owner B (my previous willHide) ALSO animated the offset down
+        // by kb on its own curve. The two disagree mid-flight → content dips UNDER the composer, then a
+        // completion pinBottom() forces the final offset ~a beat later = the visible snap-up. (keyboardWill-
+        // Show has no twin: on OPEN the inset GROWS, and UIKit does NOT auto-scroll when the bottom inset
+        // grows, so the fold is PASSIVE and willShow is the sole owner. Mirroring open onto close was
+        // doomed — it added a 2nd active owner.) FIX = make close a single owner: SUPPRESS the fold for the
+        // duration (contentInsetAdjustmentBehavior = .never) and carry the keyboard as a MANUAL bottom inset
+        // equal to the current folded inset (so nothing changes at this instant — no start-jump), then
+        // animate the manual inset AND the offset down by kb TOGETHER. With the fold off there is no second
+        // clamp to fight; the content rides down once and lands above the composer, no correction needed.
         guard let begin = (note.userInfo?[UIResponder.keyboardFrameBeginUserInfoKey] as? NSValue)?.cgRectValue,
               let win = view.window else { return }
         let f = view.convert(begin, from: win.coordinateSpace)
         let kb = max(0, view.bounds.maxY - f.minY)   // on-screen keyboard height at the start of the hide
         guard kb > 1 else { return }
-        let targetY = max(minContentOffsetY, collectionView.contentOffset.y - kb)
         keyboardAnimating = true
+        let baseBottom = composerBarH + 12            // the resting, keyboard-down inset updateBottomInset uses
+        // Swap the folded keyboard inset for an equal MANUAL inset, preserving the offset across the swap
+        // (changing contentInset can move contentOffset — stash + restore).
+        let stash = collectionView.contentOffset
+        collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.contentInset.bottom = baseBottom + kb   // == the old adjusted bottom (composer + keyboard)
+        collectionView.setContentOffset(stash, animated: false)
+        let targetY = max(minContentOffsetY, stash.y - kb)     // == the new bottom once the inset loses kb
         UIView.animate(withDuration: duration, delay: 0,
                        options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
                                  .beginFromCurrentState, .allowUserInteraction]) {
-            self.collectionView.contentOffset.y = targetY
+            self.collectionView.contentInset.bottom = baseBottom   // shrink the inset by kb…
+            self.collectionView.contentOffset.y = targetY          // …and follow it down by kb, in lockstep
         } completion: { _ in
+            self.collectionView.contentInsetAdjustmentBehavior = .always   // keyboard gone → the fold re-adds 0
             self.keyboardAnimating = false
-            // Settle to the exact bottom once the inset has finished shrinking — a no-op if the ride
-            // landed right, a tiny non-animated correction otherwise.
-            let scrolling = self.collectionView.isDragging || self.collectionView.isTracking
-                || self.collectionView.isDecelerating
-            if !scrolling, !self.programmaticScrollAnimating, !self.isDisappearing, self.didInitialScroll {
-                UIView.performWithoutAnimation { self.pinBottom() }
-            }
             self.settleFlush()
         }
     }
@@ -1655,14 +1662,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 swipingCell = nil; swipingId = nil; return
             }
             swipingCell = cell; swipingId = id; swipeTriggered = false
-            // LOCK vertical scrolling for the duration of the reply-swipe (user request): the swipe owns the
-            // touch, the conversation must not scroll up/down at the same time. Disabling the collection
-            // view's own scroll cancels any in-flight vertical pan; our swipePan is a separate recognizer so
-            // it keeps tracking. Restored on end/cancel.
-            let stash = collectionView.contentOffset
-            collectionView.isScrollEnabled = false
-            collectionView.setContentOffset(stash, animated: false)
-            layout.frozen = true   // freeze frames for the swipe (belt); self-size override does the real work
+            // LOCK vertical scrolling for the swipe (user request: the swipe owns the touch) WITHOUT the
+            // neighbor-jump. Deep root cause of the text-only jump: `isScrollEnabled = false` forces
+            // UIScrollView to RE-CLAMP contentOffset — off an exact row boundary that clamp shifted the
+            // whole list ~a row (documented in commit ce50004), and it also flipped isTracking false
+            // mid-touch, opening the pin/settle guards. Instead cancel just the scroll view's PAN recognizer:
+            // it stops any in-flight vertical scroll but does NOT re-evaluate contentOffset/inset, so no
+            // clamp, no jump. Our swipePan is a separate recognizer and keeps tracking. Restored on end.
+            collectionView.panGestureRecognizer.isEnabled = false
+            layout.frozen = true   // freeze frames for the swipe (belt); horizontal transform never reflows
             addSwipeArrow(for: cell)
         case .changed:
             guard let cell = swipingCell else { return }
