@@ -99,19 +99,26 @@ struct VoiceMessageView: View {
                         Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
                             .transition(.opacity)
                     }
-                    // Speed toggle (1× / 1.5× / 2×) — appears once the note is loaded.
-                    if player != nil {
-                        Button { cycleRate() } label: {
-                            Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(tint.opacity(0.16), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
+                    // Speed toggle (1× / 1.5× / 2×) shown ALWAYS — not gated on `player != nil`.
+                    // ROOT CAUSE of "the bubble changes size once played / spacing between notes disappears"
+                    // (user clue: "happens when the x1 tab appears"): the cell is PRE-MEASURED by the
+                    // collection view while player == nil (no toggle), but the toggle capsule is TALLER than
+                    // the plain duration text, so when it appeared on first play the content grew past the
+                    // measured cell height and overflowed into the next bubble (the "spacing disappears").
+                    // Rendering it unconditionally makes the pre-measure and the played render IDENTICAL, so
+                    // nothing shifts. Before load it simply pre-selects the rate cycleRate() applies on play.
+                    Button { cycleRate() } label: {
+                        Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(tint.opacity(0.16), in: Capsule())
                     }
+                    .buttonStyle(.plain)
                 }
-                // Pin the meta row to the waveform's fixed width so the bubble NEVER changes size when the
-                // speed toggle appears on first play (user report: bubble widened after playback). The
-                // waveform is already fixed at 158, so a matching row keeps the whole VStack rock-solid.
+                // Pin the meta row to the waveform's fixed width. Height needs NO hard-coding now: the toggle
+                // renders unconditionally (above), so the row's tallest element (the 11pt bold capsule) is
+                // ALWAYS present → the row height is constant, measure == render, and it stays correct under
+                // Dynamic Type (a fixed height would clip large text). The unheard dot is shorter than the
+                // text, so its fade in/out never changes the height either.
                 .frame(width: 158, alignment: .leading)
             }
         }
@@ -340,15 +347,17 @@ struct WaveformBars: View {
                 }
             }
             .contentShape(Rectangle())
-            // simultaneousGesture GUARANTEES this fires alongside the bubble's reply-swipe (highPriority
-            // didn't always co-fire inside the hosted collection-view cell, so the scrub flag wasn't set
-            // in time and the reply still won). onChanged sets the flag synchronously → the reply bails.
-            .simultaneousGesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in
-                    onScrub(true)
-                    onSeek(Double(v.location.x / max(1, geo.size.width)))
-                }
-                .onEnded { _ in onScrub(false) })
+            // SEEK IS TAP-ONLY. The old drag-scrub (DragGesture minDistance 0) fired on the first pixel of
+            // ANY touch and synchronously set VoiceScrubState.active so the bubble's reply-swipe would BAIL
+            // — but the waveform covers most of the voice bubble, so that made voice bubbles "laggy / hard
+            // to swipe / fighting the gesture" (user report): the scrub always stole the touch before the
+            // reply could start. A spatial TAP seeks to the tapped position without ever claiming a drag, so
+            // the reply-swipe on a voice bubble is now smooth, stable and independent of playback — exactly
+            // like a text bubble. (onScrub kept for API compatibility; it no longer fires, so VoiceScrubState
+            // never blocks the reply.)
+            .gesture(SpatialTapGesture().onEnded { v in
+                onSeek(Double(v.location.x / max(1, geo.size.width)))
+            })
         }
     }
 }
