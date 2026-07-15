@@ -391,6 +391,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // keyboardAnimating makes every per-pass pin stand off.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
+        // OPEN ride (Telegram's model — WindowContent.swift): on keyboard open, growing the safe area
+        // does NOT move the offset, and our stickBottom pin snapped (couldn't detect the keyboard
+        // animation) → the bubbles JUMPED to their new spot instead of gliding up. This animates the
+        // content UP by the keyboard height using the keyboard's OWN duration + curve (curve 7 = the
+        // private keyboard curve), exactly like Telegram feeds the keyboard curve into its transition —
+        // so the bubbles ride the keyboard in lockstep. Close stays native (keyboardWillHide).
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow(_:)),
+                                               name: UIResponder.keyboardWillShowNotification, object: nil)
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -1401,6 +1409,47 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
                 || self.collectionView.isDecelerating
             if !userScrolling, !self.programmaticScrollAnimating, !self.isDisappearing, self.didInitialScroll {
+                UIView.performWithoutAnimation { self.pinBottom() }
+            }
+            self.settleFlush()
+        }
+    }
+
+    // Telegram-style OPEN ride: animate the content UP by the keyboard height with the keyboard's exact
+    // duration + curve, so the bubbles glide up in lockstep with the keyboard (not a snap). Only fires
+    // when at the bottom; keyboardAnimating gates the per-pass stickBottom pin for the whole ride.
+    @objc private func keyboardWillShow(_ note: Notification) {
+        guard shouldAnimateKeyboardChanges, didInitialScroll, !isDisappearing else { return }
+        if let pop = navigationController?.interactivePopGestureRecognizer {
+            switch pop.state { case .possible, .failed: break; default: return }
+        }
+        let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+        guard !userScrolling else { return }
+        guard computeAtBottom() else { return }   // only ride the content when the reader is at the bottom
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        guard duration > 0 else { return }   // hardware keyboard / instant: the native fold handles it
+        let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int) ?? 7
+        guard let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+              let win = view.window else { return }
+        let f = view.convert(end, from: win.coordinateSpace)
+        let kb = max(0, view.bounds.maxY - f.minY)   // on-screen keyboard height
+        guard kb > 1 else { return }
+        // Ride UP by the keyboard height (the native fold grows the inset over the same animation, so the
+        // newest message stays just above the composer). The private keyboard curve (raw << 16) makes the
+        // motion track the keyboard frame-for-frame — Telegram's exact technique.
+        let targetY = max(minContentOffsetY, collectionView.contentOffset.y + kb)
+        keyboardAnimating = true
+        UIView.animate(withDuration: duration, delay: 0,
+                       options: [UIView.AnimationOptions(rawValue: UInt(curveRaw) << 16),
+                                 .beginFromCurrentState, .allowUserInteraction]) {
+            self.collectionView.contentOffset.y = targetY
+        } completion: { _ in
+            self.keyboardAnimating = false
+            // Settle to the exact bottom (the inset has finished growing by now) — no-op if the ride
+            // landed right, a tiny non-animated correction otherwise.
+            let scrolling = self.collectionView.isDragging || self.collectionView.isTracking
+                || self.collectionView.isDecelerating
+            if !scrolling, !self.programmaticScrollAnimating, !self.isDisappearing, self.didInitialScroll {
                 UIView.performWithoutAnimation { self.pinBottom() }
             }
             self.settleFlush()
