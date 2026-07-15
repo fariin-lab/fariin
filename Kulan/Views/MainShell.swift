@@ -1412,6 +1412,13 @@ struct ChatRow: View, Equatable {
             previewRow("person.crop.circle.fill", lastSenderPrefix + "Contact")
         } else if decodedLast.hasPrefix(Message.locationMarker) {
             previewRow("mappin.circle.fill", lastSenderPrefix + "Location")
+        } else if decodedLast.hasPrefix(Message.pinMarker) {
+            // Pin notice — a marker THIS build fully supports. It must render as a friendly preview, NOT
+            // the "newer version" fallback below (user report: both users on the latest build saw
+            // "Message from a newer version" for a pin because pin had no case here and fell through to
+            // the generic feature-marker catch-all). Every KNOWN marker (contact/location/pin) is handled
+            // explicitly above; only genuinely-unknown markers reach the fallback.
+            previewRow("pin.fill", lastSenderPrefix + "Pinned a message")
         } else if decodedLast.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil {
             // A newer-version feature this build doesn't recognize → never show the raw marker.
             previewRow("arrow.up.circle.fill", "Message from a newer version")
