@@ -1597,9 +1597,10 @@ struct ThreadView: View {
     private func flashAndScroll(_ id: String) {
         nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
         highlightId = id
-        // Signal's found-result emphasis: the mark stays a couple of seconds so the eye can land on it,
-        // then fades smoothly (the bubble's own 0.4s ease drives the fade).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+        // Signal's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
+        // (the bubble's own 0.4s ease drives the fade). The old 2.2s hold felt sluggish across every
+        // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ Signal's timing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             if highlightId == id { withAnimation { highlightId = nil } }
         }
     }
