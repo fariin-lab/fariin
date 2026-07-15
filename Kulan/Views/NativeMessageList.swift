@@ -249,6 +249,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var doubleTapGesture: UITapGestureRecognizer!
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
+    private var holdRestoreY: CGFloat?                        // offset captured at long-press start (position-neutral hold)
+    private var holdComposerH: CGFloat = 0                    // composer height at long-press start (detect a reply/edit action)
     private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
@@ -1645,10 +1647,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         switch g.state {
         case .began:
             interactionHoldUntil = .distantFuture
+            // Capture the resting position at press-start. A menu long-press has ZERO scroll intent, but the
+            // hold folds the whole press into isInMotion, so the post-open settle burst (late height reports,
+            // decrypt appends, read/delivery updates — only present on FIRST entry) is DEFERRED and then
+            // released all at once by the scheduled settleFlush below, whose pinBottom/reconcile move the
+            // offset = the "all bubbles auto-scroll on the first long-press" report. We restore this offset
+            // after that flush so the press itself never scrolls.
+            holdRestoreY = collectionView.contentOffset.y
+            holdComposerH = composerBarH
         case .ended, .cancelled, .failed:
             // Keep the gate up briefly past the lift-off: the menu presentation is still settling.
             interactionHoldUntil = Date().addingTimeInterval(1.0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) { [weak self] in self?.settleFlush() }
+            let anchorY = holdRestoreY
+            let startComposerH = holdComposerH
+            holdRestoreY = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) { [weak self] in
+                guard let self else { return }
+                self.settleFlush()   // land the deferred reconfigures/heights (repaint) …
+                // … then undo any scroll they caused — UNLESS an action legitimately changed the layout: a
+                // Reply/Edit grew the composer, the keyboard is animating, a programmatic jump is running, or
+                // the user is now scrolling. Clamped to valid content so a height change can't over-scroll.
+                if let anchorY, self.composerBarH == startComposerH, !self.keyboardAnimating,
+                   !self.programmaticScrollAnimating, !self.collectionView.isDragging,
+                   !self.collectionView.isTracking, !self.collectionView.isDecelerating {
+                    let clamped = min(max(self.minContentOffsetY, anchorY), self.maxContentOffsetY)
+                    if abs(self.collectionView.contentOffset.y - clamped) > 0.5 {
+                        UIView.performWithoutAnimation {
+                            self.collectionView.setContentOffset(CGPoint(x: 0, y: clamped), animated: false)
+                        }
+                    }
+                }
+            }
         default: break
         }
     }
