@@ -2474,7 +2474,12 @@ struct ThreadView: View {
             if incomingMissed { return "phone.arrow.down.left" }
             return mine ? "phone.arrow.up.right" : "phone.arrow.down.left"
         }()
-        let iconColor: Color = incomingMissed ? .red : (mine ? Theme.onAccent(dark) : Theme.accent(dark))
+        // Match the REGULAR bubble palette so the call bubble follows the user's chosen chat colour instead
+        // of always being the brand accent (user report: "call bubble is a different colour even when I
+        // change the bubble colour"). myFill = the per-chat colour or the default bubble; text is white on it,
+        // exactly like every other sent bubble (onMyBubble).
+        let myBubbleFill: AnyShapeStyle = chatColorSpec?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark))
+        let iconColor: Color = incomingMissed ? .red : (mine ? .white : Theme.accent(dark))
         let circleBg: Color = mine ? Color.white.opacity(0.22)
             : (incomingMissed ? Color.red.opacity(0.14) : Theme.accent(dark).opacity(0.14))
 
@@ -2491,14 +2496,14 @@ struct ThreadView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(statusText)
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(mine ? Theme.onAccent(dark) : .primary)
+                        .foregroundStyle(mine ? Color.white : .primary)
                     Text(detail)
                         .font(.system(size: 12))
-                        .foregroundStyle(mine ? Theme.onAccent(dark).opacity(0.75) : .secondary)
+                        .foregroundStyle(mine ? Color.white.opacity(0.75) : .secondary)
                 }
             }
             .padding(.vertical, 8).padding(.horizontal, 12)
-            .background(mine ? Theme.accent(dark) : Theme.received(dark))
+            .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so

@@ -1462,25 +1462,39 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             keyboardOverlap = 0
             updateBottomInset()
         }
-        // AUTHORITATIVE end of the close: the keyboard is fully gone and the native fold has finished. This is
-        // the BACKSTOP the pure-native close (keyboardWillHide) deliberately relies on — the fold rides the
-        // content down cleanly during the animation, and here we make the FINAL position exact. Clear the gate
-        // FIRST (willHide only raised it to stand the per-pass pins down for the fold; there is no animation to
-        // fight now), then do ONE non-animated corrective pin + a settleFlush.
-        let wasCloseFromBottom = keyboardCloseFromBottom
-        keyboardCloseFromBottom = false
+        // AUTHORITATIVE end of the close. keyboardCloseFromBottom was set in willHide when the close STARTED at
+        // the bottom, and is CLEARED by scrollViewDidScroll the moment the reader flicks up into history during
+        // the fold — so a history reader is NEVER pinned (that missing scroll-away invalidation was the
+        // "scroll up → auto-scrolls back down" yank). We KEEP the flag alive through the settle window below and
+        // consume it at the end.
         keyboardAnimating = false   // authoritative clear (the willHide fallback timer becomes a no-op)
         let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        // Pin to the bottom when the close STARTED at the bottom — using the captured truth, NOT the live
-        // computeAtBottom(): if the fold under-lands (a gap above the composer) the live read is >44 = false,
-        // and gating on it would leave the gap uncorrected (the exact hole the verification pass found). Also
-        // hands-off during a user scroll or a programmatic jump (tapping a reply quote dismisses the keyboard
-        // AND starts a jump — pinning would cancel it). A reader deep in history never set the flag, so is
-        // untouched. Non-animated: a no-op if the fold landed clean, an instant correction if it did not.
-        if wasCloseFromBottom, !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
+        if keyboardCloseFromBottom, !userScrolling, !programmaticScrollAnimating, !isDisappearing, didInitialScroll {
             UIView.performWithoutAnimation { pinBottom() }
         }
         settleFlush()   // land any messages that arrived and were deferred during the close window
+        // The composer is a SwiftUI safeAreaBar whose close settles a BEAT LATE and does NOT reliably trigger
+        // this VC's viewDidLayoutSubviews, so a single pin here can land before the inset settles → the content
+        // drops behind the composer until a natural layout pass ~1s later (the drop-then-recover bug). Build 340
+        // MASKED it: its on-screen diagnostic label called setNeedsLayout on every keyboard event, forcing those
+        // passes; removing the diagnostic (341) re-exposed it. Fix = force our own layout + re-pin across the
+        // settle window. Every tick BAILS if the reader is scrolling OR scrolled away (keyboardCloseFromBottom is
+        // cleared in scrollViewDidScroll), so a history reader is never yanked.
+        let settleTicks: [Double] = [0.08, 0.18, 0.32, 0.5, 0.8]
+        for delay in settleTicks {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.keyboardCloseFromBottom,
+                      !self.collectionView.isDragging, !self.collectionView.isTracking,
+                      !self.collectionView.isDecelerating, !self.programmaticScrollAnimating,
+                      !self.isDisappearing, self.didInitialScroll else { return }
+                self.view.layoutIfNeeded()   // settle the composer inset (updateBottomInset) BEFORE pinning
+                UIView.performWithoutAnimation { self.pinBottom() }
+            }
+        }
+        // Consume the flag just after the window so stale re-pins stop and the next close starts fresh.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (settleTicks.last ?? 0.8) + 0.05) { [weak self] in
+            self?.keyboardCloseFromBottom = false
+        }
     }
 
     // Backgrounding force-dismisses the keyboard WITHOUT a frame notification. Record overlap = 0 so the
@@ -1889,6 +1903,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // Scrolled away from the bottom mid-keyboard-session → the definitive settle at keyboardDidHide
             // must NOT yank the reader back down (they left the bottom deliberately, keyboard up).
             if keyboardSessionWasAtBottom, safeDistanceFromBottom > 44 { keyboardSessionWasAtBottom = false }
+            // SAME for the CLOSE flag (the "scroll up during the keyboard fold → auto-scrolls back down" yank):
+            // keyboardCloseFromBottom drives keyboardDidHide's pin + the settle re-pins; once the user has
+            // scrolled up (userDriven so this is a REAL scroll, not the drop-recovery re-pin), invalidate it so
+            // neither fires. Gated on userDriven so the content DROP (not user-driven) never clears it — the
+            // settle re-pins still correct the drop.
+            if keyboardCloseFromBottom, safeDistanceFromBottom > 44 { keyboardCloseFromBottom = false }
             // stickBottom is otherwise only recomputed on LAYOUT passes, which don't run during quiet
             // reading — invalidate it the moment the user scrolls away so no stale TRUE survives (S1).
             if stickBottom, safeDistanceFromBottom > 44 { stickBottom = false }
