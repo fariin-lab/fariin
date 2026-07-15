@@ -4468,8 +4468,8 @@ struct MessageBubble: View, Equatable {
                         .foregroundStyle(.white.opacity(0.95)).shadow(color: .black.opacity(0.4), radius: 3)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
             .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
     }
 
