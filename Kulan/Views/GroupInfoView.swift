@@ -112,7 +112,7 @@ struct GroupInfoView: View {
         }
         .sheet(item: $memberAction) { m in
             GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "",
-                             canManageAdmins: can(.addAdmins), canRestrict: can(.banUsers),
+                             canManageAdmins: iAmOwner, canRestrict: can(.banUsers),
                              currentRights: conv?.adminRights[m.id], mutedUntil: conv?.restrictedUntil[m.id] ?? 0)
                 .presentationDetents([.medium, .large])
         }

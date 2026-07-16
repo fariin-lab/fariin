@@ -60,7 +60,7 @@ struct PollBubbleContent: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(poll.question).font(.system(size: 16, weight: .semibold))
-                Text(poll.multiple ? "Select one or more" : "Anonymous poll")
+                Text(poll.multiple ? "Select one or more" : "Select one")
                     .font(.caption2).opacity(0.7)
             }
             ForEach(Array(poll.options.enumerated()), id: \.offset) { i, opt in

@@ -38,6 +38,11 @@ struct MainShell: View {
         .onChange(of: AppRouter.shared.pendingChatId) { _, id in
             if id != nil { tab = 0 }
         }
+        // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
+        // it so the sheet isn't dropped on a hidden tab.
+        .onChange(of: AppRouter.shared.pendingInviteCode) { _, code in
+            if code != nil { tab = 0 }
+        }
         // Call UI is mounted at the root (CallContainer in RootView) so it survives all
         // navigation. Here we only start listening for incoming calls.
         .onAppear {
@@ -1026,7 +1031,7 @@ struct ChatsView: View {
                 get: { router.pendingInviteCode.map { InviteCodeItem(code: $0) } },
                 set: { router.pendingInviteCode = $0?.code }
             )) { item in
-                JoinGroupSheet(code: item.code).presentationDetents([.medium])
+                JoinGroupSheet(code: item.code).presentationDetents([.large])
             }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {

@@ -373,8 +373,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func isOwner(_ me: String) -> Bool { !createdBy.isEmpty && createdBy == me }
 
     // Per-flag admin rights (Telegram-style). Slugs kept small, mapped to what Kulan actually gates.
+    // Delegatable admin rights. Managing the admin TEAM (promote/demote/set-rights) is deliberately
+    // NOT here — it is owner-only, so a limited admin can never mint an admin more powerful than
+    // themselves or demote a peer the owner appointed.
     enum Right: String, CaseIterable, Identifiable {
-        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls, addAdmins
+        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -384,7 +387,6 @@ struct Conversation: Identifiable, Equatable, Hashable {
             case .inviteUsers:    return "Add members"
             case .pinMessages:    return "Pin messages"
             case .manageCalls:    return "Manage video chats"
-            case .addAdmins:      return "Add new admins"
             }
         }
     }
@@ -422,7 +424,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // member restricted from sending text.
     func canSend(_ me: String) -> Bool {
         if !isGroup { return true }
-        if onlyAdminsSend && !admins.contains(me) { return false }
+        if onlyAdminsSend && !admins.contains(me) && !isOwner(me) { return false }
         return true
     }
     /// Send gate that also honours a live restriction (needs `now` for the expiry check).

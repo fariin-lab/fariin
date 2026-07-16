@@ -866,7 +866,7 @@ struct ThreadView: View {
             GroupMemberSheet(cid: cid, member: m,
                              iAmAdmin: conversation?.isAdmin(me) ?? false,
                              ownerUid: conversation?.createdBy ?? "",
-                             canManageAdmins: conversation?.adminCan(me, .addAdmins) ?? false,
+                             canManageAdmins: (conversation?.createdBy == me && !(conversation?.createdBy.isEmpty ?? true)),
                              canRestrict: conversation?.adminCan(me, .banUsers) ?? false,
                              currentRights: conversation?.adminRights[m.id],
                              mutedUntil: conversation?.restrictedUntil[m.id] ?? 0)
@@ -1265,6 +1265,7 @@ struct ThreadView: View {
                 onSaveImage: { m in Task { await saveImageToPhotos(m) } },
                 canPin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
                 isPinned: repo.pinnedMessageIds.contains(msg.id),
+                restricted: iAmMuted,
                 onResend: { m in resend(m) },
                 onJumpTo: { id in jumpTo(id) },
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
@@ -3586,7 +3587,7 @@ struct MessageBubble: View, Equatable {
             && l.isHighlighted == r.isHighlighted && l.searchTerm == r.searchTerm
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
-            && l.isViewedOnce == r.isViewedOnce
+            && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
     }
 
     let message: Message
@@ -3622,6 +3623,7 @@ struct MessageBubble: View, Equatable {
     var onSaveImage: (Message) -> Void = { _ in }
     var canPin: Bool = true
     var isPinned: Bool = false
+    var restricted: Bool = false   // I'm muted in this group → can't react / edit (parity with the composer)
 
     private var fileSizeLabel: String {
         guard let b = message.fileSize else { return "Document" }
@@ -3980,14 +3982,14 @@ struct MessageBubble: View, Equatable {
                         // Delete/Report below a divider (Select sits ABOVE Delete, not after it).
                         // Save Image / Info stay as context-specific items in place.
                         Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
-                        if message.sendState == nil {   // can't react until the message is on the server
+                        if message.sendState == nil && !restricted {   // can't react until on server; muted members can't react
                             Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
                         }
                         // Edit: text messages only — NOT a contact/location card (its "text" is a marker;
                         // editing would corrupt the card and expose the raw payload in the composer).
                         // GIF/file are excluded too (their text is never rendered, so an "edit" would be
                         // invisible), and Edit only shows inside the server-enforced edit window.
-                        if isMe && !message.isImage && !message.isAudio && !message.isCall
+                        if isMe && !restricted && !message.isImage && !message.isAudio && !message.isCall
                             && !message.isFeatureMarker && !message.isGif && !message.isFile
                             && message.sendState == nil
                             && Date().timeIntervalSince(message.createdAt) < Limits.editWindowSeconds {
@@ -4025,7 +4027,7 @@ struct MessageBubble: View, Equatable {
                     }
                     // Double-tap to quick-react with a heart.
                     .highPriorityGesture(TapGesture(count: 2).onEnded {
-                        guard message.sendState == nil else { return }   // not until it's on the server
+                        guard message.sendState == nil, !restricted else { return }   // not until on server; muted can't react
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         onReact(myReaction == "❤️" ? nil : "❤️")
                     })

@@ -129,6 +129,11 @@ enum ChatService {
             "users": FieldValue.arrayUnion(newOnes),
             "updatedAt": FieldValue.serverTimestamp(),
         ]
+        // Re-adding a removed member lifts their ban — but ONLY when an ADMIN adds. A non-admin member
+        // (membersCanAdd) writes through a field-whitelisted rule branch that forbids `bannedUids`, so
+        // touching it would reject the whole add. Admins write through the any-field admin branch.
+        let iAmGroupAdmin = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isAdmin(uid) ?? false
+        if iAmGroupAdmin { update["bannedUids"] = FieldValue.arrayRemove(newOnes) }
         var addedNames: [String] = []
         var keyless: [String] = []
         for u in newOnes {
@@ -158,6 +163,12 @@ enum ChatService {
         try await convRef.updateData([
             "users": FieldValue.arrayRemove([removed]),
             "admins": FieldValue.arrayRemove([removed]),
+            // Ban the removed user so they can't rejoin via an invite link (a "kick" must stick). Re-adding
+            // them (Add Members) or approving a join request lifts the ban. Clear their admin/restriction state.
+            "bannedUids": FieldValue.arrayUnion([removed]),
+            "adminRights.\(removed)": FieldValue.delete(),
+            "restrictedFlags.\(removed)": FieldValue.delete(),
+            "restrictedUntil.\(removed)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
         ])
     }
@@ -226,6 +237,10 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData([
             "admins": FieldValue.arrayUnion([promoted]),
+            // An admin is never restricted — clear any lingering mute so a later demote can't silently
+            // re-apply a stale "forever" restriction.
+            "restrictedFlags.\(promoted)": FieldValue.delete(),
+            "restrictedUntil.\(promoted)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
         ])
         try await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
@@ -242,7 +257,7 @@ enum ChatService {
         try await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name) as admin")
     }
 
-    /// Set an admin's granted per-flag rights (owner/admin-with-addAdmins). `rights` is a subset of
+    /// Set an admin's granted per-flag rights (owner-only in the UI). `rights` is a subset of
     /// Conversation.Right raw values; an empty/omitted map means the admin has ALL rights (legacy).
     static func setAdminRights(cid: String, uid: String, rights: [String]) async throws {
         try await db.collection("conversations").document(cid).updateData([

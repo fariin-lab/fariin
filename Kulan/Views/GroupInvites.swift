@@ -70,6 +70,12 @@ enum GroupInviteService {
     @discardableResult
     static func createInvite(cid: String, groupTitle: String, groupPhoto: String?,
                              expireAt: Double = 0, usageLimit: Int = 0, requestApproval: Bool = false) async throws -> String {
+        // Revoke any existing primary link first, so a group never ends up with two live links (one of
+        // which the admin can no longer see or revoke).
+        if let snap = try? await db.collection("conversations").document(cid).getDocument(),
+           let old = snap.data()?["inviteCode"] as? String, !old.isEmpty {
+            try? await db.collection("invites").document(old).updateData(["revoked": true])
+        }
         let code = randomCode()
         try await db.collection("invites").document(code).setData([
             "cid": cid,
