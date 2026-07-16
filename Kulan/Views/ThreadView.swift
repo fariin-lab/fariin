@@ -487,13 +487,23 @@ struct ThreadView: View {
     // Split into several layers so each modifier chain stays under the type-checker limit.
     private var threadCovers: some View {
         threadScroll
-        // Avatar + name live in a NATIVE .topBarLeading toolbar item (added in chatToolbar), left-aligned
-        // right after the back button. This REPLACES the old NavTitleView (a UIViewRepresentable that set
-        // navigationItem.titleView directly): mutating the nav item externally fought SwiftUI's Navigation-
-        // Stack reconciler — SwiftUI cleared the titleView every update, our KVO re-added it, each re-add
-        // forced -[UINavigationBar _redisplayItems] → SwiftUI re-ran its nav update → repeat. That loop
-        // burned 71% CPU for 126s and hung on exit (0x8BADF00D). A native toolbar item lets SwiftUI OWN the
-        // slot, so there is no fight. (The header profile-open onTap moved into the toolbar item too.)
+        // Avatar + name installed as the native UINavigationItem.titleView (left-aligned after the back
+        // button, slides with the native swipe-back). NavTitleView clears the bar appearance overrides,
+        // so there's no border — same native bar as the Chats list. RESTORED build-341 header on explicit
+        // repeated user request ("completely go back build 341"). Known risk: setting titleView directly
+        // fights SwiftUI's NavigationStack reconciler and can spin a CPU redisplay loop (0x8BADF00D hang);
+        // the coalesced async re-assert in NavTitleView is the mitigation.
+        .background(NavTitleView(onTap: {
+            // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
+            // and is still there when you swipe back (the reported bug).
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            showContactInfo = true
+        }) {
+            // Selection mode replaces the title with just the toolbar (Delete All / count / X) — hide the
+            // avatar + name so it reads as a clean selection bar.
+            if !selecting { headerLabel }
+        })
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back
@@ -1746,24 +1756,9 @@ struct ThreadView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
-        // Avatar + name in the NATIVE .topBarLeading toolbar slot — anchored right after the back chevron
-        // with the SYSTEM's exact inter-item spacing, so it is ROCK-STABLE and adapts perfectly to every
-        // iPhone (identical on every render/device). This is deliberately NOT the .principal (title) slot:
-        // the title slot slides with the swipe-back but its horizontal position depends on the trailing
-        // call-buttons' width and is NON-deterministic — the gap jumped between renders (user: "that space
-        // is not stable"). Trilemma: topBarLeading = stable+left but no slide; principal-centered = stable+
-        // slide but centered (rejected); principal-forced-left = left+slide but UNSTABLE; the old NavTitleView
-        // = all three but a 71% CPU hang. Stable native spacing wins. Plain content (no Button) so iOS 26
-        // does NOT wrap it in a Liquid Glass pill (flat look). Tap opens contact/group info (keyboard first).
-        ToolbarItem(placement: .topBarLeading) {
-            headerLabel
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    inputFocused = false
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    showContactInfo = true
-                }
-        }
+        // Avatar + name are the native UINavigationItem.titleView (see NavTitleView, installed in
+        // threadCovers), left-aligned after the back button and sliding with the swipe-back — only the
+        // call/video buttons live here in the toolbar.
         // iOS 26 wraps toolbar items in a Liquid Glass pill by default; opt the header OUT so the avatar+name
         // reads as a flat title like before (user: "make it how it was"). Applied to the ToolbarItem (it's
         // ToolbarContent), not the inner view.
