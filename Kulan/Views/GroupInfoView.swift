@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import FirebaseFirestore
 
 // Group info: avatar (admin can change) + name (admin can rename), member list with Admin
 // badges, admin actions (add / remove / promote), and Leave. Live from ConversationsRepository.
@@ -27,6 +28,9 @@ struct GroupInfoView: View {
     @State private var uploadingAvatar = false
     @State private var showCall = false
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
+    @State private var showInvite = false
+    @State private var joinReqs: [JoinRequest] = []
+    @State private var reqListener: ListenerRegistration?
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
 
@@ -84,6 +88,7 @@ struct GroupInfoView: View {
         List {
             headerSection
             settingsSection
+            if iAmAdmin && !joinReqs.isEmpty { joinRequestsSection }
             mediaSection
             membersSection
             leaveSection
@@ -91,6 +96,16 @@ struct GroupInfoView: View {
         .navigationTitle("Group Info")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
+        .onAppear {
+            guard reqListener == nil else { return }
+            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        }
+        .onDisappear { reqListener?.remove(); reqListener = nil }
+        .sheet(isPresented: $showInvite) {
+            InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
+                            initialCode: conv?.inviteCode ?? "")
+                .presentationDetents([.medium, .large])
+        }
         .sheet(item: $memberAction) { m in
             GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "",
                              currentRights: conv?.adminRights[m.id], mutedUntil: conv?.restrictedUntil[m.id] ?? 0)
@@ -193,10 +208,29 @@ struct GroupInfoView: View {
             .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
+    private var joinRequestsSection: some View {
+        Section("Join requests (\(joinReqs.count))") {
+            ForEach(joinReqs) { r in
+                HStack(spacing: 12) {
+                    AvatarView(name: r.name, photoUrl: r.photo, size: 34)
+                    Text(r.name).foregroundStyle(.primary)
+                    Spacer()
+                    Button { Task { try? await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
+                        Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                    }.buttonStyle(.plain)
+                    Button { Task { try? await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
+                        Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.red)
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     private var membersSection: some View {
         Section(conv?.memberCountLabel.capitalized ?? "Members") {
             if canAdd {
                 Button { showAdd = true } label: { rowLabel("person.badge.plus", "Add Members", .blue) }
+                Button { showInvite = true } label: { rowLabel("link", "Invite via Link", .teal) }
             }
             ForEach(sortedMembers, id: \.self) { uid in memberRow(uid) }
         }

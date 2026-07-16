@@ -297,6 +297,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
     // Per-flag admin rights (Telegram model): uid → granted right slugs. An admin with NO entry
     // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
+    var inviteCode: String             // group's current primary invite-link code ("" = none)
     var adminRights: [String: [String]]
     // Per-member restrictions (Telegram bannedRights): uid → restricted flags + an auto-expiring
     // `until` timestamp (ms). Empty flags or a past `until` = no restriction. See Conversation.Restrict.
@@ -338,6 +339,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsSend = data["onlyAdminsSend"] as? Bool ?? false
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
+        self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])

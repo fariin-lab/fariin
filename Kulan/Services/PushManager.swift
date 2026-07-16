@@ -120,6 +120,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     var pendingChatId: String?    // a chat to open from a notification tap
     var pendingChatName: String?  // fallback header name when the conv isn't in the cache yet
     var pendingChatPhoto: String? // fallback header photo
+    var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
     var activeChatId: String?     // the chat currently on screen (suppresses its own banners)
 }
 

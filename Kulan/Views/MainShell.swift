@@ -1022,6 +1022,12 @@ struct ChatsView: View {
             }
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
             .sheet(isPresented: $showArchived) { ArchivedChatsView() }
+            .sheet(item: Binding(
+                get: { router.pendingInviteCode.map { InviteCodeItem(code: $0) } },
+                set: { router.pendingInviteCode = $0?.code }
+            )) { item in
+                JoinGroupSheet(code: item.code).presentationDetents([.medium])
+            }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteSelected, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelected() }

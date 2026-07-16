@@ -20,8 +20,16 @@ struct KulanApp: App {
     }
 
     // kulan://u/<handle> — open (or start) a chat with that user.
+    // kulan://g/<code>   — open the "Join group" sheet for an invite link.
     private func handleDeepLink(_ url: URL) {
-        guard url.scheme == "kulan", url.host == "u" else { return }
+        guard url.scheme == "kulan" else { return }
+        if url.host == "g" {
+            let code = url.pathComponents.last(where: { $0 != "/" }) ?? ""
+            guard !code.isEmpty else { return }
+            AppRouter.shared.pendingInviteCode = code
+            return
+        }
+        guard url.host == "u" else { return }
         let handle = url.pathComponents.last(where: { $0 != "/" }) ?? ""
         guard !handle.isEmpty else { return }
         Task {
