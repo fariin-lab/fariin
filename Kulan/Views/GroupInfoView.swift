@@ -523,7 +523,7 @@ struct GroupMemberSheet: View {
     let member: GroupInfoView.MemberAction
     let iAmAdmin: Bool
     let ownerUid: String
-    var canManageAdmins: Bool = false      // I hold the Add-admins right → can promote/demote
+    var canManageAdmins: Bool = false      // I'm the owner → can promote/demote + set admin rights
     var canRestrict: Bool = false          // I hold the Restrict-members right → can remove/mute
     var currentRights: [String]? = nil      // this admin's granted rights (nil = all/legacy)
     var mutedUntil: Double = 0              // ms; > now = currently restricted
