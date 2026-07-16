@@ -31,11 +31,13 @@ struct GroupInfoView: View {
     @State private var showInvite = false
     @State private var joinReqs: [JoinRequest] = []
     @State private var reqListener: ListenerRegistration?
+    @State private var confirmDelete = false
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
+    private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
     // Admins always can; members can too when the matching permission toggle is on.
     private var canEditInfo: Bool { iAmAdmin || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { iAmAdmin || (conv?.membersCanAdd ?? false) }
@@ -320,6 +322,12 @@ struct GroupInfoView: View {
             Button(role: .destructive) { confirmReport = true } label: {
                 HStack(spacing: 12) { chip("exclamationmark.bubble.fill", .red); Text("Report Group").foregroundStyle(.red) }
             }
+            // Only the owner can permanently delete the whole group (for everyone).
+            if iAmOwner {
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    HStack(spacing: 12) { chip("trash.slash.fill", .red); Text("Delete Group").foregroundStyle(.red) }
+                }
+            }
         } footer: {
             if let label = createdByLabel {
                 Text(label).frame(maxWidth: .infinity).multilineTextAlignment(.center).padding(.top, 6)
@@ -342,6 +350,12 @@ struct GroupInfoView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("The group will be reported to moderators for review.") }
+        .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Group", role: .destructive) {
+                Task { try? await GroupInviteService.deleteGroup(cid: cid); await MainActor.run { dismiss() } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
     }
 
     // "Created by you · 26 Jun 2026" footer, like the reference group screens.

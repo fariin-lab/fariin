@@ -123,6 +123,11 @@ enum GroupInviteService {
         _ = try await fns.httpsCallable("denyJoinRequest").call(["cid": cid, "uid": uid])
     }
 
+    /// Owner-only: permanently delete the whole group (messages + invites + conversation).
+    static func deleteGroup(cid: String) async throws {
+        _ = try await fns.httpsCallable("deleteGroup").call(["cid": cid])
+    }
+
     /// Live pending join-requests for a group (admins show these).
     static func joinRequests(cid: String, _ cb: @escaping ([JoinRequest]) -> Void) -> ListenerRegistration {
         db.collection("conversations").document(cid).collection("joinRequests")
