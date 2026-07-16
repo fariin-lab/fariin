@@ -1746,26 +1746,23 @@ struct ThreadView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
-        // Avatar + name in the NATIVE .principal (title) slot so it SLIDES with the swipe-back like the old
-        // build-341 header did — but FORCED left-aligned: the title slot centers its content by default (the
-        // user rejected centered), so we widen it to the full title area and push the label to the leading
-        // edge with a trailing Spacer. This is the SAFE way to get left-aligned + sliding: SwiftUI owns the
-        // slot, unlike the old NavTitleView which set navigationItem.titleView directly and fought the
-        // NavigationStack reconciler in a 71% CPU loop that hung the app. Plain content (no Button) = no iOS
-        // 26 Liquid Glass pill; only the label is tappable (Spacer isn't) so it can't eat the call buttons.
-        ToolbarItem(placement: .principal) {
-            HStack(spacing: 0) {
-                headerLabel
-                    .padding(.leading, 28)   // ~12px gap from the back chevron (title frame anchors at the bar's ~16pt leading edge; chevron right edge ~x34)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        inputFocused = false
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                        showContactInfo = true
-                    }
-                Spacer(minLength: 0)
-            }
-            .frame(width: max(0, UIScreen.main.bounds.width - 150), alignment: .leading)
+        // Avatar + name in the NATIVE .topBarLeading toolbar slot — anchored right after the back chevron
+        // with the SYSTEM's exact inter-item spacing, so it is ROCK-STABLE and adapts perfectly to every
+        // iPhone (identical on every render/device). This is deliberately NOT the .principal (title) slot:
+        // the title slot slides with the swipe-back but its horizontal position depends on the trailing
+        // call-buttons' width and is NON-deterministic — the gap jumped between renders (user: "that space
+        // is not stable"). Trilemma: topBarLeading = stable+left but no slide; principal-centered = stable+
+        // slide but centered (rejected); principal-forced-left = left+slide but UNSTABLE; the old NavTitleView
+        // = all three but a 71% CPU hang. Stable native spacing wins. Plain content (no Button) so iOS 26
+        // does NOT wrap it in a Liquid Glass pill (flat look). Tap opens contact/group info (keyboard first).
+        ToolbarItem(placement: .topBarLeading) {
+            headerLabel
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    inputFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    showContactInfo = true
+                }
         }
         // iOS 26 wraps toolbar items in a Liquid Glass pill by default; opt the header OUT so the avatar+name
         // reads as a flat title like before (user: "make it how it was"). Applied to the ToolbarItem (it's
