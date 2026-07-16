@@ -218,8 +218,8 @@ struct GroupInfoView: View {
             ForEach(joinReqs) { r in
                 HStack(spacing: 12) {
                     AvatarView(name: r.name, photoUrl: r.photo, size: 34)
-                    Text(r.name).foregroundStyle(.primary)
-                    Spacer()
+                    Text(r.name).foregroundStyle(.primary).lineLimit(1)
+                    Spacer(minLength: 8)
                     Button { Task { try? await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
                         Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
                     }.buttonStyle(.plain)

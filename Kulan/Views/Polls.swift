@@ -84,7 +84,10 @@ struct PollBubbleContent: View {
                     .foregroundStyle(accent).font(.system(size: 16))
                 Text(opt).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 6)
-                Text("\(Int((fraction(i) * 100).rounded()))%").font(.caption.weight(.semibold)).opacity(0.85)
+                // Fixed size (not .caption) so it can't grow at large Dynamic Type and crush the narrow
+                // fixed-width poll bubble's option label.
+                Text("\(Int((fraction(i) * 100).rounded()))%")
+                    .font(.system(size: 13, weight: .semibold)).opacity(0.85).layoutPriority(1)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
