@@ -1910,17 +1910,18 @@ struct ThreadView: View {
             // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
             // bar in the recents strip takes its place).
             if !recentsHasSelection {
-                HStack(spacing: 12) {
-                    // "Photos" removed — the recents grid above already provides the photo library.
-                    // "Contacts" tile is added when the send-contact feature (picker + contact-card message)
-                    // is built as a focused, tested piece.
-                    // Order (user spec): GIF · Files · Contacts · Location. GIF + Files are live;
-                    // Contacts + Location show the coming-soon sheet until their features are built.
-                    attachTile("sparkles", "GIF") { showGifPicker = true }
-                    attachTile("doc", "Files") { showFileImporter = true }
-                    attachTile("person.crop.circle", "Contacts") { showContactShare = true }
-                    attachTile("location", "Location") { showLocationShare = true }
-                    if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
+                // Horizontally scrollable so the row never clips a tile (5 tiles overflow a phone width
+                // once Poll is added in groups) — swipe to reach them all.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        // Order (user spec): GIF · Files · Contacts · Location · Poll (groups only).
+                        attachTile("sparkles", "GIF") { showGifPicker = true }
+                        attachTile("doc", "Files") { showFileImporter = true }
+                        attachTile("person.crop.circle", "Contacts") { showContactShare = true }
+                        attachTile("location", "Location") { showLocationShare = true }
+                        if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
+                    }
+                    .padding(.horizontal, 16)
                 }
                 .padding(.vertical, 12)
             }
