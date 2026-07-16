@@ -1756,7 +1756,7 @@ struct ThreadView: View {
         ToolbarItem(placement: .principal) {
             HStack(spacing: 0) {
                 headerLabel
-                    .padding(.leading, 44)   // clear the back chevron (the wide title frame anchors at the bar's left edge)
+                    .padding(.leading, 30)   // ~14px gap from the back chevron (title frame anchors at the bar's ~16pt leading edge; chevron right edge ~x34)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         inputFocused = false
