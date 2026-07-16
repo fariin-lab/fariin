@@ -784,7 +784,7 @@ struct ThreadView: View {
                     .sorted { $0.createdAt < $1.createdAt },
                 me: me, cid: cid, title: title,
                 nameFor: { personName($0) },
-                canUnpin: !isGroup || (conversation?.isAdmin(me) ?? false),
+                canUnpin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
                 onUnpin: { id in Task { await ChatService.removePinnedMessage(cid, id) } },
                 onTap: { id in
                     showPinnedSheet = false
@@ -857,7 +857,11 @@ struct ThreadView: View {
         .sheet(item: $tappedMember) { m in
             GroupMemberSheet(cid: cid, member: m,
                              iAmAdmin: conversation?.isAdmin(me) ?? false,
-                             ownerUid: conversation?.createdBy ?? "")
+                             ownerUid: conversation?.createdBy ?? "",
+                             canManageAdmins: conversation?.adminCan(me, .addAdmins) ?? false,
+                             canRestrict: conversation?.adminCan(me, .banUsers) ?? false,
+                             currentRights: conversation?.adminRights[m.id],
+                             mutedUntil: conversation?.restrictedUntil[m.id] ?? 0)
                 .presentationDetents([.medium, .large])
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
@@ -1064,7 +1068,7 @@ struct ThreadView: View {
                 Spacer(minLength: 0)
                 // Pin icon → context menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
                 Menu {
-                    if !isGroup || (conversation?.isAdmin(me) ?? false) {
+                    if !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false) {
                         Button {
                             Task { await ChatService.removePinnedMessage(cid, pid) }
                             if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
@@ -1144,7 +1148,7 @@ struct ThreadView: View {
             if conversation?.createdBy == me {
                 Text("You created this group").font(.caption).foregroundStyle(.secondary)
             }
-            if (conversation?.isAdmin(me) ?? false) || (conversation?.membersCanAdd ?? false) {
+            if (conversation?.adminCan(me, .inviteUsers) ?? false) || (conversation?.membersCanAdd ?? false) {
                 Button { showGroupAdd = true } label: {
                     Label("Add Members", systemImage: "person.badge.plus")
                         .font(.subheadline.weight(.medium))
@@ -1251,7 +1255,7 @@ struct ThreadView: View {
                 },
                 onOpenFile: { m in openFile(m) },
                 onSaveImage: { m in Task { await saveImageToPhotos(m) } },
-                canPin: !isGroup || (conversation?.isAdmin(me) ?? false),
+                canPin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
                 isPinned: repo.pinnedMessageIds.contains(msg.id),
                 onResend: { m in resend(m) },
                 onJumpTo: { id in jumpTo(id) },

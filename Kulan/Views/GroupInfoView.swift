@@ -38,9 +38,11 @@ struct GroupInfoView: View {
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
     private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
-    // Admins always can; members can too when the matching permission toggle is on.
-    private var canEditInfo: Bool { iAmAdmin || (conv?.membersCanEditInfo ?? false) }
-    private var canAdd: Bool { iAmAdmin || (conv?.membersCanAdd ?? false) }
+    // Per-flag admin right check (owner = all; legacy admin with no adminRights entry = all).
+    private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
+    // An admin with the matching right can; members can too when the group's permission toggle is on.
+    private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
+    private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
     var body: some View {
         Group {   // pushed from the chat header → uses the parent nav bar (no nested stack)
@@ -90,7 +92,7 @@ struct GroupInfoView: View {
         List {
             headerSection
             settingsSection
-            if iAmAdmin && !joinReqs.isEmpty { joinRequestsSection }
+            if can(.inviteUsers) && !joinReqs.isEmpty { joinRequestsSection }
             mediaSection
             membersSection
             leaveSection
@@ -110,6 +112,7 @@ struct GroupInfoView: View {
         }
         .sheet(item: $memberAction) { m in
             GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "",
+                             canManageAdmins: can(.addAdmins), canRestrict: can(.banUsers),
                              currentRights: conv?.adminRights[m.id], mutedUntil: conv?.restrictedUntil[m.id] ?? 0)
                 .presentationDetents([.medium, .large])
         }
@@ -241,8 +244,8 @@ struct GroupInfoView: View {
     private var settingsSection: some View {
         Section {
             Button { showMute = true } label: { rowLabel("bell.slash.fill", "Mute Notifications", .gray) }
-            // Disappearing messages is a group-wide setting → admin-only to change.
-            if iAmAdmin {
+            // Disappearing messages is a group-wide setting → needs the Change-info right to edit.
+            if can(.changeInfo) {
                 Button { showDisappear = true } label: {
                     HStack {
                         rowLabel("timer", "Disappearing Messages", .orange)
@@ -257,8 +260,8 @@ struct GroupInfoView: View {
                     Text(disappearLabel).foregroundStyle(.secondary)
                 }
             }
-            // Announcement mode (admin): only admins can send. Enforced in the message rules.
-            if iAmAdmin {
+            // Announcement mode + who-can-do-what: group governance → needs the Change-info right.
+            if can(.changeInfo) {
                 Toggle(isOn: Binding(
                     get: { conv?.onlyAdminsSend ?? false },
                     set: { v in Task { try? await ChatService.setOnlyAdminsSend(cid: cid, v) } }
@@ -520,6 +523,8 @@ struct GroupMemberSheet: View {
     let member: GroupInfoView.MemberAction
     let iAmAdmin: Bool
     let ownerUid: String
+    var canManageAdmins: Bool = false      // I hold the Add-admins right → can promote/demote
+    var canRestrict: Bool = false          // I hold the Restrict-members right → can remove/mute
     var currentRights: [String]? = nil      // this admin's granted rights (nil = all/legacy)
     var mutedUntil: Double = 0              // ms; > now = currently restricted
     @Environment(\.dismiss) private var dismiss
@@ -570,19 +575,24 @@ struct GroupMemberSheet: View {
                         } label: { Label("Message", systemImage: "message") }
                     }
                 }
-                // The owner is protected: no admin can demote or remove them.
-                if iAmAdmin && member.id != me && !isOwner {
+                // The owner is protected: no admin can demote or remove them. Promote/demote needs the
+                // Add-admins right; removing a member needs the Restrict-members right.
+                if member.id != me && !isOwner && (canManageAdmins || canRestrict) {
                     Section {
-                        if member.isAdmin {
-                            Button("Remove as Admin") {
-                                Task { try? await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
-                            }
-                        } else {
-                            Button("Make Admin") {
-                                Task { try? await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                        if canManageAdmins {
+                            if member.isAdmin {
+                                Button("Remove as Admin") {
+                                    Task { try? await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                }
+                            } else {
+                                Button("Make Admin") {
+                                    Task { try? await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                }
                             }
                         }
-                        Button("Remove from Group", role: .destructive) { confirmRemove = true }
+                        if canRestrict {
+                            Button("Remove from Group", role: .destructive) { confirmRemove = true }
+                        }
                     }
                 }
                 // Per-flag admin permissions — owner-only, for an admin who isn't the owner.
@@ -599,8 +609,8 @@ struct GroupMemberSheet: View {
                         }
                     }
                 }
-                // Restrictions — any admin can mute a regular member with an auto-expiring timeout.
-                if iAmAdmin && !member.isAdmin && !isOwner && member.id != me {
+                // Restrictions — an admin with the Restrict right can mute a regular member (auto-expiring).
+                if canRestrict && !member.isAdmin && !isOwner && member.id != me {
                     Section("Restrictions") {
                         if isMuted {
                             Button("Lift restrictions") {
