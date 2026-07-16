@@ -295,6 +295,13 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var onlyAdminsSend: Bool           // announcement mode: only admins may send (groups)
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
+    // Per-flag admin rights (Telegram model): uid → granted right slugs. An admin with NO entry
+    // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
+    var adminRights: [String: [String]]
+    // Per-member restrictions (Telegram bannedRights): uid → restricted flags + an auto-expiring
+    // `until` timestamp (ms). Empty flags or a past `until` = no restriction. See Conversation.Restrict.
+    var restrictedFlags: [String: [String]]
+    var restrictedUntil: [String: Double]
     var lastReactionEnc: String?       // sealed emoji of the newest reaction (list preview)
     var lastReactionBy: String         // who reacted ("" = none)
     var lastReactionToAuthor: String   // author of the reacted-to message
@@ -331,6 +338,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.onlyAdminsSend = data["onlyAdminsSend"] as? Bool ?? false
         self.membersCanAdd = data["membersCanAdd"] as? Bool ?? false
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
+        self.adminRights = stringArrayMap(data["adminRights"])
+        self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
+        self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String
         self.lastReactionBy = data["lastReactionBy"] as? String ?? ""
         self.lastReactionToAuthor = data["lastReactionToAuthor"] as? String ?? ""
@@ -358,8 +368,65 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // ── Group helpers ──
     var isGroup: Bool { convType == "group" }
     func isAdmin(_ me: String) -> Bool { admins.contains(me) }
-    // Announcement mode: in a group with onlyAdminsSend, non-admins can't send.
-    func canSend(_ me: String) -> Bool { !isGroup || !onlyAdminsSend || admins.contains(me) }
+    func isOwner(_ me: String) -> Bool { !createdBy.isEmpty && createdBy == me }
+
+    // Per-flag admin rights (Telegram-style). Slugs kept small, mapped to what Kulan actually gates.
+    enum Right: String, CaseIterable, Identifiable {
+        case changeInfo, deleteMessages, banUsers, inviteUsers, pinMessages, manageCalls, addAdmins
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .changeInfo:     return "Change group info"
+            case .deleteMessages: return "Delete messages"
+            case .banUsers:       return "Restrict / remove members"
+            case .inviteUsers:    return "Add members"
+            case .pinMessages:    return "Pin messages"
+            case .manageCalls:    return "Manage video chats"
+            case .addAdmins:      return "Add new admins"
+            }
+        }
+    }
+    /// Can `uid` perform `right`? Owner → always. Admin with no adminRights entry → all (legacy).
+    /// Admin with an entry → only the granted slugs. Non-admin → never.
+    func adminCan(_ uid: String, _ right: Right) -> Bool {
+        if isOwner(uid) { return true }
+        guard admins.contains(uid) else { return false }
+        guard let granted = adminRights[uid] else { return true }   // legacy admin = full rights
+        return granted.contains(right.rawValue)
+    }
+
+    // Per-member restrictions (Telegram bannedRights). Slugs the client enforces at send time.
+    enum Restrict: String, CaseIterable, Identifiable {
+        case sendText, sendMedia, sendVoice, sendStickers, sendPolls, sendReactions, pinMessages, addMembers, changeInfo
+        var id: String { rawValue }
+    }
+    /// Flags currently restricting `uid` (empty once the `until` timestamp passes). Admins/owner are never restricted.
+    func activeRestrictions(_ uid: String, now: Double) -> Set<String> {
+        if isOwner(uid) || admins.contains(uid) { return [] }
+        guard (restrictedUntil[uid] ?? 0) > now, let flags = restrictedFlags[uid], !flags.isEmpty else { return [] }
+        return Set(flags)
+    }
+    func isRestricted(_ uid: String, _ r: Restrict, now: Double) -> Bool {
+        activeRestrictions(uid, now: now).contains(r.rawValue)
+    }
+    /// The "mute everything" preset = every send flag restricted (what the simple Mute action sets).
+    static let muteAllFlags: [String] = [Restrict.sendText, .sendMedia, .sendVoice, .sendStickers, .sendPolls, .sendReactions].map(\.rawValue)
+    /// True if `uid` is fully muted (can't send any content) right now.
+    func isMutedMember(_ uid: String, now: Double) -> Bool {
+        activeRestrictions(uid, now: now).contains(Restrict.sendText.rawValue)
+    }
+
+    // Announcement mode: in a group with onlyAdminsSend, non-admins can't send. Also blocks a
+    // member restricted from sending text.
+    func canSend(_ me: String) -> Bool {
+        if !isGroup { return true }
+        if onlyAdminsSend && !admins.contains(me) { return false }
+        return true
+    }
+    /// Send gate that also honours a live restriction (needs `now` for the expiry check).
+    func canSend(_ me: String, now: Double) -> Bool {
+        canSend(me) && !isMutedMember(me, now: now)
+    }
     /// Everyone but me (the fan-out set; N-1 people in a group).
     func others(_ me: String) -> [String] { users.filter { $0 != me } }
     /// Header title: group name for groups, the other person's name for 1:1.
@@ -491,6 +558,10 @@ private func doubleMap(_ any: Any?) -> [String: Double] {
 private func boolMap(_ any: Any?) -> [String: Bool] {
     guard let m = any as? [String: Any] else { return [:] }
     return m.compactMapValues { $0 as? Bool }
+}
+private func stringArrayMap(_ any: Any?) -> [String: [String]] {
+    guard let m = any as? [String: Any] else { return [:] }
+    return m.compactMapValues { ($0 as? [Any])?.compactMap { $0 as? String } }
 }
 
 // MARK: - Shared contact card (rides the encrypted text pipeline as a marker — no new message fields)

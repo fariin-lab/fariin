@@ -231,14 +231,58 @@ enum ChatService {
         try await writeSystemMessage(cid: cid, text: "\(myName()) made \(name) an admin")
     }
 
-    /// Demote an admin back to a regular member (admin) + system message.
+    /// Demote an admin back to a regular member (admin) + system message. Clears any per-flag grant.
     static func demoteGroupAdmin(cid: String, uid demoted: String, name: String) async throws {
         let convRef = db.collection("conversations").document(cid)
         try await convRef.updateData([
             "admins": FieldValue.arrayRemove([demoted]),
+            "adminRights.\(demoted)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
         ])
         try await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name) as admin")
+    }
+
+    /// Set an admin's granted per-flag rights (owner/admin-with-addAdmins). `rights` is a subset of
+    /// Conversation.Right raw values; an empty/omitted map means the admin has ALL rights (legacy).
+    static func setAdminRights(cid: String, uid: String, rights: [String]) async throws {
+        try await db.collection("conversations").document(cid).updateData([
+            "admins": FieldValue.arrayUnion([uid]),   // granting rights implies admin
+            "adminRights.\(uid)": rights,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ])
+    }
+
+    /// Restrict a member with an auto-expiring timeout (Telegram bannedRights model). `flags` is a
+    /// subset of Conversation.Restrict raw values; `until` is an absolute ms timestamp (0 = clear).
+    static func restrictMember(cid: String, uid: String, name: String, flags: [String], until: Double) async throws {
+        let convRef = db.collection("conversations").document(cid)
+        if flags.isEmpty || until <= Date().timeIntervalSince1970 * 1000 {
+            try await convRef.updateData([
+                "restrictedFlags.\(uid)": FieldValue.delete(),
+                "restrictedUntil.\(uid)": FieldValue.delete(),
+                "updatedAt": FieldValue.serverTimestamp(),
+            ])
+            try await writeSystemMessage(cid: cid, text: "\(myName()) lifted the restrictions on \(name)")
+        } else {
+            try await convRef.updateData([
+                "restrictedFlags.\(uid)": flags,
+                "restrictedUntil.\(uid)": until,
+                "updatedAt": FieldValue.serverTimestamp(),
+            ])
+            try await writeSystemMessage(cid: cid, text: "\(myName()) restricted \(name)")
+        }
+    }
+
+    /// Convenience: fully mute a member (block all sending) for `seconds` (0 = forever).
+    static func muteMember(cid: String, uid: String, name: String, seconds: Double) async throws {
+        let forever = 60.0 * 60 * 24 * 365 * 50   // ~50y sentinel = "forever"
+        let until = (Date().timeIntervalSince1970 + (seconds > 0 ? seconds : forever)) * 1000
+        try await restrictMember(cid: cid, uid: uid, name: name, flags: Conversation.muteAllFlags, until: until)
+    }
+
+    /// Lift all restrictions on a member.
+    static func unmuteMember(cid: String, uid: String, name: String) async throws {
+        try await restrictMember(cid: cid, uid: uid, name: name, flags: [], until: 0)
     }
 
     private static func myName() -> String {

@@ -475,6 +475,8 @@ struct ThreadView: View {
                 removedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotSendAnnouncement {
                 announcementBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if iAmMuted {
+                restrictedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if repo.iBlocked {
                 blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
@@ -2889,6 +2891,20 @@ struct ThreadView: View {
 
     private var announcementBar: some View {
         Label("Only admins can send messages", systemImage: "megaphone")
+            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.bar)
+    }
+
+    // A member an admin has restricted (Telegram-style timed mute) can't send until it expires.
+    private var iAmMuted: Bool {
+        guard let conv = conversation, conv.isGroup else { return false }
+        return conv.isMutedMember(AuthService.shared.uid ?? "", now: Date().timeIntervalSince1970 * 1000)
+    }
+
+    private var restrictedBar: some View {
+        Label("You're muted in this group", systemImage: "speaker.slash")
             .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)

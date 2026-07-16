@@ -92,7 +92,8 @@ struct GroupInfoView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .sheet(item: $memberAction) { m in
-            GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "")
+            GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "",
+                             currentRights: conv?.adminRights[m.id], mutedUntil: conv?.restrictedUntil[m.id] ?? 0)
                 .presentationDetents([.medium, .large])
         }
         .confirmationDialog("Leave this group?", isPresented: $confirmLeave, titleVisibility: .visible) {
@@ -471,11 +472,21 @@ struct GroupMemberSheet: View {
     let member: GroupInfoView.MemberAction
     let iAmAdmin: Bool
     let ownerUid: String
+    var currentRights: [String]? = nil      // this admin's granted rights (nil = all/legacy)
+    var mutedUntil: Double = 0              // ms; > now = currently restricted
     @Environment(\.dismiss) private var dismiss
     @State private var profile: UserProfile?
     @State private var confirmRemove = false
+    @State private var rights: Set<String> = []
+    @State private var rightsLoaded = false
     private var me: String { AuthService.shared.uid ?? "" }
     private var isOwner: Bool { member.id == ownerUid }
+    private var iAmOwner: Bool { ownerUid == me }
+    private var isMuted: Bool { mutedUntil > Date().timeIntervalSince1970 * 1000 }
+
+    private func mute(_ seconds: Double) {
+        Task { try? await ChatService.muteMember(cid: cid, uid: member.id, name: member.name, seconds: seconds); dismiss() }
+    }
 
     var body: some View {
         NavigationStack {
@@ -526,10 +537,46 @@ struct GroupMemberSheet: View {
                         Button("Remove from Group", role: .destructive) { confirmRemove = true }
                     }
                 }
+                // Per-flag admin permissions — owner-only, for an admin who isn't the owner.
+                if iAmOwner && member.isAdmin && !isOwner && member.id != me {
+                    Section("Admin permissions") {
+                        ForEach(Conversation.Right.allCases) { r in
+                            Toggle(r.label, isOn: Binding(
+                                get: { rights.contains(r.rawValue) },
+                                set: { on in
+                                    if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) }
+                                    let list = Array(rights)
+                                    Task { try? await ChatService.setAdminRights(cid: cid, uid: member.id, rights: list) }
+                                }))
+                        }
+                    }
+                }
+                // Restrictions — any admin can mute a regular member with an auto-expiring timeout.
+                if iAmAdmin && !member.isAdmin && !isOwner && member.id != me {
+                    Section("Restrictions") {
+                        if isMuted {
+                            Button("Lift restrictions") {
+                                Task { try? await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name); dismiss() }
+                            }
+                        } else {
+                            Menu {
+                                Button("1 hour")  { mute(3600) }
+                                Button("1 day")   { mute(86400) }
+                                Button("1 week")  { mute(604800) }
+                                Button("Forever") { mute(0) }
+                            } label: { Label("Mute (can't send)", systemImage: "speaker.slash") }
+                        }
+                    }
+                }
             }
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { profile = await ProfileStore.shared.fetch(member.id) }
+            .onAppear {
+                guard !rightsLoaded else { return }
+                rightsLoaded = true
+                rights = currentRights.map(Set.init) ?? Set(Conversation.Right.allCases.map(\.rawValue))
+            }
             .confirmationDialog("Remove \(member.name) from the group?",
                                 isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) {
