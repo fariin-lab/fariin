@@ -92,6 +92,7 @@ struct ThreadView: View {
     @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
     @State private var showContactShare = false      // Contacts tile → share-contact picker
     @State private var showLocationShare = false     // Location tile → Select Location map
+    @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
@@ -719,6 +720,13 @@ struct ThreadView: View {
                 }
             }
         }
+        // New-poll composer (groups): sends the poll as an encrypted "kulan-poll:" marker message.
+        .sheet(isPresented: $showPollComposer) {
+            PollComposerSheet { marker in
+                showAttachPanel = false
+                Task { try? await ChatService.sendText(cid: cid, text: marker, group: isGroup ? groupMembers : nil) }
+            }
+        }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
                 Task {
@@ -1195,7 +1203,7 @@ struct ThreadView: View {
         if let pin = msg.pinNotice {
             // Telegram-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
             pinNoticeRow(msg, pin, jumpTo: jumpTo).id(msg.id)
-        } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil {
+        } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil && msg.poll == nil {
             // A reserved kulan-…: payload we can't render as a card — either a newer app version's
             // feature OR a malformed known marker. Either way show the system notice, NEVER the raw
             // marker text.
@@ -1911,6 +1919,7 @@ struct ThreadView: View {
                     attachTile("doc", "Files") { showFileImporter = true }
                     attachTile("person.crop.circle", "Contacts") { showContactShare = true }
                     attachTile("location", "Location") { showLocationShare = true }
+                    if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
                 .padding(.vertical, 12)
             }
@@ -4349,6 +4358,18 @@ struct MessageBubble: View, Equatable {
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
+        } else if let poll = message.poll {
+            // POLL: question + options with live vote bars. Content is E2EE (rides the encrypted text
+            // marker); votes live in a per-voter subcollection. Renders in a normal bubble.
+            VStack(alignment: .leading, spacing: 8) {
+                PollBubbleContent(poll: poll, cid: cid, messageId: message.id, isMe: isMe, dark: dark)
+                HStack { Spacer(); metaRow }
+            }
+            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+            .padding(12)
+            .frame(width: maxBubbleWidth * 0.9)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if let loc = message.locationCard {
             // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
             VStack(alignment: .leading, spacing: 8) {

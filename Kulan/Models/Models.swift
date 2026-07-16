@@ -640,13 +640,44 @@ extension Message {
     }
 }
 
+// MARK: - Poll (Telegram-style). E2EE-SAFE: the question + options ride the ENCRYPTED text pipeline as
+// a "kulan-poll:" marker (base64 JSON), so the server never sees them. Votes live in a per-voter
+// subcollection (messages/{mid}/votes/{uid}) as plain option INDICES — meaningless without the
+// end-to-end-encrypted options — and each voter can only write their own doc.
+
+struct PollCard: Equatable {
+    let id: String
+    let question: String
+    let options: [String]
+    let multiple: Bool
+}
+
+extension Message {
+    static let pollMarker = "kulan-poll:"
+    var poll: PollCard? {
+        guard text.hasPrefix(Self.pollMarker) else { return nil }
+        let b64 = String(text.dropFirst(Self.pollMarker.count))
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = obj["id"] as? String,
+              let q = obj["q"] as? String,
+              let opts = obj["opts"] as? [String], opts.count >= 2 else { return nil }
+        return PollCard(id: id, question: q, options: opts, multiple: obj["multi"] as? Bool ?? false)
+    }
+    static func pollMarkerText(id: String, question: String, options: [String], multiple: Bool) -> String {
+        let obj: [String: Any] = ["id": id, "q": question, "opts": options, "multi": multiple]
+        let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
+        return pollMarker + data.base64EncodedString()
+    }
+}
+
 // MARK: - Forward compatibility: structured feature payloads share the reserved "kulan-<feature>:"
 // namespace over the text pipeline. A build that does NOT recognize a given feature (e.g. a stable
 // version receiving a payload from a newer beta) renders it as a system "sent with a newer version"
 // notice instead of the raw marker text. When you add a NEW feature marker, add its prefix to
 // `knownFeatureMarkers` so THIS version keeps rendering it normally.
 extension Message {
-    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker, pinMarker]
+    static let knownFeatureMarkers: [String] = [contactMarker, locationMarker, pinMarker, pollMarker]
 
     /// True when the text uses the reserved kulan-feature namespace with a feature this build doesn't
     /// know — i.e. it was sent by a newer app version. Matched strictly (`^kulan-<name>:`) so ordinary
@@ -671,6 +702,7 @@ extension Message {
     var safeText: String {
         if contactCard != nil { return "Contact" }
         if locationCard != nil { return "Location" }
+        if let p = poll { return "📊 \(p.question)" }
         if pinNotice != nil { return "Pinned a message" }
         if isUnsupportedFeature { return "Message from a newer version" }
         if isFeatureMarker { return "Message" }   // malformed known marker → never leak the raw payload

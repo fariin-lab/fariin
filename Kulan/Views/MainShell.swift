@@ -1425,6 +1425,8 @@ struct ChatRow: View, Equatable {
             // the generic feature-marker catch-all). Every KNOWN marker (contact/location/pin) is handled
             // explicitly above; only genuinely-unknown markers reach the fallback.
             previewRow("pin.fill", lastSenderPrefix + "Pinned a message")
+        } else if decodedLast.hasPrefix(Message.pollMarker) {
+            previewRow("chart.bar.fill", lastSenderPrefix + "Poll")
         } else if decodedLast.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil {
             // A newer-version feature this build doesn't recognize → never show the raw marker.
             previewRow("arrow.up.circle.fill", "Message from a newer version")
