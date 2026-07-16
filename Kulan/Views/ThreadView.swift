@@ -1759,10 +1759,6 @@ struct ThreadView: View {
         // Avatar + name are the native UINavigationItem.titleView (see NavTitleView, installed in
         // threadCovers), left-aligned after the back button and sliding with the swipe-back — only the
         // call/video buttons live here in the toolbar.
-        // iOS 26 wraps toolbar items in a Liquid Glass pill by default; opt the header OUT so the avatar+name
-        // reads as a flat title like before (user: "make it how it was"). Applied to the ToolbarItem (it's
-        // ToolbarContent), not the inner view.
-        .sharedBackgroundVisibility(.hidden)
         // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
