@@ -524,6 +524,7 @@ struct ChatsView: View {
     @State private var showArchived = false
     @State private var showDeleteSelected = false
     @State private var showCompose = false
+    @State private var showMyQR = false   // welcome empty-state → My QR Code sheet
     @State private var viewerGroup: StoryGroup?
     @State private var viewerAnonymous = false
     // WHERE the story was opened from — the zoom grows out of (and closes back into) the
@@ -538,6 +539,45 @@ struct ChatsView: View {
     // scroll, and the List gets a matching top margin so rows start below it.
     @State private var chatScrollY: CGFloat = 0
     @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
+
+    // Welcome empty state: icon + copy + the three ways to get a first chat going.
+    // Reuses the existing flows (NewChatView search, MyQRView, Settings' invite text).
+    private var inviteText: String {
+        let h = profile.me?.handle ?? ""
+        return h.isEmpty ? "Chat with me on Kulan." : "Chat with me on Kulan — my username is @\(h)"
+    }
+    private var emptyWelcome: some View {
+        VStack(spacing: 22) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 44)).foregroundStyle(.secondary)
+            VStack(spacing: 6) {
+                Text("No chats yet").font(.title3.weight(.semibold))
+                Text("Find friends by username, or share your QR code so they can find you.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            VStack(spacing: 10) {
+                Button { showNew = true } label: {
+                    Label("Find People", systemImage: "magnifyingglass")
+                        .fontWeight(.semibold).frame(maxWidth: .infinity).frame(height: 46)
+                }
+                .buttonStyle(.borderedProminent)
+                Button { showMyQR = true } label: {
+                    Label("My QR Code", systemImage: "qrcode")
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                }
+                .buttonStyle(.bordered)
+                ShareLink(item: inviteText) {
+                    Label("Invite Friends", systemImage: "person.badge.plus")
+                        .frame(maxWidth: .infinity).frame(height: 46)
+                }
+                .buttonStyle(.bordered)
+            }
+            .tint(.primary)
+            .padding(.horizontal, 44)
+        }
+        .padding(.horizontal, 24)
+    }
 
     private func storyCid(_ other: String) -> String {
         [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
@@ -896,14 +936,20 @@ struct ChatsView: View {
                     // only when truly unfiltered; a filtered empty result says so instead.
                     .overlay(alignment: .top) {
                         if visible.isEmpty {
-                            // Per-filter copy — the Groups filter was showing the Unread text.
-                            ContentUnavailableView(
-                                chatFilter == 0 ? "No chats yet" : (chatFilter == 2 ? "No groups yet" : "No unread chats"),
-                                systemImage: chatFilter == 0 ? "bubble.left.and.bubble.right" : (chatFilter == 2 ? "person.3" : "checkmark.circle"),
-                                description: Text(chatFilter == 0 ? "Tap the compose button to start one."
-                                                  : (chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up.")))
-                                .padding(.top, storiesRowHeight + 24)
-                                .allowsHitTesting(false)
+                            if chatFilter == 0 {
+                                // First run: an empty list must TEACH the next step, not dead-end
+                                // (big-app pattern) — find people, share your QR, invite friends.
+                                emptyWelcome
+                                    .padding(.top, storiesRowHeight + 24)
+                            } else {
+                                // Per-filter copy — the Groups filter was showing the Unread text.
+                                ContentUnavailableView(
+                                    chatFilter == 2 ? "No groups yet" : "No unread chats",
+                                    systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
+                                    description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
+                                    .padding(.top, storiesRowHeight + 24)
+                                    .allowsHitTesting(false)
+                            }
                         }
                     }
                 }
@@ -1030,6 +1076,7 @@ struct ChatsView: View {
             }
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
             .sheet(isPresented: $showArchived) { ArchivedChatsView() }
+            .sheet(isPresented: $showMyQR) { MyQRView() }
             .sheet(item: Binding(
                 get: { Flags.groupsEnabled ? router.pendingInviteCode.map { InviteCodeItem(code: $0) } : nil },
                 set: { router.pendingInviteCode = $0?.code }
