@@ -13,7 +13,7 @@ v1 scope: 1-to-1 E2EE messenger. Groups are compiled out (`Flags.groupsEnabled =
 `Private, simple messaging`
 
 **Promotional text** (max 170 chars, changeable without review):
-`Private messaging without a phone number. End-to-end encrypted chats, voice and video calls, and 24-hour stories. Kulan means "gathering" in Somali.`
+`Private messaging without a phone number. End-to-end encrypted chats, voice and video calls, and 24-hour stories. Kulan is the Somali word for a gathering.`
 
 **Description** (max 4000 chars):
 
@@ -23,16 +23,16 @@ Kulan is a private messenger built on one idea: your conversations belong to you
 NO PHONE NUMBER NEEDED
 Create an account in seconds with just a name and a username. No phone number, no email, no contact list upload. Find friends by username or by scanning their QR code in person.
 
-TRULY PRIVATE MESSAGES
-Every message is end-to-end encrypted on your device before it is sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to — not by Kulan, not by anyone else.
+END-TO-END ENCRYPTED
+Every message is encrypted on your device before it is sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Kulan cannot read them, and neither can anyone else.
 
 VOICE AND VIDEO CALLS
 Free, private 1-to-1 voice and video calls over the internet.
 
 STORIES
-Share photo and video stories that disappear after 24 hours. Choose exactly who can see them, and see who viewed them.
+Share photo and video stories that disappear after 24 hours. You choose who can see them, and you can see who viewed them.
 
-EVERYTHING YOU EXPECT FROM A MODERN MESSENGER
+ALL THE ESSENTIALS
 • Voice messages with waveforms and playback speed
 • Photos, videos, albums and file sharing
 • Message reactions, replies, forwarding and pinned messages
@@ -47,7 +47,7 @@ BUILT-IN PROTECTION
 • Block and report users
 • Delete your account and data at any time
 
-Kulan is a Somali word for "gathering" — a place where people meet. Wherever you are in the world, Kulan keeps your conversations fast, familiar and private.
+Kulan is the Somali word for a gathering, a place where people meet. That is what the app is meant to be: a private place to talk with the people who matter to you.
 ```
 
 **Keywords** (max 100 chars, comma-separated):
