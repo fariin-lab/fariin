@@ -3,245 +3,50 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kulan — Private messaging. No phone number needed.</title>
-    <meta name="description" content="Kulan is an end-to-end encrypted messenger for iPhone. Sign up with just a name and username. Voice and video calls, voice messages, and 24-hour stories." />
+    <title>Kulan</title>
     <link rel="icon" href="/favicon.ico" />
     <style>
-      :root {
-        --ink: #0d0d0f;
-        --paper: #ffffff;
-        --grey: #6b6b70;
-        --line: #ececee;
-        --soft: #f5f5f7;
-      }
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      html { scroll-behavior: smooth; }
       body {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        color: var(--ink);
-        background: var(--paper);
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 64px 20px;
+        color: #111;
         line-height: 1.6;
-        -webkit-font-smoothing: antialiased;
       }
-      .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
-
-      /* Nav */
-      nav {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 22px 0;
-      }
-      .wordmark { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; color: var(--ink); text-decoration: none; }
-      nav .links a {
-        color: var(--grey); text-decoration: none; font-size: 14px; margin-left: 22px; font-weight: 500;
-      }
-      nav .links a:hover { color: var(--ink); }
-
-      /* Hero */
-      .hero {
-        display: flex; align-items: center; gap: 48px;
-        padding: 56px 0 72px;
-      }
-      .hero-copy { flex: 1 1 380px; }
-      h1 {
-        font-size: clamp(34px, 5vw, 54px);
-        line-height: 1.08; letter-spacing: -1.5px; font-weight: 800;
-        margin-bottom: 18px;
-      }
-      .hero-copy p.lead { font-size: 18px; color: var(--grey); max-width: 46ch; margin-bottom: 26px; }
-      .soon {
-        display: inline-block; font-size: 14px; font-weight: 600;
-        border: 1.5px solid var(--ink); border-radius: 999px;
-        padding: 10px 20px; color: var(--ink);
-      }
-      .hero-note { font-size: 13px; color: var(--grey); margin-top: 14px; }
-
-      /* Phone mockup */
-      .phone-col { flex: 0 0 auto; display: flex; justify-content: center; }
-      .phone {
-        width: 300px; border-radius: 44px; border: 1.5px solid var(--line);
-        background: var(--paper);
-        box-shadow: 0 24px 60px rgba(0,0,0,0.10), 0 4px 14px rgba(0,0,0,0.05);
-        padding: 14px; user-select: none;
-      }
-      .screen {
-        border-radius: 32px; background: var(--paper); overflow: hidden;
-        border: 1px solid var(--line);
-      }
-      .chat-header {
-        display: flex; align-items: center; gap: 10px;
-        padding: 14px 14px 10px; border-bottom: 1px solid var(--line);
-      }
-      .avatar {
-        width: 34px; height: 34px; border-radius: 50%;
-        background: var(--ink); color: #fff;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 14px; font-weight: 700;
-      }
-      .chat-header .who { font-size: 14px; font-weight: 700; line-height: 1.2; }
-      .chat-header .who small { display: block; font-size: 11px; color: var(--grey); font-weight: 500; }
-      .msgs { padding: 14px 12px 10px; display: flex; flex-direction: column; gap: 7px; min-height: 320px; }
-      .bubble {
-        max-width: 78%; padding: 8px 12px; border-radius: 17px;
-        font-size: 13.5px; line-height: 1.35;
-      }
-      .in  { background: var(--soft); color: var(--ink); align-self: flex-start; border-bottom-left-radius: 6px; }
-      .out { background: var(--ink); color: #fff; align-self: flex-end; border-bottom-right-radius: 6px; }
-      .voice { display: flex; align-items: center; gap: 8px; min-width: 150px; }
-      .voice .play {
-        width: 22px; height: 22px; border-radius: 50%; background: #fff; flex: 0 0 auto;
-        display: flex; align-items: center; justify-content: center;
-      }
-      .voice .play::after {
-        content: ""; display: block; margin-left: 2px;
-        border-left: 7px solid var(--ink); border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
-      }
-      .wave { display: flex; align-items: center; gap: 2px; height: 18px; }
-      .wave i { width: 2.5px; background: rgba(255,255,255,0.85); border-radius: 2px; }
-      .stamp { font-size: 10px; color: var(--grey); align-self: flex-end; margin-top: -3px; }
-      .stamp.left { align-self: flex-start; }
-      .inputbar {
-        margin: 6px 10px 12px; border: 1px solid var(--line); border-radius: 999px;
-        padding: 9px 14px; font-size: 13px; color: var(--grey);
-        display: flex; justify-content: space-between; align-items: center;
-      }
-      .inputbar b { color: var(--ink); font-weight: 800; font-size: 15px; }
-
-      /* Feature sections */
-      .band { border-top: 1px solid var(--line); padding: 64px 0; }
-      .band h2 { font-size: 26px; letter-spacing: -0.6px; margin-bottom: 8px; }
-      .band > .wrap > p.sub { color: var(--grey); max-width: 60ch; margin-bottom: 36px; }
-      .grid {
-        display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px;
-      }
-      .card {
-        border: 1px solid var(--line); border-radius: 20px; padding: 22px;
-        background: var(--paper);
-      }
-      .card h3 { font-size: 16px; margin-bottom: 6px; letter-spacing: -0.2px; }
-      .card p { font-size: 14px; color: var(--grey); }
-
-      /* Somali line */
-      .meaning { text-align: center; padding: 72px 24px; border-top: 1px solid var(--line); }
-      .meaning .word { font-size: clamp(26px, 4vw, 38px); font-weight: 800; letter-spacing: -1px; }
-      .meaning p { color: var(--grey); max-width: 52ch; margin: 10px auto 0; }
-
-      /* Footer */
-      footer { border-top: 1px solid var(--line); padding: 34px 0 54px; }
-      footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
-      footer .fine { color: var(--grey); font-size: 13px; }
-      footer a { color: var(--ink); font-size: 13px; text-decoration: none; margin-right: 18px; font-weight: 500; }
-      footer a:hover { text-decoration: underline; }
-
-      @media (max-width: 760px) {
-        .hero { flex-direction: column-reverse; padding: 24px 0 48px; text-align: center; }
-        .hero-copy p.lead { margin-left: auto; margin-right: auto; }
-        nav .links a { margin-left: 14px; }
-      }
+      h1 { font-size: 40px; letter-spacing: -1px; margin-bottom: 4px; }
+      .tagline { font-size: 18px; color: #555; margin-top: 0; }
+      p, li { font-size: 15px; color: #333; }
+      .links { margin-top: 40px; font-size: 14px; }
+      .links a { color: #000; margin-right: 18px; }
+      a { color: #000; }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <nav>
-        <a class="wordmark" href="/">Kulan</a>
-        <span class="links">
-          <a href="#features">Features</a>
-          <a href="#support">Support</a>
-          <a href="/privacy.html">Privacy</a>
-        </span>
-      </nav>
+    <h1>Kulan</h1>
+    <p class="tagline">Private messaging. No phone number needed.</p>
 
-      <section class="hero">
-        <div class="hero-copy">
-          <h1>Private messaging.<br />No phone number needed.</h1>
-          <p class="lead">
-            Kulan is an end-to-end encrypted messenger for iPhone. Sign up with a name
-            and a username, nothing else. Your messages stay between you and the
-            person you send them to.
-          </p>
-          <span class="soon">Coming soon to the App Store</span>
-          <p class="hero-note">Currently in beta on TestFlight.</p>
-        </div>
+    <p>
+      Kulan is a messenger for iPhone. You sign up with just a name and a username,
+      find friends by username or QR code, and chat knowing your messages are
+      end-to-end encrypted. It also has voice and video calls, voice messages,
+      and stories that disappear after 24 hours.
+    </p>
 
-        <div class="phone-col" aria-hidden="true">
-          <div class="phone">
-            <div class="screen">
-              <div class="chat-header">
-                <div class="avatar">A</div>
-                <div class="who">Asha<br /><small>online</small></div>
-              </div>
-              <div class="msgs">
-                <div class="bubble in">Salaam! Are you on Kulan now?</div>
-                <div class="stamp left">09:41</div>
-                <div class="bubble out">Yes, just signed up. Only needed a username.</div>
-                <div class="stamp">09:41</div>
-                <div class="bubble in">Send me a voice note, I want to test it.</div>
-                <div class="stamp left">09:42</div>
-                <div class="bubble out voice">
-                  <span class="play"></span>
-                  <span class="wave">
-                    <i style="height:6px"></i><i style="height:12px"></i><i style="height:16px"></i>
-                    <i style="height:9px"></i><i style="height:14px"></i><i style="height:7px"></i>
-                    <i style="height:11px"></i><i style="height:16px"></i><i style="height:8px"></i>
-                    <i style="height:13px"></i><i style="height:5px"></i><i style="height:10px"></i>
-                  </span>
-                  <span style="font-size:11px; opacity:.85">0:07</span>
-                </div>
-                <div class="stamp">09:42 ✓✓</div>
-              </div>
-              <div class="inputbar"><span>Message</span><b>+</b></div>
-            </div>
-          </div>
-        </div>
-      </section>
+    <p>
+      Kulan is a Somali word for a gathering, a place where people meet.
+    </p>
+
+    <h2 style="font-size:18px; margin-top:36px;">Support</h2>
+    <p>
+      Questions, problems, or feedback? Email
+      <a href="mailto:kulanchat@gmail.com">kulanchat@gmail.com</a>
+      and we will get back to you.
+    </p>
+
+    <div class="links">
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/terms.html">Terms &amp; Conditions</a>
     </div>
-
-    <section class="band" id="features">
-      <div class="wrap">
-        <h2>What you get</h2>
-        <p class="sub">A full messenger, built around privacy from the first screen.</p>
-        <div class="grid">
-          <div class="card">
-            <h3>No phone number</h3>
-            <p>Create an account with just a name and a username. Find friends by username or by scanning their QR code in person.</p>
-          </div>
-          <div class="card">
-            <h3>End-to-end encrypted</h3>
-            <p>Texts, photos, videos, voice messages and files are encrypted on your device. Only you and the recipient can read them.</p>
-          </div>
-          <div class="card">
-            <h3>Voice and video calls</h3>
-            <p>Free 1-to-1 calls over the internet, encrypted in transit.</p>
-          </div>
-          <div class="card">
-            <h3>Stories</h3>
-            <p>Photo and video stories that disappear after 24 hours. You choose who sees them, and you can see who viewed them.</p>
-          </div>
-          <div class="card">
-            <h3>Voice messages</h3>
-            <p>Hold to record, with waveforms and playback speed control.</p>
-          </div>
-          <div class="card">
-            <h3>Locked down</h3>
-            <p>App Lock with Face ID, screen security, disappearing messages, and block and report built in. Delete your account any time.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="meaning">
-      <div class="word">kulan</div>
-      <p>A Somali word for a gathering, a place where people meet. That is what the app is meant to be: a private place to talk with the people who matter to you.</p>
-    </section>
-
-    <footer id="support">
-      <div class="wrap">
-        <div>
-          <a href="/privacy.html">Privacy Policy</a>
-          <a href="/terms.html">Terms &amp; Conditions</a>
-          <a href="mailto:kulanchat@gmail.com">kulanchat@gmail.com</a>
-        </div>
-        <div class="fine">Kulan · Private messenger for iPhone</div>
-      </div>
-    </footer>
   </body>
 </html>
