@@ -313,7 +313,9 @@ struct AccountSettingsView: View {
         out += "Account ID: \(me)\n\n"
 
         let convs = await MainActor.run {
-            ConversationsRepository.shared.conversations.filter { !$0.isCleared(me) }
+            ConversationsRepository.shared.conversations
+                .filter { !$0.isCleared(me) }
+                .filter { Flags.groupsEnabled || !$0.isGroup }
         }
         let db = Firestore.firestore()
         for c in convs {
