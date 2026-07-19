@@ -79,7 +79,7 @@ struct ContactInfoView: View {
                 mediaCard
             }
         }
-        if !isSelf {
+        if !isSelf && Flags.groupsEnabled {
             VStack(alignment: .leading, spacing: 8) {
                 sectionHeader(groupsHeaderText)
                 groupsInCommonCard

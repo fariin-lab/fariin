@@ -47,8 +47,10 @@ struct NewChatView: View {
                 List {
                     if query.isEmpty {
                         Section {
-                            Button { showNewGroup = true } label: { actionRow("person.2.fill", "New group") }
-                                .tint(.primary)
+                            if Flags.groupsEnabled {
+                                Button { showNewGroup = true } label: { actionRow("person.2.fill", "New group") }
+                                    .tint(.primary)
+                            }
                             Button { showNewContact = true } label: { actionRow("person.crop.circle.badge.plus", "New contact") }
                                 .tint(.primary)
                         }

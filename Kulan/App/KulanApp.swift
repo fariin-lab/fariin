@@ -24,6 +24,7 @@ struct KulanApp: App {
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "kulan" else { return }
         if url.host == "g" {
+            guard Flags.groupsEnabled else { return }
             let code = url.pathComponents.last(where: { $0 != "/" }) ?? ""
             guard !code.isEmpty else { return }
             AppRouter.shared.pendingInviteCode = code

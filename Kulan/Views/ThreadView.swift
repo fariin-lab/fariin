@@ -519,7 +519,7 @@ struct ThreadView: View {
         }
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
-                GroupInfoView(cid: cid)
+                if Flags.groupsEnabled { GroupInfoView(cid: cid) }
             } else {
                 ContactInfoView(cid: cid, name: title, photoUrl: photoUrl, onSearch: {
                     showContactInfo = false   // pop back to the chat…

@@ -584,6 +584,7 @@ struct ChatsView: View {
     private var visible: [Conversation] {
         repo.conversations
             .filter { !$0.isCleared(me) && !$0.isArchived(me) }
+            .filter { Flags.groupsEnabled || !$0.isGroup }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
                 case 1: return c.unread(me) > 0
@@ -619,7 +620,9 @@ struct ChatsView: View {
             // Flat filter items (no "Filter by" header) — checkmark on the active one.
             Button { chatFilter = 0 } label: { if chatFilter == 0 { Label("All", systemImage: "checkmark") } else { Text("All") } }
             Button { chatFilter = 1 } label: { if chatFilter == 1 { Label("Unread", systemImage: "checkmark") } else { Text("Unread") } }
-            Button { chatFilter = 2 } label: { if chatFilter == 2 { Label("Groups", systemImage: "checkmark") } else { Text("Groups") } }
+            if Flags.groupsEnabled {
+                Button { chatFilter = 2 } label: { if chatFilter == 2 { Label("Groups", systemImage: "checkmark") } else { Text("Groups") } }
+            }
             Divider()
             Button { showArchived = true } label: { Label("Archive", systemImage: "archivebox") }
             Button { showCompose = true } label: { Label("Add Story", systemImage: "plus.circle") }
@@ -1028,7 +1031,7 @@ struct ChatsView: View {
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
             .sheet(isPresented: $showArchived) { ArchivedChatsView() }
             .sheet(item: Binding(
-                get: { router.pendingInviteCode.map { InviteCodeItem(code: $0) } },
+                get: { Flags.groupsEnabled ? router.pendingInviteCode.map { InviteCodeItem(code: $0) } : nil },
                 set: { router.pendingInviteCode = $0?.code }
             )) { item in
                 JoinGroupSheet(code: item.code).presentationDetents([.large])
@@ -1118,12 +1121,13 @@ struct ArchivedChatsView: View {
     }
 
     private var hasAnyArchived: Bool {
-        repo.conversations.contains { $0.isArchived(me) && !$0.isCleared(me) }
+        repo.conversations.contains { $0.isArchived(me) && !$0.isCleared(me) && (Flags.groupsEnabled || !$0.isGroup) }
     }
     private var archived: [Conversation] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         return repo.conversations
             .filter { $0.isArchived(me) && !$0.isCleared(me) }
+            .filter { Flags.groupsEnabled || !$0.isGroup }
             .filter { q.isEmpty || $0.displayName(me).lowercased().contains(q) }
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }

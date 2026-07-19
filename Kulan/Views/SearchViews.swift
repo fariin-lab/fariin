@@ -87,6 +87,7 @@ struct ChatSearchView: View {
         let q = trimmed.lowercased()
         guard !q.isEmpty else { return [] }
         return repo.conversations
+            .filter { Flags.groupsEnabled || !$0.isGroup }
             .filter { !$0.isCleared(me) && $0.name(for: me).lowercased().contains(q) }
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
@@ -262,7 +263,9 @@ enum MessageSearch {
 
     static func loadCorpus(me: String) async -> [SearchableMessage] {
         let convs = await MainActor.run {
-            ConversationsRepository.shared.conversations.filter { !$0.isCleared(me) }
+            ConversationsRepository.shared.conversations
+                .filter { !$0.isCleared(me) }
+                .filter { Flags.groupsEnabled || !$0.isGroup }
         }
         let db = Firestore.firestore()
         var out: [SearchableMessage] = []

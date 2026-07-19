@@ -5,6 +5,13 @@ import FirebaseFirestore
 // Domain models. Field names match the existing Firestore schema EXACTLY so the
 // native client reads the same data the RN app writes (see MIGRATION.md).
 
+// Compile-time feature gates. Groups ship OFF for the App Store v1: the code stays
+// in the project but every user-reachable door (create, join link, filter tab,
+// contact-screen section, group header tap) is closed until this flips to true.
+enum Flags {
+    static let groupsEnabled = false
+}
+
 struct UserProfile: Identifiable, Equatable {
     let id: String            // uid
     var name: String
