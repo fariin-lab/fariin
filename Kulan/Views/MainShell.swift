@@ -546,37 +546,40 @@ struct ChatsView: View {
         let h = profile.me?.handle ?? ""
         return h.isEmpty ? "Chat with me on Kulan." : "Chat with me on Kulan — my username is @\(h)"
     }
+    // Big-app empty state (TG/WA/Signal rule: one visual, one line, ONE button).
+    // The stacked three-pill version read as clutter — secondary actions are quiet
+    // inline text links instead.
     private var emptyWelcome: some View {
-        VStack(spacing: 22) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 44)).foregroundStyle(.secondary)
-            VStack(spacing: 6) {
+        VStack(spacing: 14) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.quaternary)
+            VStack(spacing: 4) {
                 Text("No chats yet").font(.title3.weight(.semibold))
-                Text("Find friends by username, or share your QR code so they can find you.")
+                Text("Find a friend by username to start talking.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            VStack(spacing: 10) {
-                Button { showNew = true } label: {
-                    Label("Find People", systemImage: "magnifyingglass")
-                        .fontWeight(.semibold).frame(maxWidth: .infinity).frame(height: 46)
-                }
-                .buttonStyle(.borderedProminent)
-                Button { showMyQR = true } label: {
-                    Label("My QR Code", systemImage: "qrcode")
-                        .frame(maxWidth: .infinity).frame(height: 46)
-                }
-                .buttonStyle(.bordered)
-                ShareLink(item: inviteText) {
-                    Label("Invite Friends", systemImage: "person.badge.plus")
-                        .frame(maxWidth: .infinity).frame(height: 46)
-                }
-                .buttonStyle(.bordered)
+            Button { showNew = true } label: {
+                Text("Find People")
+                    .font(.body.weight(.semibold))
+                    .padding(.horizontal, 36).frame(height: 46)
             }
+            .buttonStyle(.borderedProminent)
             .tint(.primary)
-            .padding(.horizontal, 44)
+            .padding(.top, 8)
+            HStack(spacing: 18) {
+                Button { showMyQR = true } label: {
+                    Label("My QR", systemImage: "qrcode").font(.footnote.weight(.medium))
+                }
+                ShareLink(item: inviteText) {
+                    Label("Invite", systemImage: "square.and.arrow.up").font(.footnote.weight(.medium))
+                }
+            }
+            .tint(.secondary)
+            .padding(.top, 2)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 32)
     }
 
     private func storyCid(_ other: String) -> String {
