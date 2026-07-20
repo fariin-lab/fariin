@@ -554,6 +554,9 @@ struct ChatsView: View {
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(.quaternary)
+                // A quiet periodic bounce (native symbol effect, no Lottie dependency) —
+                // the TG-style "something alive on the empty page" touch.
+                .symbolEffect(.bounce, options: .repeat(.periodic(delay: 3.0)))
             VStack(spacing: 4) {
                 Text("No chats yet").font(.title3.weight(.semibold))
                 Text("Find a friend by username to start talking.")
