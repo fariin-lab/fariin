@@ -154,8 +154,8 @@ struct ChatSearchView: View {
             .listStyle(.plain)
             .overlay {
                 if trimmed.isEmpty {
-                    ContentUnavailableView("Search messages", systemImage: "magnifyingglass",
-                                           description: Text("Search names and the text of every message."))
+                    EmptyStateView(title: "Search messages", icon: "magnifyingglass",
+                                   text: "Search names and the text of every message.")
                 } else if loadingCorpus && nothingFound {
                     ChatListSkeleton()   // skeleton rows instead of a spinner while indexing
                 } else if !loadingCorpus && nothingFound {
@@ -413,8 +413,8 @@ struct InChatSearchView: View {
             .listStyle(.plain)
             .overlay {
                 if trimmed.isEmpty {
-                    ContentUnavailableView("Search this chat", systemImage: "magnifyingglass",
-                                           description: Text("Find any message in this conversation."))
+                    EmptyStateView(title: "Search this chat", icon: "magnifyingglass",
+                                   text: "Find any message in this conversation.")
                 } else if loading && results.isEmpty {
                     ProgressView()
                 } else if !loading && results.isEmpty {
@@ -494,8 +494,8 @@ struct ContactsSearchView: View {
             .overlay {
                 if results.isEmpty {
                     if trimmed.isEmpty {
-                        ContentUnavailableView("Call a contact", systemImage: "phone",
-                                               description: Text("Search anyone you've chatted with to start a call."))
+                        EmptyStateView(title: "Call a contact", icon: "phone",
+                                       text: "Search anyone you've chatted with to start a call.")
                     } else {
                         ContentUnavailableView.search(text: trimmed)
                     }

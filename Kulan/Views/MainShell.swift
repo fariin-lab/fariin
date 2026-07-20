@@ -227,8 +227,8 @@ struct CallsView: View {
                 if !repo.hasLoaded {
                     CallListSkeleton()   // shimmer placeholders while the first load runs
                 } else if repo.calls.isEmpty {
-                    ContentUnavailableView("No Calls Yet", systemImage: "phone",
-                                           description: Text("Your call history will appear here."))
+                    EmptyStateView(title: "No Calls Yet", icon: "phone",
+                                   text: "Your call history will appear here.")
                 } else {
                     List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                         ForEach(shownRuns) { run in
@@ -1189,8 +1189,8 @@ struct ArchivedChatsView: View {
         NavigationStack(path: $path) {
             Group {
                 if !hasAnyArchived && archivedStories.isEmpty {
-                    ContentUnavailableView("Nothing archived", systemImage: "archivebox",
-                                           description: Text("Chats you archive and stories you hide will show here."))
+                    EmptyStateView(title: "Nothing archived", icon: "archivebox",
+                                   text: "Chats you archive and stories you hide will show here.")
                 } else {
                     List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                         if !archivedStories.isEmpty {

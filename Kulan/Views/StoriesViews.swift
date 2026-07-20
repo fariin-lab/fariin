@@ -1791,8 +1791,8 @@ struct SeenBySheet: View {
                 if loading {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if viewers.isEmpty {
-                    ContentUnavailableView("No views yet", systemImage: "eye",
-                        description: Text("When people view your status, they'll appear here."))
+                    EmptyStateView(title: "No views yet", icon: "eye",
+                                   text: "When people view your status, they'll appear here.")
                 } else {
                     List(viewers) { v in
                         HStack(spacing: 12) {
@@ -2321,8 +2321,8 @@ struct StoryViewersBottomSheet: View {
                 if loading {
                     ProgressView().tint(.white).padding(.top, 44).frame(maxWidth: .infinity)
                 } else if filtered.isEmpty {
-                    ContentUnavailableView("No views yet", systemImage: "eye",
-                        description: Text("When people view this story, they'll show up here."))
+                    EmptyStateView(title: "No views yet", icon: "eye",
+                                   text: "When people view this story, they'll show up here.")
                         .padding(.top, 40)
                 } else {
                     ForEach(filtered) { v in

@@ -74,8 +74,8 @@ struct NewChatView: View {
                             }
                         }
                     } else if sections.isEmpty {
-                        ContentUnavailableView("Start a new chat", systemImage: "square.and.pencil",
-                                               description: Text("Search a username to message someone."))
+                        EmptyStateView(title: "Start a new chat", icon: "square.and.pencil",
+                                       text: "Search a username to message someone.")
                     } else {
                         ForEach(sections, id: \.letter) { section in
                             Section(section.letter) {
