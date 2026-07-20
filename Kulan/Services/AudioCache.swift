@@ -43,6 +43,13 @@ enum AudioCache {
         try? FileManager.default.removeItem(at: fileURL(messageId))
     }
 
+    /// Sign-out/delete: these files are DECRYPTED voice notes — wipe with the account.
+    static func removeAll() {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for f in items { try? fm.removeItem(at: f) }
+    }
+
     /// Total bytes on disk (Settings "storage used").
     static func diskBytes() -> Int {
         let fm = FileManager.default

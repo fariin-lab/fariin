@@ -512,6 +512,12 @@ final class Drafts {
         if t.isEmpty { map.removeValue(forKey: cid) } else { map[cid] = t }
         UserDefaults.standard.set(map, forKey: Self.key)
     }
+
+    /// Sign-out/delete: drafts are unsent plaintext — wipe with the account.
+    func clear() {
+        map = [:]
+        UserDefaults.standard.removeObject(forKey: Self.key)
+    }
 }
 
 /// Which incoming voice notes have been PLAYED (not just seen). Drives the accent
@@ -527,6 +533,14 @@ final class PlayedVoice {
     private init() {
         ids = Set(UserDefaults.standard.stringArray(forKey: Self.idsKey) ?? [])
         upTo = UserDefaults.standard.dictionary(forKey: Self.upToKey) as? [String: Double] ?? [:]
+    }
+
+    /// Sign-out/delete: reset played-state with the account.
+    func clear() {
+        ids = []
+        upTo = [:]
+        UserDefaults.standard.removeObject(forKey: Self.idsKey)
+        UserDefaults.standard.removeObject(forKey: Self.upToKey)
     }
 
     /// Chat list: the newest message is an incoming voice note that hasn't been played.

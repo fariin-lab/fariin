@@ -42,6 +42,13 @@ enum SendQueue {
         save(map)
     }
 
+    /// Sign-out/delete: unsent plaintext from the old account must not be re-driven
+    /// (or readable) under the next account.
+    static func removeAll() {
+        lock.lock(); defer { lock.unlock() }
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
     static func remove(clientId: String) {
         lock.lock(); defer { lock.unlock() }
         var map = load()

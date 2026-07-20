@@ -40,4 +40,11 @@ enum VideoCache {
     static func remove(_ messageId: String) {
         try? FileManager.default.removeItem(at: fileURL(messageId))
     }
+
+    /// Sign-out/delete: these files are DECRYPTED chat videos — wipe with the account.
+    static func removeAll() {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for f in items { try? fm.removeItem(at: f) }
+    }
 }

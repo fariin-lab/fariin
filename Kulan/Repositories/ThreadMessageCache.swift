@@ -34,4 +34,8 @@ final class ThreadMessageCache {
         byCid[cid] = messages.suffix(cap).map { $0 }
     }
     func messages(for cid: String) -> [Message]? { byCid[cid] }
+
+    /// Sign-out/delete: these are DECRYPTED messages — never let them survive into
+    /// another account's session on this device.
+    func removeAll() { byCid = [:] }
 }

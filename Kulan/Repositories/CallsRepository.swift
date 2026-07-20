@@ -37,6 +37,14 @@ final class CallsRepository {
     var hasLoaded = false   // false until the first load finishes -> drives the skeleton
     private var lastLoadedAt: Date?
 
+    /// Sign-out/delete: drop the previous account's call log.
+    func reset() {
+        calls = []
+        hasLoaded = false
+        loading = false
+        lastLoadedAt = nil
+    }
+
     // force: true bypasses the 30s TTL (pull-to-refresh). Normal tab-switch passes false so we
     // don't re-fire N concurrent Firestore queries every time the Calls tab becomes visible.
     func load(force: Bool = false) async {

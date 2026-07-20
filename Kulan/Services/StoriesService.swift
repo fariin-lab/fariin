@@ -445,6 +445,19 @@ final class StoriesRepository {
     private var profileCache: [String: (String, String?)] = [:]   // unknown-author name/photo
     private var expiryTask: Task<Void, Never>?      // wakes at the next expiresAt → drop that card
 
+    /// Sign-out/delete: drop this account's story state; listeners re-attach for the
+    /// next account on its first load().
+    func reset() {
+        othersReg?.remove(); othersReg = nil
+        mineReg?.remove(); mineReg = nil
+        ctxReg?.remove(); ctxReg = nil
+        listeningUid = nil
+        expiryTask?.cancel(); expiryTask = nil
+        othersStories = []; mineStories = []
+        profileCache = [:]
+        mine = nil; others = []
+    }
+
     private func parse(_ docs: [QueryDocumentSnapshot]?) -> [Story] {
         (docs ?? []).compactMap { d in
             let data = d.data()

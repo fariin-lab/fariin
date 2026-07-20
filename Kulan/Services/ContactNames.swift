@@ -29,4 +29,10 @@ import Observation
         if trimmed.isEmpty { names.removeValue(forKey: uid) } else { names[uid] = trimmed }
         UserDefaults.standard.set(names, forKey: Self.key)
     }
+
+    /// Sign-out/delete: nicknames belong to the account that set them.
+    func clear() {
+        names = [:]
+        UserDefaults.standard.removeObject(forKey: Self.key)
+    }
 }

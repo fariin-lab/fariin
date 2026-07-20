@@ -185,6 +185,23 @@ final class Crypto {
         await Self.publishKeyIfChanged(db: db, uid: uid, b64: Data(pk).base64EncodedString())
     }
 
+    /// Sign-out/delete: forget this account's E2EE identity so the NEXT account on this
+    /// device generates a fresh keypair. The Keychain keys are app-scoped, not per-uid —
+    /// without this a new sign-up silently reused (and re-published) the previous
+    /// account's keypair. Anonymous auth can never sign back into the old account, so
+    /// nothing recoverable is lost.
+    func wipeIdentity() {
+        lock.withLock {
+            mySecretKey = nil; myPublicKey = nil
+            pubCache = [:]
+            readyTask = nil
+            didWarm = false
+        }
+        Keychain.delete(Self.skKeychainKey)
+        Keychain.delete(Self.pkKeychainKey)
+        UserDefaults.standard.removeObject(forKey: Self.pubKeysDefaultsKey)
+    }
+
     /// My identity public key (Curve25519), for the safety-number screen. nil until
     /// ensureReady() has run — callers should `try await ensureReady()` first.
     var myPublicKeyData: Data? { lock.withLock { myPublicKey.map { Data($0) } } }
@@ -539,5 +556,14 @@ enum Keychain {
         // Available after first unlock; survives reboot, stays on this device only.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func delete(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

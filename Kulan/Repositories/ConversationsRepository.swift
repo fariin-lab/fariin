@@ -97,4 +97,14 @@ final class ConversationsRepository {
         listener?.remove()
         listener = nil
     }
+
+    /// Sign-out/delete: drop the previous account's chats so the next account on this
+    /// device starts empty. Without this the singleton kept the old list alive — and the
+    /// empty-cache guard in the listener then preserved it for the NEW user forever.
+    func reset() {
+        stop()
+        pendingConvs = nil
+        conversations = []
+        hasLoaded = false
+    }
 }

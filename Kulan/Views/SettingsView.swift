@@ -272,7 +272,9 @@ struct AccountSettingsView: View {
             Button("Sign Out", role: .destructive) {
                 Task {
                     await Push.unregister()   // AWAITED before signOut (needs auth): stop message + CallKit ring pushes to this phone
-                    try? Auth.auth().signOut(); dismiss(); onSignOut()
+                    try? Auth.auth().signOut()
+                    SessionWipe.wipeAccountData()   // this account's on-device state must not leak into the next sign-up
+                    dismiss(); onSignOut()
                 }
             }
         } message: {
@@ -285,6 +287,7 @@ struct AccountSettingsView: View {
                     working = true
                     do {
                         try await profile.deleteAccount()
+                        SessionWipe.wipeAccountData()   // server data is gone; clear the device copy too
                         working = false; dismiss(); onSignOut()   // only sign out if the server delete SUCCEEDED
                     } catch {
                         working = false
