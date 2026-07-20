@@ -8,6 +8,9 @@ struct EmptyStateView: View {
     let title: String
     let icon: String
     var text: String? = nil
+    // One greeting bounce as the screen appears, then rest — an endlessly repeating
+    // bounce read as fidgety (user verdict on build 352), and it started 3s late.
+    @State private var greet = 0
 
     var body: some View {
         ContentUnavailableView {
@@ -15,10 +18,13 @@ struct EmptyStateView: View {
                 Text(title)
             } icon: {
                 Image(systemName: icon)
-                    .symbolEffect(.bounce, options: .repeat(.periodic(delay: 3.0)))
+                    .symbolEffect(.bounce, value: greet)
             }
         } description: {
             if let text { Text(text) }
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { greet += 1 }   // after the push settles
         }
     }
 }

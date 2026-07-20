@@ -525,6 +525,7 @@ struct ChatsView: View {
     @State private var showDeleteSelected = false
     @State private var showCompose = false
     @State private var showMyQR = false   // welcome empty-state → My QR Code sheet
+    @State private var welcomeGreet = 0   // one-shot greeting bounce on the welcome glyph
     @State private var viewerGroup: StoryGroup?
     @State private var viewerAnonymous = false
     // WHERE the story was opened from — the zoom grows out of (and closes back into) the
@@ -554,9 +555,9 @@ struct ChatsView: View {
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(.quaternary)
-                // A quiet periodic bounce (native symbol effect, no Lottie dependency) —
-                // the TG-style "something alive on the empty page" touch.
-                .symbolEffect(.bounce, options: .repeat(.periodic(delay: 3.0)))
+                // One greeting bounce on appear (endless repeat read as fidgety).
+                .symbolEffect(.bounce, value: welcomeGreet)
+                .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { welcomeGreet += 1 } }
             VStack(spacing: 4) {
                 Text("No chats yet").font(.title3.weight(.semibold))
                 Text("Find a friend by username to start talking.")
