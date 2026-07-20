@@ -47,12 +47,15 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
-        # Kulan ships its own E2EE (libsodium: Curve25519/XSalsa20/Poly1305) — that is
-        # NON-exempt encryption, so this must be true. One-time App Store Connect export
-        # questionnaire (standard algorithms, mass-market self-classification) then yields
-        # an ITSEncryptionExportComplianceCode to add here so uploads auto-clear again.
-        # Answers + annual-report details: AppStore/store-listing.md.
-        ITSAppUsesNonExemptEncryption: true
+        # Export compliance is deliberately NOT declared in the plist. Kulan ships its
+        # own E2EE (libsodium) = NON-exempt encryption; declaring false was a false
+        # statement, and declaring true without a compliance code makes the upload FAIL
+        # (409 Invalid Export Compliance Code — hit 2026-07-20). Standard flow instead:
+        # each build sits "Missing Compliance" in ASC until the questionnaire is answered
+        # there (answers in AppStore/store-listing.md). Once ASC issues the code, add:
+        #   ITSAppUsesNonExemptEncryption: true
+        #   ITSEncryptionExportComplianceCode: <code from ASC>
+        # and uploads auto-clear again.
         NSPhotoLibraryUsageDescription: "Kulan needs photo access so you can send pictures in chats."
         NSPhotoLibraryAddUsageDescription: "Kulan needs permission to save photos to your camera roll."
         NSCameraUsageDescription: "Kulan needs camera access so you can take photos in chats."
