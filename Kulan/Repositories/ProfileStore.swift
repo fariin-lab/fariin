@@ -17,7 +17,22 @@ final class ProfileStore {
 
     func loadMine() async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        me = await fetch(uid)
+        // Offline: fetch() returns nil after the server-timeout — keep the cached
+        // profile instead of wiping `me` (which would bounce the user to onboarding).
+        me = await fetch(uid) ?? me
+    }
+
+    /// Instant boot path: my profile straight from Firestore's on-disk cache, no
+    /// network. Returns true if a completed profile (has a handle) was cached —
+    /// the signal that this user finished onboarding and can go straight to .main.
+    func loadCachedMine() async -> Bool {
+        guard let uid = Auth.auth().currentUser?.uid, !uid.isEmpty else { return false }
+        guard let snap = try? await db.collection("users").document(uid).getDocument(source: .cache),
+              let data = snap.data() else { return false }
+        let cached = UserProfile(id: uid, data: data)
+        guard !cached.handle.isEmpty else { return false }
+        me = cached
+        return true
     }
 
     func fetch(_ uid: String) async -> UserProfile? {

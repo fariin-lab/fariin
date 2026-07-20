@@ -80,12 +80,27 @@ struct RootView: View {
 
     private func route() async {
         phase = .loading
-        await AuthService.shared.bootstrap()
+        await AuthService.shared.bootstrap()   // local when already signed in
+        // Returning user: boot INSTANTLY from the on-disk cache (the WhatsApp model).
+        // Launch must never wait on the network — offline, each awaited server call
+        // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
+        // is Keychain-only now, so the whole fast path is local.
+        if await ProfileStore.shared.loadCachedMine() {
+            try? await Crypto.shared.ensureReady()
+            Push.register(); Push.saveVoipToken()
+            phase = .main
+            Task {   // background refresh + key self-heal, off the boot path
+                await ProfileStore.shared.loadMine()
+                await Crypto.shared.publishPublicKey()
+            }
+            return
+        }
+        // First run (nothing cached yet): the original network path decides
+        // onboarding vs main, and publishes the key once the profile doc exists —
+        // self-heals accounts that failed to publish on a first launch (otherwise
+        // others can never message them: "hasn't set up encryption yet").
         try? await Crypto.shared.ensureReady()
         await ProfileStore.shared.loadMine()
-        // Re-publish the public key now that the profile doc exists — self-heals
-        // accounts that failed to publish on a first launch (otherwise others can
-        // never message them: "hasn't set up encryption yet").
         await Crypto.shared.publishPublicKey()
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
         if ready { Push.register(); Push.saveVoipToken() }   // notifications + VoIP token now that we're signed in

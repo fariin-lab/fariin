@@ -155,13 +155,20 @@ final class Crypto {
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
 
-        // Publish my public key so others can encrypt to me.
+        // Publish my public key so others can encrypt to me. Fire-and-forget: the
+        // keypair is already usable locally (set above), and blocking here made a
+        // no-network cold start hang ~10s on the server timeout. publishPublicKey()
+        // self-heals on every launch, so a lost publish is retried next open.
         let myPubB64 = Data(pkBytes).base64EncodedString()
+        Task { await Self.publishKeyIfChanged(db: db, uid: uid, b64: myPubB64) }
+    }
+
+    private static func publishKeyIfChanged(db: Firestore, uid: String, b64: String) async {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
-            if (snap.data()?["publicKey"] as? String) != myPubB64 {
+            if (snap.data()?["publicKey"] as? String) != b64 {
                 try await db.collection("users").document(uid)
-                    .setData(["publicKey": myPubB64], merge: true)
+                    .setData(["publicKey": b64], merge: true)
             }
         } catch {
             print("crypto: publishing public key failed:", error)
@@ -175,16 +182,7 @@ final class Crypto {
     func publishPublicKey() async {
         do { try await ensureReady() } catch { return }
         guard let uid = currentUid(), let pk = myPublicKey else { return }
-        let b64 = Data(pk).base64EncodedString()
-        do {
-            let snap = try await db.collection("users").document(uid).getDocument()
-            if (snap.data()?["publicKey"] as? String) != b64 {
-                try await db.collection("users").document(uid)
-                    .setData(["publicKey": b64], merge: true)
-            }
-        } catch {
-            print("crypto: publishPublicKey failed:", error)
-        }
+        await Self.publishKeyIfChanged(db: db, uid: uid, b64: Data(pk).base64EncodedString())
     }
 
     /// My identity public key (Curve25519), for the safety-number screen. nil until
