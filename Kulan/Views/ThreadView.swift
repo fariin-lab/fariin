@@ -2224,10 +2224,10 @@ struct ThreadView: View {
             // Plain photo — retry keeps the caption AND the view-once flag (both were stripped before).
             var p = Message(localImageData: data, width: m.width ?? 1, height: m.height ?? 1,
                             authorId: me, clientId: clientId, sendState: .sending)
-            p.text = m.text; p.viewOnce = m.viewOnce
+            p.text = m.text; p.viewOnce = m.viewOnce; p.replyTo = m.replyTo   // retry keeps the quote too
             repo.addPending(p)
             Task {
-                do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId,
+                do { try await ChatService.sendImage(cid: cid, data: data, replyTo: m.replyTo, clientId: clientId,
                                                      group: isGroup ? groupMembers : nil,
                                                      viewOnce: m.viewOnce, caption: m.text) }
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
@@ -2328,14 +2328,21 @@ struct ThreadView: View {
         let preview = ChatService.downscaledJPEG(data)
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
         let clientId = UUID().uuidString
+        // A photo sent while replying carries the reply (like text/voice) and clears the bar.
+        let reply = replyingTo.map {
+            ReplyRef(id: $0.id, authorId: $0.authorId,
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+        }
         await MainActor.run {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
                                   authorId: me, clientId: clientId, sendState: .sending)
             pending.viewOnce = viewOnce
             pending.text = caption   // caption rides inside the image bubble
+            pending.replyTo = reply
             repo.addPending(pending)
+            replyingTo = nil
         }
-        do { try await ChatService.sendImage(cid: cid, data: data, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption) }
+        do { try await ChatService.sendImage(cid: cid, data: data, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
@@ -3494,8 +3501,12 @@ struct ThreadView: View {
                      text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         await MainActor.run {
-            repo.addPending(Message(localAudioData: data, duration: dur, waveform: wf,
-                                    authorId: me, clientId: clientId, sendState: .sending))
+            // The optimistic bubble must carry the quote too — without it the voice reply
+            // looked quote-less until the server echo reconciled (read as "reply didn't work").
+            var pending = Message(localAudioData: data, duration: dur, waveform: wf,
+                                  authorId: me, clientId: clientId, sendState: .sending)
+            pending.replyTo = reply
+            repo.addPending(pending)
             replyingTo = nil
         }
         do { try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil) }

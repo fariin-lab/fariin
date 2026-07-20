@@ -440,7 +440,7 @@ enum ChatService {
         return resized.jpegData(compressionQuality: quality) ?? data
     }
 
-    static func sendImage(cid: String, data rawData: Data, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "") async throws {
+    static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "") async throws {
         let data = downscaledJPEG(rawData)
         var members = group
         if members == nil, !cid.contains("_") {
@@ -478,11 +478,22 @@ enum ChatService {
             }
         }
 
+        // Encrypt the reply snippet the same way as the conversation (group vs 1:1) —
+        // replying to a message WITH a photo, like every standard messenger.
+        var replyEnc: [String: Any]?
+        if let r = replyTo {
+            let rc: Any
+            if let members { rc = try await Crypto.shared.encryptForGroup(r.text, members: members) }
+            else { rc = try await Crypto.shared.encryptForConversation(cid, r.text) }
+            replyEnc = ["id": r.id, "authorId": r.authorId, "text": rc]
+        }
+
         let batch = db.batch()
         var imgMsg: [String: Any] = [
             "type": "image", "imageUrl": url, "enc": meta.asDict, "text": captionCipher,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
         ]
+        if let replyEnc { imgMsg["replyTo"] = replyEnc }
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
         if viewOnce { imgMsg["viewOnce"] = true }           // view-once photo
         if let ui = UIImage(data: data) {                   // natural aspect ratio
