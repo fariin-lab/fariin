@@ -411,7 +411,7 @@ final class CallService: NSObject {
     // dead (CallKit owns it), so the ringback started at startCall was silent. Restart it fresh on
     // the live session — but only while we're still the caller waiting for an answer (outgoing).
     func audioSessionActivated() {
-        guard state == .outgoing, calleeRinging else { return }   // honest ringback: only once they RING
+        guard state == .outgoing else { return }   // ringback plays for the whole wait, not only once they ring
         stopRingback()
         startRingback()
     }
@@ -537,8 +537,10 @@ final class CallService: NSObject {
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
             guard granted else { self.hangUp(); return }   // no mic -> don't start a dead call
-            // NO ringback yet - silence during "Calling…" (their phone is not ringing); the tone
-            // starts when ringingAt arrives and the label flips to "Ringing…" (standard behavior).
+            // Ringback starts IMMEDIATELY (user decision 2026-07-22, verified against Signal live):
+            // the caller never sits in dead silence. The SOUND is comfort; the LABEL is truth —
+            // "Calling…" flips to "Ringing…" only when their phone confirms it is actually ringing.
+            self.startRingback()
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
             let ref = self.db.collection("calls").document()
             self.callId = ref.documentID
@@ -758,10 +760,11 @@ final class CallService: NSObject {
                 return
             }
 
-            // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…".
+            // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…". (The ringback
+            // tone is already playing since startCall — the LABEL is the honest reachability signal.)
             if self.isCaller, d["ringingAt"] != nil, !self.calleeRinging, self.state == .outgoing {
                 self.calleeRinging = true
-                self.startRingback()   // HONEST ringback: the tone starts only when their phone RINGS
+                self.startRingback()   // no-op if already playing (guard); safety for CallKit restarts
             }
             // Caller applies the answer once it arrives → connected.
             if self.isCaller, let answer = d["answer"] as? [String: String], let sdp = answer["sdp"],
