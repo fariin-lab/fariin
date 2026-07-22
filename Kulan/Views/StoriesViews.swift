@@ -461,7 +461,9 @@ struct StoriesRow: View {
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: "plus.circle.fill")
                                 .font(.system(size: 16)).symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, Color(.systemGreen))
+                                // OUR badge color (not WhatsApp green): black circle / white + in light
+                                // mode, auto-flips white/black in dark so it never disappears.
+                                .foregroundStyle(Color(.systemBackground), Color.primary)
                                 .offset(x: 4, y: 4)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
@@ -508,7 +510,8 @@ struct StoriesRow: View {
     private func plusBadge(_ action: @escaping () -> Void, size: CGFloat) -> some View {
         Image(systemName: "plus.circle.fill")
             .font(.system(size: size)).symbolRenderingMode(.palette)
-            .foregroundStyle(.white, Color(.systemGreen))
+            // OUR badge color (not WhatsApp green): black/white flips with the theme.
+            .foregroundStyle(Color(.systemBackground), Color.primary)
             .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
             // high-priority so tapping + adds a story without triggering the card's open tap
             .highPriorityGesture(TapGesture().onEnded { action() })
