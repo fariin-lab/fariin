@@ -92,7 +92,10 @@ final class ThreadRepository {
     private(set) var itemsVersion = 0
     private func refreshItems() {
         let echoed = Set(messages.compactMap { $0.clientId })
+        // Pending sends are MERGED by send time, not appended: an uploading photo stays exactly where
+        // it was sent even when later texts confirm first (order never shuffles on upload finish).
         items = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+            .sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
             .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
         indexById = Dictionary(items.enumerated().map { ($0.element.rowId, $0.offset) },
                                uniquingKeysWith: { a, _ in a })
@@ -422,7 +425,9 @@ final class ThreadRepository {
                 var c = m; c.reactions.removeValue(forKey: otherUid); return c
             }
         }
-        var sorted = msgs.sorted { $0.createdAt < $1.createdAt }
+        // Sort by SEND time (sortAt = sender tap time when present) — a slow-uploading photo keeps its
+        // place above a fast text sent after it. rowId tie-break keeps equal-time order deterministic.
+        var sorted = msgs.sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
         // Double-echo dedupe: a retry racing a slow-but-successful original can produce TWO server docs
         // with the same clientId. Show only the FIRST (earlier) one — the duplicate is invisible to the
         // user even before any server-side cleanup.

@@ -80,6 +80,7 @@ struct Message: Identifiable, Equatable {
     var callVideo: Bool = false             // placed as a video call (older records default to voice)
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
+    var clientTs: Date? = nil               // sender's tap time (ms epoch on the wire) — display order is send order
 
     var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
     var isAudio: Bool { (type == "audio" && (audioUrl?.isEmpty == false)) || localAudioData != nil }
@@ -94,6 +95,14 @@ struct Message: Identifiable, Equatable {
     /// Stable list identity: an optimistic message and its server echo share the
     /// same clientId, so the row updates in place (no delete+insert blink) on confirm.
     var rowId: String { clientId ?? id }
+
+    /// Display-order time: the sender's TAP time when sane, else the server arrival time.
+    /// Standard messenger rule — a slow-uploading photo stays ABOVE a fast text sent after it;
+    /// messages never swap when the upload finishes. The 1h sanity cap ignores broken clocks.
+    var sortAt: Date {
+        if let c = clientTs, abs(createdAt.timeIntervalSince(c)) < 3600 { return c }
+        return createdAt
+    }
 
     /// Local optimistic IMAGE message — shows the picked photo instantly before upload.
     init(localImageData: Data, width: Double, height: Double, authorId: String, clientId: String, sendState: MessageSendState) {
@@ -268,6 +277,9 @@ struct Message: Identifiable, Equatable {
             self.createdAt = ts.dateValue()
         } else {
             self.createdAt = Date()
+        }
+        if let ms = (data["clientTs"] as? NSNumber)?.doubleValue {
+            self.clientTs = Date(timeIntervalSince1970: ms / 1000)
         }
     }
 }

@@ -373,6 +373,7 @@ enum ChatService {
             "text": cipher,
             "authorId": uid,
             "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": Date().timeIntervalSince1970 * 1000,   // tap time — display order is send order
         ]
         if let clientId { msg["clientId"] = clientId }   // lets the client reconcile its optimistic copy
         if let replyEnc { msg["replyTo"] = replyEnc }
@@ -407,6 +408,7 @@ enum ChatService {
             "text": cipher,
             "authorId": uid,
             "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": Date().timeIntervalSince1970 * 1000,   // tap time — display order is send order
         ]
         if let clientId { msg["clientId"] = clientId }
         if let replyEnc { msg["replyTo"] = replyEnc }
@@ -441,6 +443,7 @@ enum ChatService {
     }
 
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "") async throws {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
         let data = downscaledJPEG(rawData)
         var members = group
         if members == nil, !cid.contains("_") {
@@ -491,7 +494,7 @@ enum ChatService {
         let batch = db.batch()
         var imgMsg: [String: Any] = [
             "type": "image", "imageUrl": url, "enc": meta.asDict, "text": captionCipher,
-            "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         if let replyEnc { imgMsg["replyTo"] = replyEnc }
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
@@ -528,6 +531,7 @@ enum ChatService {
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
     /// E2EE'd + uploaded separately; a single message doc carries the array of {imageUrl, enc, w, h}.
     static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil) async throws {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -567,7 +571,7 @@ enum ChatService {
         let batch = db.batch()
         var msg: [String: Any] = [
             "type": "album", "album": items, "text": captionCipher,
-            "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
         batch.setData(msg, forDocument: msgRef)
@@ -602,6 +606,7 @@ enum ChatService {
     /// one delivery status — the group never splits into separate messages.
     static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
                                clientId: String? = nil, group: [String]? = nil) async throws {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -662,7 +667,7 @@ enum ChatService {
         let batch = db.batch()
         var msg: [String: Any] = [
             "type": "album", "album": out, "text": captionCipher,
-            "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
         batch.setData(msg, forDocument: msgRef)
@@ -694,6 +699,7 @@ enum ChatService {
     /// Encrypt + send a voice note. Same E2EE pipeline as photos: the m4a bytes
     /// are sealed and the ciphertext uploaded; the server never hears the audio.
     static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil) async throws {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -734,6 +740,7 @@ enum ChatService {
         var msg: [String: Any] = [
             "type": "audio", "audioUrl": url, "duration": duration, "waveform": waveform,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
@@ -761,6 +768,7 @@ enum ChatService {
     /// instantly without downloading the video.
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
                           width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil) async throws {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -801,6 +809,7 @@ enum ChatService {
             "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
             "duration": duration, "width": width, "height": height,
             "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
         batch.setData(msg, forDocument: msgRef)
@@ -827,6 +836,7 @@ enum ChatService {
     /// Encrypt + send a document/file. Contents are E2EE (same pipeline as photos); the file
     /// NAME is metadata stored in the clear (like image dimensions) so the bubble can label it.
     static func sendFile(cid: String, data rawData: Data, fileName: String, clientId: String? = nil, group: [String]? = nil) async throws {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -850,6 +860,7 @@ enum ChatService {
         var msg: [String: Any] = [
             "type": "file", "fileUrl": url, "fileName": fileName, "fileSize": rawData.count,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
         batch.setData(msg, forDocument: msgRef)
@@ -883,6 +894,7 @@ enum ChatService {
         batch.setData([
             "type": "gif", "imageUrl": url, "width": width, "height": height,
             "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": Date().timeIntervalSince1970 * 1000,
         ], forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "GIF", "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
