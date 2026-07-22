@@ -45,6 +45,7 @@ struct ContactInfoView: View {
     @State private var localName: String?       // local custom name (Edit) — device-only, never sent
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
+    @State private var showProfilePhoto = false   // tap the hero avatar → full-screen photo
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
@@ -147,6 +148,9 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
+            .fullScreenCover(isPresented: $showProfilePhoto) {
+                ProfilePhotoViewer(name: shownName, photoUrl: photoUrl ?? "")
+            }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
@@ -342,6 +346,7 @@ struct ContactInfoView: View {
     private var hero: some View {
         VStack(spacing: 6) {
             AvatarView(name: shownName, photoUrl: photoUrl, size: 88)
+                .onTapGesture { if photoUrl?.isEmpty == false { showProfilePhoto = true } }
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
@@ -537,6 +542,72 @@ struct SharedMediaGridView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .fullScreenCover(item: $viewer) { ImageViewerView(message: $0, cid: cid) }
+        }
+    }
+}
+
+// Full-screen profile-photo viewer (tap the hero avatar, standard messenger behavior). Profile
+// photos are plain URLs (not E2EE) served from the same DiskImageCache AvatarView fills, so it
+// opens instantly when the avatar already rendered. Pinch to zoom, drag down (or X) to close.
+private struct ProfilePhotoViewer: View {
+    let name: String
+    let photoUrl: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+    @State private var zoom: CGFloat = 1
+    @State private var drag: CGSize = .zero
+
+    var body: some View {
+        ZStack {
+            // Backdrop fades as the photo is dragged toward dismissal (system photo-viewer feel).
+            Color.black.opacity(1 - min(abs(drag.height) / 500, 0.4)).ignoresSafeArea()
+            Group {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFit()
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .scaleEffect(zoom)
+            .offset(drag)
+        }
+        .gesture(
+            MagnificationGesture()
+                .onChanged { zoom = max(1, $0) }
+                .onEnded { _ in withAnimation(.spring(duration: 0.3)) { zoom = 1 } }
+        )
+        .simultaneousGesture(
+            DragGesture()
+                .onChanged { if zoom == 1 { drag = $0.translation } }
+                .onEnded { v in
+                    if zoom == 1, abs(v.translation.height) > 120 { dismiss() }
+                    else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
+                }
+        )
+        .overlay(alignment: .top) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(.black.opacity(0.4), in: Circle())
+                }
+                Spacer()
+                Text(name).font(.headline).foregroundStyle(.white)
+                Spacer()
+                Color.clear.frame(width: 38, height: 38)   // balances the X so the name stays centered
+            }
+            .padding(.horizontal, 16)
+            .opacity(drag == .zero ? 1 : 0)   // chrome hides while dragging to dismiss
+        }
+        .statusBarHidden()
+        .task {
+            if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
+            guard let url = URL(string: photoUrl),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let ui = UIImage(data: data) else { return }
+            DiskImageCache.shared.store(ui, data: data, for: photoUrl)
+            image = ui
         }
     }
 }
