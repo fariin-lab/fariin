@@ -39,7 +39,7 @@ struct MediaGalleryView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
     private var dark: Bool { scheme == .dark }
-    private let cols = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
     // MARK: - Derived lists
 
