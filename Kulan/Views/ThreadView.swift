@@ -4711,9 +4711,13 @@ struct MessageBubble: View, Equatable {
                       : (reply.authorId == me ? "Replied to your status" : "Replied to their status"))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
+                // ~92x160 (measured from the reference): small enough to read as a story CARD,
+                // not a sent photo. Hairline stroke separates light stories from the wallpaper.
                 StoryImage(url: thumb)
-                    .frame(width: 118, height: 190)
+                    .frame(width: 92, height: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
                     // Unique per MESSAGE (two replies can quote the same story — duplicate
                     // hero ids glitch the transition).
                     .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
