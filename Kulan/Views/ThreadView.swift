@@ -3960,6 +3960,11 @@ struct MessageBubble: View, Equatable {
                         .padding(.leading, 12)
                         .onTapGesture { onTapSender(message.authorId) }
                 }
+                // Status reply: caption + BIG story card floating on the wallpaper ABOVE the bubble
+                // (reference look, our own take) — replaces the small in-bubble quote for status replies.
+                if let reply = message.replyTo, reply.isStatus {
+                    storyReplyHeader(reply)
+                }
                 content
                     // Jump-to flash: a brief dim pulse using the bubble's OWN shape + cluster corners, so
                     // it covers exactly the bubble with no generic-rounded-rect over/under-hang (user
@@ -4697,8 +4702,30 @@ struct MessageBubble: View, Equatable {
         onTapAlbum(gallery, "\(message.id)-\(i)")
     }
 
+    // The BIG floating story card above the bubble (status replies render here, not in the quote box):
+    // secondary caption line, then a tall rounded story thumbnail that opens the status on tap.
+    @ViewBuilder private func storyReplyHeader(_ reply: ReplyRef) -> some View {
+        let me = AuthService.shared.uid
+        VStack(alignment: isMe ? .trailing : .leading, spacing: 5) {
+            Text(isMe ? (reply.authorId == me ? "You replied to your status" : "You replied to their status")
+                      : (reply.authorId == me ? "Replied to your status" : "Replied to their status"))
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
+                StoryImage(url: thumb)
+                    .frame(width: 118, height: 190)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    // Unique per MESSAGE (two replies can quote the same story — duplicate
+                    // hero ids glitch the transition).
+                    .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .onTapGesture { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }
+            }
+        }
+        .padding(.bottom, 2)
+    }
+
     @ViewBuilder private var replyQuote: some View {
-        if let reply = message.replyTo {
+        if let reply = message.replyTo, !reply.isStatus {
             let fg = isMe ? onMyBubble : (dark ? Color.white : .black)
             HStack(spacing: 7) {
                 // Left accent line signalling a quoted reply.
