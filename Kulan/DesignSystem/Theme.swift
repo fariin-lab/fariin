@@ -133,6 +133,18 @@ struct AvatarView: View {
 
     @State private var image: UIImage?
 
+    init(name: String, photoUrl: String? = nil, size: CGFloat = 48) {
+        self.name = name
+        self.photoUrl = photoUrl
+        self.size = size
+        // FIRST-FRAME seed from the synchronous memory cache: without it every AvatarView
+        // renders the letter fallback for a beat before .task loads the (already cached)
+        // photo — the "blink" on the call screen's big 180pt avatar made it obvious.
+        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.memoryImage(u) {
+            _image = State(initialValue: warm)
+        }
+    }
+
     private var hasPhoto: Bool { (photoUrl?.isEmpty == false) }
     private var initial: String {
         let c = name.trimmingCharacters(in: .whitespaces).first
