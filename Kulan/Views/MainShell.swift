@@ -862,6 +862,9 @@ struct ChatsView: View {
                         .tag(conv.id)
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)   // clean, no row lines
+                        // Swiped row slides on a PLAIN page-colored surface (Signal look) — without an
+                        // explicit row background the swipe platter renders a grey slab behind the row.
+                        .listRowBackground(Color(.systemBackground))
                         .moveDisabled(true)   // reordering removed — pinned chats stay fixed
                         // Full-swipe enabled like the leading (Pin) edge. The FIRST action is
                         // what a full swipe triggers, so Archive leads: a long
@@ -1213,6 +1216,7 @@ struct ArchivedChatsView: View {
                             .tag(conv.id)
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
+                            .listRowBackground(Color(.systemBackground))   // no grey slab on swipe (Signal look)
                             .swipeActions(edge: .trailing) {
                                 Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
                                     Label("Unarchive", systemImage: "tray.and.arrow.up")
