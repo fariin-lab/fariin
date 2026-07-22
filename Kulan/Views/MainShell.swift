@@ -628,6 +628,72 @@ struct ChatsView: View {
         Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
     }
 
+    // One chat-list row: full-row Button (a NavigationLink would draw the disclosure chevron;
+    // in edit mode a Button is auto-disabled so native multi-select toggles via the row tag),
+    // long-press menu + conversation PEEK preview, swipe actions both edges.
+    @ViewBuilder private func chatListRow(_ conv: Conversation) -> some View {
+        Button {
+            path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
+                                   photo: conv.displayPhoto(me)))
+        } label: {
+            chatListRowLabel(conv)
+        }
+        .buttonStyle(ChatRowPressStyle())   // grey highlight while held
+        .tag(conv.id)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)   // clean, no row lines
+        // Swiped row slides on a PLAIN page-colored surface (Signal look) — without an
+        // explicit row background the swipe platter renders a grey slab behind the row.
+        .listRowBackground(Color(.systemBackground))
+        .moveDisabled(true)   // reordering removed — pinned chats stay fixed
+        // Full-swipe enabled like the leading (Pin) edge. The FIRST action is what a full
+        // swipe triggers, so Archive leads; Mute/Delete are still revealed for a tap.
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button {
+                Task { await ChatService.setArchived(conv.id, true) }
+            } label: { Label("Archive", systemImage: "archivebox.fill") }
+            .tint(.gray)
+            Button { pendingMute = conv } label: { Label("Mute", systemImage: "bell.slash.fill") }
+            .tint(.indigo)
+            Button(role: .destructive) {
+                pendingDelete = conv
+            } label: { Label("Delete", systemImage: "trash.fill") }
+            .tint(.red)
+        }
+        .swipeActions(edge: .leading) {
+            Button {
+                Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
+            } label: {
+                Label(conv.isPinned(me) ? "Unpin" : "Pin", systemImage: "pin")
+            }
+            .tint(.orange)
+        }
+    }
+
+    // The row CONTENT with the context menu attached to it (not the Button — a Button in a
+    // List swallows the long-press) + the conversation peek as the menu preview.
+    private func chatListRowLabel(_ conv: Conversation) -> some View {
+        ChatRow(conv: conv, me: me, dark: dark,
+                storySeen: storySeen(conv),
+                onStoryTap: {   // open this person's story in the same viewer the stories row uses
+                    if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
+                        viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
+                        viewerAnonymous = false; viewerGroup = g
+                    }
+                },
+                storyNS: storyNS,
+                draft: Drafts.shared.text(conv.id),
+                voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
+            .equatable()   // skip rebuild when this conversation is unchanged
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())   // whole row tappable (incl. empty space)
+            .contextMenu {
+                chatMenu(conv)
+            } preview: {
+                ChatPeekPreview(cid: conv.id, me: me)
+            }
+    }
+
     private var visible: [Conversation] {
         repo.conversations
             .filter { !$0.isCleared(me) && !$0.isArchived(me) }
@@ -835,76 +901,9 @@ struct ChatsView: View {
                       // native circles-slide-in + rows-shift-right animate smoothly (withAnimation on
                       // `selecting` at the tap sites drives it).
                       List(selection: $selection) {
-                      ForEach(visible) { conv in
-                        // Full-row Button instead of a NavigationLink: a NavigationLink in a
-                        // List always draws the trailing disclosure chevron (the arrow). A
-                        // plain Button does not, and in edit mode it is auto-disabled so the
-                        // List's native multi-select still toggles via the row tag.
-                        Button {
-                            // Demo chats now open a real (local, plaintext) conversation in the
-                            // preview — ThreadRepository serves DemoMode.messages(for:) directly.
-                            path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
-                                                   photo: conv.displayPhoto(me)))
-                        } label: {
-                            ChatRow(conv: conv, me: me, dark: dark,
-                                    storySeen: storySeen(conv),
-                                    onStoryTap: {   // open this person's story in the same viewer the stories row uses
-                                        if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
-                                            viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
-                                            viewerAnonymous = false; viewerGroup = g
-                                        }
-                                    },
-                                    storyNS: storyNS,
-                                    draft: Drafts.shared.text(conv.id),
-                                    voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
-                                .equatable()   // skip rebuild when this conversation is unchanged
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())   // whole row tappable (incl. empty space)
-                                // Context menu attached to the ROW CONTENT, not the Button. On a Button
-                                // inside a List the button's press gesture swallows the context-menu
-                                // long-press, so the menu never appeared; on the content it fires.
-                                // preview: a real conversation PEEK (last messages as read-only bubbles,
-                                // the reference behavior) instead of lifting just the row.
-                                .contextMenu {
-                                    chatMenu(conv)
-                                } preview: {
-                                    ChatPeekPreview(cid: conv.id, me: me)
-                                }
-                        }
-                        .buttonStyle(ChatRowPressStyle())   // grey highlight while held
-                        .tag(conv.id)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)   // clean, no row lines
-                        // Swiped row slides on a PLAIN page-colored surface (Signal look) — without an
-                        // explicit row background the swipe platter renders a grey slab behind the row.
-                        .listRowBackground(Color(.systemBackground))
-                        .moveDisabled(true)   // reordering removed — pinned chats stay fixed
-                        // Full-swipe enabled like the leading (Pin) edge. The FIRST action is
-                        // what a full swipe triggers, so Archive leads: a long
-                        // left swipe archives; Mute/Delete are still revealed for a tap.
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button {
-                                Task { await ChatService.setArchived(conv.id, true) }
-                            } label: { Label("Archive", systemImage: "archivebox.fill") }
-                            .tint(.gray)
-                            Button { pendingMute = conv } label: { Label("Mute", systemImage: "bell.slash.fill") }
-                            .tint(.indigo)
-                            Button(role: .destructive) {
-                                pendingDelete = conv
-                            } label: { Label("Delete", systemImage: "trash.fill") }
-                            .tint(.red)
-                        }
-                        .swipeActions(edge: .leading) {
-                            Button {
-                                Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
-                            } label: {
-                                Label(conv.isPinned(me) ? "Unpin" : "Pin", systemImage: "pin")
-                            }
-                            .tint(.orange)
-                        }
-                        // (contextMenu moved onto the row content above — a Button in a List swallows
-                        // the long-press, so attaching it here never triggered.)
-                      }
+                      // Row body extracted (chatListRow): the inline closure blew past the
+                      // type-checker's budget once the peek preview + row background joined it.
+                      ForEach(visible) { conv in chatListRow(conv) }
                     }
                     .listStyle(.plain)
                     // When a new message bumps a chat to the top, the rows
