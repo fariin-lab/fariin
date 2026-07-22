@@ -395,7 +395,9 @@ struct StoriesRow: View {
                     .onTapGesture { onOpenUploading() }
                     .matchedTransitionSource(id: "my-story", in: storyNS)   // hero source for the native zoom close
             } else {
-                card(cover: repo.mine?.stories.last?.previewUrl ?? mePhoto,
+                // Cover = last STORY only. No stories yet → the add-status look (centered circle
+                // avatar + green +), never the profile photo blown up to fill the card.
+                card(cover: repo.mine?.stories.last?.previewUrl,
                      name: "My Story", avatar: mePhoto,
                      seen: StoryPrefs.seenFlags(repo.mine?.stories ?? [], upTo: repo.mine?.lastViewedAt), onBadge: onCompose) {
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
@@ -406,7 +408,7 @@ struct StoriesRow: View {
                     Button { if let m = repo.mine, !m.stories.isEmpty { onOpen(m) } }
                         label: { Label("Posted Stories", systemImage: "circle.dashed") }
                 } preview: {
-                    coverImage(repo.mine?.stories.last?.previewUrl ?? mePhoto, name: "My Story", avatar: mePhoto)
+                    coverImage(repo.mine?.stories.last?.previewUrl, name: "My Story", avatar: mePhoto)
                         .frame(width: cardW, height: cardH)
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }
@@ -483,16 +485,13 @@ struct StoriesRow: View {
         .buttonStyle(.plain)
     }
 
-    // addBadge (my card, NO stories yet): the green + rides ON the cover — on the photo's corner when a
-    // profile photo fills the card, or attached to the centered placeholder circle when there's none —
-    // instead of a duplicated small avatar (the "two Ms" bug).
+    // addBadge (my card, NO stories yet): WhatsApp add-status look — a centered circle avatar (profile
+    // photo or letter fallback) with the green + attached to its corner. Never a duplicated small
+    // avatar (the "two Ms" bug), never the profile photo blown up as the card cover.
     @ViewBuilder private func coverImage(_ cover: String?, name: String, avatar: String?,
                                          addBadge: (() -> Void)? = nil) -> some View {
         if let cover, !cover.isEmpty {
             StoryImage(url: cover)
-                .overlay(alignment: .bottomLeading) {
-                    if let addBadge { plusBadge(addBadge, size: 22).padding(10) }
-                }
         } else {
             ZStack {
                 Color.secondary.opacity(0.2)
