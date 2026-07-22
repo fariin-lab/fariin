@@ -446,11 +446,14 @@ struct StoriesRow: View {
         Button(action: tap) {
         VStack(spacing: 6) {
             ZStack(alignment: .bottomLeading) {
-                coverImage(cover, name: name, avatar: avatar)
+                coverImage(cover, name: name, avatar: avatar,
+                           addBadge: (onBadge != nil && seen.isEmpty) ? onBadge : nil)
                     .frame(width: cardW, height: cardH)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                if let onBadge {
-                    // My Story: profile picture + ring (colorful before I view it, grey after) + small + badge.
+                if let onBadge, !seen.isEmpty {
+                    // My Story WITH posted stories: profile picture + ring (colorful before I view it,
+                    // grey after) + small + badge. (No stories → the + lives on the cover itself, no
+                    // duplicated avatar — the WhatsApp add-status look.)
                     AvatarView(name: name, photoUrl: avatar, size: 32)
                         .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
                         .overlay(alignment: .bottomTrailing) {
@@ -464,7 +467,7 @@ struct StoriesRow: View {
                         .animation(.easeInOut(duration: 0.3), value: seen)
                         .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
                         .padding(8)
-                } else {
+                } else if onBadge == nil {
                     AvatarView(name: name, photoUrl: avatar, size: 32)
                         .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
                         .animation(.easeInOut(duration: 0.3), value: seen)
@@ -480,15 +483,34 @@ struct StoriesRow: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder private func coverImage(_ cover: String?, name: String, avatar: String?) -> some View {
+    // addBadge (my card, NO stories yet): the green + rides ON the cover — on the photo's corner when a
+    // profile photo fills the card, or attached to the centered placeholder circle when there's none —
+    // instead of a duplicated small avatar (the "two Ms" bug).
+    @ViewBuilder private func coverImage(_ cover: String?, name: String, avatar: String?,
+                                         addBadge: (() -> Void)? = nil) -> some View {
         if let cover, !cover.isEmpty {
             StoryImage(url: cover)
+                .overlay(alignment: .bottomLeading) {
+                    if let addBadge { plusBadge(addBadge, size: 22).padding(10) }
+                }
         } else {
             ZStack {
                 Color.secondary.opacity(0.2)
                 AvatarView(name: name, photoUrl: avatar, size: cardW * 0.62)
+                    .overlay(alignment: .bottomTrailing) {
+                        if let addBadge { plusBadge(addBadge, size: 22) }
+                    }
             }
         }
+    }
+
+    private func plusBadge(_ action: @escaping () -> Void, size: CGFloat) -> some View {
+        Image(systemName: "plus.circle.fill")
+            .font(.system(size: size)).symbolRenderingMode(.palette)
+            .foregroundStyle(.white, Color(.systemGreen))
+            .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
+            // high-priority so tapping + adds a story without triggering the card's open tap
+            .highPriorityGesture(TapGesture().onEnded { action() })
     }
 
     func reload() { Task { await repo.load(force: true) } }
