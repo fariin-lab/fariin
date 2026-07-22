@@ -557,11 +557,14 @@ private struct ProfilePhotoViewer: View {
     @State private var zoom: CGFloat = 1
     @State private var drag: CGSize = .zero
 
+    // Backdrop dims toward 0.6 as the photo is dragged toward dismissal.
+    private var backdropOpacity: Double { 1 - min(Double(abs(drag.height)) / 500.0, 0.4) }
+
     var body: some View {
         ZStack {
             // Backdrop fades as the photo is dragged toward dismissal (system photo-viewer feel).
             // Tapping the empty area outside the photo also closes.
-            Color.black.opacity(1 - min(abs(drag.height) / 500, 0.4)).ignoresSafeArea()
+            Color.black.opacity(backdropOpacity).ignoresSafeArea()
                 .onTapGesture { dismiss() }
             Group {
                 if let image {
