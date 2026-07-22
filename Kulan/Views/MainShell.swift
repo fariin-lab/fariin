@@ -854,9 +854,14 @@ struct ChatsView: View {
                                 .contentShape(Rectangle())   // whole row tappable (incl. empty space)
                                 // Context menu attached to the ROW CONTENT, not the Button. On a Button
                                 // inside a List the button's press gesture swallows the context-menu
-                                // long-press, so the menu never appeared; on the content it fires. iOS
-                                // still lifts the real row as the native peek preview.
-                                .contextMenu { chatMenu(conv) }
+                                // long-press, so the menu never appeared; on the content it fires.
+                                // preview: a real conversation PEEK (last messages as read-only bubbles,
+                                // the reference behavior) instead of lifting just the row.
+                                .contextMenu {
+                                    chatMenu(conv)
+                                } preview: {
+                                    ChatPeekPreview(cid: conv.id, me: me)
+                                }
                         }
                         .buttonStyle(ChatRowPressStyle())   // grey highlight while held
                         .tag(conv.id)
@@ -1591,5 +1596,74 @@ struct ChatRow: View, Equatable {
         .padding(.horizontal, 16)   // 16pt gutter moved inside the cell (row insets are now
                                     // zero) so the reorder drag preview matches the cell width
                                     // and stays locked to the vertical axis (no horizontal drift)
+    }
+}
+
+// Long-press PEEK of a conversation (reference behavior): the chat's real last messages as
+// simple read-only bubbles. Cache-first — a chat opened this session renders instantly from
+// ThreadMessageCache; otherwise one light fetch. Deliberately NOT ThreadView (a peek must stay
+// cheap and side-effect free: no listeners, no read receipts, no keyboard).
+private struct ChatPeekPreview: View {
+    let cid: String
+    let me: String
+    @State private var msgs: [Message]
+    @State private var loaded: Bool
+    @Environment(\.colorScheme) private var scheme
+
+    init(cid: String, me: String) {
+        self.cid = cid
+        self.me = me
+        let cached = (ThreadMessageCache.shared.messages(for: cid) ?? []).filter { !$0.isSystem }
+        _msgs = State(initialValue: Array(cached.suffix(12)))
+        _loaded = State(initialValue: !cached.isEmpty)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if !loaded {
+                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 60)
+            } else if msgs.isEmpty {
+                Text("No messages yet").font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity).padding(.vertical, 60)
+            }
+            ForEach(msgs) { m in bubble(m) }
+        }
+        .padding(14)
+        .frame(width: 330, alignment: .leading)
+        .background(Color(.systemBackground))
+        .task {
+            guard !loaded else { return }
+            // Newest-first fetch → ascending for display, capped to the last 12.
+            let fetched = await ChatService.galleryContent(cid, limit: 12)
+            msgs = Array(fetched.reversed()).filter { !$0.isSystem }
+            loaded = true
+        }
+    }
+
+    private func label(_ m: Message) -> String {
+        if m.isCall { return m.callVideo ? "🎥 Video call" : "📞 Voice call" }
+        if m.isAlbum { return "📷 \(max(m.album.count, m.localAlbum.count)) Photos" }
+        if m.isImage { return m.viewOnce ? "① View-once photo" : "📷 Photo" }
+        if m.isVideo { return "🎥 Video" }
+        if m.isAudio { return "🎤 Voice message" }
+        if m.isGif { return "GIF" }
+        if m.isFile { return "📄 \(m.fileName ?? "Document")" }
+        return m.safeText.isEmpty ? "…" : m.safeText
+    }
+
+    @ViewBuilder private func bubble(_ m: Message) -> some View {
+        let mine = m.authorId == me
+        HStack {
+            if mine { Spacer(minLength: 44) }
+            Text(label(m))
+                .font(.system(size: 15)).lineLimit(4)
+                .foregroundStyle(mine ? Color.white : (scheme == .dark ? Color.white : .black))
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(mine ? AnyShapeStyle(Theme.accent(scheme == .dark))
+                                 : AnyShapeStyle(Color.primary.opacity(0.08)),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            if !mine { Spacer(minLength: 44) }
+        }
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
     }
 }
