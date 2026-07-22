@@ -4355,7 +4355,7 @@ struct MessageBubble: View, Equatable {
                     }
                     .onTapGesture {
                         if message.sendState == .failed { onResend(message) }
-                        else if message.localImageData == nil { onTapImage(message) }   // only open uploaded photos
+                        else { onTapImage(message) }   // uploading photos open too — the viewer shows the local copy
                     }
                     // Caption INSIDE the same bubble (the caption is the message body).
                     if hasCaption {
