@@ -395,9 +395,9 @@ struct StoriesRow: View {
                     .onTapGesture { onOpenUploading() }
                     .matchedTransitionSource(id: "my-story", in: storyNS)   // hero source for the native zoom close
             } else {
-                // Cover = last STORY only. No stories yet → the add-status look (centered circle
-                // avatar + green +), never the profile photo blown up to fill the card.
-                card(cover: repo.mine?.stories.last?.previewUrl,
+                // Cover = last story, else the profile photo fills the card (user rollback
+                // 2026-07-22: they prefer the full-photo look). No photo at all → centered circle.
+                card(cover: repo.mine?.stories.last?.previewUrl ?? mePhoto,
                      name: "My Story", avatar: mePhoto,
                      seen: StoryPrefs.seenFlags(repo.mine?.stories ?? [], upTo: repo.mine?.lastViewedAt), onBadge: onCompose) {
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
@@ -408,7 +408,7 @@ struct StoriesRow: View {
                     Button { if let m = repo.mine, !m.stories.isEmpty { onOpen(m) } }
                         label: { Label("Posted Stories", systemImage: "circle.dashed") }
                 } preview: {
-                    coverImage(repo.mine?.stories.last?.previewUrl, name: "My Story", avatar: mePhoto)
+                    coverImage(repo.mine?.stories.last?.previewUrl ?? mePhoto, name: "My Story", avatar: mePhoto)
                         .frame(width: cardW, height: cardH)
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }
@@ -452,18 +452,22 @@ struct StoriesRow: View {
                            addBadge: (onBadge != nil && seen.isEmpty) ? onBadge : nil)
                     .frame(width: cardW, height: cardH)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                if let onBadge, !seen.isEmpty {
-                    // My Story WITH posted stories: profile picture + ring (colorful before I view it,
-                    // grey after) + small + badge. (No stories → the + lives on the cover itself, no
-                    // duplicated avatar — the WhatsApp add-status look.)
-                    AvatarView(name: name, photoUrl: avatar, size: 32)
-                        .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
+                if let onBadge, cover?.isEmpty == false {
+                    // My Story with a filled cover (story preview OR profile photo): small avatar +
+                    // ring + green + badge. With no stories the story ring is absent, so a clean white
+                    // border makes the circle stand out against the (identical) photo behind it.
+                    AvatarView(name: name, photoUrl: avatar, size: 34)
+                        .overlay {
+                            if seen.isEmpty {
+                                Circle().strokeBorder(.white, lineWidth: 2)
+                            } else {
+                                StoryRingView(seen: seen).frame(width: 39, height: 39)
+                            }
+                        }
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: "plus.circle.fill")
                                 .font(.system(size: 16)).symbolRenderingMode(.palette)
-                                // OUR badge color (not WhatsApp green): black circle / white + in light
-                                // mode, auto-flips white/black in dark so it never disappears.
-                                .foregroundStyle(Color(.systemBackground), Color.primary)
+                                .foregroundStyle(.white, Color(.systemGreen))
                                 .offset(x: 4, y: 4)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
@@ -510,8 +514,7 @@ struct StoriesRow: View {
     private func plusBadge(_ action: @escaping () -> Void, size: CGFloat) -> some View {
         Image(systemName: "plus.circle.fill")
             .font(.system(size: size)).symbolRenderingMode(.palette)
-            // OUR badge color (not WhatsApp green): black/white flips with the theme.
-            .foregroundStyle(Color(.systemBackground), Color.primary)
+            .foregroundStyle(.white, Color(.systemGreen))   // green + (user rollback 2026-07-22)
             .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
             // high-priority so tapping + adds a story without triggering the card's open tap
             .highPriorityGesture(TapGesture().onEnded { action() })
