@@ -632,6 +632,14 @@ struct ChatsView: View {
         repo.conversations
             .filter { !$0.isCleared(me) && !$0.isArchived(me) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
+            // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
+            // in stays OUT of the list (standard behavior) until something real happens: a message
+            // either way, an unread, a pin, or a draft you typed. Groups always list — creating
+            // one is deliberate.
+            .filter { c in
+                c.isGroup || !c.lastMessageCipher.isEmpty || c.unread(me) > 0 || c.isPinned(me)
+                    || !Drafts.shared.text(c.id).isEmpty
+            }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
                 case 1: return c.unread(me) > 0

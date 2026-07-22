@@ -216,7 +216,15 @@ final class ThreadRepository {
             .order(by: "createdAt", descending: true)
             .limit(to: pageSize)
             .addSnapshotListener { [weak self] snap, _ in
-                guard let self, let snap else { return }
+                guard let self else { return }
+                guard let snap else {
+                    // Listener ERROR (seen in the wild: a brand-new chat opened from search sat on
+                    // the skeleton FOREVER). A dead listener must never freeze the screen — reveal
+                    // the (empty) chat and re-attach after a beat.
+                    self.didInitialLoad = true
+                    self.retryStartSoon()
+                    return
+                }
                 // Don't blank an open thread on an empty offline snapshot.
                 if snap.metadata.isFromCache && snap.documents.isEmpty && !self.messages.isEmpty { return }
                 // Pass whether this is a cache/local snapshot — deletes are only trusted from the SERVER
@@ -280,6 +288,16 @@ final class ThreadRepository {
         byId[id] = m
         rawReactions[id] = sig
         return m
+    }
+
+    // Re-attach the whole listener set after a listener error (bounded — never an error loop).
+    private var listenerRetries = 0
+    private func retryStartSoon() {
+        guard listenerRetries < 3 else { return }
+        listenerRetries += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.start()
+        }
     }
 
     // Monotonic snapshot sequencing: detached decrypt batches can finish out of order; the
