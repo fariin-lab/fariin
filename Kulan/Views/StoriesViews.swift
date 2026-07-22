@@ -495,9 +495,11 @@ struct StoriesRow: View {
         } else {
             ZStack {
                 Color.secondary.opacity(0.2)
-                AvatarView(name: name, photoUrl: avatar, size: cardW * 0.62)
+                // Roomy proportions (user polish 2026-07-22): the circle stays well clear of the card
+                // edges — a near-edge circle + big badge read cramped, not pro.
+                AvatarView(name: name, photoUrl: avatar, size: cardW * 0.48)
                     .overlay(alignment: .bottomTrailing) {
-                        if let addBadge { plusBadge(addBadge, size: 22) }
+                        if let addBadge { plusBadge(addBadge, size: 19).offset(x: 3, y: 3) }
                     }
             }
         }
