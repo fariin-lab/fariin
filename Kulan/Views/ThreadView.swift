@@ -4713,7 +4713,11 @@ struct MessageBubble: View, Equatable {
             if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
                 // ~92x160 (measured from the reference): small enough to read as a story CARD,
                 // not a sent photo. Hairline stroke separates light stories from the wallpaper.
-                StoryImage(url: thumb)
+                // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
+                // crop — the preview must show exactly what opening the story shows (6 people
+                // in the story = 6 people in the card, user rule). Threshold = the card's own
+                // aspect so a card-tall photo still fills edge-to-edge with no bars.
+                StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 160.0 / 92.0)
                     .frame(width: 92, height: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
