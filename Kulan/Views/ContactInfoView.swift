@@ -46,6 +46,7 @@ struct ContactInfoView: View {
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → full-screen photo
+    @Namespace private var profilePhotoNS         // zoom hero: the viewer grows out of the avatar circle
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
@@ -150,6 +151,9 @@ struct ContactInfoView: View {
             .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
             .fullScreenCover(isPresented: $showProfilePhoto) {
                 ProfilePhotoViewer(name: shownName, photoUrl: photoUrl ?? "")
+                    // Native zoom hero: the big circle GROWS out of the small avatar and the
+                    // dismiss shrinks back into it (same mechanism as the story viewer).
+                    .navigationTransition(.zoom(sourceID: "profile-photo", in: profilePhotoNS))
             }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
@@ -347,6 +351,7 @@ struct ContactInfoView: View {
         VStack(spacing: 6) {
             AvatarView(name: shownName, photoUrl: photoUrl, size: 88)
                 .onTapGesture { if photoUrl?.isEmpty == false { showProfilePhoto = true } }
+                .matchedTransitionSource(id: "profile-photo", in: profilePhotoNS)
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
