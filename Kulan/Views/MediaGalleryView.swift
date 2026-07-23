@@ -20,7 +20,7 @@ struct MediaGalleryView: View {
     let title: String
     let photoUrl: String?
 
-    enum Tab: Hashable { case media, audio, links }
+    enum Tab: Hashable { case media, audio, links, docs }
     enum MediaFilter: Hashable { case all, photos, videos, gifs }
     enum AudioFilter: Hashable { case all, voice, files }
 
@@ -61,6 +61,7 @@ struct MediaGalleryView: View {
     private var linkItems: [Message] {
         all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile && Self.firstURL(in: $0.text) != nil }
     }
+    private var docItems: [Message] { all.filter { $0.isFile } }
 
     var body: some View {
         content
@@ -100,6 +101,7 @@ struct MediaGalleryView: View {
         case .media: mediaGrid
         case .audio: audioList
         case .links: linksList
+        case .docs:  docsList
         }
     }
 
@@ -124,11 +126,12 @@ struct MediaGalleryView: View {
                     Text("Media").tag(Tab.media)
                     Text("Audio").tag(Tab.audio)
                     Text("Links").tag(Tab.links)
+                    Text("Docs").tag(Tab.docs)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 240)
+                .frame(width: 300)
             }
-            if tab != .links {
+            if tab == .media || tab == .audio {
                 ToolbarItem(placement: .topBarTrailing) { filterMenu }
             }
         }
@@ -350,6 +353,49 @@ struct MediaGalleryView: View {
             Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
             if let url { Button { UIApplication.shared.open(url) } label: { Label("Open Link", systemImage: "safari") } }
         }
+    }
+
+    // MARK: - Docs list (files shared in this chat — WhatsApp's Docs tab)
+
+    private var docsList: some View {
+        ScrollView {
+            if loaded && docItems.isEmpty { emptyState("doc", "No documents") }
+            LazyVStack(spacing: 0) {
+                ForEach(docItems) { m in
+                    docRow(m)
+                    Divider().padding(.leading, 64)
+                }
+            }
+        }
+    }
+
+    private func docRow(_ m: Message) -> some View {
+        Button { goToChat(m) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 18)).foregroundStyle(Color.accentColor)
+                    .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(m.fileName ?? "Document")
+                        .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
+                    Text(docMeta(m)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(m.createdAt.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+        }
+    }
+
+    private func docMeta(_ m: Message) -> String {
+        guard let size = m.fileSize, size > 0 else { return "File" }
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 
     // MARK: - Item context menu (media + audio)

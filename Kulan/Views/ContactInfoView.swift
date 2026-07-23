@@ -32,9 +32,6 @@ struct ContactInfoView: View {
     @State private var showBlock = false
     @State private var showReport = false
     @State private var showShare = false
-    @State private var showCallSoon = false
-    @State private var showSearchSoon = false
-    @State private var showVideoSoon = false
     @State private var openChat = false
     @State private var showAllMedia = false
     @State private var showVerify = false
@@ -245,9 +242,6 @@ struct ContactInfoView: View {
             } message: {
                 Text("Our team will review this account within 24 hours. \(name) won't be told.")
             }
-            .alert("Voice calls", isPresented: $showCallSoon) { Button("OK", role: .cancel) {} } message: { Text("Voice calling is coming soon.") }
-            .alert("Search", isPresented: $showSearchSoon) { Button("OK", role: .cancel) {} } message: { Text("In-chat search is coming soon.") }
-            .alert("Video calls", isPresented: $showVideoSoon) { Button("OK", role: .cancel) {} } message: { Text("Video calling is coming soon.") }
     }
 
     // Profile settings rows (standard order): Disappearing Messages, Sounds & Notifications,
@@ -394,7 +388,7 @@ struct ContactInfoView: View {
     }
 
     // Context-aware row. From Calls: Message (open the chat) leads. From a chat: Search
-    // trails (you're already here). Video is an honest "coming soon"; Voice always calls.
+    // trails (pops back and opens the in-chat search bar). Video and Voice call live.
     private var quickActions: some View {
         HStack(spacing: 12) {
             if source == .calls {
