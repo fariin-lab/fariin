@@ -52,9 +52,6 @@ struct SettingsView: View {
                     NavigationLink { AccountSettingsView(onSignOut: onSignOut) } label: {
                         SettingsRowLabel("Account", "ic_account")
                     }
-                    NavigationLink { DevicesView() } label: {
-                        SettingsRowLabel("Linked Devices", "ic_linked_devices")
-                    }
                 }
 
                 Section {

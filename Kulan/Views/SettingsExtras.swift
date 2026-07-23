@@ -44,65 +44,6 @@ struct NotificationsSettingsView: View {
     }
 }
 
-// MARK: - Devices
-
-struct DevicesView: View {
-    @State private var showAddInfo = false
-
-    var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 26) {
-                    // Hero card (matches the reference): illustration + caption + Link button.
-                    VStack(spacing: 16) {
-                        Image(systemName: "laptopcomputer.and.iphone")
-                            .font(.system(size: 60))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.blue)
-                            .padding(.top, 10)
-                        (Text("Use Kulan on desktop or iPad. ").foregroundStyle(.secondary)
-                            + Text("Learn More").foregroundStyle(.blue))
-                            .font(.subheadline).multilineTextAlignment(.center)
-                        Button { showAddInfo = true } label: {
-                            Text("Link a New Device").font(.headline).foregroundStyle(.white)
-                                .frame(maxWidth: .infinity).frame(height: 50)
-                                .background(.blue, in: Capsule())
-                        }
-                    }
-                    .padding(20)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                    // Linked devices list (none — single-device today).
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Linked Devices").font(.title3.weight(.bold)).padding(.horizontal, 4)
-                        Text("No linked devices")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity).frame(height: 84)
-                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    }
-
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "lock.fill").font(.caption)
-                        Text("Messages and chat info are protected by end-to-end encryption on all devices")
-                    }
-                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                }
-                .padding(16)
-            }
-        }
-        .navigationTitle("Linked Devices")
-        .navigationBarTitleDisplayMode(.inline)
-        // Honest: there's no companion app to link yet, so the button explains instead of faking.
-        .alert("Coming soon", isPresented: $showAddInfo) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Kulan on desktop and iPad is coming soon. Right now each account runs on a single device.")
-        }
-    }
-}
-
 // MARK: - Blocked Users (real)
 
 struct BlockedUsersView: View {
