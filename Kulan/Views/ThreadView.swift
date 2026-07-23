@@ -141,7 +141,9 @@ struct ThreadView: View {
     @State private var tappedUserNotFound = false       // @username tapped but no such user (screen-level alert)
     // Telegram-style media open/close TEST (Settings > Privacy): the tapped photo/video springs from
     // the bubble rect instead of the system zoom transition.
-    @AppStorage("telegramMediaOpen") private var telegramMediaOpen = false
+    // Retired experiment (Settings toggle removed 2026-07-23): hard-off, ignoring any stored
+    // value, so nobody stays stuck on the Telegram media-open path with no way back.
+    private let telegramMediaOpen = false
     @AppStorage("readReceipts") private var readReceiptsOn = true   // feeds the uikit tick + its cache key
 
     // Arrival high-water mark (audit S6): per-message arrival classification, not per-batch. A class
