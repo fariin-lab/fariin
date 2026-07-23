@@ -4717,8 +4717,8 @@ struct MessageBubble: View, Equatable {
                 // crop — the preview must show exactly what opening the story shows (6 people
                 // in the story = 6 people in the card, user rule). Threshold = the card's own
                 // aspect so a card-tall photo still fills edge-to-edge with no bars.
-                StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 160.0 / 92.0)
-                    .frame(width: 92, height: 160)
+                StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
+                    .frame(width: 80, height: 140)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
