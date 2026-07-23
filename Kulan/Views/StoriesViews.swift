@@ -575,9 +575,18 @@ private struct StoryFriendCard: View, Equatable {
             Button { onProfile() } label: { Label("Open Profile", systemImage: "person.crop.circle") }
             Button(role: .destructive) { onHide() } label: { Label("Hide Stories", systemImage: "archivebox") }
         } preview: {
-            coverView
-                .frame(width: cardW, height: cardH)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            // Lift the card AS IT LOOKS — avatar ring included. A bare photo made the small
+            // circle visibly vanish during the lift (user report).
+            ZStack(alignment: .bottomLeading) {
+                coverView
+                    .frame(width: cardW, height: cardH)
+                AvatarView(name: name, photoUrl: avatar, size: 32)
+                    .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
+                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                    .padding(8)
+            }
+            .frame(width: cardW, height: cardH)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         // "story-" prefix so the top card's source id is NOT the raw group id (which is ALSO the
         // story viewer's destination identity). Without the prefix, SwiftUI's zoom auto-matched the
