@@ -661,6 +661,17 @@ struct EditProfileView: View {
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var saving = false
     @State private var error: String?
+    // What the fields held when the sheet opened — closing with UNSAVED text edits asks
+    // before discarding (silent loss was the gap; photo changes apply instantly and are
+    // never part of Save). Captured in onAppear.
+    @State private var origFirst = ""
+    @State private var origLast = ""
+    @State private var origHandle = ""
+    @State private var origAbout = ""
+    @State private var confirmDiscard = false
+    private var hasUnsavedText: Bool {
+        firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
+    }
 
     var body: some View {
         NavigationStack {
@@ -744,13 +755,19 @@ struct EditProfileView: View {
             .toolbar {
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
                 if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
-                        .sharedBackgroundVisibility(.hidden)
+                    ToolbarItem(placement: .cancellationAction) {
+                        CloseXButton { if hasUnsavedText { confirmDiscard = true } else { dismiss() } }
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                 } else {
-                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) {
+                        CloseXButton { if hasUnsavedText { confirmDiscard = true } else { dismiss() } }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.fontWeight(.semibold).disabled(saving)
+                    Button("Save") { Task { await save() } }
+                        .fontWeight(.semibold)
+                        .disabled(saving || !hasUnsavedText)   // nothing to save → Save sleeps (no ghost tap)
                 }
             }
             .onAppear {
@@ -759,6 +776,16 @@ struct EditProfileView: View {
                 lastName = parts.count > 1 ? parts[1] : ""
                 handle = profile.me?.handle ?? ""
                 about = profile.me?.about ?? ""
+                origFirst = firstName; origLast = lastName
+                origHandle = handle; origAbout = about
+            }
+            // A swipe-down with unsaved text edits must not silently discard them either.
+            .interactiveDismissDisabled(hasUnsavedText)
+            .confirmationDialog("Discard changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                Text("Your name, username or bio edits are not saved yet.")
             }
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }   // ignore our own reset in upload() — don't cancel a live upload
