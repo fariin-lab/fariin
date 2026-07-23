@@ -6,7 +6,7 @@ import FirebaseFirestore
 import FirebaseStorage
 
 // One story (photo or video). Rules-protected (v1, not E2EE); media is a plain file in Storage.
-struct Story: Identifiable, Hashable {
+struct Story: Identifiable, Hashable, Codable {
     let id: String
     let authorUid: String
     let createdAt: Date
@@ -25,7 +25,7 @@ struct Story: Identifiable, Hashable {
 }
 
 // A person's active (unexpired) stories — the unit behind a ring in the row + the viewer.
-struct StoryGroup: Identifiable {
+struct StoryGroup: Identifiable, Codable {
     let authorUid: String
     let name: String
     let photoUrl: String?
@@ -421,6 +421,33 @@ final class StoriesService {
     }
 }
 
+// Cold-start warm cache for the stories ROW (the chat-list trick): the last BUILT row is
+// persisted per-account and re-seeded synchronously on launch, so friends' cards render
+// immediately instead of ~1.7s late — a cold rebuild otherwise blocks on unknown-author
+// profile fetches over the network (user stopwatch, 2026-07-22). Listeners reconcile after.
+private enum StoryRowCache {
+    struct CachedProfile: Codable { let name: String; let photo: String? }
+    struct Blob: Codable {
+        let uid: String
+        let mine: StoryGroup?
+        let others: [StoryGroup]
+        let profiles: [String: CachedProfile]
+    }
+    private static let key = "storyRowCache.v1"
+    static func save(uid: String, mine: StoryGroup?, others: [StoryGroup],
+                     profiles: [String: (String, String?)]) {
+        let blob = Blob(uid: uid, mine: mine, others: others,
+                        profiles: profiles.mapValues { CachedProfile(name: $0.0, photo: $0.1) })
+        if let d = try? JSONEncoder().encode(blob) { UserDefaults.standard.set(d, forKey: key) }
+    }
+    static func load(uid: String) -> Blob? {
+        guard let d = UserDefaults.standard.data(forKey: key),
+              let b = try? JSONDecoder().decode(Blob.self, from: d), b.uid == uid else { return nil }
+        return b
+    }
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
+}
+
 // Loads the stories I can see (mine + others' that include me), unexpired, grouped by
 // person, with my seen-state attached. LIVE: snapshot listeners (same pattern as the chat
 // list) push new/deleted stories and my seen-watermarks straight into the row — a friend's
@@ -456,6 +483,7 @@ final class StoriesRepository {
         othersStories = []; mineStories = []
         profileCache = [:]
         mine = nil; others = []
+        StoryRowCache.clear()   // the next account must never see this account's story row
     }
 
     private func parse(_ docs: [QueryDocumentSnapshot]?) -> [Story] {
@@ -521,10 +549,29 @@ final class StoriesRepository {
         #endif
         guard let me = Auth.auth().currentUser?.uid else { return }
         if listeningUid != me {
-            await MainActor.run { start(me) }   // first call, or the signed-in user changed
+            await MainActor.run {
+                seedFromDisk(me)   // last-known row paints NOW; the listeners reconcile it silently
+                start(me)          // first call, or the signed-in user changed
+            }
         } else {
             await rebuild()
         }
+    }
+
+    // Cold-start seed: re-publish the persisted row (expired stories dropped) before the first
+    // listener snapshot, so the stories row renders on the first frame like the chat list does.
+    @MainActor private func seedFromDisk(_ me: String) {
+        guard mine == nil, others.isEmpty, let blob = StoryRowCache.load(uid: me) else { return }
+        let now = Date()
+        var m = blob.mine
+        m?.stories.removeAll { $0.expiresAt <= now }
+        mine = (m?.stories.isEmpty == false) ? m : nil
+        others = blob.others.compactMap { g -> StoryGroup? in
+            var g = g
+            g.stories.removeAll { $0.expiresAt <= now }
+            return g.stories.isEmpty ? nil : g
+        }
+        for (u, p) in blob.profiles where profileCache[u] == nil { profileCache[u] = (p.name, p.photo) }
     }
 
     // Attach the three live queries (chat-list listener pattern).
@@ -661,6 +708,8 @@ final class StoriesRepository {
                 }
             }
             self.mine = mg; self.others = gs
+            // Persist the freshly built row so the NEXT cold start paints it on the first frame.
+            StoryRowCache.save(uid: me, mine: mg, others: gs, profiles: self.profileCache)
             self.scheduleExpiryTick(nextExpiry)
         }
     }
