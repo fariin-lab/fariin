@@ -98,6 +98,24 @@ struct ContactInfoView: View {
                 groupsInCommonCard
             }
         }
+        if !isSelf { dangerCard }
+    }
+
+    // Block / Report always VISIBLE at the bottom of the profile (WhatsApp pattern, user
+    // decision) — a user who feels unsafe must see the way out, not hunt a "..." menu.
+    private var dangerCard: some View {
+        VStack(spacing: 0) {
+            if blocked {
+                infoRow("Unblock \(shownName)", "checkmark.circle", chevron: false) {
+                    Task { await ChatService.setBlocked(cid, false); blocked = false }
+                }
+            } else {
+                infoRow("Block \(shownName)", "nosign", tint: .red, chevron: false) { showBlock = true }
+            }
+            rowDivider
+            infoRow("Report \(shownName)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
+        }
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // Bold grouped-list section title above a card (standard grouped-list style).
@@ -119,18 +137,12 @@ struct ContactInfoView: View {
         }
     }
 
-    // The "More" tile's menu: video · voice · mute · search · MORE.
+    // The "More" tile's menu: housekeeping only. Block/Report moved OUT to the always-visible
+    // dangerCard at the bottom of the page (WhatsApp pattern, user decision).
     @ViewBuilder private var moreMenuItems: some View {
         Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
         Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
-        Divider()
-        Button(role: .destructive) { showReport = true } label: { Label("Report \(shownName)", systemImage: "exclamationmark.triangle") }
-        if blocked {
-            Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: { Label("Unblock \(shownName)", systemImage: "checkmark.circle") }
-        } else {
-            Button(role: .destructive) { showBlock = true } label: { Label("Block \(shownName)", systemImage: "nosign") }
-        }
     }
 
     private var coreScroll: some View {
