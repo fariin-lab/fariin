@@ -469,6 +469,8 @@ struct StoriesRow: View {
                                 .font(.system(size: 16)).symbolRenderingMode(.palette)
                                 // Black badge (matches the settings icon color); flips white in dark mode.
                                 .foregroundStyle(Color(.systemBackground), Color.primary)
+                                // Same white rim as the big add-badge — cut cleanly into the ring.
+                                .background(Circle().fill(Color(.systemBackground)).padding(-2))
                                 .offset(x: 4, y: 4)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
@@ -516,6 +518,9 @@ struct StoriesRow: View {
         Image(systemName: "plus.circle.fill")
             .font(.system(size: size)).symbolRenderingMode(.palette)
             .foregroundStyle(Color(.systemBackground), Color.primary)   // black + badge (settings-icon color); flips white in dark
+            // White rim (reference look): the badge is CUT cleanly into whatever it sits on,
+            // instead of the raw black circle blending into the avatar ring where they meet.
+            .background(Circle().fill(Color(.systemBackground)).padding(-2.5))
             .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
             // high-priority so tapping + adds a story without triggering the card's open tap
             .highPriorityGesture(TapGesture().onEnded { action() })
