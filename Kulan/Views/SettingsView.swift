@@ -339,23 +339,115 @@ struct ActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
+// Appearance: a live bubble preview + three minimal mode cards (our own take on the
+// theme-preview pattern — no gear icons, the System card SHOWS what system means with a
+// half-light/half-dark split, and the preview uses our real bubble shapes).
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
+
     var body: some View {
-        List {
-            Section {
-                Picker("Theme", selection: $appearanceRaw) {
-                    ForEach(AppAppearance.allCases) { Text($0.label).tag($0.rawValue) }
+        ScrollView {
+            VStack(spacing: 22) {
+                preview
+                HStack(spacing: 14) {
+                    ForEach(AppAppearance.allCases) { modeCard($0) }
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } footer: {
-                Text("Choose how Kulan looks. System follows your device setting.")
+                Text("System follows your device setting.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
+            .padding(20)
         }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
+    }
+
+    // The page itself flips with the pick, so the preview is always truthful — real bubble
+    // shapes, real colors, no mock screenshot.
+    private var preview: some View {
+        VStack(spacing: 10) {
+            HStack { previewBubble("Salaam, sidee tahay?", mine: false); Spacer(minLength: 44) }
+            HStack { Spacer(minLength: 44); previewBubble("Waan fiicanahay 😊", mine: true) }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .animation(.easeInOut(duration: 0.25), value: appearanceRaw)
+    }
+
+    private func previewBubble(_ text: String, mine: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 15))
+            .foregroundStyle(mine ? Color.white : Color.primary)
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.systemGray5)),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func modeCard(_ mode: AppAppearance) -> some View {
+        let isSel = mode.rawValue == appearanceRaw
+        return Button {
+            withAnimation(.easeInOut(duration: 0.25)) { appearanceRaw = mode.rawValue }
+        } label: {
+            VStack(spacing: 8) {
+                thumb(mode)
+                    .frame(height: 74)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(isSel ? Color.accentColor : Color.primary.opacity(0.08),
+                                          lineWidth: isSel ? 2 : 1)
+                    )
+                Text(mode.label)
+                    .font(.footnote.weight(isSel ? .semibold : .regular))
+                    .foregroundStyle(isSel ? Color.accentColor : Color.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+    }
+
+    // Mini mockups drawn from the same recipe as the preview. System = light and dark
+    // sharing one card on a diagonal, which is literally what the setting does.
+    @ViewBuilder private func thumb(_ mode: AppAppearance) -> some View {
+        switch mode {
+        case .light: miniChat(dark: false)
+        case .dark:  miniChat(dark: true)
+        case .system:
+            ZStack {
+                miniChat(dark: false)
+                miniChat(dark: true).clipShape(DiagonalHalf())
+            }
+        }
+    }
+
+    private func miniChat(dark: Bool) -> some View {
+        VStack(spacing: 7) {
+            Capsule().fill(dark ? Color(white: 0.24) : Color.white)
+                .frame(width: 52, height: 13)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Capsule().fill(Color.accentColor.opacity(dark ? 0.9 : 1))
+                .frame(width: 52, height: 13)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(dark ? Color(white: 0.09) : Color(white: 0.93))
+    }
+}
+
+// Right-leaning diagonal slice for the System card's dark half.
+private struct DiagonalHalf: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.width * 0.62, y: 0))
+        p.addLine(to: CGPoint(x: rect.width, y: 0))
+        p.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        p.addLine(to: CGPoint(x: rect.width * 0.38, y: rect.height))
+        p.closeSubpath()
+        return p
     }
 }
 
