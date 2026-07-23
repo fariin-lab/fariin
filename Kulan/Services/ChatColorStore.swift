@@ -90,7 +90,10 @@ enum ChatColors {
 
     func color(for cid: String) -> ChatColorSpec? {
         if let c = cache[cid] { return c }
-        let spec = ChatColorSpec(stored: UserDefaults.standard.string(forKey: Self.key(cid)))
+        // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
+        let raw = UserDefaults.standard.string(forKey: Self.key(cid))
+            ?? UserDefaults.standard.string(forKey: Self.defaultKey)
+        let spec = ChatColorSpec(stored: raw)
         cache[cid] = spec
         return spec
     }
@@ -102,5 +105,18 @@ enum ChatColors {
         version &+= 1
     }
 
+    /// "Apply For All Chats": default bubble colour + clear per-chat picks (nil = app default).
+    func applyToAllChats(_ spec: ChatColorSpec?) {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys
+            where k.hasPrefix("chatColor.") && k != "chatColor.customLibrary.v1" && k != Self.defaultKey {
+            d.removeObject(forKey: k)
+        }
+        cache = [:]
+        if let spec { d.set(spec.stored, forKey: Self.defaultKey) } else { d.removeObject(forKey: Self.defaultKey) }
+        version &+= 1
+    }
+
     private static func key(_ cid: String) -> String { "chatColor.\(cid)" }
+    static let defaultKey = "chatColor.__default__"   // the all-chats fallback
 }

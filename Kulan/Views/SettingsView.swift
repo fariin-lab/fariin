@@ -347,6 +347,7 @@ struct ActivityView: UIViewControllerRepresentable {
 // half-light/half-dark split, and the preview uses our real bubble shapes).
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
+    @State private var showChatLook = false   // all-chats wallpaper + bubble colour picker
 
     var body: some View {
         ScrollView {
@@ -357,6 +358,26 @@ struct AppearanceSettingsView: View {
                 }
                 Text("System follows your device setting.")
                     .font(.footnote).foregroundStyle(.secondary)
+
+                // One door for the whole chat look (reference: Chat Wallpaper / Chat bubble
+                // rows) — opens the same picker chats use, applying to ALL chats.
+                Button { showChatLook = true } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "paintpalette").font(.system(size: 17)).frame(width: 26)
+                        Text("Chat Wallpaper & Bubble")
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 16).padding(.vertical, 14)
+                    .background(Color(.secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Text("Sets the wallpaper and bubble color for every chat. A chat's own pick still wins.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(20)
         }
@@ -364,6 +385,9 @@ struct AppearanceSettingsView: View {
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
+        .sheet(isPresented: $showChatLook) {
+            WallpaperPickerSheet(cid: "__default__", globalOnly: true)
+        }
     }
 
     // The page itself flips with the pick, so the preview is always truthful — real bubble

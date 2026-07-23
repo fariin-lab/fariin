@@ -9,6 +9,10 @@ import PhotosUI
 // you can see it selected. Local per-chat only. Closing without applying reverts.
 struct WallpaperPickerSheet: View {
     let cid: String
+    // Settings > Appearance entry: cid is the DEFAULT slot itself and the one primary button
+    // is "Apply For All Chats" (sets the default + clears every per-chat pick). From a chat,
+    // the primary Apply stays per-chat and a smaller all-chats button rides under it.
+    var globalOnly: Bool = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
@@ -25,8 +29,9 @@ struct WallpaperPickerSheet: View {
     @State private var original: ChatWallpaper
     @State private var originalColor: ChatColorSpec?
 
-    init(cid: String) {
+    init(cid: String, globalOnly: Bool = false) {
         self.cid = cid
+        self.globalOnly = globalOnly
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
         _original = State(initialValue: cur)
@@ -99,7 +104,8 @@ struct WallpaperPickerSheet: View {
         }
         .padding(.top, 8)      // native gap under the system grabber (was a big dead band)
         .padding(.bottom, 12)
-        .presentationDetents([.height(384)])   // fits the content — no empty band under the Photos button
+        // Taller only while the secondary "Apply For All Chats" button is present.
+        .presentationDetents([.height(hasPendingChange && !globalOnly ? 428 : 384)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
@@ -203,10 +209,25 @@ struct WallpaperPickerSheet: View {
 
     private func resetToDefault() {
         committed = true                       // persist the reset (don't let onDisappear revert it)
-        store.set(.none, for: cid)
-        colorStore.set(nil, for: cid)
+        if globalOnly {
+            // Global reset: plain app look everywhere (default cleared + all per-chat picks).
+            store.applyToAllChats(.none)
+            colorStore.applyToAllChats(nil)
+        } else {
+            // Per-chat reset: this chat FOLLOWS the all-chats default again (remove the
+            // override — writing an explicit "none" would pin it to plain forever).
+            store.clearOverride(for: cid)
+            colorStore.set(nil, for: cid)
+        }
         selected = .none; selectedColor = nil
         original = .none; originalColor = nil
+        dismiss()
+    }
+
+    private func applyForAllChats() {
+        committed = true
+        store.applyToAllChats(selected)
+        colorStore.applyToAllChats(selectedColor)
         dismiss()
     }
 
@@ -215,17 +236,30 @@ struct WallpaperPickerSheet: View {
     @ViewBuilder private var bottomBar: some View {
         Group {
             if hasPendingChange {
-                Button {
-                    committed = true                      // keep the live-previewed wallpaper + colour
-                    store.set(selected, for: cid)
-                    colorStore.set(selectedColor, for: cid)
-                    dismiss()
-                } label: {
-                    Text("Apply Wallpaper").fontWeight(.semibold).font(.system(size: 17))
-                        .foregroundStyle(selected == .none && selectedColor == nil ? Color.primary : Color.white)
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .liquidGlass(Capsule(), interactive: true, tint: applyTint)
-                        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
+                VStack(spacing: 6) {
+                    Button {
+                        if globalOnly { applyForAllChats(); return }
+                        committed = true                  // keep the live-previewed wallpaper + colour
+                        store.set(selected, for: cid)
+                        colorStore.set(selectedColor, for: cid)
+                        dismiss()
+                    } label: {
+                        Text(globalOnly ? "Apply For All Chats" : "Apply Wallpaper")
+                            .fontWeight(.semibold).font(.system(size: 17))
+                            .foregroundStyle(selected == .none && selectedColor == nil ? Color.primary : Color.white)
+                            .frame(maxWidth: .infinity).frame(height: 50)
+                            .liquidGlass(Capsule(), interactive: true, tint: applyTint)
+                            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
+                    }
+                    if !globalOnly {
+                        Button { applyForAllChats() } label: {
+                            Text("Apply For All Chats").font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity).frame(height: 34)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .transition(.opacity)
             } else {
@@ -274,9 +308,12 @@ struct WallpaperPickerSheet: View {
 
     private var defaultColorCircle: some View {
         let isDefault = selectedColor == nil
+        // "Default" = follow the all-chats colour when one is set, else the app blue —
+        // the swatch shows what following the default actually LOOKS like.
+        let globalSpec = ChatColorSpec(stored: UserDefaults.standard.string(forKey: ChatColorStore.defaultKey))
         return Button { chooseColor(nil) } label: {
-            // The default swatch shows the adaptive systemBlue (its light/dark value), white glyph.
-            Circle().fill(Theme.defaultBubble(dark)).frame(width: 52, height: 52)
+            Circle().fill(globalSpec.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+                .frame(width: 52, height: 52)
                 .overlay(Image(systemName: "message.fill").font(.system(size: 18)).foregroundStyle(.white))
                 .overlay(Circle().strokeBorder(isDefault ? Color.primary : .clear, lineWidth: 3))
         }.buttonStyle(.plain)

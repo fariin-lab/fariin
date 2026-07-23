@@ -110,7 +110,11 @@ enum ChatWallpapers {
 
     func wallpaper(for cid: String) -> ChatWallpaper {
         if let c = cache[cid] { return c }
-        var w = ChatWallpaper(stored: UserDefaults.standard.string(forKey: Self.key(cid)))
+        // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
+        // An explicit per-chat "none" is stored as the string "none", so it does NOT fall through.
+        let raw = UserDefaults.standard.string(forKey: Self.key(cid))
+            ?? UserDefaults.standard.string(forKey: Self.defaultKey)
+        var w = ChatWallpaper(stored: raw)
         // MIGRATION: legacy per-chat photo → import into the library, rewrite the stored value.
         if case .photo(ChatWallpaper.legacyMarker) = w {
             if let img = UIImage(contentsOfFile: Self.legacyPhotoURL(cid).path),
@@ -130,6 +134,26 @@ enum ChatWallpapers {
         cache[cid] = w
         UserDefaults.standard.set(w.stored, forKey: Self.key(cid))
         version &+= 1                                           // observed → live re-render
+    }
+
+    /// Remove the per-chat pick so this chat follows the all-chats default again.
+    func clearOverride(for cid: String) {
+        cache[cid] = nil
+        UserDefaults.standard.removeObject(forKey: Self.key(cid))
+        version &+= 1
+    }
+
+    /// "Apply For All Chats": the pick becomes the default every chat falls back to, and
+    /// per-chat picks are cleared so it truly shows everywhere.
+    func applyToAllChats(_ w: ChatWallpaper) {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys
+            where k.hasPrefix("wallpaper.") && !k.hasPrefix("wallpaper.library") && k != Self.defaultKey {
+            d.removeObject(forKey: k)
+        }
+        cache = [:]
+        d.set(w.stored, forKey: Self.defaultKey)
+        version &+= 1
     }
 
     // MARK: - User photo library (persistent history; local only)
@@ -184,6 +208,7 @@ enum ChatWallpapers {
     // MARK: - Paths / helpers
 
     private static func key(_ cid: String) -> String { "wallpaper.\(cid)" }
+    static let defaultKey = "wallpaper.__default__"   // the all-chats fallback
     private static var base: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     }
