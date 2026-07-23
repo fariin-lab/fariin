@@ -137,71 +137,62 @@ struct NotificationSoundView: View {
     }
 }
 
-// MARK: - Storage and Data
+// MARK: - Devices (restored 2026-07-24 on user request)
 
-// True on-device numbers, honest buttons. Our media model differs from WhatsApp's: each
-// phone holds the ONLY decrypted copy of received videos/voice notes (the server copy is
-// deleted after delivery) — so there is deliberately NO "clear media" for those. The photo
-// cache is re-downloadable and safe to clear.
-struct StorageDataView: View {
-    @AppStorage("sentMediaQuality") private var quality = "standard"
-    @State private var photoBytes = 0
-    @State private var videoBytes = 0
-    @State private var voiceBytes = 0
-    @State private var confirmClear = false
-
-    private func fmt(_ b: Int) -> String {
-        b == 0 ? "Zero KB" : ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file)
-    }
+struct DevicesView: View {
+    @State private var showAddInfo = false
 
     var body: some View {
-        List {
-            Section {
-                LabeledContent("Photo Cache", value: fmt(photoBytes))
-                LabeledContent("Videos", value: fmt(videoBytes))
-                LabeledContent("Voice Messages", value: fmt(voiceBytes))
-            } header: {
-                Text("Storage by Type")
-            } footer: {
-                Text("Videos and voice notes live only on your phone — the server copy is deleted after delivery, so they can't be cleared and re-downloaded. That's part of the privacy design.")
-            }
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 26) {
+                    // Hero card: illustration + caption + Link button.
+                    VStack(spacing: 16) {
+                        Image(systemName: "laptopcomputer.and.iphone")
+                            .font(.system(size: 60))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.blue)
+                            .padding(.top, 10)
+                        (Text("Use Kulan on desktop or iPad. ").foregroundStyle(.secondary)
+                            + Text("Learn More").foregroundStyle(.blue))
+                            .font(.subheadline).multilineTextAlignment(.center)
+                        Button { showAddInfo = true } label: {
+                            Text("Link a New Device").font(.headline).foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).frame(height: 50)
+                                .background(.blue, in: Capsule())
+                        }
+                    }
+                    .padding(20)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-            Section {
-                Button("Clear Photo Cache", role: .destructive) { confirmClear = true }
-                    .disabled(photoBytes == 0)
-            } footer: {
-                Text("Cached photos and avatars re-download automatically when needed.")
-            }
+                    // Linked devices list (none — single-device today).
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Linked Devices").font(.title3.weight(.bold)).padding(.horizontal, 4)
+                        Text("No linked devices")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).frame(height: 84)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
 
-            Section {
-                Picker("Sent Media Quality", selection: $quality) {
-                    Text("Standard").tag("standard")
-                    Text("High").tag("high")
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "lock.fill").font(.caption)
+                        Text("Messages and chat info are protected by end-to-end encryption on all devices")
+                    }
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
                 }
-            } header: {
-                Text("Sent Media")
-            } footer: {
-                Text("High sends sharper photos (2048px) and 1080p video. Uses more data.")
+                .padding(16)
             }
         }
-        .navigationTitle("Storage and Data")
+        .navigationTitle("Linked Devices")
         .navigationBarTitleDisplayMode(.inline)
-        .task { refresh() }
-        .alert("Clear photo cache?", isPresented: $confirmClear) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
-                DiskImageCache.shared.clear()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { refresh() }
-            }
+        // Honest: there's no companion app to link yet, so the button explains instead of faking.
+        .alert("Coming soon", isPresented: $showAddInfo) {
+            Button("OK", role: .cancel) {}
         } message: {
-            Text("Photos and avatars will re-download as you use the app.")
+            Text("Kulan on desktop and iPad is coming soon. Right now each account runs on a single device.")
         }
-    }
-
-    private func refresh() {
-        photoBytes = DiskImageCache.shared.diskBytes()
-        videoBytes = VideoCache.diskBytes()
-        voiceBytes = AudioCache.diskBytes()
     }
 }
 

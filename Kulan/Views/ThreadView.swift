@@ -822,6 +822,12 @@ struct ThreadView: View {
         // In-chat search: a top bar replaces the nav bar; the ↑/↓ nav bar (searchNavBar) replaces the
         // composer above the keyboard.
         .safeAreaInset(edge: .top) { if searchActive { searchBar } }
+        // Media auto-download policies: prefetch this chat's videos/voice per setting +
+        // network, so tapping them later plays instantly (files skipped over 200 MB).
+        .task(id: cid) {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the open settle first
+            MediaAutoDownloader.sweep(repo.items, cid: cid)
+        }
         .toolbar(searchActive ? .hidden : .automatic, for: .navigationBar)
     }
 
@@ -4345,7 +4351,8 @@ struct MessageBubble: View, Equatable {
                             Image(uiImage: ui).resizable().scaledToFill()          // optimistic local photo
                         } else if let url = message.imageUrl {
                             SecureImageView(imageUrl: url, enc: message.enc, cid: cid,
-                                            placeholderHash: message.blurhash)     // blurred preview while downloading
+                                            placeholderHash: message.blurhash,     // blurred preview while downloading
+                                            gated: true)   // photos auto-download policy can hold this until tapped
                         } else {
                             Rectangle().fill(Color.gray.opacity(0.18))
                         }

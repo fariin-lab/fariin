@@ -48,6 +48,11 @@ struct MainShell: View {
                 InAppBannerView(banner: b)
             }
         }
+        // Keep Media (Settings > Storage): age out old re-downloadable photo cache on launch.
+        .task {
+            let d = UserDefaults.standard.integer(forKey: "keepMediaDays")
+            if d > 0 { DiskImageCache.shared.sweep(olderThanDays: d) }
+        }
         // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
         // it so the sheet isn't dropped on a hidden tab.
         .onChange(of: AppRouter.shared.pendingInviteCode) { _, code in

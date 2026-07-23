@@ -182,7 +182,27 @@ final class CallService: NSObject {
         // frames, no camera). This makes a mid-call camera toggle a pure track-enable with NO
         // renegotiation (which is fragile + glare-prone) and no black-remote-on-re-toggle bugs.
         addLocalVideo(to: connection)
+        applyDataSaver(to: connection)
         return connection
+    }
+
+    // Use Less Data (Settings > Storage and Data > Calls): cap the sender bitrates when
+    // the saver is active on the current network. Audio ~24 kbps still sounds fine for
+    // speech; video drops to 300 kbps at half resolution.
+    private func applyDataSaver(to connection: RTCPeerConnection?) {
+        guard let connection, UseLessDataPage.activeNow else { return }
+        for sender in connection.senders {
+            let params = sender.parameters
+            for enc in params.encodings {
+                if sender.track?.kind == "audio" {
+                    enc.maxBitrateBps = NSNumber(value: 24_000)
+                } else if sender.track?.kind == "video" {
+                    enc.maxBitrateBps = NSNumber(value: 300_000)
+                    enc.scaleResolutionDownBy = NSNumber(value: 2.0)
+                }
+            }
+            sender.parameters = params
+        }
     }
 
     // MARK: - Video tracks / capture

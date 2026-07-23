@@ -11,9 +11,14 @@ struct SecureImageView: View {
     let cid: String
     var fill: Bool = true
     var placeholderHash: String? = nil   // BlurHash → a real blurred preview instead of the gray shimmer
+    // Chat photo bubbles pass true: the photos auto-download POLICY can hold the download
+    // until tapped (blur + arrow shown). Everything already cached is untouched.
+    var gated: Bool = false
 
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var waitingTap = false
+    @State private var userRequested = false
 
     var body: some View {
         // Synchronous memory-cache read so an already-cached image renders on the FIRST frame
@@ -33,11 +38,27 @@ struct SecureImageView: View {
                 // Placeholder chain: a recognizable blur of the ACTUAL photo (decoded from the
                 // ~28-char hash that travels in the message) beats a gray skeleton while bytes download.
                 Image(uiImage: blur).resizable().scaledToFill()
+                    .overlay { if waitingTap { downloadBadge } }
+            } else if waitingTap {
+                Rectangle().fill(Color.gray.opacity(0.18)).overlay { downloadBadge }
             } else {
                 SkeletonFill()   // shimmer skeleton while loading (replaces the spinner)
             }
         }
+        .onTapGesture {
+            // Only intercepts while the policy is holding the download; a loaded image's
+            // taps pass through to the bubble's own open-viewer gesture as before.
+            if waitingTap { userRequested = true; waitingTap = false; Task { await load() } }
+        }
+        .allowsHitTesting(waitingTap)   // transparent to taps unless the download is held
         .task(id: imageUrl) { await load() }
+    }
+
+    private var downloadBadge: some View {
+        Image(systemName: "arrow.down.circle.fill")
+            .font(.system(size: 34))
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, .black.opacity(0.55))
     }
 
     private func load() async {
@@ -47,6 +68,11 @@ struct SecureImageView: View {
         image = nil; failed = false
         // Disk hit → show instantly, no network or decrypt.
         if let cached = await DiskImageCache.shared.image(for: imageUrl) { image = cached; return }
+        // Photos auto-download policy: hold the network fetch until tapped.
+        if gated, !userRequested, !AutoDownloadPrefs.allowedNow(.photos) {
+            waitingTap = true
+            return
+        }
         guard let url = URL(string: imageUrl) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)

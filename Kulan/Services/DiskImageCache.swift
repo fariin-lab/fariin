@@ -127,6 +127,25 @@ final class DiskImageCache {
         return items.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) }
     }
 
+    /// Keep Media (Settings > Storage): drop cached files older than N days. Safe — this
+    /// cache is re-downloadable by design (unlike the video/voice only-copies).
+    func sweep(olderThanDays days: Int) {
+        guard days > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        io.async { [weak self] in
+            guard let self else { return }
+            let fm = FileManager.default
+            guard let items = try? fm.contentsOfDirectory(
+                at: self.dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+            for u in items {
+                if let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+                   d < cutoff {
+                    try? fm.removeItem(at: u)
+                }
+            }
+        }
+    }
+
     /// Wipe both tiers (Settings → Clear Cache).
     func clear() {
         mem.removeAllObjects()
