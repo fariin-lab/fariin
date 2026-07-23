@@ -546,9 +546,11 @@ struct SharedMediaGridView: View {
     }
 }
 
-// Full-screen profile-photo viewer (tap the hero avatar, standard messenger behavior). Profile
-// photos are plain URLs (not E2EE) served from the same DiskImageCache AvatarView fills, so it
-// opens instantly when the avatar already rendered. Pinch to zoom, drag down (or X) to close.
+// Full-screen profile-photo viewer (tap the hero avatar): the photo as a big CIRCLE on the THEME
+// background — white page in light mode, black in dark (Signal's profile-photo look; the boxy
+// full-bleed style is what we avoid here). Chat media keeps its own always-black viewer — that's
+// for real photos, this is a portrait. Profile photos are plain URLs (not E2EE) served from the
+// same DiskImageCache AvatarView fills, so it opens instantly. Pinch, drag, X, or tap to close.
 private struct ProfilePhotoViewer: View {
     let name: String
     let photoUrl: String
@@ -562,19 +564,25 @@ private struct ProfilePhotoViewer: View {
 
     var body: some View {
         ZStack {
-            // Backdrop fades as the photo is dragged toward dismissal (system photo-viewer feel).
-            // Tapping the empty area outside the photo also closes.
-            Color.black.opacity(backdropOpacity).ignoresSafeArea()
+            // THEME backdrop (white light / black dark), fading as the photo is dragged toward
+            // dismissal. Tapping the empty area outside the photo also closes.
+            Color(.systemBackground).opacity(backdropOpacity).ignoresSafeArea()
                 .onTapGesture { dismiss() }
-            Group {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFit()
-                } else {
-                    ProgressView().tint(.white)
+            GeometryReader { geo in
+                let d = min(geo.size.width - 40, 360)   // circle diameter, breathing room at the edges
+                Group {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFill()
+                            .frame(width: d, height: d)
+                            .clipShape(Circle())   // the Signal look: a portrait circle, not a boxy photo
+                    } else {
+                        ProgressView().tint(.secondary)
+                    }
                 }
+                .scaleEffect(zoom)
+                .offset(drag)
+                .position(x: geo.size.width / 2, y: geo.size.height / 2)
             }
-            .scaleEffect(zoom)
-            .offset(drag)
         }
         .gesture(
             MagnificationGesture()
@@ -593,12 +601,12 @@ private struct ProfilePhotoViewer: View {
             HStack {
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                         .frame(width: 38, height: 38)
-                        .background(.black.opacity(0.4), in: Circle())
+                        .background(Color.primary.opacity(0.08), in: Circle())
                 }
                 Spacer()
-                Text(name).font(.headline).foregroundStyle(.white)
+                Text(name).font(.headline).foregroundStyle(.primary)
                 Spacer()
                 Color.clear.frame(width: 38, height: 38)   // balances the X so the name stays centered
             }
