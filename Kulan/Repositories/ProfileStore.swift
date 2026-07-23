@@ -124,4 +124,23 @@ final class ProfileStore {
 
         me = await fetch(uid)
     }
+
+    /// Remove the profile photo entirely (back to the initials avatar) — the mirror of
+    /// uploadPhoto: clear users.photoUrl, clear my photos.{uid} in every conversation,
+    /// and delete the storage object so the old image is really gone, not just unlinked.
+    func removePhoto() async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        try await db.collection("users").document(uid).setData(["photoUrl": ""], merge: true)
+
+        let snap = try await db.collection("conversations")
+            .whereField("users", arrayContains: uid).getDocuments()
+        let batch = db.batch()
+        for d in snap.documents { batch.updateData(["photos.\(uid)": ""], forDocument: d.reference) }
+        try await batch.commit()
+
+        // Best-effort: a failed storage delete must not leave the profile half-updated.
+        try? await Storage.storage().reference().child("profiles/\(uid).jpg").delete()
+
+        me = await fetch(uid)
+    }
 }

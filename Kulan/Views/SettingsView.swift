@@ -556,6 +556,15 @@ struct EditProfileView: View {
                         PhotosPicker(selection: $photoItem, matching: .images) {
                             Text("Change Photo").font(.subheadline)
                         }
+                        if profile.me?.photoUrl?.isEmpty == false {
+                            Button(role: .destructive) {
+                                uploadTask?.cancel()
+                                uploadTask = Task { await removePhoto() }
+                            } label: {
+                                Text("Remove Photo").font(.subheadline)
+                            }
+                            .disabled(uploading)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
@@ -636,6 +645,13 @@ struct EditProfileView: View {
         } catch {
             self.error = "Photo upload failed: \(error.localizedDescription)"
         }
+        uploading = false
+    }
+
+    private func removePhoto() async {
+        uploading = true; error = nil
+        do { try await profile.removePhoto() }
+        catch { self.error = "Could not remove photo: \(error.localizedDescription)" }
         uploading = false
     }
 
