@@ -342,143 +342,155 @@ struct ActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
-// Appearance: a live bubble preview + three minimal mode cards (our own take on the
-// theme-preview pattern — no gear icons, the System card SHOWS what system means with a
-// half-light/half-dark split, and the preview uses our real bubble shapes).
+// Appearance root (user's reference): live preview, quick chat-theme cards, and four
+// doors — Chat Wallpaper / Chat Color / App Icon / Night Mode — each its own page
+// (AppearancePages.swift). Theme cards and the doors apply to ALL chats.
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
-    @State private var showChatLook = false   // all-chats wallpaper + bubble colour picker
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
+    private var wallStore: WallpaperStore { .shared }
+    private var colorStore: ChatColorStore { .shared }
+
+    private var defaultWallpaper: ChatWallpaper {
+        ChatWallpaper(stored: UserDefaults.standard.string(forKey: WallpaperStore.defaultKey))
+    }
+    private var defaultColor: ChatColorSpec? {
+        ChatColorSpec(stored: UserDefaults.standard.string(forKey: ChatColorStore.defaultKey))
+    }
 
     var body: some View {
+        let _ = wallStore.version
+        let _ = colorStore.version
         ScrollView {
-            VStack(spacing: 22) {
-                preview
-                HStack(spacing: 14) {
-                    ForEach(AppAppearance.allCases) { modeCard($0) }
-                }
-                Text("System follows your device setting.")
-                    .font(.footnote).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Chat Theme").font(.footnote).foregroundStyle(.secondary)
+                    .textCase(.uppercase).padding(.horizontal, 6)
 
-                // One door for the whole chat look (reference: Chat Wallpaper / Chat bubble
-                // rows) — opens the same picker chats use, applying to ALL chats.
-                Button { showChatLook = true } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "paintpalette").font(.system(size: 17)).frame(width: 26)
-                        Text("Chat Wallpaper & Bubble")
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 16).padding(.vertical, 14)
-                    .background(Color(.secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .contentShape(Rectangle())
+                VStack(spacing: 0) {
+                    preview
+                    themeCards
                 }
-                .buttonStyle(.plain)
-                Text("Sets the wallpaper and bubble color for every chat. A chat's own pick still wins.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+
+                VStack(spacing: 0) {
+                    doorRow("Chat Wallpaper", icon: "photo") { ChatWallpaperPage() }
+                    Divider().padding(.leading, 52)
+                    doorRow("Chat Color", icon: "paintpalette", accessory: AnyView(colorDot)) { ChatColorPage() }
+                    Divider().padding(.leading, 52)
+                    doorRow("App Icon", icon: "app.badge") { AppIconPage() }
+                }
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+
+                VStack(spacing: 0) {
+                    doorRow("Night Mode", icon: "moon.fill",
+                            accessory: AnyView(Text(AppAppearance(rawValue: appearanceRaw)?.label ?? "System")
+                                .foregroundStyle(.secondary))) { NightModePage() }
+                }
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             }
-            .padding(20)
+            .padding(16)
         }
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
-        .sheet(isPresented: $showChatLook) {
-            WallpaperPickerSheet(cid: "__default__", globalOnly: true)
-        }
     }
 
-    // The page itself flips with the pick, so the preview is always truthful — real bubble
-    // shapes, real colors, no mock screenshot.
+    // Live preview drawn on the CURRENT all-chats wallpaper with the CURRENT bubble color.
     private var preview: some View {
-        VStack(spacing: 10) {
-            HStack { previewBubble("Salaam, sidee tahay?", mine: false); Spacer(minLength: 44) }
-            HStack { Spacer(minLength: 44); previewBubble("Waan fiicanahay 😊", mine: true) }
+        VStack(spacing: 8) {
+            Text("Today").font(.caption2.weight(.semibold))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(.regularMaterial, in: Capsule())
+            HStack { previewBubble("Here's a preview of the chat color.", mine: false); Spacer(minLength: 36) }
+            HStack { Spacer(minLength: 36); previewBubble("The color is visible to only you.", mine: true) }
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .animation(.easeInOut(duration: 0.25), value: appearanceRaw)
+        .background(previewBackground)
+    }
+
+    @ViewBuilder private var previewBackground: some View {
+        switch defaultWallpaper {
+        case .none:
+            Color(.secondarySystemGroupedBackground)
+        case .gradient(let id):
+            if let g = ChatWallpapers.gradient(id) {
+                LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+            } else { Color(.secondarySystemGroupedBackground) }
+        case .photo(let id):
+            if let img = wallStore.libraryImage(id) {
+                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
+            } else { Color(.secondarySystemGroupedBackground) }
+        }
     }
 
     private func previewBubble(_ text: String, mine: Bool) -> some View {
-        // The REAL chat bubble blue (Theme.defaultBubble) — NOT the app accent, which flips
-        // to white in dark mode and made the preview text white-on-white (device report).
         Text(text)
-            .font(.system(size: 15))
+            .font(.system(size: 14))
             .foregroundStyle(mine ? Color.white : Color.primary)
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(mine ? AnyShapeStyle(Theme.defaultBubble(dark)) : AnyShapeStyle(Color(.systemGray5)),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 13).padding(.vertical, 8)
+            .background(mine ? (defaultColor.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+                             : AnyShapeStyle(Color(.systemGray5)),
+                        in: RoundedRectangle(cornerRadius: 17, style: .continuous))
     }
 
-    private func modeCard(_ mode: AppAppearance) -> some View {
-        let isSel = mode.rawValue == appearanceRaw
-        return Button {
-            withAnimation(.easeInOut(duration: 0.25)) { appearanceRaw = mode.rawValue }
-        } label: {
-            VStack(spacing: 8) {
-                thumb(mode)
-                    .frame(height: 74)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(isSel ? Color.accentColor : Color.primary.opacity(0.08),
-                                          lineWidth: isSel ? 2 : 1)
-                    )
-                Text(mode.label)
-                    .font(.footnote.weight(isSel ? .semibold : .regular))
-                    .foregroundStyle(isSel ? Color.accentColor : Color.secondary)
+    // Quick theme cards: the built-in gradients, one tap = that wallpaper for all chats.
+    private var themeCards: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(ChatWallpapers.all) { g in
+                    let isSel = defaultWallpaper == .gradient(g.id)
+                    Button { wallStore.applyToAllChats(.gradient(g.id)) } label: {
+                        VStack(spacing: 6) {
+                            Capsule().fill(.white.opacity(0.9)).frame(width: 44, height: 12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Capsule().fill(Theme.defaultBubble(dark)).frame(width: 44, height: 12)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        .padding(10)
+                        .frame(width: 92, height: 118)
+                        .background(LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(isSel ? Color.accentColor : .clear, lineWidth: 2.5)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(12)
+        }
+    }
+
+    private var colorDot: some View {
+        Circle()
+            .fill(defaultColor.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+            .frame(width: 22, height: 22)
+    }
+
+    private func doorRow<D: View>(_ title: String, icon: String,
+                                  accessory: AnyView? = nil,
+                                  @ViewBuilder destination: @escaping () -> D) -> some View {
+        NavigationLink { destination() } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+                    .foregroundStyle(.primary)
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if let accessory { accessory }
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: .infinity)
-    }
-
-    // Mini mockups drawn from the same recipe as the preview. System = light and dark
-    // sharing one card on a diagonal, which is literally what the setting does.
-    @ViewBuilder private func thumb(_ mode: AppAppearance) -> some View {
-        switch mode {
-        case .light: miniChat(dark: false)
-        case .dark:  miniChat(dark: true)
-        case .system:
-            ZStack {
-                miniChat(dark: false)
-                miniChat(dark: true).clipShape(DiagonalHalf())
-            }
-        }
-    }
-
-    private func miniChat(dark: Bool) -> some View {
-        VStack(spacing: 7) {
-            Capsule().fill(dark ? Color(white: 0.24) : Color.white)
-                .frame(width: 52, height: 13)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Capsule().fill(Theme.defaultBubble(dark))   // the real chat blue, both modes
-                .frame(width: 52, height: 13)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(dark ? Color(white: 0.09) : Color(white: 0.93))
-    }
-}
-
-// Right-leaning diagonal slice for the System card's dark half.
-private struct DiagonalHalf: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: rect.width * 0.62, y: 0))
-        p.addLine(to: CGPoint(x: rect.width, y: 0))
-        p.addLine(to: CGPoint(x: rect.width, y: rect.height))
-        p.addLine(to: CGPoint(x: rect.width * 0.38, y: rect.height))
-        p.closeSubpath()
-        return p
     }
 }
 

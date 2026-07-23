@@ -47,6 +47,13 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        # Alternate app icons (Settings > Appearance > App Icon). Primary stays the asset
+        # catalog; these are loose PNGs in Resources/AltIcons, referenced by base name.
+        CFBundleIcons:
+          CFBundleAlternateIcons:
+            icon-ivory:  { CFBundleIconFiles: [icon-ivory] }
+            icon-ocean:  { CFBundleIconFiles: [icon-ocean] }
+            icon-forest: { CFBundleIconFiles: [icon-forest] }
         # Export compliance is deliberately NOT declared in the plist. Kulan ships its
         # own E2EE (libsodium) = NON-exempt encryption; declaring false was a false
         # statement, and declaring true without a compliance code makes the upload FAIL
