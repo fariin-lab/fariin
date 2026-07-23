@@ -38,6 +38,16 @@ struct MainShell: View {
         .onChange(of: AppRouter.shared.pendingChatId) { _, id in
             if id != nil { tab = 0 }
         }
+        // In-app notifications: every conversations emission runs the delta detector; a new
+        // unread in a chat that isn't on screen fires the banner/sound/haptic per settings.
+        .onChange(of: ConversationsRepository.shared.conversations) { _, new in
+            InAppNotify.shared.process(new)
+        }
+        .overlay(alignment: .top) {
+            if let b = InAppNotify.shared.banner {
+                InAppBannerView(banner: b)
+            }
+        }
         // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
         // it so the sheet isn't dropped on a hidden tab.
         .onChange(of: AppRouter.shared.pendingInviteCode) { _, code in

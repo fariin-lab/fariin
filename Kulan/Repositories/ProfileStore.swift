@@ -131,6 +131,17 @@ final class ProfileStore {
         me = await fetch(uid)
     }
 
+    /// Notification preferences the PUSH SERVER reads per recipient (onNewMessage):
+    /// preview = show sender name in the push; sound = bundled tone name ("default" = system).
+    func setNotifPrefs(preview: Bool? = nil, sound: String? = nil) async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        var data: [String: Any] = [:]
+        if let preview { data["notifPreview"] = preview }
+        if let sound { data["notifSound"] = sound }
+        guard !data.isEmpty else { return }
+        try await db.collection("users").document(uid).setData(data, merge: true)
+    }
+
     /// Remove the profile photo entirely (back to the initials avatar) — the mirror of
     /// uploadPhoto: clear users.photoUrl, clear my photos.{uid} in every conversation,
     /// and delete the storage object so the old image is really gone, not just unlinked.

@@ -11,12 +11,15 @@ private var appVersion: String {
 
 // MARK: - Notifications
 
-// Layout follows the user's reference (master switch → in-app block → red reset at the
-// bottom), REAL rows only: no Sound picker until bundled tones + the server payload
-// exist, no Message Preview (lock-screen pushes can't show E2EE text anyway), no New
-// Contacts (no contact sync). Reset = unmute every chat you custom-muted.
+// The user's reference layout, every row REAL: Show Notifications = push registration;
+// Message Preview = whether the push shows the sender (server reads users.notifPreview);
+// Sound = bundled tones the push and in-app banner actually play (users.notifSound);
+// the in-app block drives InAppNotify. Only "New Contacts" is absent — there is no
+// contact-book sync, so that event cannot exist yet.
 struct NotificationsSettingsView: View {
     @AppStorage("notif.push") private var pushOn = true
+    @AppStorage("notif.preview") private var messagePreview = true
+    @AppStorage("notif.sound") private var soundName = "rebound"
     @AppStorage("notif.inAppSound") private var inAppSound = true
     @AppStorage("notif.inAppVibrate") private var inAppVibrate = true
     @AppStorage("notif.inAppPreview") private var inAppPreview = true
@@ -37,8 +40,26 @@ struct NotificationsSettingsView: View {
                     .onChange(of: pushOn) { _, on in
                         if on { Push.register() } else { Task { await Push.unregister() } }   // unregister is now async
                     }
-            } footer: {
-                Text("Get notified of new messages and calls when Kulan is closed. (Message text never appears in the lock-screen notification — it stays end-to-end encrypted.)")
+            }
+
+            Section {
+                Toggle("Message Preview", isOn: $messagePreview)
+                    .tint(.green)
+                    .onChange(of: messagePreview) { _, on in
+                        // The push server reads this per recipient — OFF sends a nameless
+                        // "New message" instead of the sender's name.
+                        Task { try? await ProfileStore.shared.setNotifPrefs(preview: on) }
+                    }
+                NavigationLink { NotificationSoundView() } label: {
+                    HStack {
+                        Text("Sound")
+                        Spacer()
+                        Text(soundName == "default" ? "Default" : soundName.capitalized)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Options")
             }
 
             Section {
@@ -47,8 +68,6 @@ struct NotificationsSettingsView: View {
                 Toggle("In-App Preview", isOn: $inAppPreview).tint(.green)
             } header: {
                 Text("In-App Notifications")
-            } footer: {
-                Text("Controls alerts while Kulan is open.")
             }
 
             Section {
@@ -60,9 +79,7 @@ struct NotificationsSettingsView: View {
                 }
                 .disabled(resetting || mutedCount == 0)
             } footer: {
-                Text(mutedCount == 0
-                     ? "No chats have custom notification settings."
-                     : "Unmutes the \(mutedCount) chat\(mutedCount == 1 ? "" : "s") you muted.")
+                Text("Undo all custom notification settings for your chats.")
             }
         }
         .navigationTitle("Notifications")
@@ -82,6 +99,41 @@ struct NotificationsSettingsView: View {
             await ChatService.setMute(c.id, until: 0)
         }
         resetting = false
+    }
+}
+
+// Sound picker: bundled tones, tap = hear it + choose it. The choice drives BOTH the
+// lock-screen push (server reads users.notifSound) and the in-app banner tone.
+struct NotificationSoundView: View {
+    @AppStorage("notif.sound") private var soundName = "rebound"
+    private let sounds = ["default", "rebound", "chime", "pop", "pulse", "marimba"]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(sounds, id: \.self) { s in
+                    Button {
+                        soundName = s
+                        InAppNotify.shared.playTone(s)   // instant preview
+                        Task { try? await ProfileStore.shared.setNotifPrefs(sound: s) }
+                    } label: {
+                        HStack {
+                            Text(s == "default" ? "Default" : s.capitalized).foregroundStyle(.primary)
+                            Spacer()
+                            if soundName == s {
+                                Image(systemName: "checkmark").fontWeight(.semibold)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
+            } footer: {
+                Text("Plays for new messages, on the lock screen and inside the app.")
+            }
+        }
+        .navigationTitle("Sound")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
