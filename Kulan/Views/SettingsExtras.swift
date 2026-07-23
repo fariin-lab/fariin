@@ -11,22 +11,34 @@ private var appVersion: String {
 
 // MARK: - Notifications
 
+// Layout follows the user's reference (master switch → in-app block → red reset at the
+// bottom), REAL rows only: no Sound picker until bundled tones + the server payload
+// exist, no Message Preview (lock-screen pushes can't show E2EE text anyway), no New
+// Contacts (no contact sync). Reset = unmute every chat you custom-muted.
 struct NotificationsSettingsView: View {
     @AppStorage("notif.push") private var pushOn = true
     @AppStorage("notif.inAppSound") private var inAppSound = true
     @AppStorage("notif.inAppVibrate") private var inAppVibrate = true
     @AppStorage("notif.inAppPreview") private var inAppPreview = true
+    @State private var confirmReset = false
+    @State private var resetting = false
+
+    private var me: String { AuthService.shared.uid ?? "" }
+    private var mutedCount: Int {
+        let now = Date().timeIntervalSince1970 * 1000
+        return ConversationsRepository.shared.conversations.filter { $0.isMuted(me, now: now) }.count
+    }
 
     var body: some View {
         List {
             Section {
-                Toggle("Message Notifications", isOn: $pushOn)
+                Toggle("Show Notifications", isOn: $pushOn)
                     .tint(.green)
                     .onChange(of: pushOn) { _, on in
                         if on { Push.register() } else { Task { await Push.unregister() } }   // unregister is now async
                     }
             } footer: {
-                Text("Get notified of new messages when Kulan is closed.")
+                Text("Get notified of new messages and calls when Kulan is closed. (Message text never appears in the lock-screen notification — it stays end-to-end encrypted.)")
             }
 
             Section {
@@ -34,13 +46,42 @@ struct NotificationsSettingsView: View {
                 Toggle("In-App Vibrate", isOn: $inAppVibrate).tint(.green)
                 Toggle("In-App Preview", isOn: $inAppPreview).tint(.green)
             } header: {
-                Text("IN-APP NOTIFICATIONS")
+                Text("In-App Notifications")
             } footer: {
-                Text("Controls alerts while Kulan is open. (Message previews can't show text in the lock-screen notification — that stays private with end-to-end encryption.)")
+                Text("Controls alerts while Kulan is open.")
+            }
+
+            Section {
+                Button(role: .destructive) { confirmReset = true } label: {
+                    HStack {
+                        Text("Reset All Notifications")
+                        if resetting { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(resetting || mutedCount == 0)
+            } footer: {
+                Text(mutedCount == 0
+                     ? "No chats have custom notification settings."
+                     : "Unmutes the \(mutedCount) chat\(mutedCount == 1 ? "" : "s") you muted.")
             }
         }
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Reset all notifications?", isPresented: $confirmReset) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) { Task { await resetAll() } }
+        } message: {
+            Text("Every muted chat goes back to normal notifications.")
+        }
+    }
+
+    private func resetAll() async {
+        resetting = true
+        let now = Date().timeIntervalSince1970 * 1000
+        for c in ConversationsRepository.shared.conversations where c.isMuted(me, now: now) {
+            await ChatService.setMute(c.id, until: 0)
+        }
+        resetting = false
     }
 }
 
