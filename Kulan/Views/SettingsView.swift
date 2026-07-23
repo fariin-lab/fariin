@@ -348,6 +348,8 @@ struct ActivityView: UIViewControllerRepresentable {
 struct AppearanceSettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var showChatLook = false   // all-chats wallpaper + bubble colour picker
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
 
     var body: some View {
         ScrollView {
@@ -404,11 +406,13 @@ struct AppearanceSettingsView: View {
     }
 
     private func previewBubble(_ text: String, mine: Bool) -> some View {
+        // The REAL chat bubble blue (Theme.defaultBubble) — NOT the app accent, which flips
+        // to white in dark mode and made the preview text white-on-white (device report).
         Text(text)
             .font(.system(size: 15))
             .foregroundStyle(mine ? Color.white : Color.primary)
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(mine ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color(.systemGray5)),
+            .background(mine ? AnyShapeStyle(Theme.defaultBubble(dark)) : AnyShapeStyle(Color(.systemGray5)),
                         in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
@@ -455,7 +459,7 @@ struct AppearanceSettingsView: View {
             Capsule().fill(dark ? Color(white: 0.24) : Color.white)
                 .frame(width: 52, height: 13)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Capsule().fill(Color.accentColor.opacity(dark ? 0.9 : 1))
+            Capsule().fill(Theme.defaultBubble(dark))   // the real chat blue, both modes
                 .frame(width: 52, height: 13)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
