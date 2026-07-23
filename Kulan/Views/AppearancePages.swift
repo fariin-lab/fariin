@@ -111,7 +111,6 @@ struct ChatWallpaperPage: View {
             VStack(alignment: .leading, spacing: 18) {
                 PhotosPicker(selection: $photoItem, matching: .images) {
                     HStack(spacing: 12) {
-                        Image(systemName: "photo.on.rectangle.angled").font(.system(size: 17))
                         Text("Choose from Photos").foregroundStyle(.primary)
                         Spacer()
                         Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)

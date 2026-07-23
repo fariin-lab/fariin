@@ -22,6 +22,7 @@ struct ContactInfoView: View {
 
     @State private var handle = ""
     @State private var about = ""
+    @State private var targetPrivacy: [String: String] = [:]   // their audience map (users doc)
     @State private var muted = false
     @State private var mutedUntil: Double = 0   // millis; drives the "Muted until <time>" menu header
     @State private var blocked = false
@@ -72,7 +73,7 @@ struct ContactInfoView: View {
             // profile stays visible behind and the drag can melt the white away.
             .overlay {
                 if showProfilePhoto {
-                    ProfilePhotoViewer(name: shownName, photoUrl: photoUrl ?? "",
+                    ProfilePhotoViewer(name: shownName, photoUrl: gatedPhotoUrl ?? "",
                                        sourceFrame: avatarFrame, isPresented: $showProfilePhoto)
                 }
             }
@@ -358,10 +359,23 @@ struct ContactInfoView: View {
     }
     // MARK: - Sections
 
+    // Their privacy audience, honored by MY client: am I allowed their photo/bio/calls?
+    // "Contact" = we share a real conversation (opened from a chat always qualifies).
+    private var iAmContact: Bool { source == .chat || PrivacyPrefs.isContact(otherUid) }
+    private var gatedPhotoUrl: String? {
+        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? photoUrl : nil
+    }
+    private var gatedAbout: String {
+        PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) ? about : ""
+    }
+    private var canCallThem: Bool {
+        PrivacyPrefs.allows(targetPrivacy, "calls", contactOfMine: iAmContact)
+    }
+
     private var hero: some View {
         VStack(spacing: 6) {
-            AvatarView(name: shownName, photoUrl: photoUrl, size: 88)
-                .onTapGesture { if photoUrl?.isEmpty == false { showProfilePhoto = true } }
+            AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88)
+                .onTapGesture { if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true } }
                 // The viewer IS this avatar while open — hide the original so the morph reads
                 // as one circle leaving and returning, not a copy floating over it.
                 .opacity(showProfilePhoto ? 0 : 1)
@@ -376,8 +390,8 @@ struct ContactInfoView: View {
                 .frame(minHeight: 20)
             // Bio shown as centered text under the handle (like a group's description under the member
             // count) — not a labeled "bio" card.
-            if !about.isEmpty {
-                Text(about)
+            if !gatedAbout.isEmpty {
+                Text(gatedAbout)
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32).padding(.top, 2)
@@ -396,7 +410,7 @@ struct ContactInfoView: View {
             }
             // Your OWN profile: no call-yourself buttons, and NO message-self yet (opening a self-chat crashed —
             // that's the upcoming "My Space" feature, built separately). Friends keep video/voice.
-            if !isSelf {
+            if !isSelf && canCallThem {
                 actionTile("video", "video.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) }
                 actionTile("voice", "phone.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) }
             }
@@ -517,7 +531,9 @@ struct ContactInfoView: View {
 
 
     private func load() async {
-        if let p = await ProfileStore.shared.fetch(otherUid) { handle = p.handle; about = p.about }
+        if let p = await ProfileStore.shared.fetch(otherUid) {
+            handle = p.handle; about = p.about; targetPrivacy = p.privacy
+        }
         if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
            let d = snap.data() {
             let me = AuthService.shared.uid ?? ""

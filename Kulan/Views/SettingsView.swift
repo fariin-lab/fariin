@@ -375,17 +375,17 @@ struct AppearanceSettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                 VStack(spacing: 0) {
-                    doorRow("Chat Wallpaper", icon: "photo") { ChatWallpaperPage() }
-                    Divider().padding(.leading, 52)
-                    doorRow("Chat Color", icon: "paintpalette", accessory: AnyView(colorDot)) { ChatColorPage() }
-                    Divider().padding(.leading, 52)
-                    doorRow("App Icon", icon: "app.badge") { AppIconPage() }
+                    doorRow("Chat Wallpaper") { ChatWallpaperPage() }
+                    Divider().padding(.leading, 16)
+                    doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
+                    Divider().padding(.leading, 16)
+                    doorRow("App Icon") { AppIconPage() }
                 }
                 .background(Color(.secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                 VStack(spacing: 0) {
-                    doorRow("Night Mode", icon: "moon.fill",
+                    doorRow("Night Mode",
                             accessory: AnyView(Text(AppAppearance(rawValue: appearanceRaw)?.label ?? "System")
                                 .foregroundStyle(.secondary))) { NightModePage() }
                 }
@@ -475,13 +475,11 @@ struct AppearanceSettingsView: View {
             .frame(width: 22, height: 22)
     }
 
-    private func doorRow<D: View>(_ title: String, icon: String,
+    private func doorRow<D: View>(_ title: String,
                                   accessory: AnyView? = nil,
                                   @ViewBuilder destination: @escaping () -> D) -> some View {
         NavigationLink { destination() } label: {
             HStack(spacing: 12) {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
-                    .foregroundStyle(.primary)
                 Text(title).foregroundStyle(.primary)
                 Spacer()
                 if let accessory { accessory }
@@ -494,28 +492,31 @@ struct AppearanceSettingsView: View {
     }
 }
 
+// Privacy & Security, the user's reference structure. Two-Step Verification and
+// Passkeys are DELIBERATELY absent: they protect a login, and anonymous accounts have
+// none — they arrive with account linking. Everything below is real today.
 struct PrivacySettingsView: View {
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
     private var blockedCount: Int { repo.conversations.filter { $0.blockedBy[me] == true }.count }
-    @AppStorage("appLockEnabled") private var appLock = false
-    @AppStorage("appLockDelay") private var lockDelay = 0   // grace period (seconds) before re-locking
-    @AppStorage("screenSecurity") private var screenSecurity = false
-    @AppStorage("readReceipts") private var readReceipts = true
-    @AppStorage("typingIndicators") private var typingIndicators = true
-    @AppStorage("shareLastSeen") private var shareLastSeen = true
     @AppStorage("defaultDisappearSeconds") private var defaultDisappear = 0
+    @AppStorage("priv.lastSeen") private var privLastSeen = "everyone"
+    @AppStorage("priv.photo") private var privPhoto = "everyone"
+    @AppStorage("priv.bio") private var privBio = "everyone"
+    @AppStorage("priv.calls") private var privCalls = "everyone"
+    @AppStorage("priv.groups") private var privGroups = "everyone"
     @State private var showDefaultDisappear = false
+
+    private func label(_ raw: String) -> String {
+        (Audience(rawValue: raw) ?? .everyone).label
+    }
+
     var body: some View {
         List {
-            // Page order follows the user's reference (2026-07-23), REAL rows only — no
-            // Two-Step/Passkeys (anonymous auth has no password), no per-field audience
-            // pickers (no server support yet). Experimental toggles are all gone (history
-            // in git: standard list 07-11, TG engine, TG media open 07-23).
             Section {
                 NavigationLink { BlockedUsersView() } label: {
                     HStack {
-                        Label("Blocked Users", systemImage: "hand.raised")
+                        Text("Blocked Users")
                         Spacer()
                         Text("\(blockedCount)").foregroundStyle(.secondary)
                     }
@@ -525,55 +526,53 @@ struct PrivacySettingsView: View {
             Section {
                 Button { showDefaultDisappear = true } label: {
                     HStack {
-                        Label("Disappearing Messages", systemImage: "timer").foregroundStyle(.primary)
+                        Text("Disappearing Messages").foregroundStyle(.primary)
                         Spacer()
                         Text(ChatService.disappearLabel(defaultDisappear)).foregroundStyle(.secondary)
                         Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
                     }
                 }
             } footer: {
-                Text("Automatically delete messages for everyone after a period of time in all new chats you start. Chats you already have keep their own setting.")
+                Text("Automatically delete messages for everyone after a period of time in all new chats you start.")
             }
 
             Section {
-                Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)
-                Toggle(isOn: $typingIndicators) { Label("Typing Indicators", systemImage: "ellipsis.bubble") }.tint(.green)
-                Toggle(isOn: $shareLastSeen) { Label("Last Seen & Online", systemImage: "clock") }.tint(.green)
+                NavigationLink { AppLockPage() } label: { Text("App Lock") }
             } footer: {
-                Text("These are reciprocal — if you turn one off, you won't see it from others either.")
+                Text("Require Face ID to unlock Kulan.")
             }
 
             Section {
-                NavigationLink { PhoneNumberPrivacyView() } label: {
-                    Label("Phone Number", systemImage: "phone")
+                NavigationLink { PhoneNumberPrivacyView() } label: { Text("Phone Number") }
+                audienceRow("Last Seen & Online", key: "lastSeen", value: privLastSeen,
+                            footerText: "Who can see when you're online and when you were last active.")
+                audienceRow("Profile Picture", key: "photo", value: privPhoto,
+                            footerText: "Who can see your profile photo when they find you on Kulan.")
+                audienceRow("Bio", key: "bio", value: privBio,
+                            footerText: "Who can see the few words about you.")
+                audienceRow("Calls", key: "calls", value: privCalls,
+                            footerText: "Who can call you. Calls from anyone else are declined automatically.")
+                NavigationLink { MessagesPrivacyPage() } label: { Text("Messages") }
+                if Flags.groupsEnabled {
+                    audienceRow("Groups", key: "groups", value: privGroups,
+                                footerText: "Who can add you to groups.")
                 }
-            }
-
-            Section {
-                Toggle(isOn: $appLock) { Label("App Lock", systemImage: "faceid") }.tint(.green)
-                if appLock {
-                    Picker(selection: $lockDelay) {
-                        Text("Immediately").tag(0)
-                        Text("After 1 minute").tag(60)
-                        Text("After 5 minutes").tag(300)
-                        Text("After 1 hour").tag(3600)
-                    } label: { Label("Auto-Lock", systemImage: "clock.arrow.circlepath") }
-                }
-                Toggle(isOn: $screenSecurity) { Label("Screen Security", systemImage: "eye.slash") }.tint(.green)
-            } footer: {
-                Text("App Lock requires Face ID / passcode to open Kulan. Auto-Lock sets how long Kulan can be in the background before it locks again. Screen Security hides the app preview in the multitasking switcher.")
-            }
-
-            Section {
-                Label("End-to-end encrypted", systemImage: "lock.fill")
-            } footer: {
-                Text("Every message is end-to-end encrypted. The private key lives only on your device — the server can never read your messages.")
             }
         }
         .navigationTitle("Privacy & Security")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showDefaultDisappear) {
             DisappearingMessagesView(cid: "", current: defaultDisappear) { defaultDisappear = $0 }
+        }
+    }
+
+    private func audienceRow(_ title: String, key: String, value: String, footerText: String) -> some View {
+        NavigationLink { AudiencePage(title: title, key: key, footer: footerText) } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(label(value)).foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -592,10 +591,10 @@ struct AboutView: View {
         List {
             Section {
                 Link(destination: URL(string: "https://kulan-2ef85.web.app")!) {
-                    Label("Support Center", systemImage: "questionmark.circle")
+                    Text("Support Center").foregroundStyle(.primary)
                 }
                 Link(destination: URL(string: "mailto:kulanchat@gmail.com")!) {
-                    Label("Report a Problem", systemImage: "envelope")
+                    Text("Report a Problem").foregroundStyle(.primary)
                 }
             } footer: {
                 Text("Kulan has zero tolerance for objectionable content or abusive behavior. Reports are reviewed within 24 hours.")
@@ -603,10 +602,10 @@ struct AboutView: View {
             Section {
                 LabeledContent("Version", value: "\(appVersion) (\(buildNumber))")
                 Link(destination: URL(string: "https://kulan-2ef85.web.app/privacy.html")!) {
-                    Label("Privacy Policy", systemImage: "hand.raised")
+                    Text("Privacy Policy").foregroundStyle(.primary)
                 }
                 Link(destination: URL(string: "https://kulan-2ef85.web.app/terms.html")!) {
-                    Label("Terms & Conditions", systemImage: "doc.text")
+                    Text("Terms & Conditions").foregroundStyle(.primary)
                 }
             } header: {
                 Text("About")

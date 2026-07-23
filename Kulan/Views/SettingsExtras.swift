@@ -157,9 +157,9 @@ struct StorageDataView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent { Text(fmt(photoBytes)) } label: { Label("Photo Cache", systemImage: "photo.on.rectangle") }
-                LabeledContent { Text(fmt(videoBytes)) } label: { Label("Videos", systemImage: "video") }
-                LabeledContent { Text(fmt(voiceBytes)) } label: { Label("Voice Messages", systemImage: "waveform") }
+                LabeledContent("Photo Cache", value: fmt(photoBytes))
+                LabeledContent("Videos", value: fmt(videoBytes))
+                LabeledContent("Voice Messages", value: fmt(voiceBytes))
             } header: {
                 Text("Storage by Type")
             } footer: {
@@ -174,11 +174,9 @@ struct StorageDataView: View {
             }
 
             Section {
-                Picker(selection: $quality) {
+                Picker("Sent Media Quality", selection: $quality) {
                     Text("Standard").tag("standard")
                     Text("High").tag("high")
-                } label: {
-                    Label("Sent Media Quality", systemImage: "sparkles.tv")
                 }
             } header: {
                 Text("Sent Media")

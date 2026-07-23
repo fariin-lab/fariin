@@ -55,6 +55,7 @@ final class ThreadRepository {
     private var typingExpiry: Timer? // incoming typing self-clears after 15s — a crashed sender's flag can't stick
     var otherOnline = false
     var otherLastActive: Date?
+    var otherPrivacy: [String: String] = [:]   // their per-field audience map (users doc)
     var otherLastReadMillis: Double = 0
     var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
@@ -197,6 +198,7 @@ final class ThreadRepository {
             userListener = db.collection("users").document(other)
                 .addSnapshotListener { [weak self] snap, _ in
                     let d = snap?.data()
+                    self?.otherPrivacy = (d?["privacy"] as? [String: String]) ?? [:]
                     self?.otherOnline = d?["online"] as? Bool ?? false
                     if let ts = d?["lastActive"] as? Timestamp { self?.otherLastActive = ts.dateValue() }
                 }

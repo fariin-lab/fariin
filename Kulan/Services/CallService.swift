@@ -646,6 +646,17 @@ final class CallService: NSObject {
                 let cid = [self.me, caller].sorted().joined(separator: "_")
                 self.db.collection("conversations").document(cid).getDocument { cs, _ in
                     let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
+                    // Calls privacy (Settings > Privacy > Calls): "No One" declines everything;
+                    // "My Contacts" requires a real conversation with the caller. The caller
+                    // sees declined — same signal as a manual decline, nothing leaks.
+                    let audience = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.calls") ?? "") ?? .everyone
+                    let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
+                    let callsAllowed = audience == .everyone || (audience == .contacts && isContact)
+                    if !callsAllowed {
+                        self.db.collection("calls").document(doc.documentID)
+                            .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
+                        return
+                    }
                     guard !blocked, self.state == .idle else { return }
                     self.callId = doc.documentID
                     self.otherUid = caller

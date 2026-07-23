@@ -19,6 +19,7 @@ struct UserProfile: Identifiable, Equatable {
     var about: String
     var photoUrl: String?
     var publicKeyB64: String?
+    var privacy: [String: String]   // per-field audience: "everyone" | "contacts" | "nobody"
 
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -27,6 +28,7 @@ struct UserProfile: Identifiable, Equatable {
         self.about = data["about"] as? String ?? ""
         self.photoUrl = data["photoUrl"] as? String
         self.publicKeyB64 = data["publicKey"] as? String
+        self.privacy = (data["privacy"] as? [String: String]) ?? [:]
     }
 }
 

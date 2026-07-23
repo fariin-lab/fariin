@@ -60,9 +60,15 @@ struct NewChatView: View {
                     if !query.isEmpty {
                         Section("Results") {
                             ForEach(results) { user in
+                                // Search finds STRANGERS — honor their Profile Picture audience
+                                // (photo hidden unless they allow non-contacts; a shared chat
+                                // qualifies as contact).
                                 Button { start(user) } label: {
                                     personRow(name: user.name.isEmpty ? user.handle : user.name,
-                                              handle: user.handle, photo: user.photoUrl)
+                                              handle: user.handle,
+                                              photo: PrivacyPrefs.allows(user.privacy, "photo",
+                                                                          contactOfMine: PrivacyPrefs.isContact(user.id))
+                                                     ? user.photoUrl : nil)
                                 }
                             }
                             if results.isEmpty {

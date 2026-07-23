@@ -1123,7 +1123,11 @@ struct ThreadView: View {
         }
         if repo.iBlocked { return nil }   // blocked: don't reveal their typing/online/last-seen
         if typingPref && repo.otherTyping { return "typing…" }   // reciprocal: only if I share typing
-        if lastSeenPref {                                        // reciprocal: only if I share last-seen
+        // Reciprocal (my audience isn't "No One") AND their audience allows me (in a chat
+        // together we're contacts, so only their "No One" hides it — defense in depth on
+        // top of their client not publishing at all).
+        if PrivacyPrefs.mine("lastSeen") != .nobody && lastSeenPref,
+           PrivacyPrefs.allows(repo.otherPrivacy, "lastSeen", contactOfMine: true) {
             if repo.otherOnline { return "online" }
             if let la = repo.otherLastActive {
                 let f = RelativeDateTimeFormatter(); f.unitsStyle = .short
