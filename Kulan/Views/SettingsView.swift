@@ -658,6 +658,7 @@ struct EditProfileView: View {
     @State private var uploadTask: Task<Void, Never>?
     @State private var uploading = false
     @State private var localPreview: UIImage?   // picked photo, shown instantly while uploading
+    @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var saving = false
     @State private var error: String?
 
@@ -666,6 +667,10 @@ struct EditProfileView: View {
             Form {
                 // Avatar header on the plain grouped background (Contacts / Settings edit style).
                 Section {
+                    // Every control here is .plain + its own contentShape: a DEFAULT-styled
+                    // button inside a Form stretches its tap zone across the whole row, which
+                    // made the empty white area open the gallery and let the picker swallow
+                    // taps meant for Remove (user's device report).
                     VStack(spacing: 10) {
                         PhotosPicker(selection: $photoItem, matching: .images) {
                             // Seamless set (the WhatsApp feel): the picked photo shows INSTANTLY
@@ -678,18 +683,22 @@ struct EditProfileView: View {
                                         .frame(width: 100, height: 100).clipShape(Circle())
                                 }
                             }
+                            .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
                         PhotosPicker(selection: $photoItem, matching: .images) {
-                            Text("Change Photo").font(.subheadline)
+                            Text("Change Photo").font(.subheadline).foregroundStyle(Color.accentColor)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                         if profile.me?.photoUrl?.isEmpty == false {
-                            Button(role: .destructive) {
-                                uploadTask?.cancel()
-                                uploadTask = Task { await removePhoto() }
+                            Button {
+                                confirmRemovePhoto = true
                             } label: {
-                                Text("Remove Photo").font(.subheadline)
+                                Text("Remove Photo").font(.subheadline).foregroundStyle(.red)
+                                    .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                             .disabled(uploading)
                         }
                     }
@@ -755,6 +764,15 @@ struct EditProfileView: View {
                 guard let item else { return }   // ignore our own reset in upload() — don't cancel a live upload
                 uploadTask?.cancel()
                 uploadTask = Task { await upload(item) }
+            }
+            .alert("Remove profile photo?", isPresented: $confirmRemovePhoto) {
+                Button("Cancel", role: .cancel) {}
+                Button("Remove", role: .destructive) {
+                    uploadTask?.cancel()
+                    uploadTask = Task { await removePhoto() }
+                }
+            } message: {
+                Text("Your photo will be removed and your initials will show instead.")
             }
         }
     }
