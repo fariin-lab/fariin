@@ -539,6 +539,7 @@ struct EditProfileView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var uploadTask: Task<Void, Never>?
     @State private var uploading = false
+    @State private var localPreview: UIImage?   // picked photo, shown instantly while uploading
     @State private var saving = false
     @State private var error: String?
 
@@ -549,8 +550,16 @@ struct EditProfileView: View {
                 Section {
                     VStack(spacing: 10) {
                         PhotosPicker(selection: $photoItem, matching: .images) {
-                            AvatarView(name: firstName, photoUrl: profile.me?.photoUrl, size: 100)
-                                .overlay { if uploading { ZStack { Circle().fill(.black.opacity(0.3)); ProgressView().tint(.white) } } }
+                            // Seamless set (the WhatsApp feel): the picked photo shows INSTANTLY
+                            // as a local preview while the upload runs silently behind it — no
+                            // dark spinner blocking the avatar.
+                            ZStack {
+                                AvatarView(name: firstName, photoUrl: profile.me?.photoUrl, size: 100)
+                                if let localPreview {
+                                    Image(uiImage: localPreview).resizable().scaledToFill()
+                                        .frame(width: 100, height: 100).clipShape(Circle())
+                                }
+                            }
                         }
                         .buttonStyle(.plain)
                         PhotosPicker(selection: $photoItem, matching: .images) {
@@ -641,8 +650,11 @@ struct EditProfileView: View {
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { uploading = false; return }
             if Task.isCancelled { uploading = false; return }   // a newer pick superseded this one
+            localPreview = UIImage(data: data)   // instant — the upload continues silently behind it
             try await profile.uploadPhoto(data)
+            localPreview = nil   // server URL is live and pre-cached; AvatarView takes over seamlessly
         } catch {
+            localPreview = nil   // revert to the previous avatar on failure
             self.error = "Photo upload failed: \(error.localizedDescription)"
         }
         uploading = false

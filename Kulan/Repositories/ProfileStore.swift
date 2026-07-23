@@ -114,6 +114,12 @@ final class ProfileStore {
         _ = try await ref.putDataAsync(data, metadata: meta)
         let url = try await ref.downloadURL().absoluteString
 
+        // Seed the cache BEFORE publishing the URL: every AvatarView cache-hits the new
+        // photo the instant photoUrl lands — no re-download, no placeholder blink. Also
+        // covers the change-photo case where the URL stays identical (same storage path)
+        // and a stale cached image would otherwise keep showing.
+        if let ui = UIImage(data: data) { DiskImageCache.shared.store(ui, data: data, for: url) }
+
         try await db.collection("users").document(uid).setData(["photoUrl": url], merge: true)
 
         let snap = try await db.collection("conversations")
