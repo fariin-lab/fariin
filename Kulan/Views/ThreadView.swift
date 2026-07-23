@@ -3963,7 +3963,12 @@ struct MessageBubble: View, Equatable {
                 // Status reply: caption + BIG story card floating on the wallpaper ABOVE the bubble
                 // (reference look, our own take) — replaces the small in-bubble quote for status replies.
                 if let reply = message.replyTo, reply.isStatus {
+                    // The card is part of the message: it rides the reply-swipe with the bubble
+                    // and swiping the card itself also starts the reply (user report: only the
+                    // bubble responded, the photo was deaf).
                     storyReplyHeader(reply)
+                        .offset(x: dragX)
+                        .simultaneousGesture(replySwipeGesture)
                 }
                 content
                     // Jump-to flash: a brief dim pulse using the bubble's OWN shape + cluster corners, so
@@ -4054,24 +4059,7 @@ struct MessageBubble: View, Equatable {
                     // MessageBubble; native text cells keep the UIKit pan. The reply arrow sits in the
                     // vacated space (added after the offset so it stays put).
                     .offset(x: dragX)
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 18)
-                            .onChanged { v in
-                                guard message.sendState == nil, !VoiceScrubState.active else { return }
-                                guard abs(v.translation.width) > abs(v.translation.height) else { return }   // horizontal only
-                                if v.translation.width < 0 {
-                                    let t = v.translation.width
-                                    dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
-                                }
-                            }
-                            .onEnded { _ in
-                                if !VoiceScrubState.active, dragX <= -50 {
-                                    onReply(message)
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                }
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { dragX = 0 }
-                            }
-                    )
+                    .simultaneousGesture(replySwipeGesture)
                 reactionBadges
                     .animation(.spring(response: 0.35, dampingFraction: 0.6), value: message.reactions)   // pop in/out
                 if isMe && message.sendState == .failed {
@@ -4099,6 +4087,27 @@ struct MessageBubble: View, Equatable {
                 .padding(.trailing, 14)   // consistent inset from the screen's right edge, always visible
                 .allowsHitTesting(false)
         }
+    }
+
+    // The build-285 reply-swipe, shared by the bubble AND the story-reply card so the whole
+    // message answers the gesture as one piece.
+    private var replySwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 18)
+            .onChanged { v in
+                guard message.sendState == nil, !VoiceScrubState.active else { return }
+                guard abs(v.translation.width) > abs(v.translation.height) else { return }   // horizontal only
+                if v.translation.width < 0 {
+                    let t = v.translation.width
+                    dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
+                }
+            }
+            .onEnded { _ in
+                if !VoiceScrubState.active, dragX <= -50 {
+                    onReply(message)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { dragX = 0 }
+            }
     }
 
     @ViewBuilder private var content: some View {
