@@ -85,6 +85,76 @@ struct NotificationsSettingsView: View {
     }
 }
 
+// MARK: - Storage and Data
+
+// True on-device numbers, honest buttons. Our media model differs from WhatsApp's: each
+// phone holds the ONLY decrypted copy of received videos/voice notes (the server copy is
+// deleted after delivery) — so there is deliberately NO "clear media" for those. The photo
+// cache is re-downloadable and safe to clear.
+struct StorageDataView: View {
+    @AppStorage("sentMediaQuality") private var quality = "standard"
+    @State private var photoBytes = 0
+    @State private var videoBytes = 0
+    @State private var voiceBytes = 0
+    @State private var confirmClear = false
+
+    private func fmt(_ b: Int) -> String {
+        b == 0 ? "Zero KB" : ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent { Text(fmt(photoBytes)) } label: { Label("Photo Cache", systemImage: "photo.on.rectangle") }
+                LabeledContent { Text(fmt(videoBytes)) } label: { Label("Videos", systemImage: "video") }
+                LabeledContent { Text(fmt(voiceBytes)) } label: { Label("Voice Messages", systemImage: "waveform") }
+            } header: {
+                Text("Storage by Type")
+            } footer: {
+                Text("Videos and voice notes live only on your phone — the server copy is deleted after delivery, so they can't be cleared and re-downloaded. That's part of the privacy design.")
+            }
+
+            Section {
+                Button("Clear Photo Cache", role: .destructive) { confirmClear = true }
+                    .disabled(photoBytes == 0)
+            } footer: {
+                Text("Cached photos and avatars re-download automatically when needed.")
+            }
+
+            Section {
+                Picker(selection: $quality) {
+                    Text("Standard").tag("standard")
+                    Text("High").tag("high")
+                } label: {
+                    Label("Sent Media Quality", systemImage: "sparkles.tv")
+                }
+            } header: {
+                Text("Sent Media")
+            } footer: {
+                Text("High sends sharper photos (2048px) and 1080p video. Uses more data.")
+            }
+        }
+        .navigationTitle("Storage and Data")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { refresh() }
+        .alert("Clear photo cache?", isPresented: $confirmClear) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                DiskImageCache.shared.clear()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { refresh() }
+            }
+        } message: {
+            Text("Photos and avatars will re-download as you use the app.")
+        }
+    }
+
+    private func refresh() {
+        photoBytes = DiskImageCache.shared.diskBytes()
+        videoBytes = VideoCache.diskBytes()
+        voiceBytes = AudioCache.diskBytes()
+    }
+}
+
 // MARK: - Blocked Users (real)
 
 struct BlockedUsersView: View {

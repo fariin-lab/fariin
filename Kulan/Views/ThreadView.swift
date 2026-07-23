@@ -2761,7 +2761,8 @@ struct ThreadView: View {
     // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
     // the sender's copy on-device; the recipient's player deletes the server object).
     private func sendVideo(from url: URL, caption: String = "", hd: Bool = false) async {
-        guard let prepared = await VideoTranscoder.prepare(url, hd: hd) else {
+        // Per-send HD button OR the global Sent Media Quality "High" → 1080p.
+        guard let prepared = await VideoTranscoder.prepare(url, hd: hd || ChatService.highQualitySends) else {
             try? FileManager.default.removeItem(at: url)
             await MainActor.run { sendError = "Couldn't process this video." }
             return

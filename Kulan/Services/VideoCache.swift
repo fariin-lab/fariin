@@ -41,6 +41,13 @@ enum VideoCache {
         try? FileManager.default.removeItem(at: fileURL(messageId))
     }
 
+    /// Total bytes on disk (Settings "storage used").
+    static func diskBytes() -> Int {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        return items.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0) }
+    }
+
     /// Sign-out/delete: these files are DECRYPTED chat videos — wipe with the account.
     static func removeAll() {
         let fm = FileManager.default

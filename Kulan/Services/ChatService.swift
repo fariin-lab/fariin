@@ -441,6 +441,18 @@ enum ChatService {
     /// and the ciphertext is uploaded to Storage; the server never sees the image.
     /// Downscale + recompress a photo before encrypting/uploading. Cuts upload size
     /// (and failure rate) massively; full-res camera/library photos are huge.
+    /// Global Sent Media Quality (Settings > Storage and Data). High = bigger photos
+    /// (2048px @ 0.9) and 1080p video; Standard = the long-standing 1600px @ 0.72 + 720p.
+    static var highQualitySends: Bool {
+        UserDefaults.standard.string(forKey: "sentMediaQuality") == "high"
+    }
+
+    /// The photo-SEND compression (thumbnails/stories/wallpapers keep their own explicit calls).
+    static func sendJPEG(_ data: Data) -> Data {
+        highQualitySends ? downscaledJPEG(data, maxDimension: 2048, quality: 0.9)
+                         : downscaledJPEG(data)
+    }
+
     static func downscaledJPEG(_ data: Data, maxDimension: CGFloat = 1600, quality: CGFloat = 0.72) -> Data {
         guard let img = UIImage(data: data) else { return data }
         let longEdge = max(img.size.width, img.size.height)
@@ -455,7 +467,7 @@ enum ChatService {
 
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "") async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
-        let data = downscaledJPEG(rawData)
+        let data = sendJPEG(rawData)
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -554,7 +566,7 @@ enum ChatService {
         // Upload + seal every photo (natural aspect kept for the grid).
         var items: [[String: Any]] = []
         for (i, raw) in images.enumerated() {
-            let data = downscaledJPEG(raw)
+            let data = sendJPEG(raw)
             let cipher: Data, meta: EncMeta
             if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members) }
             else {
@@ -646,7 +658,7 @@ enum ChatService {
             switch item {
             case .image(let raw):
                 photoCount += 1
-                let data = downscaledJPEG(raw)
+                let data = sendJPEG(raw)
                 let (cipher, meta) = try await seal(data)
                 let url = try await upload(cipher, "\(i)")
                 if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url) }

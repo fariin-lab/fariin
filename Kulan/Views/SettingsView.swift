@@ -67,6 +67,9 @@ struct SettingsView: View {
                     NavigationLink { PrivacySettingsView() } label: {
                         SettingsRowLabel("Privacy & Security", "ic_privacy")
                     }
+                    NavigationLink { StorageDataView() } label: {
+                        Label("Storage and Data", systemImage: "externaldrive")
+                    }
                 }
 
                 Section {
