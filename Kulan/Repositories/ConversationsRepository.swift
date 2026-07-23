@@ -42,7 +42,10 @@ final class ConversationsRepository {
 
                 // No sort here — every consumer (ChatsView, SearchViews) applies its own
                 // richer comparator (pins, recency). Sorting twice was wasted CPU.
-                let convs = snap.documents.map { Conversation(id: $0.documentID, data: $0.data()) }
+                // .estimate: an offline send leaves updatedAt as a PENDING server timestamp,
+                // which plain data() reads as nil → updatedAtMillis 0 → isCleared() treats the
+                // chat as delete-for-me and it vanishes from the list until the server acks.
+                let convs = snap.documents.map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
                 self.publish(convs)
 
                 // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY

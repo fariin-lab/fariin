@@ -65,7 +65,7 @@ final class CallsRepository {
 
         let convSnap = try? await database.collection("conversations")
             .whereField("users", arrayContains: me).getDocuments()
-        let convs = (convSnap?.documents ?? []).map { Conversation(id: $0.documentID, data: $0.data()) }
+        let convs = (convSnap?.documents ?? []).map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
 
         // Fetch every chat's call records CONCURRENTLY (was sequential = N round-trips in
         // series). Each task builds its own CallEntry list off-main; results merged after.
