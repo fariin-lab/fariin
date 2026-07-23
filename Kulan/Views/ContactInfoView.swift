@@ -45,8 +45,8 @@ struct ContactInfoView: View {
     @State private var localName: String?       // local custom name (Edit) — device-only, never sent
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
-    @State private var showProfilePhoto = false   // tap the hero avatar → full-screen photo
-    @Namespace private var profilePhotoNS         // zoom hero: the viewer grows out of the avatar circle
+    @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
+    @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
@@ -68,7 +68,18 @@ struct ContactInfoView: View {
     }
 
     // Split into layers so the type-checker doesn't time out on one giant modifier chain.
-    var body: some View { withAlerts }
+    var body: some View {
+        withAlerts
+            // In-place viewer (Telegram model, user request): the photo grows OUT of the avatar
+            // circle and closes back INTO it — never a page. An overlay (not a cover) so the
+            // profile stays visible behind and the drag can melt the white away.
+            .overlay {
+                if showProfilePhoto {
+                    ProfilePhotoViewer(name: shownName, photoUrl: photoUrl ?? "",
+                                       sourceFrame: avatarFrame, isPresented: $showProfilePhoto)
+                }
+            }
+    }
 
     @ViewBuilder private var sections: some View {
         hero
@@ -131,7 +142,7 @@ struct ContactInfoView: View {
         .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        .toolbar(showProfilePhoto ? .hidden : .visible, for: .navigationBar)   // photo viewer owns the screen
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(false)
         .toolbar { navTrailing }
@@ -149,12 +160,6 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
-            .fullScreenCover(isPresented: $showProfilePhoto) {
-                ProfilePhotoViewer(name: shownName, photoUrl: photoUrl ?? "")
-                    // Native zoom hero: the big circle GROWS out of the small avatar and the
-                    // dismiss shrinks back into it (same mechanism as the story viewer).
-                    .navigationTransition(.zoom(sourceID: "profile-photo", in: profilePhotoNS))
-            }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
@@ -351,7 +356,10 @@ struct ContactInfoView: View {
         VStack(spacing: 6) {
             AvatarView(name: shownName, photoUrl: photoUrl, size: 88)
                 .onTapGesture { if photoUrl?.isEmpty == false { showProfilePhoto = true } }
-                .matchedTransitionSource(id: "profile-photo", in: profilePhotoNS)
+                // The viewer IS this avatar while open — hide the original so the morph reads
+                // as one circle leaving and returning, not a copy floating over it.
+                .opacity(showProfilePhoto ? 0 : 1)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
@@ -551,74 +559,90 @@ struct SharedMediaGridView: View {
     }
 }
 
-// Full-screen profile-photo viewer (tap the hero avatar): the photo as a big CIRCLE on the THEME
-// background — white page in light mode, black in dark (Signal's profile-photo look; the boxy
-// full-bleed style is what we avoid here). Chat media keeps its own always-black viewer — that's
-// for real photos, this is a portrait. Profile photos are plain URLs (not E2EE) served from the
-// same DiskImageCache AvatarView fills, so it opens instantly. Pinch, drag, X, or tap to close.
+// In-place profile-photo viewer (tap the hero avatar). Telegram model, per the user's request:
+// the circle GROWS out of the avatar, stays a circle the whole time, and closes back INTO the
+// avatar — never presented as a page/cover. While the finger holds and moves the photo (or
+// swipes down), the white theme backdrop melts away with drag distance so the profile shows
+// through behind; release far enough closes into the avatar, otherwise it springs back.
+// Chat media keeps its own always-black viewer — that's for real photos, this is a portrait.
+// Profile photos are plain URLs (not E2EE) served from the same DiskImageCache AvatarView
+// fills, so it opens instantly.
 private struct ProfilePhotoViewer: View {
     let name: String
     let photoUrl: String
-    @Environment(\.dismiss) private var dismiss
+    let sourceFrame: CGRect          // the hero avatar, in global coords — morph start AND end
+    @Binding var isPresented: Bool
     @State private var image: UIImage?
-    @State private var zoom: CGFloat = 1
+    @State private var progress: CGFloat = 0   // 0 = sitting on the avatar, 1 = open in the center
     @State private var drag: CGSize = .zero
+    @State private var zoom: CGFloat = 1
+    @State private var closing = false
 
-    // Backdrop dims toward 0.6 as the photo is dragged toward dismissal.
-    private var backdropOpacity: Double { 1 - min(Double(abs(drag.height)) / 500.0, 0.4) }
+    // Solid page when open and resting; the DRAG is what melts the white (fully, not partially).
+    private var backdropOpacity: Double {
+        let dist = Double(sqrt(drag.width * drag.width + drag.height * drag.height))
+        return Double(progress) * max(0, 1 - dist / 260)
+    }
 
     var body: some View {
-        ZStack {
-            // THEME backdrop (white light / black dark), fading as the photo is dragged toward
-            // dismissal. Tapping the empty area outside the photo also closes.
-            Color(.systemBackground).opacity(backdropOpacity).ignoresSafeArea()
-                .onTapGesture { dismiss() }
-            GeometryReader { geo in
-                let d = min(geo.size.width - 40, 360)   // circle diameter, breathing room at the edges
+        GeometryReader { geo in
+            let origin = geo.frame(in: .global).origin
+            let d = min(geo.size.width - 40, 360)   // open diameter, breathing room at the edges
+            // Interpolate the circle between the avatar's frame and the screen center.
+            let size = sourceFrame.width + (d - sourceFrame.width) * progress
+            let srcX = sourceFrame.midX - origin.x, srcY = sourceFrame.midY - origin.y
+            let x = srcX + (geo.size.width / 2 - srcX) * progress + drag.width
+            let y = srcY + (geo.size.height / 2 - srcY) * progress + drag.height
+            ZStack {
+                Color(.systemBackground).opacity(backdropOpacity).ignoresSafeArea()
+                    .onTapGesture { close() }
                 Group {
                     if let image {
                         Image(uiImage: image).resizable().scaledToFill()
-                            .frame(width: d, height: d)
-                            .clipShape(Circle())   // the Signal look: a portrait circle, not a boxy photo
                     } else {
-                        ProgressView().tint(.secondary)
+                        Color(.secondarySystemFill)   // placeholder keeps the morph shape while loading
                     }
                 }
+                .frame(width: size, height: size)
+                .clipShape(Circle())   // round from first frame to last — it never becomes a page
                 .scaleEffect(zoom)
-                .offset(drag)
-                .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                .position(x: x, y: y)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { if !closing { zoom = max(1, $0) } }
+                        .onEnded { _ in withAnimation(.spring(duration: 0.3)) { zoom = 1 } }
+                )
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { if zoom == 1, !closing, progress == 1 { drag = $0.translation } }
+                        .onEnded { v in
+                            guard zoom == 1, !closing else { return }
+                            let dist = sqrt(v.translation.width * v.translation.width
+                                            + v.translation.height * v.translation.height)
+                            if dist > 120 { close() }   // far enough → fly home from right here
+                            else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
+                        }
+                )
+            }
+            .overlay(alignment: .top) {
+                HStack {
+                    Button { close() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(width: 38, height: 38)
+                            .background(Color.primary.opacity(0.08), in: Circle())
+                    }
+                    Spacer()
+                    Text(name).font(.headline).foregroundStyle(.primary)
+                    Spacer()
+                    Color.clear.frame(width: 38, height: 38)   // balances the X so the name stays centered
+                }
+                .padding(.horizontal, 16)
+                .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
+                .animation(.easeOut(duration: 0.15), value: drag == .zero)
             }
         }
-        .gesture(
-            MagnificationGesture()
-                .onChanged { zoom = max(1, $0) }
-                .onEnded { _ in withAnimation(.spring(duration: 0.3)) { zoom = 1 } }
-        )
-        .simultaneousGesture(
-            DragGesture()
-                .onChanged { if zoom == 1 { drag = $0.translation } }
-                .onEnded { v in
-                    if zoom == 1, abs(v.translation.height) > 120 { dismiss() }
-                    else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
-                }
-        )
-        .overlay(alignment: .top) {
-            HStack {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(width: 38, height: 38)
-                        .background(Color.primary.opacity(0.08), in: Circle())
-                }
-                Spacer()
-                Text(name).font(.headline).foregroundStyle(.primary)
-                Spacer()
-                Color.clear.frame(width: 38, height: 38)   // balances the X so the name stays centered
-            }
-            .padding(.horizontal, 16)
-            .opacity(drag == .zero ? 1 : 0)   // chrome hides while dragging to dismiss
-        }
-        .statusBarHidden()
+        .onAppear { withAnimation(.spring(duration: 0.38, bounce: 0.15)) { progress = 1 } }
         .task {
             if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
             guard let url = URL(string: photoUrl),
@@ -627,5 +651,15 @@ private struct ProfilePhotoViewer: View {
             DiskImageCache.shared.store(ui, data: data, for: photoUrl)
             image = ui
         }
+    }
+
+    // Close = the reverse morph: progress and drag animate home TOGETHER, so the circle flies
+    // from wherever the finger left it straight back into the avatar, shrinking as it goes.
+    // The overlay is removed only after the animation lands (the hidden avatar swaps back in).
+    private func close() {
+        guard !closing else { return }
+        closing = true
+        withAnimation(.spring(duration: 0.34, bounce: 0.12)) { progress = 0; drag = .zero; zoom = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { isPresented = false }
     }
 }
