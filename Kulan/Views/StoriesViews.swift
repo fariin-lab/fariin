@@ -398,7 +398,7 @@ struct StoriesRow: View {
                 // Cover = last story, else the profile photo fills the card (user rollback
                 // 2026-07-22: they prefer the full-photo look). No photo at all → centered circle.
                 card(cover: repo.mine?.stories.last?.previewUrl ?? mePhoto,
-                     name: "My Story", avatar: mePhoto,
+                     name: "My Story", avatarName: meName, avatar: mePhoto,
                      seen: StoryPrefs.seenFlags(repo.mine?.stories ?? [], upTo: repo.mine?.lastViewedAt), onBadge: onCompose) {
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
                 }
@@ -408,7 +408,8 @@ struct StoriesRow: View {
                     Button { if let m = repo.mine, !m.stories.isEmpty { onOpen(m) } }
                         label: { Label("Posted Stories", systemImage: "circle.dashed") }
                 } preview: {
-                    coverImage(repo.mine?.stories.last?.previewUrl ?? mePhoto, name: "My Story", avatar: mePhoto)
+                    coverImage(repo.mine?.stories.last?.previewUrl ?? mePhoto, name: "My Story",
+                               avatarName: meName, avatar: mePhoto)
                         .frame(width: cardW, height: cardH)
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }
@@ -442,13 +443,16 @@ struct StoriesRow: View {
         .frame(width: cardW)
     }
 
-    private func card(cover: String?, name: String, avatar: String?, seen: [Bool],
+    // avatarName: what the LETTER CIRCLE falls back to when there's no photo. The my-card's
+    // label is "My Story" but its circle must use the user's real name — label-as-avatar-name
+    // drew a purple "M" while Edit Profile drew the correct initial (user's device report).
+    private func card(cover: String?, name: String, avatarName: String? = nil, avatar: String?, seen: [Bool],
                       onBadge: (() -> Void)? = nil, tap: @escaping () -> Void) -> some View {
         // Button (not onTapGesture) so the caller's .contextMenu long-press fires reliably.
         Button(action: tap) {
         VStack(spacing: 6) {
             ZStack(alignment: .bottomLeading) {
-                coverImage(cover, name: name, avatar: avatar,
+                coverImage(cover, name: name, avatarName: avatarName, avatar: avatar,
                            addBadge: (onBadge != nil && seen.isEmpty) ? onBadge : nil)
                     .frame(width: cardW, height: cardH)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -456,7 +460,7 @@ struct StoriesRow: View {
                     // My Story with a filled cover (story preview OR profile photo): small avatar +
                     // ring + green + badge. With no stories the story ring is absent, so a clean white
                     // border makes the circle stand out against the (identical) photo behind it.
-                    AvatarView(name: name, photoUrl: avatar, size: 34)
+                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: 34)
                         .overlay {
                             if seen.isEmpty {
                                 Circle().strokeBorder(.white, lineWidth: 2)
@@ -479,7 +483,7 @@ struct StoriesRow: View {
                         .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
                         .padding(8)
                 } else if onBadge == nil {
-                    AvatarView(name: name, photoUrl: avatar, size: 32)
+                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: 32)
                         .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
                         .animation(.easeInOut(duration: 0.3), value: seen)
                         .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
@@ -497,8 +501,8 @@ struct StoriesRow: View {
     // addBadge (my card, NO stories yet): WhatsApp add-status look — a centered circle avatar (profile
     // photo or letter fallback) with the green + attached to its corner. Never a duplicated small
     // avatar (the "two Ms" bug), never the profile photo blown up as the card cover.
-    @ViewBuilder private func coverImage(_ cover: String?, name: String, avatar: String?,
-                                         addBadge: (() -> Void)? = nil) -> some View {
+    @ViewBuilder private func coverImage(_ cover: String?, name: String, avatarName: String? = nil,
+                                         avatar: String?, addBadge: (() -> Void)? = nil) -> some View {
         if let cover, !cover.isEmpty {
             StoryImage(url: cover)
         } else {
@@ -506,7 +510,7 @@ struct StoriesRow: View {
                 Color.secondary.opacity(0.2)
                 // Roomy proportions (user polish 2026-07-22): the circle stays well clear of the card
                 // edges — a near-edge circle + big badge read cramped, not pro.
-                AvatarView(name: name, photoUrl: avatar, size: cardW * 0.48)
+                AvatarView(name: avatarName ?? name, photoUrl: avatar, size: cardW * 0.48)
                     .overlay(alignment: .bottomTrailing) {
                         if let addBadge { plusBadge(addBadge, size: 19).offset(x: 3, y: 3) }
                     }
