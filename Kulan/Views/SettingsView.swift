@@ -592,24 +592,43 @@ struct AboutView: View {
 
 // MARK: - Story Settings
 
+// Stories settings, user's reference layout: View Receipts on top, the red opt-out below.
 struct StorySettingsView: View {
     @AppStorage("storyViewReceipts") private var viewReceipts = true
+    @AppStorage("storiesOptedOut") private var optedOut = false
+    @State private var confirmOff = false
 
     var body: some View {
         List {
-            Section {
-                Toggle("Share View Receipts", isOn: $viewReceipts)
-            } footer: {
-                Text("If on, people see when you've viewed their status, and you can see who viewed yours. If off, neither is shared.")
+            if !optedOut {
+                Section {
+                    Toggle("View Receipts", isOn: $viewReceipts).tint(.green)
+                } footer: {
+                    Text("See and share when stories are viewed. If disabled, you won't see when others view your stories.")
+                }
             }
             Section {
-                LabeledContent("Who can see my status", value: "Your chats")
+                if optedOut {
+                    Button("Turn On Stories") {
+                        withAnimation { optedOut = false }
+                    }
+                } else {
+                    Button("Turn Off Stories", role: .destructive) { confirmOff = true }
+                }
             } footer: {
-                Text("Your status is visible for 24 hours to everyone you've chatted with, then it's deleted automatically.")
+                Text(optedOut
+                     ? "Stories are off. Turn them back on to share and view stories again."
+                     : "If you opt out of stories you will no longer be able to share or view stories.")
             }
         }
         .navigationTitle("Stories")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Turn off stories?", isPresented: $confirmOff) {
+            Button("Cancel", role: .cancel) {}
+            Button("Turn Off", role: .destructive) { withAnimation { optedOut = true } }
+        } message: {
+            Text("The stories row disappears and you won't share or view stories. Any story you already posted still expires on its own after 24 hours.")
+        }
     }
 }
 

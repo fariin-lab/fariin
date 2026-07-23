@@ -540,6 +540,9 @@ struct ChatsView: View {
     // scroll, and the List gets a matching top margin so rows start below it.
     @State private var chatScrollY: CGFloat = 0
     @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
+    // Stories opt-out (Settings > Stories > Turn Off Stories): the row disappears and chat-row
+    // rings go dark — the whole surface, not a hidden-but-alive row.
+    @AppStorage("storiesOptedOut") private var storiesOptedOut = false
 
     // Welcome empty state: icon + copy + the three ways to get a first chat going.
     // Reuses the existing flows (NewChatView search, MyQRView, Settings' invite text).
@@ -612,6 +615,7 @@ struct ChatsView: View {
     // Per-segment seen flags for the 1:1 peer's stories (empty = no active story → no ring).
     private func storySeen(_ conv: Conversation) -> [Bool] {
         guard !conv.isGroup,
+              !UserDefaults.standard.bool(forKey: "storiesOptedOut"),   // opted out: no rings anywhere
               !StoryPrefs.isHidden(conv.otherUid(me)),   // hidden author: no ring on the chat-list avatar
               let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) })
         else { return [] }
@@ -913,7 +917,7 @@ struct ChatsView: View {
                     .environment(\.editMode, .constant(selecting ? .active : .inactive))
                     // Rows start below the stories row; as the list scrolls, the row above is
                     // offset by the same amount, so both move as ONE scroll surface.
-                    .contentMargins(.top, storiesRowHeight, for: .scrollContent)
+                    .contentMargins(.top, storiesOptedOut ? 8 : storiesRowHeight, for: .scrollContent)
                     // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
                     // (its transparent margins otherwise show + tap-through to a row behind the pill).
                     .contentMargins(.bottom, 28, for: .scrollContent)
@@ -928,6 +932,7 @@ struct ChatsView: View {
 
                       // Stories row stays OUTSIDE the List so EACH card long-presses on its
                       // own. Inside a List, the whole row lifts as one cell (the bug). (Build 147.)
+                      if !storiesOptedOut {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                  storyNS: storyNS,
                                  onCompose: { showCompose = true },
@@ -953,6 +958,7 @@ struct ChatsView: View {
                             let t = (chatScrollY - h * 0.45) / (h * 0.45)
                             return 1 - min(1, max(0, t))
                         }())
+                      }   // if !storiesOptedOut
                     }   // ZStack (stories row scrolling in sync above the list)
                     // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
                     // only when truly unfiltered; a filtered empty result says so instead.
