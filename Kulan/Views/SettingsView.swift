@@ -222,23 +222,9 @@ struct AccountSettingsView: View {
 
     var body: some View {
         List {
-            // Profile header (native grouped, clear background).
-            Section {
-                VStack(spacing: 8) {
-                    AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 84)
-                    Text(profile.me?.name ?? "You").font(.title2.weight(.bold))
-                    if let h = profile.me?.handle, !h.isEmpty {
-                        Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .listRowBackground(Color.clear)
-            }
-
-            // No profile fields here (username/name/bio/photo all live in Edit Profile, reached
-            // from the Settings header). Account is only data + session actions, so it doesn't
-            // duplicate the profile editor.
+            // No avatar header and no profile fields here (username/name/bio/photo all live in
+            // Edit Profile, reached from the Settings header). Account is ONLY data + session
+            // actions — a settings page, not profile management (user direction 2026-07-22).
             Section {
                 Button { Task { await exportData() } } label: {
                     HStack {
