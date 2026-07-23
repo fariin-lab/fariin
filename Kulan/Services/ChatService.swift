@@ -357,15 +357,26 @@ enum ChatService {
         let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
         let convRef = db.collection("conversations").document(cid)
 
+        // Brand-new chat? (local check — the repo mirrors the server list). The privacy
+        // setting "Disappearing Messages for new chats" only applies to chats born here.
+        let isNewConv = await MainActor.run {
+            !ConversationsRepository.shared.conversations.contains { $0.id == cid }
+        }
+
         // Ensure the conversation exists BEFORE the message. The rules require
         // convData().users to authorize a message create; on a brand-new chat the
         // create otherwise loses the race and is rolled back server-side (message
         // "sends" locally then silently vanishes). Awaiting this first send keeps
         // the writes ordered so the conv is committed before the message.
-        try await convRef.setData([
+        var convSeed: [String: Any] = [
             "users": [uid, other],
             "updatedAt": FieldValue.serverTimestamp(),
-        ], merge: true)
+        ]
+        if isNewConv {
+            let def = UserDefaults.standard.integer(forKey: "defaultDisappearSeconds")
+            if def > 0 { convSeed["disappearSeconds"] = def }
+        }
+        try await convRef.setData(convSeed, merge: true)
 
         let msgRef = convRef.collection("messages").document()
         let batch = db.batch()

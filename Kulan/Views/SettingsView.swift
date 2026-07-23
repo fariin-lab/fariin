@@ -461,12 +461,37 @@ struct PrivacySettingsView: View {
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
     @AppStorage("shareLastSeen") private var shareLastSeen = true
+    @AppStorage("defaultDisappearSeconds") private var defaultDisappear = 0
+    @State private var showDefaultDisappear = false
     var body: some View {
         List {
-            // (Every experimental toggle is gone from this page: the standard message list became
-            // THE list 2026-07-11, the Telegram-engine test was removed after its comparison, and
-            // the Telegram-media-open test toggle was retired 2026-07-23 — media keeps the system
-            // zoom; the dormant TG path in ThreadView is hard-off.)
+            // Page order follows the user's reference (2026-07-23), REAL rows only — no
+            // Two-Step/Passkeys (anonymous auth has no password), no per-field audience
+            // pickers (no server support yet). Experimental toggles are all gone (history
+            // in git: standard list 07-11, TG engine, TG media open 07-23).
+            Section {
+                NavigationLink { BlockedUsersView() } label: {
+                    HStack {
+                        Label("Blocked Users", systemImage: "hand.raised")
+                        Spacer()
+                        Text("\(blockedCount)").foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section {
+                Button { showDefaultDisappear = true } label: {
+                    HStack {
+                        Label("Disappearing Messages", systemImage: "timer").foregroundStyle(.primary)
+                        Spacer()
+                        Text(ChatService.disappearLabel(defaultDisappear)).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                }
+            } footer: {
+                Text("Automatically delete messages for everyone after a period of time in all new chats you start. Chats you already have keep their own setting.")
+            }
+
             Section {
                 Toggle(isOn: $readReceipts) { Label("Read Receipts", systemImage: "checkmark.circle") }.tint(.green)
                 Toggle(isOn: $typingIndicators) { Label("Typing Indicators", systemImage: "ellipsis.bubble") }.tint(.green)
@@ -476,13 +501,6 @@ struct PrivacySettingsView: View {
             }
 
             Section {
-                NavigationLink { BlockedUsersView() } label: {
-                    HStack {
-                        Label("Blocked Users", systemImage: "hand.raised")
-                        Spacer()
-                        Text("\(blockedCount)").foregroundStyle(.secondary)
-                    }
-                }
                 NavigationLink { PhoneNumberPrivacyView() } label: {
                     Label("Phone Number", systemImage: "phone")
                 }
@@ -511,6 +529,9 @@ struct PrivacySettingsView: View {
         }
         .navigationTitle("Privacy & Security")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showDefaultDisappear) {
+            DisappearingMessagesView(cid: "", current: defaultDisappear) { defaultDisappear = $0 }
+        }
     }
 }
 
