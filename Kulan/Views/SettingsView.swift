@@ -76,7 +76,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Button { showQR = true } label: { SettingsRowLabel("My QR Code", "ic_qr") }
+                    // My QR Code lives in the top-left toolbar button — no duplicate row here.
                     ShareLink(item: inviteText) { Label("Invite Friends", systemImage: "person.badge.plus") }
                     NavigationLink { AboutView() } label: {
                         Label("Help & About", systemImage: "questionmark.circle")

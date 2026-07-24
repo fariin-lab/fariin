@@ -661,9 +661,9 @@ struct ChatsView: View {
         .tag(conv.id)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)   // clean, no row lines
-        // Swiped row slides on a PLAIN page-colored surface (Signal look) — without an
-        // explicit row background the swipe platter renders a grey slab behind the row.
-        .listRowBackground(Color(.systemBackground))
+        // NO explicit row background: forcing systemBackground made the swiped row paint a
+        // white slab OVER its own content (blank row on swipe, user report). The native
+        // swipe platter (grey) is correct and keeps the row content visible.
         .moveDisabled(true)   // reordering removed — pinned chats stay fixed
         // Full-swipe enabled like the leading (Pin) edge. The FIRST action is what a full
         // swipe triggers, so Archive leads; Mute/Delete are still revealed for a tap.
@@ -1249,7 +1249,8 @@ struct ArchivedChatsView: View {
                             .tag(conv.id)
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
-                            .listRowBackground(Color(.systemBackground))   // no grey slab on swipe (Signal look)
+                            // Native swipe platter (grey) — no white listRowBackground override
+                            // that painted over the row content on swipe.
                             .swipeActions(edge: .trailing) {
                                 Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
                                     Label("Unarchive", systemImage: "tray.and.arrow.up")
