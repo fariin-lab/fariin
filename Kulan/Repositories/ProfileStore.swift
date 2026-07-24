@@ -74,7 +74,20 @@ final class ProfileStore {
     /// Permanently delete the account (Apple requires in-app deletion): removes
     /// the profile doc and the Firebase auth user.
     func deleteAccount() async throws {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
+        guard let user = Auth.auth().currentUser else { return }
+        let uid = user.uid
+
+        // PRE-FLIGHT: Firebase refuses `user.delete()` unless the sign-in is recent (~5 min),
+        // which is the normal case for a real deletion. This used to be discovered only AFTER
+        // the stories/photo/profile doc had already been destroyed, leaving the account
+        // half-deleted and unrecoverable: data gone, account alive, user stuck in onboarding.
+        // Check FIRST and bail with a clear instruction while everything is still intact.
+        let lastSignIn = user.metadata.lastSignInDate ?? .distantPast
+        guard Date().timeIntervalSince(lastSignIn) < 4 * 60 else {
+            throw NSError(domain: "Kulan", code: 17014, userInfo: [NSLocalizedDescriptionKey:
+                "For your security, deleting an account needs a fresh sign-in. Sign out, sign back in, then delete — nothing has been deleted yet."])
+        }
+
         // Remove the content I posted BEFORE the account goes away, so nothing of mine
         // stays visible to others (App Store 5.1.1(v) — deletion must remove my data).
         await StoriesService.shared.deleteAllMine()
@@ -87,7 +100,11 @@ final class ProfileStore {
             }
         }
         try? await db.collection("users").document(uid).delete()
-        try await Auth.auth().currentUser?.delete()
+        try await user.delete()
+        // The account is gone for good, so its private key has nothing left to decrypt —
+        // remove it rather than leaving it on the device. (Sign-out deliberately KEEPS the key;
+        // only real deletion destroys it.)
+        Crypto.shared.destroyIdentity(uid: uid)
         me = nil
     }
 

@@ -55,8 +55,17 @@ final class Crypto {
 
     private let sodium = Sodium()
     private let db = Firestore.firestore()
-    private static let skKeychainKey = "kulan_secret_key_v1"
-    private static let pkKeychainKey = "kulan_public_key_v1"
+    // Legacy APP-SCOPED key names (one keypair per device, whoever was signed in). Kept only so
+    // existing installs can migrate their real key to the per-uid slot below — see initKeys().
+    private static let legacySkKey = "kulan_secret_key_v1"
+    private static let legacyPkKey = "kulan_public_key_v1"
+
+    // PER-ACCOUNT keys. Scoping by uid is what makes sign-out safe: a different account simply
+    // finds no entry and generates its own keypair, so we no longer have to DELETE keys on
+    // sign-out — which used to make every past message permanently unreadable if you ever signed
+    // back into the same account.
+    private static func skKeychainKey(_ uid: String) -> String { "kulan_secret_key_v1.\(uid)" }
+    private static func pkKeychainKey(_ uid: String) -> String { "kulan_public_key_v1.\(uid)" }
 
     // In-memory key state (set by ensureReady / preloadKey; read by the sync `decrypt`).
     private var myPublicKey: Bytes?
@@ -94,12 +103,15 @@ final class Crypto {
                     if let d = Data(base64Encoded: b64) { pubCache[uid] = Bytes(d) }
                 }
             }
-            if mySecretKey == nil,
-               let skB64 = Keychain.get(Self.skKeychainKey), let pkB64 = Keychain.get(Self.pkKeychainKey),
+            // Per-account keys: only load a key when we know WHOSE it is (loading blind could
+            // hand one account another account's identity).
+            if mySecretKey == nil, let uid = currentUid(),
+               let skB64 = Keychain.get(Self.skKeychainKey(uid)) ?? Keychain.get(Self.legacySkKey),
+               let pkB64 = Keychain.get(Self.pkKeychainKey(uid)) ?? Keychain.get(Self.legacyPkKey),
                let sk = Data(base64Encoded: skB64), let pk = Data(base64Encoded: pkB64),
                sk.count == sodium.box.SecretKeyBytes {
                 mySecretKey = Bytes(sk); myPublicKey = Bytes(pk)
-                if let uid = currentUid() { pubCache[uid] = Bytes(pk) }
+                pubCache[uid] = Bytes(pk)
             }
         }
     }
@@ -133,15 +145,29 @@ final class Crypto {
                           userInfo: [NSLocalizedDescriptionKey: "ensureReady() called before sign-in"])
         }
 
-        // Load existing keypair from Keychain, or generate + persist a new one.
+        // Load THIS ACCOUNT's keypair from the Keychain, or generate + persist a new one.
         let skBytes: Bytes, pkBytes: Bytes
-        if let skB64 = Keychain.get(Self.skKeychainKey),
-           let pkB64 = Keychain.get(Self.pkKeychainKey),
+        if let skB64 = Keychain.get(Self.skKeychainKey(uid)),
+           let pkB64 = Keychain.get(Self.pkKeychainKey(uid)),
            let sk = Data(base64Encoded: skB64),
            let pk = Data(base64Encoded: pkB64),
            sk.count == sodium.box.SecretKeyBytes {
             skBytes = Bytes(sk)
             pkBytes = Bytes(pk)
+        } else if let skB64 = Keychain.get(Self.legacySkKey),
+                  let pkB64 = Keychain.get(Self.legacyPkKey),
+                  let sk = Data(base64Encoded: skB64),
+                  let pk = Data(base64Encoded: pkB64),
+                  sk.count == sodium.box.SecretKeyBytes {
+            // MIGRATION (one-time, existing installs): the device-wide key belongs to whoever is
+            // signed in right now — that's this uid. Claim it into their per-account slot so their
+            // history stays readable, then drop the legacy entry so no LATER account can adopt it.
+            skBytes = Bytes(sk)
+            pkBytes = Bytes(pk)
+            Keychain.set(Self.skKeychainKey(uid), skB64)
+            Keychain.set(Self.pkKeychainKey(uid), pkB64)
+            Keychain.delete(Self.legacySkKey)
+            Keychain.delete(Self.legacyPkKey)
         } else {
             guard let kp = sodium.box.keyPair() else {
                 throw NSError(domain: "Crypto", code: 2,
@@ -149,8 +175,8 @@ final class Crypto {
             }
             skBytes = kp.secretKey
             pkBytes = kp.publicKey
-            Keychain.set(Self.skKeychainKey, Data(kp.secretKey).base64EncodedString())
-            Keychain.set(Self.pkKeychainKey, Data(kp.publicKey).base64EncodedString())
+            Keychain.set(Self.skKeychainKey(uid), Data(kp.secretKey).base64EncodedString())
+            Keychain.set(Self.pkKeychainKey(uid), Data(kp.publicKey).base64EncodedString())
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
@@ -185,11 +211,15 @@ final class Crypto {
         await Self.publishKeyIfChanged(db: db, uid: uid, b64: Data(pk).base64EncodedString())
     }
 
-    /// Sign-out/delete: forget this account's E2EE identity so the NEXT account on this
-    /// device generates a fresh keypair. The Keychain keys are app-scoped, not per-uid —
-    /// without this a new sign-up silently reused (and re-published) the previous
-    /// account's keypair. Anonymous auth can never sign back into the old account, so
-    /// nothing recoverable is lost.
+    /// Sign-out: forget the in-memory E2EE identity so the next account starts clean.
+    ///
+    /// The KEYCHAIN KEY IS DELIBERATELY KEPT. Keys are per-uid now, so the next account
+    /// simply finds no entry of its own and generates a fresh keypair — which is what deleting
+    /// used to accomplish. Deleting was also destroying history: signing out and back into the
+    /// SAME account regenerated a keypair and republished it, leaving every earlier message
+    /// permanently undecryptable. Keeping the key means sign-out is reversible, as users expect.
+    ///
+    /// The account's key IS removed on real account deletion — see `destroyIdentity(uid:)`.
     func wipeIdentity() {
         lock.withLock {
             mySecretKey = nil; myPublicKey = nil
@@ -197,9 +227,17 @@ final class Crypto {
             readyTask = nil
             didWarm = false
         }
-        Keychain.delete(Self.skKeychainKey)
-        Keychain.delete(Self.pkKeychainKey)
-        UserDefaults.standard.removeObject(forKey: Self.pubKeysDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: Self.pubKeysDefaultsKey)   // cache of others' PUBLIC keys
+    }
+
+    /// Account DELETION: the account is gone for good, so its private key should go too
+    /// (nothing is left to decrypt, and leaving it on the device is needless exposure).
+    func destroyIdentity(uid: String) {
+        Keychain.delete(Self.skKeychainKey(uid))
+        Keychain.delete(Self.pkKeychainKey(uid))
+        Keychain.delete(Self.legacySkKey)
+        Keychain.delete(Self.legacyPkKey)
+        wipeIdentity()
     }
 
     /// My identity public key (Curve25519), for the safety-number screen. nil until
