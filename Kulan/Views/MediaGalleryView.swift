@@ -12,23 +12,33 @@ extension Notification.Name { static let goToMessage = Notification.Name("goToMe
 // SwiftUI views that read/write it stay data-race free.
 @MainActor enum GalleryCache { static var store: [String: [Message]] = [:] }
 
-// Full-screen shared-content gallery, PUSHED (not a sheet). Three tabs — Media,
-// Audio, Links — with a filter menu on Media/Audio, long-press context menus, and a selection mode
-// with a bottom Share / count / Delete toolbar. Links have no filter and no selection.
+// Full-screen shared-content gallery, PUSHED (not a sheet). An "All Media" header with a live
+// photo/video count and a filter button, then five tabs — Media, Files, Voice, Links, GIFs — with
+// time-grouped sections, long-press context menus, and a selection mode with a bottom Share / count /
+// Delete toolbar.
 struct MediaGalleryView: View {
     let cid: String
     let title: String
     let photoUrl: String?
 
-    enum Tab: Hashable { case media, audio, links, docs }
-    enum MediaFilter: Hashable { case all, photos, videos, gifs }
-    enum AudioFilter: Hashable { case all, voice, files }
+    enum Tab: Hashable, CaseIterable {
+        case media, files, voice, links, gifs
+        var label: String {
+            switch self {
+            case .media: return "Media"
+            case .files: return "Files"
+            case .voice: return "Voice"
+            case .links: return "Links"
+            case .gifs:  return "GIFs"
+            }
+        }
+    }
+    enum MediaFilter: Hashable { case all, photos, videos }
 
     @State private var all: [Message] = []
     @State private var loaded = false
     @State private var tab: Tab = .media
     @State private var mediaFilter: MediaFilter = .all
-    @State private var audioFilter: AudioFilter = .all
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var viewerImage: Message?
@@ -41,71 +51,124 @@ struct MediaGalleryView: View {
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
-    // MARK: - Derived lists
+    // MARK: - Derived lists (gifs get their own tab, so they're excluded from Media)
 
     private var mediaItems: [Message] {
-        all.filter { $0.isImage || $0.isVideo || $0.isGif }.filter { m in
+        all.filter { ($0.isImage || $0.isVideo) && !$0.isGif }.filter { m in
             switch mediaFilter {
             case .all:    return true
             case .photos: return m.isImage
             case .videos: return m.isVideo
-            case .gifs:   return m.isGif
             }
         }
     }
-    private var audioItems: [Message] {
-        all.filter { $0.isAudio }.filter { _ in
-            switch audioFilter { case .all, .voice: return true; case .files: return false }
-        }
-    }
+    private var gifItems: [Message]  { all.filter { $0.isGif } }
+    private var voiceItems: [Message] { all.filter { $0.isAudio } }
+    private var fileItems: [Message]  { all.filter { $0.isFile } }
     private var linkItems: [Message] {
         all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile && Self.firstURL(in: $0.text) != nil }
     }
-    private var docItems: [Message] { all.filter { $0.isFile } }
+
+    private var photoCount: Int { all.filter { $0.isImage && !$0.isGif }.count }
+    private var videoCount: Int { all.filter { $0.isVideo }.count }
+
+    // The count line under "All Media" reflects the visible tab.
+    private var subtitle: String {
+        func n(_ c: Int, _ one: String) -> String { "\(c) \(one)\(c == 1 ? "" : "s")" }
+        switch tab {
+        case .media: return "\(n(photoCount, "photo")), \(n(videoCount, "video"))"
+        case .files: return n(fileItems.count, "file")
+        case .voice: return n(voiceItems.count, "voice message")
+        case .links: return n(linkItems.count, "link")
+        case .gifs:  return n(gifItems.count, "GIF")
+        }
+    }
 
     var body: some View {
-        content
-            .overlay { loadingOverlay }   // spinner until the first load finishes (no "No media" flash)
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
-            .toolbar { toolbar }
-            .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
-            .task {
-                // STABLE via a persistent-backed store, so reopen is instant:
-                // render the cached list synchronously first — no full-screen spinner on reopen — then
-                // refresh in the background and update the cache. The spinner shows only on the very first
-                // load, when there's nothing cached yet.
-                if let cached = GalleryCache.store[cid] { all = cached; loaded = true }
-                let fresh = await ChatService.galleryContent(cid)
-                all = fresh
-                GalleryCache.store[cid] = fresh
-                loaded = true
+        VStack(spacing: 0) {
+            header
+            if !selecting { tabBar }
+            content
+                .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
+        .toolbar { toolbar }
+        .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
+        .task {
+            // STABLE via a persistent-backed store, so reopen is instant: render the cached list
+            // synchronously first — no full-screen spinner on reopen — then refresh in the background
+            // and update the cache. The spinner shows only on the very first load.
+            if let cached = GalleryCache.store[cid] { all = cached; loaded = true }
+            let fresh = await ChatService.galleryContent(cid)
+            all = fresh
+            GalleryCache.store[cid] = fresh
+            loaded = true
+        }
+        .fullScreenCover(item: $viewerImage) {
+            ImageViewerView(message: $0, in: mediaItems.filter { $0.isImage && !$0.isGif }, cid: cid)
+        }
+        .fullScreenCover(item: $viewerVideo) { VideoPlayerScreen(message: $0, cid: cid) }
+        .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
+            if let items = shareItems { ActivityView(items: items) }
+        }
+        .alert("Delete \(selecting ? "\(selection.count) item\(selection.count == 1 ? "" : "s")" : "item")?",
+               isPresented: $confirmDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { deleteSelected() }
+        } message: { Text("This removes the message from this chat.") }
+    }
+
+    // MARK: - Header ("All Media" + count + filter)
+
+    private var header: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("All Media").font(.largeTitle.weight(.bold))
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
             }
-            .fullScreenCover(item: $viewerImage) {
-                ImageViewerView(message: $0, in: mediaItems.filter { $0.isImage && !$0.isGif }, cid: cid)
+            Spacer()
+            if tab == .media && !selecting { filterMenu }
+        }
+        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 12)
+    }
+
+    // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(Tab.allCases, id: \.self) { t in
+                Button { withAnimation(.easeInOut(duration: 0.2)) { tab = t } } label: {
+                    VStack(spacing: 7) {
+                        Text(t.label)
+                            .font(.subheadline.weight(tab == t ? .semibold : .regular))
+                            .foregroundStyle(tab == t ? Color.primary : Color.secondary)
+                        Rectangle()
+                            .fill(tab == t ? Color.accentColor : Color.clear)
+                            .frame(height: 2.5)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .fullScreenCover(item: $viewerVideo) { VideoPlayerScreen(message: $0, cid: cid) }
-            .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
-                if let items = shareItems { ActivityView(items: items) }
-            }
-            .alert("Delete \(selecting ? "\(selection.count) item\(selection.count == 1 ? "" : "s")" : "item")?",
-                   isPresented: $confirmDelete) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) { deleteSelected() }
-            } message: { Text("This removes the message from this chat.") }
+        }
+        .padding(.top, 2)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     @ViewBuilder private var content: some View {
         switch tab {
-        case .media: mediaGrid
-        case .audio: audioList
+        case .media: grid(mediaItems, emptyIcon: "photo.on.rectangle", emptyText: "No media")
+        case .gifs:  grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs")
+        case .voice: voiceList
         case .links: linksList
-        case .docs:  docsList
+        case .files: filesList
         }
     }
 
-    // Shown until the first load finishes, so the "No media" empty state never flashes while loading.
+    // Shown until the first load finishes, so the empty state never flashes while loading.
     @ViewBuilder private var loadingOverlay: some View {
         if !loaded {
             ProgressView().tint(.secondary)
@@ -113,46 +176,25 @@ struct MediaGalleryView: View {
         }
     }
 
-    // MARK: - Toolbar
+    // MARK: - Toolbar (selection only — the tabs live in the header now)
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         if selecting {
             ToolbarItem(placement: .topBarLeading) {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
-        } else {
-            ToolbarItem(placement: .principal) {
-                Picker("", selection: $tab) {
-                    Text("Media").tag(Tab.media)
-                    Text("Audio").tag(Tab.audio)
-                    Text("Links").tag(Tab.links)
-                    Text("Docs").tag(Tab.docs)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
-            }
-            if tab == .media || tab == .audio {
-                ToolbarItem(placement: .topBarTrailing) { filterMenu }
-            }
         }
     }
 
     private var filterMenu: some View {
         Menu {
-            if tab == .media {
-                filterButton("All Media", mediaFilter == .all) { mediaFilter = .all }
-                filterButton("Photos", mediaFilter == .photos) { mediaFilter = .photos }
-                filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
-                filterButton("GIFs", mediaFilter == .gifs) { mediaFilter = .gifs }
-            } else {
-                filterButton("All Audio", audioFilter == .all) { audioFilter = .all }
-                filterButton("Voice Messages", audioFilter == .voice) { audioFilter = .voice }
-                filterButton("Audio Files", audioFilter == .files) { audioFilter = .files }
-            }
+            filterButton("All Media", mediaFilter == .all) { mediaFilter = .all }
+            filterButton("Photos", mediaFilter == .photos) { mediaFilter = .photos }
+            filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
         } label: {
-            Image(systemName: "line.3.horizontal.decrease")
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 22)).foregroundStyle(.primary)
         }
-        .tint(.primary)
     }
     private func filterButton(_ title: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) { if on { Label(title, systemImage: "checkmark") } else { Text(title) } }
@@ -185,15 +227,15 @@ struct MediaGalleryView: View {
         .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
-    // MARK: - Media grid
+    // MARK: - Media / GIF grid (time-grouped)
 
-    private var mediaGrid: some View {
+    private func grid(_ items: [Message], emptyIcon: String, emptyText: String) -> some View {
         ScrollView {
-            if loaded && mediaItems.isEmpty { emptyState("photo.on.rectangle", "No media") }
+            if loaded && items.isEmpty { emptyState(emptyIcon, emptyText) }
             LazyVStack(alignment: .leading, spacing: 22) {
-                ForEach(mediaSections, id: \.title) { section in
+                ForEach(sections(items), id: \.title) { section in
                     Text(section.title)
-                        .font(.title2.weight(.bold))
+                        .font(.title3.weight(.bold))
                         .padding(.horizontal, 14).padding(.top, 6)
                     LazyVGrid(columns: cols, spacing: 2) {
                         ForEach(section.items) { m in mediaCell(m) }
@@ -204,34 +246,32 @@ struct MediaGalleryView: View {
         }
     }
 
-    // Group media into month sections ("This Month", "June", "June 2024") for date headers, keeping
-    // the existing (newest-first) order.
-    private var mediaSections: [(title: String, items: [Message])] {
+    // Group items into date sections ("Today", "Yesterday", "This Month", "June", "June 2024"),
+    // keeping the existing newest-first order.
+    private func sections(_ items: [Message]) -> [(title: String, items: [Message])] {
         let cal = Calendar.current
-        var groups: [(key: DateComponents, items: [Message])] = []
-        for m in mediaItems {
-            let comps = cal.dateComponents([.year, .month], from: m.createdAt)
-            if let last = groups.last, last.key == comps {
-                groups[groups.count - 1].items.append(m)
-            } else {
-                groups.append((comps, [m]))
-            }
-        }
-        let now = cal.dateComponents([.year, .month], from: Date())
+        var groups: [(title: String, items: [Message])] = []
         let monthFmt = DateFormatter(); monthFmt.dateFormat = "LLLL"
         let monthYearFmt = DateFormatter(); monthYearFmt.dateFormat = "LLLL yyyy"
-        return groups.map { g in
-            let date = cal.date(from: g.key) ?? Date()
-            let title: String
-            if g.key.year == now.year && g.key.month == now.month {
-                title = "This Month"
-            } else if g.key.year == now.year {
-                title = monthFmt.string(from: date)
-            } else {
-                title = monthYearFmt.string(from: date)
-            }
-            return (title, g.items)
+        let now = Date()
+        func bucket(_ d: Date) -> String {
+            if cal.isDateInToday(d) { return "Today" }
+            if cal.isDateInYesterday(d) { return "Yesterday" }
+            let c = cal.dateComponents([.year, .month], from: d)
+            let n = cal.dateComponents([.year, .month], from: now)
+            if c.year == n.year && c.month == n.month { return "This Month" }
+            if c.year == n.year { return monthFmt.string(from: d) }
+            return monthYearFmt.string(from: d)
         }
+        for m in items {
+            let title = bucket(m.createdAt)
+            if let last = groups.last, last.title == title {
+                groups[groups.count - 1].items.append(m)
+            } else {
+                groups.append((title, [m]))
+            }
+        }
+        return groups
     }
 
     private func mediaCell(_ m: Message) -> some View {
@@ -247,6 +287,14 @@ struct MediaGalleryView: View {
                 if m.isVideo {
                     Image(systemName: "play.circle.fill").font(.system(size: 26))
                         .foregroundStyle(.white.opacity(0.95)).shadow(radius: 3)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if m.isGif {
+                    Text("GIF").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                        .padding(5)
                 }
             }
             .overlay {
@@ -278,21 +326,21 @@ struct MediaGalleryView: View {
         }
     }
 
-    // MARK: - Audio list
+    // MARK: - Voice list
 
-    private var audioList: some View {
+    private var voiceList: some View {
         ScrollView {
-            if loaded && audioItems.isEmpty { emptyState("mic", "No audio") }
+            if loaded && voiceItems.isEmpty { emptyState("mic", "No voice messages") }
             LazyVStack(spacing: 0) {
-                ForEach(audioItems) { m in
-                    audioRow(m)
+                ForEach(voiceItems) { m in
+                    voiceRow(m)
                     Divider().padding(.leading, 64)
                 }
             }
         }
     }
 
-    private func audioRow(_ m: Message) -> some View {
+    private func voiceRow(_ m: Message) -> some View {
         let selected = selection.contains(m.id)
         let me = AuthService.shared.uid ?? ""
         return HStack(spacing: 12) {
@@ -309,8 +357,7 @@ struct MediaGalleryView: View {
                 Spacer()
             } else {
                 // The REAL playable voice player (same one used in chat) — tap the play button to
-                // decrypt + play, scrub the waveform, change speed. (The old row was a static icon with
-                // no playback wired up at all.)
+                // decrypt + play, scrub the waveform, change speed.
                 VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark, plainBackground: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -355,21 +402,21 @@ struct MediaGalleryView: View {
         }
     }
 
-    // MARK: - Docs list (files shared in this chat — WhatsApp's Docs tab)
+    // MARK: - Files list (documents shared in this chat)
 
-    private var docsList: some View {
+    private var filesList: some View {
         ScrollView {
-            if loaded && docItems.isEmpty { emptyState("doc", "No documents") }
+            if loaded && fileItems.isEmpty { emptyState("doc", "No files") }
             LazyVStack(spacing: 0) {
-                ForEach(docItems) { m in
-                    docRow(m)
+                ForEach(fileItems) { m in
+                    fileRow(m)
                     Divider().padding(.leading, 64)
                 }
             }
         }
     }
 
-    private func docRow(_ m: Message) -> some View {
+    private func fileRow(_ m: Message) -> some View {
         Button { goToChat(m) } label: {
             HStack(spacing: 12) {
                 Image(systemName: "doc.fill")
@@ -378,7 +425,7 @@ struct MediaGalleryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(m.fileName ?? "Document")
                         .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
-                    Text(docMeta(m)).font(.caption).foregroundStyle(.secondary)
+                    Text(fileMeta(m)).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text(m.createdAt.formatted(date: .abbreviated, time: .omitted))
@@ -393,12 +440,12 @@ struct MediaGalleryView: View {
         }
     }
 
-    private func docMeta(_ m: Message) -> String {
+    private func fileMeta(_ m: Message) -> String {
         guard let size = m.fileSize, size > 0 else { return "File" }
         return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 
-    // MARK: - Item context menu (media + audio)
+    // MARK: - Item context menu (media + gifs + voice)
 
     @ViewBuilder private func itemMenu(_ m: Message) -> some View {
         Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
@@ -415,6 +462,7 @@ struct MediaGalleryView: View {
     private func tap(_ m: Message) {
         if selecting { toggle(m) }
         else if m.isVideo { viewerVideo = m }
+        else if m.isGif { goToChat(m) }
         else if m.isImage { viewerImage = m }
     }
     private func toggle(_ m: Message) {
