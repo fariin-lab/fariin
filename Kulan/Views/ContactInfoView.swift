@@ -185,7 +185,7 @@ struct ContactInfoView: View {
             // view record (a non-contact may not have write access to the author's story views).
             .fullScreenCover(isPresented: $showPublicStory) {
                 if let pg = publicStory {
-                    StoryViewer(ownSwipeDismiss: true, groups: [pg], anonymous: true,
+                    StoryViewer(group: pg, anonymous: true, ownSwipeDismiss: true,
                                 onClose: { showPublicStory = false })
                         .background(Color.black.ignoresSafeArea())
                 }
