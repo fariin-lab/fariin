@@ -86,12 +86,15 @@ struct MediaGalleryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             if !selecting { tabBar }
             content
                 .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
         }
-        .navigationTitle("")
+        // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
+        // subtitle, the standard circular back button, and a "..." menu on the right — instead of
+        // a custom left-aligned header.
+        .navigationTitle("All Media")
+        .navigationSubtitle(subtitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
         .toolbar { toolbar }
@@ -120,19 +123,7 @@ struct MediaGalleryView: View {
         } message: { Text("This removes the message from this chat.") }
     }
 
-    // MARK: - Header ("All Media" + count + filter)
-
-    private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("All Media").font(.largeTitle.weight(.bold))
-                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if tab == .media && !selecting { filterMenu }
-        }
-        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 12)
-    }
+    // (The old custom header is gone — the native nav bar now carries the title + count.)
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
@@ -190,17 +181,38 @@ struct MediaGalleryView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
+        } else {
+            ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
     }
 
-    private var filterMenu: some View {
+    // "..." menu (user spec): filtering lives here now, plus Select — so the nav bar stays clean
+    // and the same control works on every tab, not just Media.
+    private var moreMenu: some View {
         Menu {
-            filterButton("All Media", mediaFilter == .all) { mediaFilter = .all }
-            filterButton("Photos", mediaFilter == .photos) { mediaFilter = .photos }
-            filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
+            if tab == .media {
+                Section("Show") {
+                    filterButton("All Media", mediaFilter == .all) { mediaFilter = .all }
+                    filterButton("Photos", mediaFilter == .photos) { mediaFilter = .photos }
+                    filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
+                }
+            }
+            if !currentItems.isEmpty {
+                Button { selecting = true } label: { Label("Select", systemImage: "checkmark.circle") }
+            }
         } label: {
-            Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(.system(size: 22)).foregroundStyle(.primary)
+            Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+        }
+    }
+
+    /// Items on the visible tab (drives whether "Select" is offered).
+    private var currentItems: [Message] {
+        switch tab {
+        case .media: return mediaItems
+        case .gifs:  return gifItems
+        case .voice: return voiceItems
+        case .links: return linkItems
+        case .files: return fileItems
         }
     }
     private func filterButton(_ title: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
