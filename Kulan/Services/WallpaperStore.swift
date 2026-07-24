@@ -19,6 +19,8 @@ enum ChatWallpaper: Equatable {
     case none
     case gradient(String)   // gradient id (ChatWallpapers.all)
     case photo(String)      // library photo id (WallpaperStore.libraryIds)
+    case color(UInt)        // a plain solid-colour background (hex)
+    case preset(String)     // a built-in PHOTO wallpaper (WallpaperPresets.all)
 
     // Compact string form for UserDefaults.
     var stored: String {
@@ -26,6 +28,8 @@ enum ChatWallpaper: Equatable {
         case .none:            return "none"
         case .gradient(let g): return "g:\(g)"
         case .photo(let id):   return "p:\(id)"
+        case .color(let hex):  return "c:\(String(format: "%06X", hex))"
+        case .preset(let id):  return "b:\(id)"
         }
     }
     init(stored: String?) {
@@ -33,10 +37,41 @@ enum ChatWallpaper: Equatable {
         case "photo": self = .photo(Self.legacyMarker)   // pre-library format → migrated in wallpaper(for:)
         case let s? where s.hasPrefix("g:"): self = .gradient(String(s.dropFirst(2)))
         case let s? where s.hasPrefix("p:"): self = .photo(String(s.dropFirst(2)))
+        case let s? where s.hasPrefix("c:"): self = .color(UInt(s.dropFirst(2), radix: 16) ?? 0)
+        case let s? where s.hasPrefix("b:"): self = .preset(String(s.dropFirst(2)))
         default: self = .none
         }
     }
     static let legacyMarker = "__legacy__"
+}
+
+// Built-in PHOTO wallpapers — original generated art bundled in the app (Resources/Wallpapers),
+// so "Presets" isn't only gradients. Each has a light + dark file.
+struct WallpaperPreset: Identifiable, Equatable {
+    let id: String        // asset base name in Resources/Wallpapers (e.g. "wp-dunes")
+}
+
+enum WallpaperPresets {
+    static let all: [WallpaperPreset] = [
+        .init(id: "wp-dunes"), .init(id: "wp-ocean"), .init(id: "wp-aurora"),
+        .init(id: "wp-mesh"), .init(id: "wp-night"), .init(id: "wp-doodle"),
+    ]
+}
+
+extension WallpaperPreset {
+    // Bundled JPEG in Resources/Wallpapers, loaded by base name.
+    func image() -> UIImage? {
+        Bundle.main.url(forResource: id, withExtension: "jpg").flatMap { UIImage(contentsOfFile: $0.path) }
+    }
+}
+
+// Solid-colour wallpaper choices (the "Wallpaper Color" grid).
+enum WallpaperColors {
+    static let all: [UInt] = [
+        0x0A0A0A, 0x1C1C1E, 0x2C2C2E, 0x3A3A3C,
+        0x0E2A47, 0x123B24, 0x3A1E2E, 0x2A2340,
+        0xE9E9EE, 0xD6ECFF, 0xDCF3D8, 0xFFE1E6,
+    ]
 }
 
 // A built-in gradient wallpaper with light + dark palettes (so a chat looks right in either mode).
@@ -270,6 +305,17 @@ struct ChatWallpaperBackground: View {
                     .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
             } else {
                 Theme.bg(dark)   // photo deleted from the library → fall back gracefully
+            }
+        case .color(let hex):
+            Color(hex: hex)
+        case .preset(let id):
+            if let img = WallpaperPreset(id: id).image() {
+                Color.clear
+                    .overlay { Image(uiImage: img).resizable().scaledToFill() }
+                    .clipped()
+                    .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+            } else {
+                Theme.bg(dark)
             }
         }
     }

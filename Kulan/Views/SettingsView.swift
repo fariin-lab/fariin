@@ -429,6 +429,12 @@ struct AppearanceSettingsView: View {
             if let img = wallStore.libraryImage(id) {
                 Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
             } else { Color(.secondarySystemGroupedBackground) }
+        case .color(let hex):
+            Color(hex: hex)
+        case .preset(let id):
+            if let img = WallpaperPreset(id: id).image() {
+                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
+            } else { Color(.secondarySystemGroupedBackground) }
         }
     }
 

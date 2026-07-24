@@ -52,6 +52,8 @@ struct WallpaperPickerSheet: View {
         case .none:            return "none"
         case .gradient(let g): return g
         case .photo(let id):   return "p-\(id)"
+        case .color(let hex):  return "c-\(hex)"
+        case .preset(let id):  return "b-\(id)"
         }
     }
 
@@ -61,7 +63,8 @@ struct WallpaperPickerSheet: View {
     private var applyTint: Color {
         switch selected {
         case .gradient(let id): return ChatWallpapers.gradient(id)?.tint ?? Color(hex: 0x3DA1FD)
-        case .photo:            return Color(hex: 0x3DA1FD)
+        case .photo, .preset:   return Color(hex: 0x3DA1FD)
+        case .color(let hex):   return Color(hex: hex)
         case .none:             return selectedColor?.swatch ?? Color.secondary   // colour-only change → tint with it
         }
     }

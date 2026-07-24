@@ -109,29 +109,26 @@ struct ChatWallpaperPage: View {
         let _ = store.version
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    HStack(spacing: 12) {
-                        Text("Choose from Photos").foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                VStack(spacing: 0) {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        row("Choose from Photos")
                     }
-                    .padding(.horizontal, 16).padding(.vertical, 14)
-                    .background(Color(.secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    Divider().padding(.leading, 16)
+                    // A dedicated Wallpaper COLOR page (solid background colour) — distinct from
+                    // the bubble Chat Color (user request).
+                    NavigationLink { WallpaperColorPage() } label: { row("Wallpaper Color") }
+                        .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
                 Text("Presets").font(.title3.weight(.bold)).padding(.horizontal, 4)
                 LazyVGrid(columns: cols, spacing: 10) {
                     presetTile(.none) {
                         Theme.bg(dark)
                     }
-                    ForEach(ChatWallpapers.all) { g in
-                        presetTile(.gradient(g.id)) {
-                            LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
-                        }
-                    }
+                    // Your own imported photos come FIRST (user request), newest first.
                     ForEach(store.libraryIds, id: \.self) { pid in
                         presetTile(.photo(pid)) {
                             Group {
@@ -146,6 +143,22 @@ struct ChatWallpaperPage: View {
                             Button(role: .destructive) { store.deleteFromLibrary(pid) } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                        }
+                    }
+                    // Built-in PHOTO wallpapers.
+                    ForEach(WallpaperPresets.all) { p in
+                        presetTile(.preset(p.id)) {
+                            Group {
+                                if let img = p.image() {
+                                    Image(uiImage: img).resizable().scaledToFill()
+                                } else { Color.secondary.opacity(0.15) }
+                            }
+                        }
+                    }
+                    // Gradient wallpapers.
+                    ForEach(ChatWallpapers.all) { g in
+                        presetTile(.gradient(g.id)) {
+                            LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
                         }
                     }
                 }
@@ -177,6 +190,16 @@ struct ChatWallpaperPage: View {
         ChatWallpaper(stored: UserDefaults.standard.string(forKey: WallpaperStore.defaultKey))
     }
 
+    private func row(_ title: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .contentShape(Rectangle())
+    }
+
     private func presetTile<C: View>(_ w: ChatWallpaper, @ViewBuilder content: () -> C) -> some View {
         Button { previewing = w } label: {
             content()
@@ -200,6 +223,52 @@ struct ChatWallpaperPage: View {
 // ChatWallpaper needs Identifiable for fullScreenCover(item:).
 extension ChatWallpaper: Identifiable {
     var id: String { stored }
+}
+
+// MARK: - Wallpaper Color page (a solid-colour background, distinct from bubble colour)
+
+struct WallpaperColorPage: View {
+    @State private var previewing: ChatWallpaper?
+    private var store: WallpaperStore { .shared }
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 14), count: 4)
+
+    private var current: ChatWallpaper {
+        ChatWallpaper(stored: UserDefaults.standard.string(forKey: WallpaperStore.defaultKey))
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: cols, spacing: 14) {
+                ForEach(WallpaperColors.all, id: \.self) { hex in
+                    Button { previewing = .color(hex) } label: {
+                        Circle().fill(Color(hex: hex))
+                            .frame(height: 68)
+                            .overlay(Circle().strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+                            .overlay {
+                                if current == .color(hex) {
+                                    Image(systemName: "checkmark").font(.system(size: 20, weight: .bold))
+                                        .foregroundStyle(hexIsDark(hex) ? .white : .black)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(18)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(16)
+        }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .navigationTitle("Wallpaper Color")
+        .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $previewing) { WallpaperPreviewScreen(wallpaper: $0) }
+    }
+
+    private func hexIsDark(_ hex: UInt) -> Bool {
+        let r = Double((hex >> 16) & 0xFF), g = Double((hex >> 8) & 0xFF), b = Double(hex & 0xFF)
+        return (0.299*r + 0.587*g + 0.114*b) < 140
+    }
 }
 
 // MARK: - Full-screen wallpaper preview (Blurred + Apply For All Chats)
@@ -280,6 +349,15 @@ struct WallpaperPreviewScreen: View {
             } else { Theme.bg(dark) }
         case .photo(let id):
             if let img = store.libraryImage(id) {
+                Color.clear
+                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 22 : 0) }
+                    .clipped()
+                    .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+            } else { Theme.bg(dark) }
+        case .color(let hex):
+            Color(hex: hex)
+        case .preset(let id):
+            if let img = WallpaperPreset(id: id).image() {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 22 : 0) }
                     .clipped()
@@ -401,6 +479,12 @@ struct ChatColorPage: View {
             if let img = WallpaperStore.shared.libraryImage(id) {
                 Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
             } else { Color(.secondarySystemGroupedBackground) }
+        case .color(let hex):
+            Color(hex: hex)
+        case .preset(let id):
+            if let img = WallpaperPreset(id: id).image() {
+                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
+            } else { Color(.secondarySystemGroupedBackground) }
         }
     }
 
@@ -430,9 +514,9 @@ struct ChatColorPage: View {
 struct AppIconPage: View {
     @State private var current = UIApplication.shared.alternateIconName
 
-    // nil = the primary chrome-on-black icon from the asset catalog.
+    // nil = the primary Midnight (white-on-black) icon from the asset catalog.
     private let icons: [(name: String?, label: String)] = [
-        (nil, "Midnight"), ("icon-ivory", "Ivory"), ("icon-ocean", "Ocean"), ("icon-forest", "Forest"),
+        (nil, "Midnight"), ("icon-blue", "Blue"), ("icon-ivory", "Ivory"), ("icon-chrome", "Chrome"),
     ]
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
 
