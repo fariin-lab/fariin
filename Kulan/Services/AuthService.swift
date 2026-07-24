@@ -183,12 +183,37 @@ final class AuthService: NSObject {
 
     // MARK: - Email
 
+    /// Sign up with email. "Sign up with an account you already have" is NOT a dead end: if the
+    /// email is already registered and the password matches, we just log you in (Apple and Google
+    /// already behave this way, so email now matches them). Only a WRONG password stops you, and
+    /// then the message says exactly what to do.
     func createEmailAccount(email: String, password: String) async throws {
-        let credential = EmailAuthProvider.credential(withEmail: email, password: password)
+        // Anonymous session → LINK, so the existing uid (and every chat/key) is preserved.
+        if let user = Auth.auth().currentUser, user.isAnonymous {
+            do {
+                let result = try await user.link(with: EmailAuthProvider.credential(withEmail: email, password: password))
+                uid = result.user.uid
+                return
+            } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue
+                                        || e.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
+                // Falls through to the create-or-sign-in path below, which logs them into the
+                // existing account when the password is right.
+            }
+        }
         do {
-            try await authenticate(with: credential)
+            // Real creation. (The old code called signIn() with an email credential here, which
+            // does NOT create anything — so a brand-new signed-out user could never sign up by
+            // email at all. That's fixed by using createUser.)
+            let result = try await Auth.auth().createUser(withEmail: email, password: password)
+            uid = result.user.uid
         } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
-            throw AuthFlowError.emailTaken
+            // Already registered → try to just log them in with what they typed.
+            do {
+                let result = try await Auth.auth().signIn(withEmail: email, password: password)
+                uid = result.user.uid
+            } catch {
+                throw AuthFlowError.emailTakenWrongPassword
+            }
         }
     }
 
@@ -280,7 +305,7 @@ extension AuthService: ASWebAuthenticationPresentationContextProviding {
 }
 
 enum AuthFlowError: LocalizedError {
-    case appleFailed, googleFailed, emailTaken
+    case appleFailed, googleFailed, emailTaken, emailTakenWrongPassword
     case notSignedIn, alreadyConnected, alreadyLinkedElsewhere
 
     var errorDescription: String? {
@@ -288,6 +313,8 @@ enum AuthFlowError: LocalizedError {
         case .appleFailed: return "Apple sign-in didn't complete. Please try again."
         case .googleFailed: return "Google sign-in didn't complete. Please try again."
         case .emailTaken: return "That email already has an account. Try logging in instead."
+        case .emailTakenWrongPassword:
+            return "You already have an account with this email, but that password doesn't match. Enter the right password to log in, or tap \"Forgot password?\"."
         case .notSignedIn: return "You're not signed in."
         case .alreadyConnected: return "That's already connected to this account."
         case .alreadyLinkedElsewhere:
