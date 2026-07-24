@@ -83,7 +83,8 @@ jobs:
             Add Story is hidden when you turn stories off.
             The loading screen no longer overlaps the search bar on Calls and Chats.
             New privacy control: Settings > Privacy > Messages lets you choose who can start a chat with you (Everyone, My Contacts, No One).
-            Setting a profile photo now opens a circular move-and-scale cropper so you control the framing.
+            Setting a profile photo now opens a circular move-and-scale cropper so you control the framing, from a single Edit Photo button.
+            Wallpaper preview polish: the close button no longer overlaps the clock, the Blurred option is a softer blur, photo tiles of any size crop evenly, and blurring a photo no longer leaves a duplicate tile.
 
             Please test signing in with Apple and Google on a fresh account, and tell me what feels off.
         run: fastlane beta
