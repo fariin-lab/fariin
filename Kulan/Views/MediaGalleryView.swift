@@ -136,26 +136,33 @@ struct MediaGalleryView: View {
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
+    // Liquid-glass segmented tab bar (user spec): the 5 tabs live inside one glass capsule and the
+    // selected tab rides in its own raised pill — not a flat underline.
     private var tabBar: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ForEach(Tab.allCases, id: \.self) { t in
-                Button { withAnimation(.easeInOut(duration: 0.2)) { tab = t } } label: {
-                    VStack(spacing: 7) {
-                        Text(t.label)
-                            .font(.subheadline.weight(tab == t ? .semibold : .regular))
-                            .foregroundStyle(tab == t ? Color.primary : Color.secondary)
-                        Rectangle()
-                            .fill(tab == t ? Color.accentColor : Color.clear)
-                            .frame(height: 2.5)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
+                Button { withAnimation(.easeInOut(duration: 0.22)) { tab = t } } label: {
+                    Text(t.label)
+                        .font(.subheadline.weight(tab == t ? .semibold : .medium))
+                        .foregroundStyle(tab == t ? Color.primary : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background {
+                            // Selected segment: a raised glass pill inside the bar.
+                            if tab == t {
+                                Capsule(style: .continuous)
+                                    .fill(.primary.opacity(0.14))
+                            }
+                        }
+                        .contentShape(Capsule(style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
         }
+        .padding(5)
+        .liquidGlass(Capsule(style: .continuous), interactive: true)
+        .padding(.horizontal, 16)
         .padding(.top, 2)
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     @ViewBuilder private var content: some View {
