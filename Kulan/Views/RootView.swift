@@ -176,70 +176,144 @@ struct OnboardingView: View {
     @State private var handle = ""
     @State private var saving = false
     @State private var error: String?
+    private enum Field { case name, handle }
+    @FocusState private var focus: Field?
+
+    // Live username validity (client-side only — the taken/not check runs on Continue).
+    private var handleValid: Bool { ChatService.isValidHandle(ChatService.sanitizeHandle(handle)) }
+    private var canContinue: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && handleValid && !saving
+    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("Your name", text: $name)
-                        .textInputAutocapitalization(.words)
-                        // Apple hands over the person's name exactly once, at first
-                        // authorization — prefill it so they just pick a username.
-                        .onAppear {
-                            if name.isEmpty, let n = AuthService.shared.pendingDisplayName {
-                                name = n
+        // Matches the dark sign-up flow this screen follows (the old light Form was a jarring
+        // hand-off from the black Welcome/Apple/Google/Email screens).
+        ZStack {
+            Color.black.ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer().frame(height: 24)
+
+                    // Live avatar preview: their initials + hashed color, exactly how they'll appear
+                    // to everyone else. Fills in as they type, so the profile feels theirs immediately.
+                    AvatarView(name: name.isEmpty ? "?" : name, size: 96)
+                        .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                        .animation(.easeOut(duration: 0.2), value: name)
+
+                    Text("Create your profile")
+                        .font(.system(size: 27, weight: .heavy)).foregroundStyle(.white)
+                        .padding(.top, 18)
+                    Text("This is how people will find and know you on Kulan.")
+                        .font(.subheadline).foregroundStyle(Color(white: 0.55))
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 5).padding(.horizontal, 24)
+
+                    VStack(spacing: 14) {
+                        field("YOUR NAME") {
+                            TextField("", text: $name,
+                                      prompt: Text("e.g. Amina Yusuf").foregroundStyle(Color(white: 0.35)))
+                                .textInputAutocapitalization(.words)
+                                .focused($focus, equals: .name)
+                                .submitLabel(.next)
+                                .onSubmit { focus = .handle }
+                        }
+
+                        field("USERNAME", accessory: {
+                            // Inline validity tick, so the rules are felt rather than read.
+                            if !handle.isEmpty {
+                                Image(systemName: handleValid ? "checkmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(handleValid ? Color.green : Color(white: 0.45))
+                                    .font(.system(size: 17))
+                            }
+                        }) {
+                            HStack(spacing: 2) {
+                                Text("@").foregroundStyle(Color(white: 0.45))
+                                TextField("", text: $handle,
+                                          prompt: Text("username").foregroundStyle(Color(white: 0.35)))
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                    .focused($focus, equals: .handle)
+                                    .submitLabel(.done)
+                                    .onChange(of: handle) { _, v in
+                                        let clean = ChatService.sanitizeHandle(v)
+                                        if clean != v { handle = clean }
+                                    }
                             }
                         }
-                    HStack(spacing: 1) {
-                        Text("@").foregroundStyle(.secondary)
-                        TextField("Username", text: $handle)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .onChange(of: handle) { _, v in
-                                let clean = ChatService.sanitizeHandle(v)
-                                if clean != v { handle = clean }
-                            }
+
+                        Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
+                            .font(.caption).foregroundStyle(Color(white: 0.4))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } header: {
-                    Text("Create your profile")
-                } footer: {
-                    Text("Username: letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
-                }
-                if let error {
-                    Section { Text(error).foregroundStyle(.red) }
-                }
-            }
-            .navigationTitle("Welcome to Kulan")
-            .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 12) {
+                    .padding(.top, 26)
+
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 14)
+                    }
+
+                    Spacer(minLength: 28)
+
                     Button {
                         Task { await save() }
                     } label: {
-                        if saving {
-                            ProgressView().frame(maxWidth: .infinity)
-                        } else {
-                            Text("Continue").fontWeight(.semibold).frame(maxWidth: .infinity)
+                        Group {
+                            if saving {
+                                ProgressView().tint(.black)
+                            } else {
+                                Text("Continue").font(.system(size: 18, weight: .bold)).foregroundStyle(.black)
+                            }
                         }
+                        .frame(maxWidth: .infinity).frame(height: 54)
+                        .background(.white, in: Capsule())
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(saving)
+                    .disabled(!canContinue)
+                    .opacity(canContinue ? 1 : 0.5)
+                    .animation(.easeOut(duration: 0.15), value: canContinue)
 
                     // App Store Guideline 1.2: users must agree to the terms (which
                     // include a zero-tolerance policy for objectionable content and
                     // abusive users) before they can post content. Links open in Safari.
                     Text("By tapping Continue you agree to Kulan's [Terms](https://kulan-2ef85.web.app/terms.html) and [Privacy Policy](https://kulan-2ef85.web.app/privacy.html). Kulan has zero tolerance for objectionable content or abusive behavior.")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(white: 0.42))
                         .multilineTextAlignment(.center)
-                        .tint(.primary)
+                        .tint(Color(white: 0.75))
+                        .padding(.top, 14)
                     #if DEBUG
                     Text("Preview: type **apple** in either field, then Continue, to load a demo account.")
                         .font(.caption2).foregroundStyle(.blue).multilineTextAlignment(.center)
+                        .padding(.top, 8)
                     #endif
                 }
-                .padding()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            // Apple hands over the person's name exactly once, at first authorization —
+            // prefill it so they just pick a username.
+            if name.isEmpty, let n = AuthService.shared.pendingDisplayName { name = n }
+        }
+    }
+
+    // Dark labelled field box, same shape language as the email sign-up screen.
+    private func field<C: View, A: View>(_ label: String,
+                                         @ViewBuilder accessory: () -> A = { EmptyView() },
+                                         @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(label).font(.caption2.weight(.bold)).foregroundStyle(Color(white: 0.5))
+                .tracking(0.6)
+            HStack(spacing: 8) {
+                content()
+                    .font(.system(size: 17))
+                    .foregroundStyle(.white)
+                accessory()
+            }
+            .padding(.horizontal, 16).frame(height: 54)
+            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
