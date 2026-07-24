@@ -45,6 +45,8 @@ struct ContactInfoView: View {
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
+    @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
+    @State private var showPublicStory = false     // ring tapped → play their public story
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
@@ -166,6 +168,12 @@ struct ContactInfoView: View {
             await load()
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
             localName = ContactNames.shared.name(for: otherUid)
+            // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
+            // anyone who reaches this profile can watch it, contact or not.
+            if !isSelf {
+                publicStory = await StoriesRepository.shared.publicStoryGroup(
+                    for: otherUid, name: shownName, photoUrl: gatedPhotoUrl)
+            }
         }
     }
 
@@ -173,6 +181,15 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
+            // Their public story, opened from the ring on the hero avatar. anonymous: we don't write a
+            // view record (a non-contact may not have write access to the author's story views).
+            .fullScreenCover(isPresented: $showPublicStory) {
+                if let pg = publicStory {
+                    StoryViewer(ownSwipeDismiss: true, groups: [pg], anonymous: true,
+                                onClose: { showPublicStory = false })
+                        .background(Color.black.ignoresSafeArea())
+                }
+            }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
@@ -377,12 +394,28 @@ struct ContactInfoView: View {
 
     private var hero: some View {
         VStack(spacing: 6) {
-            AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88)
-                .onTapGesture { if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true } }
-                // The viewer IS this avatar while open — hide the original so the morph reads
-                // as one circle leaving and returning, not a copy floating over it.
-                .opacity(showProfilePhoto ? 0 : 1)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
+            ZStack {
+                // Story ring (Instagram/WhatsApp pattern): a colored gradient ring means this person has
+                // an active public story — tap the avatar to watch it instead of opening the photo.
+                if publicStory != nil {
+                    Circle()
+                        .stroke(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
+                                               startPoint: .topLeading, endPoint: .bottomTrailing),
+                                lineWidth: 3)
+                        .frame(width: 100, height: 100)
+                        .opacity(showProfilePhoto ? 0 : 1)
+                }
+                AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88)
+                    // The viewer IS this avatar while open — hide the original so the morph reads
+                    // as one circle leaving and returning, not a copy floating over it.
+                    .opacity(showProfilePhoto ? 0 : 1)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
+            }
+            .contentShape(Circle())
+            .onTapGesture {
+                if publicStory != nil { showPublicStory = true }
+                else if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true }
+            }
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that

@@ -73,10 +73,17 @@ struct ShareStorySheet: View {
 
     @ViewBuilder private var audienceList: some View {
         List {
-            Section("Who can see your story") {
+            Section {
+                optionRow(3, "globe", "Everyone")
                 optionRow(0, "person.fill", "My contacts")
                 optionRow(1, "person.fill.xmark", "My contacts except")
                 optionRow(2, "person.crop.circle.badge.checkmark", "Only share with")
+            } header: {
+                Text("Who can see your story")
+            } footer: {
+                if mode == 3 {
+                    Text("Anyone who finds your profile can see this story. Your contacts also see it in their story tray.")
+                }
             }
             if mode == 1 {
                 Section {
@@ -143,14 +150,15 @@ struct ShareStorySheet: View {
         // recipientUids would be empty and the story would post to literally no one).
         let contactIds = Set(contacts.map { $0.id })
         let effective: Set<String>
-        if mode == 2 { effective = included.intersection(contactIds) }
+        if mode == 3 { effective = contactIds }   // public: contacts get the tray copy, strangers view via your profile
+        else if mode == 2 { effective = included.intersection(contactIds) }
         else if mode == 1 { effective = contactIds.subtracting(excluded) }
         else { effective = contactIds }
         // Block ONLY when you HAVE contacts but narrowed the audience down to literally no one
         // (excluded everyone / picked nobody). If you simply have NO contacts yet, posting is fine —
         // it's still YOUR OWN story (always visible to you); it just has no other recipients until
         // you add contacts. Without this, a brand-new user could never post their first story.
-        if effective.isEmpty && !contactIds.isEmpty {
+        if mode != 3 && effective.isEmpty && !contactIds.isEmpty {   // "Everyone" is public → never empty
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             emptyAudienceAlert = true
             return
@@ -168,14 +176,16 @@ struct ShareStorySheet: View {
                 muted: video.muted,
                 caption: caption,
                 excluded: mode == 1 ? excluded : [],
-                included: mode == 2 ? included : []
+                included: mode == 2 ? included : [],
+                everyone: mode == 3
             )
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image,
                 caption: caption,
                 excluded: mode == 1 ? excluded : [],
-                included: mode == 2 ? included : []
+                included: mode == 2 ? included : [],
+                everyone: mode == 3
             )
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background

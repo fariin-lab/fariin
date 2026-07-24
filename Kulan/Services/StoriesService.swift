@@ -83,7 +83,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = []) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -106,7 +106,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included) }
+            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included, everyone: everyone) }
             catch is CancellationError { cancelled = true }   // user hit cancel → postStory removed the doc
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -142,7 +142,7 @@ final class StoriesService {
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", expiryHours: Double = 24,
-                   excluded: Set<String> = [], included: Set<String> = []) async throws {
+                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
@@ -168,7 +168,10 @@ final class StoriesService {
             "mediaPath": path,
             "mediaUrl": "",
             "caption": caption,
-            "audience": ["mode": mode, "listId": "my-story"],
+            "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
+            // Public ("Everyone") stories are viewable by anyone who finds your profile — the read
+            // rules gate on this flag. Contacts still get it in their tray via recipientUids below.
+            "public": everyone,
             "allowsReplies": true,
             "replyCount": 0,
             "recipientUids": Array(recipients),
@@ -210,7 +213,7 @@ final class StoriesService {
     // frame the editor already generated; it drives the uploading ring/placeholder immediately
     // while the transcode + upload run in the background.
     @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false, caption: String = "",
-                                             excluded: Set<String> = [], included: Set<String> = []) {
+                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         uploadingImage = UIImage(data: thumbnail)
@@ -226,7 +229,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, caption: caption, excluded: excluded, included: included) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, caption: caption, excluded: excluded, included: included, everyone: everyone) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -241,7 +244,7 @@ final class StoriesService {
     // transcode to 720p H.264, upload the poster thumb + the mp4, then fill both URLs atomically
     // (the repository skips docs with an empty mediaUrl, so nobody sees a half-uploaded story).
     func postVideoStory(videoURL: URL, muted: Bool = false, caption: String = "", expiryHours: Double = 24,
-                        excluded: Set<String> = [], included: Set<String> = []) async throws {
+                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()
@@ -269,7 +272,8 @@ final class StoriesService {
             "thumbUrl": "",
             "duration": prepared.duration,
             "caption": caption,
-            "audience": ["mode": mode, "listId": "my-story"],
+            "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
+            "public": everyone,
             "allowsReplies": true,
             "replyCount": 0,
             "recipientUids": Array(recipients),
@@ -484,6 +488,26 @@ final class StoriesRepository {
         profileCache = [:]
         mine = nil; others = []
         StoryRowCache.clear()   // the next account must never see this account's story row
+    }
+
+    // Fetch a specific user's active PUBLIC ("Everyone") story group — powers the story ring on their
+    // PROFILE, so anyone who finds them can watch. Non-contacts are allowed this read because the query
+    // is constrained to `public == true`, which is exactly what the Firestore read rule gates on.
+    // Returns nil if they have no active public story. Name/photo are passed in (the profile has them).
+    func publicStoryGroup(for uid: String, name: String, photoUrl: String?) async -> StoryGroup? {
+        let me = AuthService.shared.uid ?? ""
+        guard !uid.isEmpty, uid != me else { return nil }   // my own ring is handled by the tray, not the profile
+        let snap = try? await db.collection("stories")
+            .whereField("authorUid", isEqualTo: uid)
+            .whereField("public", isEqualTo: true)
+            .getDocuments()
+        let now = Date()
+        let stories = parse(snap?.documents)
+            .filter { $0.expiresAt > now }
+            .sorted { $0.createdAt < $1.createdAt }
+        guard !stories.isEmpty else { return nil }
+        return StoryGroup(authorUid: uid, name: name, photoUrl: photoUrl,
+                          stories: stories, lastViewedAt: nil, isMine: false)
     }
 
     private func parse(_ docs: [QueryDocumentSnapshot]?) -> [Story] {
