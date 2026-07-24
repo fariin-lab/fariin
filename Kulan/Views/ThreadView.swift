@@ -4309,28 +4309,39 @@ struct MessageBubble: View, Equatable {
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
-            // PREMIUM STACKED / FANNED CARDS (replaces the old mosaic grid): the album's photos float on the
-            // wallpaper as overlapping white-bordered cards — 2–3 fan out, 4+ form a deck with a
-            // "You sent N photos" header. Tapping opens the full-screen swipeable gallery (openAlbumItem).
-            let n = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
-            VStack(alignment: isMe ? .trailing : .leading, spacing: 5) {
-                if n >= 4 {
-                    Text(isMe ? "You sent \(n) photos" : "\(n) photos")
-                        .font(.system(size: 13)).foregroundStyle(.secondary).padding(.horizontal, 8)
-                }
-                albumStack(n)
-                    .overlay {
-                        if message.sendState == .sending {
-                            ZStack { Color.black.opacity(0.18); UploadingRing() }
-                                .frame(width: albumCardSize.width, height: albumCardSize.height)
-                                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                        }
-                    }
+            // Album (2+ photos as ONE message): a MOSAIC GRID inside the bubble + one caption.
+            // Restored from `abde537^` at the user's request — that commit had replaced this with
+            // fanned/tilted floating cards, which read as a messy scattered pile rather than the
+            // clean grid every messenger uses.
+            VStack(alignment: .leading, spacing: 0) {
+                albumGrid
                 if !message.text.isEmpty {
-                    Text(message.text).font(.system(size: 17))
-                        .foregroundStyle(dark ? .white : .black).padding(.horizontal, 8)
+                    HStack(alignment: .bottom, spacing: 6) {
+                        Text(message.text).font(.system(size: 17))   // caption text is never shrunk
+                            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+                        metaRow.padding(.bottom, 1)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
                 }
-                metaRow.padding(.horizontal, 8)   // time + delivery status
+            }
+            .frame(width: albumWidth)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay {
+                if message.sendState == .sending {
+                    ZStack {
+                        Color.black.opacity(0.18)
+                        UploadingRing()
+                    }
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                // No caption → the time floats on the grid, like a bare photo bubble.
+                if message.text.isEmpty {
+                    metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
+                }
             }
         } else if message.isImage, message.viewOnce {
             // View-once photo: never rendered inline — a "① Photo" pill. The recipient taps it
