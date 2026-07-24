@@ -842,6 +842,18 @@ struct EditProfileView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
+                    // Attached HERE, on the avatar section, NOT on the outer view: that chain
+                    // already carries a confirmationDialog (discard changes) and an alert (remove
+                    // photo), and stacking a second confirmationDialog on the same view made this
+                    // one silently never present — tapping "Edit Photo" did nothing.
+                    .confirmationDialog("Profile Photo", isPresented: $showEditPhoto, titleVisibility: .visible) {
+                        Button("Choose Photo") { showPhotoPicker = true }
+                        if profile.me?.photoUrl?.isEmpty == false {
+                            Button("Remove Photo", role: .destructive) { confirmRemovePhoto = true }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    }
+                    .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                 }
 
                 Section {
@@ -922,13 +934,6 @@ struct EditProfileView: View {
                     guard let data = try? await item.loadTransferable(type: Data.self),
                           let img = UIImage(data: data) else { photoItem = nil; return }
                     await MainActor.run { cropCandidate = CropItem(image: img); photoItem = nil }
-                }
-            }
-            .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-            .confirmationDialog("Profile Photo", isPresented: $showEditPhoto, titleVisibility: .visible) {
-                Button("Choose Photo") { showPhotoPicker = true }
-                if profile.me?.photoUrl?.isEmpty == false {
-                    Button("Remove Photo", role: .destructive) { confirmRemovePhoto = true }
                 }
             }
             .fullScreenCover(item: $cropCandidate) { c in
