@@ -279,15 +279,46 @@ struct WallpaperPreviewScreen: View {
     let wallpaper: ChatWallpaper
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.displayScale) private var displayScale
     @State private var blurred = false
+    // Pinch-to-zoom / pan on a chosen photo, baked into the saved wallpaper on Apply.
+    @State private var zoom: CGFloat = 1
+    @State private var baseZoom: CGFloat = 1
+    @State private var pan: CGSize = .zero
+    @State private var basePan: CGSize = .zero
+    @State private var canvas: CGSize = .zero   // full-screen size = what gets baked
     private var store: WallpaperStore { .shared }
     private var dark: Bool { scheme == .dark }
 
     private var isPhoto: Bool { if case .photo = wallpaper { return true }; return false }
+    private var photoImg: UIImage? {
+        if case .photo(let id) = wallpaper { return store.libraryImage(id) }
+        return nil
+    }
+    private var transformed: Bool { zoom != 1 || pan != .zero }
+
+    // Keep the photo covering the whole screen while panning: clamp so no blank edge shows.
+    private func clampedPan(_ proposed: CGSize, zoom z: CGFloat) -> CGSize {
+        guard let img = photoImg, canvas.width > 0, img.size.width > 0, img.size.height > 0 else { return proposed }
+        let fill = max(canvas.width / img.size.width, canvas.height / img.size.height)
+        let s = fill * z
+        let maxX = max(0, (img.size.width * s - canvas.width) / 2)
+        let maxY = max(0, (img.size.height * s - canvas.height) / 2)
+        return CGSize(width: min(maxX, max(-maxX, proposed.width)),
+                      height: min(maxY, max(-maxY, proposed.height)))
+    }
 
     var body: some View {
         ZStack {
             background.ignoresSafeArea()
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { canvas = proxy.size }
+                            .onChange(of: proxy.size) { _, s in canvas = s }
+                    }
+                    .ignoresSafeArea()
+                )
 
             VStack {
                 HStack {
@@ -313,6 +344,13 @@ struct WallpaperPreviewScreen: View {
                 .padding(.horizontal, 14)
 
                 if isPhoto {
+                    Text("Pinch to zoom · drag to reposition")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.top, 12)
+
                     Button { withAnimation(.easeInOut(duration: 0.25)) { blurred.toggle() } } label: {
                         HStack(spacing: 8) {
                             Image(systemName: blurred ? "checkmark.circle.fill" : "circle")
@@ -324,7 +362,7 @@ struct WallpaperPreviewScreen: View {
                         .background(.regularMaterial, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .padding(.top, 12)
+                    .padding(.top, 10)
                 }
 
                 Button { apply() } label: {
@@ -354,9 +392,28 @@ struct WallpaperPreviewScreen: View {
         case .photo(let id):
             if let img = store.libraryImage(id) {
                 Color.clear
-                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 10 : 0) }
+                    .overlay {
+                        Image(uiImage: img).resizable().scaledToFill()
+                            .scaleEffect(zoom)          // pinch (anchored at center, matches baking math)
+                            .offset(pan)                // drag to reposition
+                            .blur(radius: blurred ? 10 : 0)
+                    }
                     .clipped()
                     .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                    .contentShape(Rectangle())
+                    .gesture(
+                        SimultaneousGesture(
+                            MagnifyGesture()
+                                .onChanged { v in zoom = min(5, max(1, baseZoom * v.magnification)) }
+                                .onEnded { _ in baseZoom = zoom; pan = clampedPan(pan, zoom: zoom); basePan = pan },
+                            DragGesture()
+                                .onChanged { v in
+                                    pan = clampedPan(CGSize(width: basePan.width + v.translation.width,
+                                                            height: basePan.height + v.translation.height), zoom: zoom)
+                                }
+                                .onEnded { _ in basePan = pan }
+                        )
+                    )
             } else { Theme.bg(dark) }
         case .color(let hex):
             Color(hex: hex)
@@ -381,18 +438,39 @@ struct WallpaperPreviewScreen: View {
 
     private func apply() {
         var final = wallpaper
-        // Blurred photo: bake the blur into a real library image so every chat renders it
-        // for free (no live blur cost), and the pick stays a normal library wallpaper.
-        if blurred, case .photo(let id) = wallpaper, let img = store.libraryImage(id),
-           let baked = Self.gaussianBlur(img, radius: 10),
-           let bakedId = store.addToLibrary(baked) {
-            // Only ONE tile per photo: baking the blur replaces the sharp original, it
-            // doesn't add a second tile (user report of duplicate wallpapers).
-            if bakedId != id { store.deleteFromLibrary(id) }
-            final = .photo(bakedId)
+        // Photo: bake the current framing (pinch-zoom + pan) AND the optional blur into one real
+        // library image, so every chat renders it for free and there's exactly ONE tile.
+        if case .photo(let id) = wallpaper, let img = store.libraryImage(id), (transformed || blurred) {
+            // Start from the visible crop (or the whole image if no zoom/pan), then blur if chosen.
+            let cropped = transformed
+                ? (Self.renderCrop(img, canvas: canvas, scale: displayScale, zoom: zoom, pan: pan) ?? img)
+                : img
+            let finalImg = blurred ? (Self.gaussianBlur(cropped, radius: 10) ?? cropped) : cropped
+            if let bakedId = store.addToLibrary(finalImg) {
+                if bakedId != id { store.deleteFromLibrary(id) }   // no duplicate tile
+                final = .photo(bakedId)
+            }
         }
         store.applyToAllChats(final)
         dismiss()
+    }
+
+    // Render exactly what the user sees full-screen: scaledToFill base, then their pinch-zoom and
+    // pan, drawn into a screen-sized (and -aspect) image so it applies 1:1 with no re-cropping.
+    static func renderCrop(_ img: UIImage, canvas: CGSize, scale: CGFloat, zoom: CGFloat, pan: CGSize) -> UIImage? {
+        let iw = img.size.width, ih = img.size.height
+        guard iw > 0, ih > 0, canvas.width > 0, canvas.height > 0 else { return nil }
+        let fill = max(canvas.width / iw, canvas.height / ih)
+        let s = fill * zoom
+        let drawW = iw * s, drawH = ih * s
+        let x = (canvas.width - drawW) / 2 + pan.width
+        let y = (canvas.height - drawH) / 2 + pan.height
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = max(1, scale)
+        fmt.opaque = true
+        return UIGraphicsImageRenderer(size: canvas, format: fmt).image { _ in
+            img.draw(in: CGRect(x: x, y: y, width: drawW, height: drawH))
+        }
     }
 
     static func gaussianBlur(_ image: UIImage, radius: CGFloat) -> UIImage? {
