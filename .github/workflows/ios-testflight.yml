@@ -70,21 +70,11 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            What's fixed and new in this build:
+            What's new in this build:
 
-            New app icons. Long-press the app or Settings > Appearance > App Icon to pick Midnight, Blue, Ivory or Chrome.
-            Chat themes now set the wallpaper AND the bubble color together. Set them for all chats from Appearance.
-            Set Wallpaper page redone: your own photos show first, a new Wallpaper Color page for solid backgrounds, and built-in photo wallpapers.
-            Chat bubble color now changes live while you pick it.
-            Swiping a chat now shows the normal grey actions instead of a blank row.
-            Tapping a profile photo no longer jumps the page.
-            The photo picker in a chat shows 3 per row.
-            Removed the duplicate My QR Code row (the QR button is top-left).
-            Add Story is hidden when you turn stories off.
-            The loading screen no longer overlaps the search bar on Calls and Chats.
-            New privacy control: Settings > Privacy > Messages lets you choose who can start a chat with you (Everyone, My Contacts, No One).
-            Setting a profile photo now opens a circular move-and-scale cropper so you control the framing, from a single Edit Photo button.
-            Wallpaper preview polish: the close button no longer overlaps the clock, the Blurred option is a softer blur, photo tiles of any size crop evenly, and blurring a photo no longer leaves a duplicate tile.
+            Wallpaper: when you set a photo as your wallpaper you can now pinch to zoom and drag to position it, and that framing is saved. The Blurred option is a gentler blur, photos of any shape now fit their tiles evenly, and blurring a photo no longer leaves a duplicate. The close button no longer overlaps the clock.
+            All Media redesigned: an "All Media" header with a live photo and video count, a filter button, and tabs for Media, Files, Voice, Links and GIFs, with items grouped by Today, Yesterday and month.
+            Stories: a new "Everyone" audience. Pick it and anyone who finds your profile can watch your story (your contacts still see it in their tray as usual).
 
-            Please test signing in with Apple and Google on a fresh account, and tell me what feels off.
+            Please try setting a photo wallpaper with zoom, open All Media from a chat, and post a story to Everyone, then tell me what feels off.
         run: fastlane beta
