@@ -459,10 +459,15 @@ struct ContactInfoView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32).padding(.top, 2)
+                    // A bio is variable height, so it can't be pre-reserved like the @handle line.
+                    // The cache above removes the shift entirely for profiles we've seen; on a genuine
+                    // first-ever open this makes it ease in rather than snap.
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
+        .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
 
     // Context-aware row. From Calls: Message (open the chat) leads. From a chat: Search
@@ -596,6 +601,12 @@ struct ContactInfoView: View {
 
 
     private func load() async {
+        // Paint from Firestore's LOCAL cache first (no network): for anyone we've opened before, the
+        // @handle and bio are there on the first frame, so the page doesn't shift when the server
+        // fetch lands. The fetch below still runs and corrects anything stale.
+        if handle.isEmpty, about.isEmpty, let c = await ProfileStore.shared.cachedPeer(otherUid) {
+            handle = c.handle; about = c.about; targetPrivacy = c.privacy
+        }
         if let p = await ProfileStore.shared.fetch(otherUid) {
             handle = p.handle; about = p.about; targetPrivacy = p.privacy
         }

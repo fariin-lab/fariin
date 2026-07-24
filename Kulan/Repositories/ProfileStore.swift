@@ -35,6 +35,17 @@ final class ProfileStore {
         return true
     }
 
+    /// Another user's profile straight from Firestore's on-disk cache — LOCAL only, no network.
+    /// Lets a profile paint its @handle and bio on the first frame for anyone we've loaded before,
+    /// instead of the bio arriving a moment later and shoving the whole page down (most visible
+    /// opening from the Calls tab, where nothing is warm). Same trick as `loadCachedMine`.
+    func cachedPeer(_ uid: String) async -> UserProfile? {
+        guard !uid.isEmpty,
+              let snap = try? await db.collection("users").document(uid).getDocument(source: .cache),
+              let data = snap.data() else { return nil }
+        return UserProfile(id: uid, data: data)
+    }
+
     func fetch(_ uid: String) async -> UserProfile? {
         guard !uid.isEmpty else { return nil }
         do {
