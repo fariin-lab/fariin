@@ -130,14 +130,38 @@ struct AppLockPage: View {
     }
 }
 
-// Messages page: the two REAL reciprocal message signals. ("Who can message you" needs
-// the message-requests system — it is deliberately absent rather than decorative.)
+// Messages page: WHO can message you (audience) + the reciprocal read/typing signals.
+// "My Contacts" = people you already share a chat with. Enforced on the SENDER's client:
+// their composer is disabled if you don't accept messages from them (see ThreadView).
 struct MessagesPrivacyPage: View {
+    @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
 
     var body: some View {
         List {
+            Section {
+                ForEach(Audience.allCases, id: \.self) { a in
+                    Button {
+                        privMessages = a.rawValue
+                        PrivacyPrefs.setMine("messages", a)
+                    } label: {
+                        HStack {
+                            Text(a.label).foregroundStyle(.primary)
+                            Spacer()
+                            if privMessages == a.rawValue {
+                                Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
+            } header: {
+                Text("Who can message you")
+            } footer: {
+                Text("People who can't message you won't be able to start a new chat. Chats you already have keep working.")
+            }
+
             Section {
                 Toggle("Read Receipts", isOn: $readReceipts).tint(.green)
                 Toggle("Typing Indicators", isOn: $typingIndicators).tint(.green)

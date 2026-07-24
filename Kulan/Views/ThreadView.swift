@@ -482,6 +482,8 @@ struct ThreadView: View {
                 restrictedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if repo.iBlocked {
                 blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if cannotMessageThem {
+                cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
                 composerArea.transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -2950,6 +2952,35 @@ struct ThreadView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .background(.bar)
+    }
+
+    // Do we already share this chat (either side has sent something)? If so, messaging
+    // always stays open — the Messages-privacy gate only blocks COLD new chats.
+    private var hasChatHistory: Bool {
+        !(conversation?.lastMessageCipher ?? "").isEmpty
+            || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif }
+    }
+
+    // The other person's Messages privacy (Settings > Privacy > Messages). "My Contacts" /
+    // "No One" blocks me from starting a NEW chat with them if we've never talked. Enforced
+    // here on the sender's client; existing chats are unaffected.
+    private var cannotMessageThem: Bool {
+        guard !isGroup, !repo.iBlocked else { return false }
+        let audience = Audience(rawValue: repo.otherPrivacy["messages"] ?? "") ?? .everyone
+        if audience == .everyone { return false }
+        return !hasChatHistory
+    }
+
+    private var cannotMessageBar: some View {
+        VStack(spacing: 3) {
+            Label("You can't message \(title)", systemImage: "lock.fill")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            Text("They only accept messages from their contacts.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 
     // The reply preview now nests INSIDE the input capsule (see inputRow).
