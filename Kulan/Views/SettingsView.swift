@@ -3,6 +3,7 @@ import PhotosUI
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
+import AuthenticationServices   // Sign in with Apple button (connect Apple in Account settings)
 
 // Custom-SVG row label (template asset tinted like an SF Symbol, sized to a list row).
 private struct SettingsRowLabel: View {
@@ -222,6 +223,11 @@ struct AccountSettingsView: View {
     @State private var deleteError: String?
     @State private var exporting = false
     @State private var exportFile: ExportFile?
+    // Sign-in methods (connect another door to this same account).
+    @State private var connecting: AuthService.SignInMethod?
+    @State private var connectError: String?
+    @State private var connectedTick = 0        // bump to re-read providerData after a link
+    @State private var showConnectEmail = false
 
     var body: some View {
         List {
@@ -242,6 +248,8 @@ struct AccountSettingsView: View {
                 Text("Saves your profile and all chats to a text file you can share or keep.")
             }
 
+            signInMethodsSection
+
             Section {
                 Button(role: .destructive) { showSignOut = true } label: {
                     Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
@@ -254,6 +262,16 @@ struct AccountSettingsView: View {
         .listStyle(.insetGrouped)   // clean rounded cards (matches the reference)
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showConnectEmail) {
+            ConnectEmailView { email, password in
+                try await AuthService.shared.connectEmail(email: email, password: password)
+                connectedTick += 1
+            }
+        }
+        .alert("Couldn't connect", isPresented: Binding(get: { connectError != nil },
+                                                        set: { if !$0 { connectError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(connectError ?? "") }
         .disabled(working)
         .sheet(item: $exportFile) { f in ActivityView(items: [f.url]) }
         .alert("Sign out?", isPresented: $showSignOut) {
@@ -295,6 +313,104 @@ struct AccountSettingsView: View {
     }
 
     // Gather profile + all chats (decrypted) into a text file, then present the share sheet.
+    // MARK: - Sign-in methods
+
+    // Which logins open this account, and a way to add another. Linking keeps the SAME uid, so
+    // every chat, key and story survives — and it's how a legacy anonymous session becomes a real
+    // account (sign in with Apple/Google later on a new phone instead of losing everything).
+    @ViewBuilder private var signInMethodsSection: some View {
+        let _ = connectedTick   // re-reads providerData after a successful link
+        Section {
+            ForEach(AuthService.SignInMethod.allCases) { method in
+                signInRow(method)
+            }
+        } header: {
+            Text("Sign-in Methods")
+        } footer: {
+            Text(AuthService.shared.isAnonymousSession
+                 ? "You're signed in as a guest. Connect a login so you can get back into this account on another phone — your chats stay exactly as they are."
+                 : "Connect more than one so you can always get back in. They all open this same account.")
+        }
+    }
+
+    @ViewBuilder private func signInRow(_ method: AuthService.SignInMethod) -> some View {
+        let identifier = AuthService.shared.connectedIdentifier(method)
+        HStack(spacing: 12) {
+            signInIcon(method)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(method.title).foregroundStyle(.primary)
+                if let identifier, !identifier.isEmpty {
+                    Text(identifier).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if connecting == method {
+                ProgressView()
+            } else if identifier != nil {
+                // Connected: a quiet checkmark, not a button (Firebase needs at least one method,
+                // and unlinking the last one would lock the account out — so no disconnect here).
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            } else {
+                connectButton(method)
+            }
+        }
+    }
+
+    @ViewBuilder private func connectButton(_ method: AuthService.SignInMethod) -> some View {
+        Button("Connect") { startConnect(method) }
+            .font(.subheadline.weight(.semibold))
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .disabled(connecting != nil)
+            // Apple must be triggered by its own button to get the authorization sheet; it's
+            // overlaid transparently so the row still reads as a plain "Connect".
+            .overlay {
+                if method == .apple {
+                    SignInWithAppleButton(.continue) { request in
+                        AuthService.shared.prepareAppleRequest(request)
+                    } onCompletion: { result in
+                        switch result {
+                        case .success(let auth):
+                            connecting = .apple
+                            Task {
+                                do { try await AuthService.shared.connectApple(authorization: auth); connectedTick += 1 }
+                                catch { connectError = error.localizedDescription }
+                                connecting = nil
+                            }
+                        case .failure:
+                            break   // cancelled the sheet — not an error worth showing
+                        }
+                    }
+                    .blendMode(.destinationOver)   // invisible, still tappable
+                }
+            }
+    }
+
+    @ViewBuilder private func signInIcon(_ method: AuthService.SignInMethod) -> some View {
+        switch method {
+        case .apple:  Image(systemName: "apple.logo").font(.system(size: 19)).foregroundStyle(.primary)
+        case .google: Text("G").font(.system(size: 18, weight: .bold)).foregroundStyle(.primary)
+        case .email:  Image(systemName: "envelope.fill").font(.system(size: 16)).foregroundStyle(.primary)
+        }
+    }
+
+    private func startConnect(_ method: AuthService.SignInMethod) {
+        switch method {
+        case .apple:
+            break                       // handled by the overlaid SignInWithAppleButton
+        case .email:
+            showConnectEmail = true     // needs an email + password to link
+        case .google:
+            connecting = .google
+            Task {
+                do { try await AuthService.shared.connectGoogle(); connectedTick += 1 }
+                catch { connectError = error.localizedDescription }
+                connecting = nil
+            }
+        }
+    }
+
     private func exportData() async {
         exporting = true
         let me = AuthService.shared.uid ?? ""
@@ -926,5 +1042,75 @@ struct UsernameEditView: View {
             }
         }
         .onAppear { draft = handle; focused = true }
+    }
+}
+
+// Connect an email + password login to the CURRENT account (Account > Sign-in Methods).
+// Not a sign-up: it attaches another way into the account you're already in.
+struct ConnectEmailView: View {
+    /// Throws on failure; the sheet shows the message and stays open so the user can fix it.
+    var onConnect: (String, String) async throws -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var email = ""
+    @State private var password = ""
+    @State private var busy = false
+    @State private var error: String?
+    @FocusState private var focused: Bool
+
+    private var canSubmit: Bool {
+        email.contains("@") && password.count >= 6 && !busy
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("you@example.com", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($focused)
+                    SecureField("At least 6 characters", text: $password)
+                        .textContentType(.newPassword)
+                } header: {
+                    Text("Email login")
+                } footer: {
+                    Text("You'll be able to log into this same account with this email and password.")
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red) }
+                }
+            }
+            .navigationTitle("Connect Email")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if busy {
+                        ProgressView()
+                    } else {
+                        Button("Connect") {
+                            busy = true; error = nil
+                            Task {
+                                do {
+                                    try await onConnect(email.trimmingCharacters(in: .whitespaces), password)
+                                    dismiss()
+                                } catch {
+                                    self.error = error.localizedDescription
+                                }
+                                busy = false
+                            }
+                        }
+                        .fontWeight(.semibold)
+                        .disabled(!canSubmit)
+                    }
+                }
+            }
+            .onAppear { focused = true }
+        }
     }
 }

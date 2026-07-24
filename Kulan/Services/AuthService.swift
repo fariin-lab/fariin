@@ -69,6 +69,12 @@ final class AuthService: NSObject {
     }
 
     func completeApple(authorization: ASAuthorization) async throws {
+        try await authenticate(with: makeAppleCredential(authorization: authorization))
+    }
+
+    /// Build the Firebase credential from an Apple authorization. Shared by sign-in and by
+    /// "Connect Apple" in Account settings, so both go through the identical nonce check.
+    private func makeAppleCredential(authorization: ASAuthorization) throws -> AuthCredential {
         guard let appleCred = authorization.credential as? ASAuthorizationAppleIDCredential,
               let tokenData = appleCred.identityToken,
               let idToken = String(data: tokenData, encoding: .utf8),
@@ -79,9 +85,8 @@ final class AuthService: NSObject {
             let joined = [name.givenName, name.familyName].compactMap { $0 }.joined(separator: " ")
             if !joined.isEmpty { pendingDisplayName = joined }
         }
-        let credential = OAuthProvider.appleCredential(withIDToken: idToken, rawNonce: nonce,
-                                                       fullName: appleCred.fullName)
-        try await authenticate(with: credential)
+        return OAuthProvider.appleCredential(withIDToken: idToken, rawNonce: nonce,
+                                             fullName: appleCred.fullName)
     }
 
     private static func randomNonce(length: Int = 32) -> String {
@@ -110,6 +115,12 @@ final class AuthService: NSObject {
     private var webSession: ASWebAuthenticationSession?
 
     func signInWithGoogle() async throws {
+        try await authenticate(with: obtainGoogleCredential())
+    }
+
+    /// Run the Google web flow and return the Firebase credential. Shared by sign-in and by
+    /// "Connect Google" in Account settings.
+    private func obtainGoogleCredential() async throws -> AuthCredential {
         guard let clientID = FirebaseApp.app()?.options.clientID else { throw AuthFlowError.googleFailed }
         // Reversed client id = the registered redirect scheme for this iOS OAuth client.
         let scheme = clientID.split(separator: ".").reversed().joined(separator: ".")
@@ -167,8 +178,7 @@ final class AuthService: NSObject {
         }
         let accessToken = json["access_token"] as? String ?? ""
 
-        let credential = GoogleAuthProvider.credential(withIDToken: idToken, accessToken: accessToken)
-        try await authenticate(with: credential)
+        return GoogleAuthProvider.credential(withIDToken: idToken, accessToken: accessToken)
     }
 
     // MARK: - Email
@@ -190,6 +200,75 @@ final class AuthService: NSObject {
     func resetPassword(email: String) async throws {
         try await Auth.auth().sendPasswordReset(withEmail: email)
     }
+
+    // MARK: - Sign-in methods (Account settings: see what's connected, connect another)
+
+    /// The sign-in doors Kulan supports, in the order Account settings lists them.
+    enum SignInMethod: String, CaseIterable, Identifiable {
+        case apple, google, email
+        var id: String { rawValue }
+        /// Firebase's provider id for this door (email/password is "password").
+        var providerId: String {
+            switch self {
+            case .apple:  return "apple.com"
+            case .google: return "google.com"
+            case .email:  return "password"
+            }
+        }
+        var title: String {
+            switch self {
+            case .apple:  return "Apple"
+            case .google: return "Google"
+            case .email:  return "Email"
+            }
+        }
+    }
+
+    /// The identifier shown next to a connected method (the email Firebase holds for it),
+    /// or nil when that method isn't linked to this account.
+    func connectedIdentifier(_ method: SignInMethod) -> String? {
+        guard let user = Auth.auth().currentUser else { return nil }
+        guard let info = user.providerData.first(where: { $0.providerID == method.providerId }) else { return nil }
+        // Apple's private relay (or a provider that hides the address) can leave this empty —
+        // fall back to the account email, then to a plain "Connected" in the UI.
+        return info.email ?? user.email
+    }
+
+    func isConnected(_ method: SignInMethod) -> Bool { connectedIdentifier(_: method) != nil }
+
+    /// True while the session is a legacy anonymous one — connecting a real method upgrades it
+    /// in place, keeping the same uid (and therefore every chat, key and story).
+    var isAnonymousSession: Bool { Auth.auth().currentUser?.isAnonymous ?? false }
+
+    /// Attach another sign-in method to the CURRENT account (same uid, same chats).
+    /// `link` is the right call for a signed-in user; the anonymous path already links via
+    /// `authenticate(with:)`, so this covers "add a second door to a real account".
+    private func link(_ credential: AuthCredential) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        do {
+            let result = try await user.link(with: credential)
+            uid = result.user.uid
+        } catch let e as NSError where e.code == AuthErrorCode.credentialAlreadyInUse.rawValue
+                                    || e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
+            // That identity belongs to a DIFFERENT Kulan account. We must not silently switch
+            // accounts here (it would look like the user's chats vanished) — say so plainly.
+            throw AuthFlowError.alreadyLinkedElsewhere
+        } catch let e as NSError where e.code == AuthErrorCode.providerAlreadyLinked.rawValue {
+            throw AuthFlowError.alreadyConnected
+        }
+    }
+
+    func connectApple(authorization: ASAuthorization) async throws {
+        try await link(makeAppleCredential(authorization: authorization))
+    }
+
+    func connectGoogle() async throws {
+        try await link(obtainGoogleCredential())
+    }
+
+    func connectEmail(email: String, password: String) async throws {
+        try await link(EmailAuthProvider.credential(withEmail: email, password: password))
+    }
 }
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
@@ -202,12 +281,17 @@ extension AuthService: ASWebAuthenticationPresentationContextProviding {
 
 enum AuthFlowError: LocalizedError {
     case appleFailed, googleFailed, emailTaken
+    case notSignedIn, alreadyConnected, alreadyLinkedElsewhere
 
     var errorDescription: String? {
         switch self {
         case .appleFailed: return "Apple sign-in didn't complete. Please try again."
         case .googleFailed: return "Google sign-in didn't complete. Please try again."
         case .emailTaken: return "That email already has an account. Try logging in instead."
+        case .notSignedIn: return "You're not signed in."
+        case .alreadyConnected: return "That's already connected to this account."
+        case .alreadyLinkedElsewhere:
+            return "That login already belongs to a different Kulan account. Sign out and log in with it instead."
         }
     }
 }
