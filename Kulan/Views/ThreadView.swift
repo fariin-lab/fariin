@@ -1282,6 +1282,7 @@ struct ThreadView: View {
                 restricted: iAmMuted,
                 onResend: { m in resend(m) },
                 onJumpTo: { id in jumpTo(id) },
+                resolveReplyOriginal: { id in repo.items.first { $0.id == id } },
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 replyStoryNS: replyStoryNS,
                 isHighlighted: msg.id == highlightId,
@@ -3699,6 +3700,10 @@ struct MessageBubble: View, Equatable {
     }
     var onResend: (Message) -> Void = { _ in }
     var onJumpTo: (String) -> Void = { _ in }
+    // Resolve the ORIGINAL message a reply points at (from the loaded list), so a photo/video/GIF
+    // reply can show a real thumbnail in the quote (WhatsApp-style) instead of "📷 Photo" text.
+    // Returns nil if the original isn't loaded → the quote falls back to the text snippet.
+    var resolveReplyOriginal: (String) -> Message? = { _ in nil }
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
     var replyStoryNS: Namespace.ID? = nil   // native zoom anchor for the story-quote thumbnail
     var isHighlighted: Bool = false
@@ -4418,6 +4423,11 @@ struct MessageBubble: View, Equatable {
                                 .padding(7)
                         }
                     }
+                    // The whole photo rect must be the tap target. SecureImageView goes
+                    // tap-transparent once loaded (allowsHitTesting(waitingTap)) so its gated-download
+                    // tap doesn't block the viewer — but without this contentShape the parent had no
+                    // hit area left, so tapping a loaded photo did nothing (couldn't open the viewer).
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         if message.sendState == .failed { onResend(message) }
                         else { onTapImage(message) }   // uploading photos open too — the viewer shows the local copy
@@ -4795,6 +4805,8 @@ struct MessageBubble: View, Equatable {
     @ViewBuilder private var replyQuote: some View {
         if let reply = message.replyTo, !reply.isStatus {
             let fg = isMe ? onMyBubble : (dark ? Color.white : .black)
+            // The original message (if still loaded) so a media reply shows its real thumbnail.
+            let original = resolveReplyOriginal(reply.id)
             HStack(spacing: 7) {
                 // Left accent line signalling a quoted reply.
                 RoundedRectangle(cornerRadius: 1.5)
@@ -4808,11 +4820,14 @@ struct MessageBubble: View, Equatable {
                         // Unique per MESSAGE (two replies can quote the same story — duplicate
                         // hero ids glitch the transition).
                         .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
+                } else if let o = original {
+                    // Photo / GIF / video / album reply → real thumbnail (WhatsApp-style preview).
+                    replyMediaThumb(o)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(reply.authorId == AuthService.shared.uid ? "You" : nameFor(reply.authorId))
                         .font(.caption.weight(.semibold)).foregroundStyle(fg.opacity(0.9))
-                    Text(reply.isStatus ? "Status" : (reply.text.isEmpty ? "Message" : quoteSafeLabel(reply.text)))
+                    Text(replyLabel(reply: reply, original: original))
                         .font(.caption).lineLimit(1).foregroundStyle(fg.opacity(0.75))
                 }
                 // MINIMUM quote width (reference behavior): a one-character quote never renders as a tiny
@@ -4833,6 +4848,41 @@ struct MessageBubble: View, Equatable {
                 else { onJumpTo(reply.id) }                                  // jump to the original message
             }
         }
+    }
+
+    // A small thumbnail of the replied-to media (photo / GIF / video / album), 34pt like WhatsApp.
+    @ViewBuilder private func replyMediaThumb(_ o: Message) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        Group {
+            if o.isImage, let url = o.imageUrl {
+                SecureImageView(imageUrl: url, enc: o.enc, cid: cid)
+            } else if o.isAlbum, let first = o.album.first {
+                SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
+            } else if o.isGif, let url = o.imageUrl {
+                AnimatedGifView(url: url)
+            } else if o.isVideo, let url = o.thumbUrl {
+                SecureImageView(imageUrl: url, enc: o.thumbEnc, cid: cid)
+                    .overlay { Image(systemName: "play.circle.fill").font(.system(size: 14)).foregroundStyle(.white).shadow(radius: 2) }
+            } else {
+                EmptyView()
+            }
+        }
+        .frame(width: 34, height: 34)
+        .clipShape(shape)
+    }
+
+    // The one-line label under the author: the original's caption if it has one, else a clean type
+    // word ("Photo"/"GIF"/"Video"/"Photos") when we have the original, else the stored text snippet.
+    private func replyLabel(reply: ReplyRef, original o: Message?) -> String {
+        if reply.isStatus { return "Status" }
+        if let o, o.isImage || o.isGif || o.isVideo || o.isAlbum {
+            if !o.text.isEmpty { return quoteSafeLabel(o.text) }   // caption wins
+            if o.isAlbum { return "Photos" }
+            if o.isGif { return "GIF" }
+            if o.isVideo { return "Video" }
+            return "Photo"
+        }
+        return reply.text.isEmpty ? "Message" : quoteSafeLabel(reply.text)
     }
 }
 
