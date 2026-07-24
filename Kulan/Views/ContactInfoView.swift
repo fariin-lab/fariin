@@ -47,6 +47,9 @@ struct ContactInfoView: View {
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var showPublicStory = false     // ring tapped → play their public story
+    // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
+    // drag-down close shrinks back into it.
+    @Namespace private var mediaNS
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
@@ -183,7 +186,10 @@ struct ContactInfoView: View {
     // Sheets, full-screen covers and pushes.
     private var withSheets: some View {
         coreScroll
-            .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
+            .fullScreenCover(item: $viewerImage) { msg in
+                ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
+                    .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
+            }
             // Their public story, opened from the ring on the hero avatar. anonymous: we don't write a
             // view record (a non-contact may not have write access to the author's story views).
             .fullScreenCover(isPresented: $showPublicStory) {
@@ -547,6 +553,7 @@ struct ContactInfoView: View {
                                 .frame(width: 84, height: 84)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .matchedTransitionSource(id: m.id, in: mediaNS)   // hero anchor
                                 .onTapGesture { viewerImage = m }   // tap a THUMBNAIL → just that image
                         }
                     }

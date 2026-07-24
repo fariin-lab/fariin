@@ -48,6 +48,9 @@ struct MediaGalleryView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
+    // Same zoom hero as the profile photo / chat bubbles: the viewer grows out of the tapped
+    // tile and the drag-down close shrinks back into it.
+    @Namespace private var mediaNS
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -109,10 +112,15 @@ struct MediaGalleryView: View {
             GalleryCache.store[cid] = fresh
             loaded = true
         }
-        .fullScreenCover(item: $viewerImage) {
-            ImageViewerView(message: $0, in: mediaItems.filter { $0.isImage && !$0.isGif }, cid: cid)
+        .fullScreenCover(item: $viewerImage) { msg in
+            ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
+                            cid: cid, suppressDismissPan: false)
+                .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
-        .fullScreenCover(item: $viewerVideo) { VideoPlayerScreen(message: $0, cid: cid) }
+        .fullScreenCover(item: $viewerVideo) { msg in
+            VideoPlayerScreen(message: msg, cid: cid)
+                .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
+        }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
             if let items = shareItems { ActivityView(items: items) }
         }
@@ -327,6 +335,7 @@ struct MediaGalleryView: View {
                 }
             }
             .contentShape(Rectangle())
+            .matchedTransitionSource(id: m.id, in: mediaNS)   // hero anchor for the viewer
             .onTapGesture { tap(m) }
             .contextMenu { if !selecting { itemMenu(m) } }
     }
