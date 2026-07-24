@@ -765,7 +765,10 @@ struct ChatsView: View {
             }
             Divider()
             Button { showArchived = true } label: { Label("Archive", systemImage: "archivebox") }
-            Button { showCompose = true } label: { Label("Add Story", systemImage: "plus.circle") }
+            // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
+            if !storiesOptedOut {
+                Button { showCompose = true } label: { Label("Add Story", systemImage: "plus.circle") }
+            }
         } label: {
             // Plain three-lines filter glyph (no inner circle) — Apple moved off the
             // `.circle` variant; the glass button already supplies the round shape, so
