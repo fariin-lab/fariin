@@ -72,15 +72,14 @@ jobs:
           TF_CHANGELOG: |
             What's new in this build:
 
-            IMPORTANT FIX: signing out no longer makes your old messages unreadable. Your encryption key is now kept per account, so you can sign out and back in and your history is still there.
-            Signing up by email actually works now. It was broken: choosing "Create Account" with an email could never create an account.
-            Signing up with an account you already have now just logs you in, instead of dead-ending. A wrong password says so clearly.
-            Delete Account is now a proper page: it names the account, says exactly what is erased, and asks you to verify it's you first. Before, a delete could fail halfway and leave the account broken.
-            Account settings has a new Sign-in Methods section: see whether Apple, Google or Email is connected, and connect another so you can always get back in.
-            Tapping a photo in a chat opens it again (it had stopped opening once the photo finished loading).
-            Replying to a photo now shows the actual photo as a small preview, instead of a camera icon.
-            All Media tabs are now the liquid glass bar.
-            The "Create your profile" screen was redesigned to match the sign-up flow, with a live preview of your avatar.
+            Sending several photos at once shows them as a neat grid again, instead of the scattered tilted cards.
+            Photos and videos now open and close the same way everywhere. Dragging down closes back into the thumbnail it came from, exactly like tapping X, in chats, All Media and profiles.
+            Custom Color: the Solid / Gradient switch works now. It could not be tapped before, so Gradient was impossible to pick.
+            Edit Photo on your profile now opens its Choose Photo / Remove Photo menu. It did nothing before.
+            New chat wallpapers: 12 real image wallpapers, and the Chat Theme cards now use them instead of flat colour fades.
+            Wallpaper Color now shows full wallpaper tiles instead of small circles.
+            All Media header redone: centred title with the live count, and a "..." menu holding the filters.
+            Viewing a profile photo now shows only the close button, with nothing floating over the photo.
 
-            Please test: sign out and back in (your chats should still be readable), signing up by email, and the new Delete Account screen. Tell me what feels off.
+            Please try: sending 3 or 4 photos at once, dragging a photo down to close it, and the Gradient tab in Custom Color. Tell me what feels off.
         run: fastlane beta
