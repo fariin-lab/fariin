@@ -678,6 +678,9 @@ struct StorySettingsView: View {
 
 // MARK: - Edit Profile
 
+// A picked image awaiting the circular profile cropper (Identifiable for fullScreenCover).
+private struct CropItem: Identifiable { let id = UUID(); let image: UIImage }
+
 struct EditProfileView: View {
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
@@ -689,6 +692,7 @@ struct EditProfileView: View {
     @State private var uploadTask: Task<Void, Never>?
     @State private var uploading = false
     @State private var localPreview: UIImage?   // picked photo, shown instantly while uploading
+    @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var saving = false
     @State private var error: String?
@@ -820,8 +824,23 @@ struct EditProfileView: View {
             }
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }   // ignore our own reset in upload() — don't cancel a live upload
-                uploadTask?.cancel()
-                uploadTask = Task { await upload(item) }
+                // Picking a photo now opens a CIRCULAR move-and-scale cropper first, so you
+                // control exactly how it's framed before it's set (user request).
+                Task {
+                    guard let item, let data = try? await item.loadTransferable(type: Data.self),
+                          let img = UIImage(data: data) else { photoItem = nil; return }
+                    await MainActor.run { cropCandidate = CropItem(image: img); photoItem = nil }
+                }
+            }
+            .fullScreenCover(item: $cropCandidate) { c in
+                TOCropView(image: c.image, circular: true,
+                           onDone: { cropped in
+                               cropCandidate = nil
+                               uploadTask?.cancel()
+                               uploadTask = Task { await uploadCropped(cropped) }
+                           },
+                           onCancel: { cropCandidate = nil })
+                    .ignoresSafeArea()
             }
             .alert("Remove profile photo?", isPresented: $confirmRemovePhoto) {
                 Button("Cancel", role: .cancel) {}
@@ -835,20 +854,18 @@ struct EditProfileView: View {
         }
     }
 
-    private func upload(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
-        // Reset on every exit so re-picking (even the same photo) fires onChange again
-        // (WallpaperPickerSheet pattern). onChange guards nil, so this never cancels a newer pick.
-        defer { photoItem = nil }
+    // The CROPPED image (from the circular cropper) is what gets uploaded — shown instantly
+    // as a local preview, upload runs silently behind it (the seamless WhatsApp feel kept).
+    private func uploadCropped(_ image: UIImage) async {
+        guard let data = image.jpegData(compressionQuality: 0.92) else { return }
         uploading = true; error = nil
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else { uploading = false; return }
-            if Task.isCancelled { uploading = false; return }   // a newer pick superseded this one
-            localPreview = UIImage(data: data)   // instant — the upload continues silently behind it
+            if Task.isCancelled { uploading = false; return }
+            localPreview = image
             try await profile.uploadPhoto(data)
-            localPreview = nil   // server URL is live and pre-cached; AvatarView takes over seamlessly
+            localPreview = nil
         } catch {
-            localPreview = nil   // revert to the previous avatar on failure
+            localPreview = nil
             self.error = "Photo upload failed: \(error.localizedDescription)"
         }
         uploading = false

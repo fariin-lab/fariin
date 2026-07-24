@@ -7,15 +7,17 @@ import CropViewController
 // the crop button presents this. Returns the cropped UIImage to the editor.
 struct TOCropView: UIViewControllerRepresentable {
     let image: UIImage
+    var circular: Bool = false   // profile photos: a circular move-and-scale crop
     var onDone: (UIImage) -> Void
     var onCancel: () -> Void
 
     func makeUIViewController(context: Context) -> CropViewController {
-        let vc = CropViewController(image: image)
+        let vc = CropViewController(croppingStyle: circular ? .circular : .default, image: image)
         vc.delegate = context.coordinator
-        vc.aspectRatioPickerButtonHidden = false   // let the user pick ratios
-        vc.resetAspectRatioEnabled = true
-        vc.aspectRatioLockEnabled = false
+        // Circular = a fixed 1:1 profile crop; no ratio picker, just move + scale.
+        vc.aspectRatioPickerButtonHidden = circular
+        vc.resetAspectRatioEnabled = !circular
+        vc.aspectRatioLockEnabled = circular
         vc.toolbarPosition = .bottom
 
         // Float the whole cropper on a translucent black background so the toolbar's liquid glass
