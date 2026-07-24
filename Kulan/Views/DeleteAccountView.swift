@@ -11,6 +11,9 @@ import AuthenticationServices
 // recover. Verifying first means the delete either happens completely or not at all.
 struct DeleteAccountView: View {
     var onDeleted: () -> Void
+    // Explicit init: a private stored property below makes the implicit memberwise
+    // initializer private, so SettingsView couldn't construct this view.
+    init(onDeleted: @escaping () -> Void) { self.onDeleted = onDeleted }
 
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
