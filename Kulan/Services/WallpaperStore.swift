@@ -46,6 +46,7 @@ struct WallpaperGradient: Identifiable, Equatable {
     let light: [Color]
     let dark: [Color]
     let tint: Color        // vivid representative colour → the "Apply Wallpaper" button tint
+    let bubbleHex: UInt    // the bubble colour this wallpaper is PAIRED with (a "theme" = both)
     func colors(_ dark: Bool) -> [Color] { dark ? self.dark : light }
 }
 
@@ -56,28 +57,33 @@ enum ChatWallpapers {
         .init(id: "sunset", name: "Sunset",
               light: [Color(hex: 0xFFE9C7), Color(hex: 0xFFC9AE), Color(hex: 0xF6AEC6)],
               dark:  [Color(hex: 0x3A2A2C), Color(hex: 0x2A1E28), Color(hex: 0x1C161C)],
-              tint: Color(hex: 0xF08A5D)),
+              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D),
         .init(id: "ocean", name: "Ocean",
               light: [Color(hex: 0xD6ECFF), Color(hex: 0xB8DCF6), Color(hex: 0xA6D5E6)],
               dark:  [Color(hex: 0x16283A), Color(hex: 0x142430), Color(hex: 0x101A22)],
-              tint: Color(hex: 0x3DA1FD)),
+              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0),
         .init(id: "dusk", name: "Dusk",
               light: [Color(hex: 0xE7D9FF), Color(hex: 0xD3C1F5), Color(hex: 0xF3C6E4)],
               dark:  [Color(hex: 0x2A2340), Color(hex: 0x231C33), Color(hex: 0x1A1626)],
-              tint: Color(hex: 0x9B6DF3)),
+              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0),
         .init(id: "forest", name: "Forest",
               light: [Color(hex: 0xDCF3D8), Color(hex: 0xBFE7C2), Color(hex: 0xA9DCC9)],
               dark:  [Color(hex: 0x1B2E22), Color(hex: 0x18271F), Color(hex: 0x121C18)],
-              tint: Color(hex: 0x34C76F)),
+              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A),
         .init(id: "mono", name: "Mono",
               light: [Color(hex: 0xF2F2F5), Color(hex: 0xE4E4E9), Color(hex: 0xD5D5DB)],
               dark:  [Color(hex: 0x1E1E22), Color(hex: 0x191919), Color(hex: 0x121214)],
-              tint: Color(hex: 0x8E8E93)),
+              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C),
         .init(id: "rose", name: "Rose",
               light: [Color(hex: 0xFFE1E6), Color(hex: 0xFFC9D5), Color(hex: 0xFAB0C6)],
               dark:  [Color(hex: 0x33212A), Color(hex: 0x2A1B24), Color(hex: 0x1D141A)],
-              tint: Color(hex: 0xF06792)),
+              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
     ]
+
+    /// A theme = the paired wallpaper + bubble colour, applied together by a Chat Theme card.
+    static func themeColor(_ id: String) -> ChatColorSpec? {
+        gradient(id).map { ChatColorSpec(colors: [$0.bubbleHex]) }
+    }
     static func gradient(_ id: String) -> WallpaperGradient? { all.first { $0.id == id } }
 }
 

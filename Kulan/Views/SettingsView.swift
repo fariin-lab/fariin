@@ -442,17 +442,24 @@ struct AppearanceSettingsView: View {
                         in: RoundedRectangle(cornerRadius: 17, style: .continuous))
     }
 
-    // Quick theme cards: the built-in gradients, one tap = that wallpaper for all chats.
+    // Quick theme cards. A THEME = wallpaper + paired bubble colour (user request): one tap
+    // applies BOTH to all chats, and the card previews both so what you see is what you get.
     private var themeCards: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(ChatWallpapers.all) { g in
+                    let themeColor = ChatColorSpec(colors: [g.bubbleHex])
+                    // Selected only when BOTH halves of the theme are the active ones.
                     let isSel = defaultWallpaper == .gradient(g.id)
-                    Button { wallStore.applyToAllChats(.gradient(g.id)) } label: {
+                        && defaultColor?.stored == themeColor.stored
+                    Button {
+                        wallStore.applyToAllChats(.gradient(g.id))
+                        colorStore.applyToAllChats(themeColor)
+                    } label: {
                         VStack(spacing: 6) {
                             Capsule().fill(.white.opacity(0.9)).frame(width: 44, height: 12)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            Capsule().fill(Theme.defaultBubble(dark)).frame(width: 44, height: 12)
+                            Capsule().fill(themeColor.solid).frame(width: 44, height: 12)
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         .padding(10)
