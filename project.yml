@@ -54,15 +54,16 @@ targets:
             icon-blue:   { CFBundleIconFiles: [icon-blue] }
             icon-ivory:  { CFBundleIconFiles: [icon-ivory] }
             icon-chrome: { CFBundleIconFiles: [icon-chrome] }
-        # Export compliance is deliberately NOT declared in the plist. Kulan ships its
-        # own E2EE (libsodium) = NON-exempt encryption; declaring false was a false
-        # statement, and declaring true without a compliance code makes the upload FAIL
-        # (409 Invalid Export Compliance Code — hit 2026-07-20). Standard flow instead:
-        # each build sits "Missing Compliance" in ASC until the questionnaire is answered
-        # there (answers in AppStore/store-listing.md). Once ASC issues the code, add:
-        #   ITSAppUsesNonExemptEncryption: true
-        #   ITSEncryptionExportComplianceCode: <code from ASC>
-        # and uploads auto-clear again.
+        # Export compliance: 2026-07-24 the account owner made the determination that Kulan
+        # QUALIFIES FOR THE STANDARD EXEMPTION (uses standard, publicly-available crypto —
+        # libsodium — and is offered as a mass-market app; France distribution = No). That was
+        # answered in ASC for build 363, and Apple's own dialog directs declaring it in the plist
+        # so every future build auto-clears instead of sitting "Missing Compliance". Hence:
+        ITSAppUsesNonExemptEncryption: false
+        # NOTE: this is the owner's export-compliance declaration. If the app's crypto or its
+        # distribution (e.g. enabling France, or a stricter reading of E2EE as non-exempt) changes,
+        # revisit this — the earlier stance treated E2EE as NON-exempt (would be `true` + an
+        # ITSEncryptionExportComplianceCode issued by ASC).
         NSPhotoLibraryUsageDescription: "Kulan needs photo access so you can send pictures in chats."
         NSPhotoLibraryAddUsageDescription: "Kulan needs permission to save photos to your camera roll."
         NSCameraUsageDescription: "Kulan needs camera access so you can take photos in chats."
