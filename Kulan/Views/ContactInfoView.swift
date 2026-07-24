@@ -46,7 +46,7 @@ struct ContactInfoView: View {
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
-    @State private var showPublicStory = false     // ring tapped → play their public story
+    @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
     // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
     // drag-down close shrinks back into it.
     @Namespace private var mediaNS
@@ -202,14 +202,16 @@ struct ContactInfoView: View {
                 ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
                     .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
             }
-            // Their public story, opened from the ring on the hero avatar. anonymous: we don't write a
-            // view record (a non-contact may not have write access to the author's story views).
-            .fullScreenCover(isPresented: $showPublicStory) {
-                if let pg = publicStory {
-                    StoryViewer(group: pg, anonymous: true, ownSwipeDismiss: true,
-                                onClose: { showPublicStory = false })
-                        .background(Color.black.ignoresSafeArea())
-                }
+            // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
+            // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and
+            // NO extra background wrapper) — the previous isPresented + nested `if let` + black
+            // `.background(...ignoresSafeArea())` version couldn't be closed cleanly: that wrapper sat
+            // over the library's swipe-down pan, which is the gesture that dismisses it.
+            // anonymous: we don't write a view record (a non-contact may not have write access to the
+            // author's story views).
+            .fullScreenCover(item: $storyViewerGroup) { g in
+                StoryViewer(group: g, anonymous: true, ownSwipeDismiss: true,
+                            onClose: { storyViewerGroup = nil })
             }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
@@ -439,7 +441,7 @@ struct ContactInfoView: View {
             }
             .contentShape(Circle())
             .onTapGesture {
-                if publicStory != nil { showPublicStory = true }
+                if let s = publicStory { storyViewerGroup = s }
                 else if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true }
             }
             Text(shownName).font(.title.weight(.bold))
