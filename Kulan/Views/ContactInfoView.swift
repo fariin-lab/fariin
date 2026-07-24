@@ -177,8 +177,20 @@ struct ContactInfoView: View {
             // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
             // anyone who reaches this profile can watch it, contact or not.
             if !isSelf {
-                publicStory = await StoriesRepository.shared.publicStoryGroup(
-                    for: otherUid, name: shownName, photoUrl: gatedPhotoUrl)
+                // SEED SYNCHRONOUSLY from the already-loaded story tray first, so for anyone whose
+                // story we know about the ring is there on the FIRST frame instead of blinking in
+                // after the network round-trip. The fetch below then covers non-contacts (public
+                // stories that were never in our tray).
+                if publicStory == nil,
+                   let known = StoriesRepository.shared.others.first(where: { $0.authorUid == otherUid }),
+                   !known.stories.isEmpty {
+                    publicStory = known
+                }
+                if let fresh = await StoriesRepository.shared.publicStoryGroup(
+                    for: otherUid, name: shownName, photoUrl: gatedPhotoUrl) {
+                    publicStory = fresh
+                }
+                // else: keep the tray-seeded group (a contacts-only story is still watchable here)
             }
         }
     }
@@ -406,14 +418,19 @@ struct ContactInfoView: View {
             ZStack {
                 // Story ring (Instagram/WhatsApp pattern): a colored gradient ring means this person has
                 // an active public story — tap the avatar to watch it instead of opening the photo.
-                if publicStory != nil {
-                    Circle()
-                        .stroke(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
-                                               startPoint: .topLeading, endPoint: .bottomTrailing),
-                                lineWidth: 3)
-                        .frame(width: 100, height: 100)
-                        .opacity(showProfilePhoto ? 0 : 1)
-                }
+                //
+                // ALWAYS RENDERED, only faded: the ring is wider than the avatar, so rendering it
+                // conditionally resized this ZStack (88 → 100) the moment the async story lookup
+                // landed — the page visibly re-arranged itself a beat after opening. Reserving the
+                // space (same trick as the @handle line below) means the ring can only fade in, and
+                // nothing ever moves.
+                Circle()
+                    .stroke(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            lineWidth: 3)
+                    .frame(width: 100, height: 100)
+                    .opacity(publicStory != nil && !showProfilePhoto ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: publicStory != nil)
                 AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88)
                     // The viewer IS this avatar while open — hide the original so the morph reads
                     // as one circle leaving and returning, not a copy floating over it.
