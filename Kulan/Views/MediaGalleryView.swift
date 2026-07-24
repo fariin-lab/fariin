@@ -114,11 +114,11 @@ struct MediaGalleryView: View {
         }
         .fullScreenCover(item: $viewerImage) { msg in
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
-                            cid: cid, suppressDismissPan: false)
+                            cid: cid, suppressDismissPan: true)
                 .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid)
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: true)
                 .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {

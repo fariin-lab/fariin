@@ -187,7 +187,7 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in
-                ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
+                ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
                     .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
             }
             // Their public story, opened from the ring on the hero avatar. anonymous: we don't write a

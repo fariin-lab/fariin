@@ -607,18 +607,18 @@ struct ThreadView: View {
             // CLOSE = only the PHOTO follows the finger and the black backdrop fades (system photo
             // viewer), NOT the whole page. The native .zoom transition's own drag moved the WHOLE card
             // (and .interactiveDismissDisabled did NOT suppress it), so it's removed — the in-viewer
-            // image-only pan (suppressDismissPan: false) owns the drag-down close, like the album viewer.
+            // image-only pan (suppressDismissPan: true) owns the drag-down close, like the album viewer.
             Group {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
-                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: false,
+                    ImageViewerView(message: msg, cid: cid, suppressDismissPan: true,
                                     telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
                                     onDeleteForMe: { m in repo.hideForMe(m.id) })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
-                                    cid: cid, suppressDismissPan: false,
+                                    cid: cid, suppressDismissPan: true,
                                     telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
@@ -629,7 +629,7 @@ struct ThreadView: View {
             // Zoom transition = the hero OPEN (photo grows from its bubble) and the button-close shrink
             // back into it. The DRAG-down close is NOT the zoom transition's (its pan moved the whole
             // card — chrome and all — over a moving page; user rejected that): SignalDismissHost owns the
-            // drag (suppressDismissPan: false) — chrome hides instantly, ONLY the photo follows the
+            // drag (suppressDismissPan: true) — chrome hides instantly, ONLY the photo follows the
             // finger, the page behind never moves. The zoom transition's own pan/pinch are disabled
             // inside SignalDismissHost so the two can never fight.
             // TELEGRAM-OPEN TEST: when the toggle is on, the system transition is skipped entirely —
@@ -649,7 +649,7 @@ struct ThreadView: View {
         // back into it. The drag-down close stays media-only via SignalDismissHost.
         .fullScreenCover(item: $albumViewer) { wrap in
             ImageViewerView(message: wrap.gallery.first { $0.id == wrap.startId } ?? wrap.gallery[0],
-                            in: wrap.gallery, cid: cid, suppressDismissPan: false,
+                            in: wrap.gallery, cid: cid, suppressDismissPan: true,
                             onSendEdited: { data, caption, viewOnce in
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                             },
@@ -657,7 +657,7 @@ struct ThreadView: View {
             .navigationTransition(.zoom(sourceID: wrap.startId, in: imageViewerNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false,
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: true,
                               telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil)
                 // Zoom = hero open + button-close shrink into the bubble. The drag-down close is the
                 // media-only pan (same as photos): chrome hides instantly, only the video moves, the
