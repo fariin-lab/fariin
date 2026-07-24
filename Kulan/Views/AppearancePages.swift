@@ -160,7 +160,7 @@ struct ChatWallpaperPage: View {
                     // Gradient wallpapers.
                     ForEach(ChatWallpapers.all) { g in
                         presetTile(.gradient(g.id)) {
-                            LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+                            GradientWallpaperView(g: g, dark: dark)
                         }
                     }
                 }
@@ -394,7 +394,7 @@ struct WallpaperPreviewScreen: View {
             Theme.bg(dark)
         case .gradient(let id):
             if let g = ChatWallpapers.gradient(id) {
-                LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+                GradientWallpaperView(g: g, dark: dark)
             } else { Theme.bg(dark) }
         case .photo(let id):
             if let img = store.libraryImage(id) {
@@ -565,7 +565,7 @@ struct ChatColorPage: View {
             Color(.secondarySystemGroupedBackground)
         case .gradient(let id):
             if let g = ChatWallpapers.gradient(id) {
-                LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+                GradientWallpaperView(g: g, dark: dark)
             } else { Color(.secondarySystemGroupedBackground) }
         case .photo(let id):
             if let img = WallpaperStore.shared.libraryImage(id) {

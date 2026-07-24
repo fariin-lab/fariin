@@ -130,7 +130,7 @@ struct ContactInfoView: View {
 
     // Nav bar trailing: just Edit (rename). The "…" More menu is a quick-action tile (below).
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
-        if !isSelf {
+        if !isSelf && !showProfilePhoto {   // no Edit floating over the open photo
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showRename = true }.tint(.primary)
             }
@@ -159,7 +159,10 @@ struct ContactInfoView: View {
         // viewer's own full-screen backdrop covers the bar, so no toggle is needed.
         .toolbar(.visible, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .navigationBarBackButtonHidden(false)
+        // Hide the back chevron while the photo viewer is open so it doesn't float over the photo.
+        // We hide the ITEMS, never the bar itself — toggling bar visibility changes the scroll
+        // inset, which is what used to jump the whole page.
+        .navigationBarBackButtonHidden(showProfilePhoto)
         .toolbar { navTrailing }
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
@@ -682,18 +685,14 @@ private struct ProfilePhotoViewer: View {
                         }
                 )
             }
-            .overlay(alignment: .top) {
-                HStack {
-                    Button { close() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                            .frame(width: 38, height: 38)
-                            .background(Color.primary.opacity(0.08), in: Circle())
-                    }
-                    Spacer()
-                    Text(name).font(.headline).foregroundStyle(.primary)
-                    Spacer()
-                    Color.clear.frame(width: 38, height: 38)   // balances the X so the name stays centered
+            // Just the X (user spec): no name label — the photo is the subject, and the page's own
+            // back/Edit chrome is hidden while this is open so nothing else floats over it.
+            .overlay(alignment: .topLeading) {
+                Button { close() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                        .frame(width: 38, height: 38)
+                        .background(Color.primary.opacity(0.08), in: Circle())
                 }
                 .padding(.horizontal, 16)
                 .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest

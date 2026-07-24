@@ -52,7 +52,12 @@ struct WallpaperPreset: Identifiable, Equatable {
 }
 
 enum WallpaperPresets {
+    // Real image wallpapers (not flat gradients) — the theme-paired six first, then extras.
     static let all: [WallpaperPreset] = [
+        .init(id: "wp-sunset"), .init(id: "wp-tide"), .init(id: "wp-violet"),
+        .init(id: "wp-forest"), .init(id: "wp-graphite"), .init(id: "wp-rose"),
+        .init(id: "wp-nightlights"), .init(id: "wp-amber"), .init(id: "wp-teal"),
+        .init(id: "wp-daylight"), .init(id: "wp-sand"), .init(id: "wp-ice"),
         .init(id: "wp-dunes"), .init(id: "wp-ocean"), .init(id: "wp-aurora"),
         .init(id: "wp-mesh"), .init(id: "wp-night"), .init(id: "wp-doodle"),
     ]
@@ -82,7 +87,25 @@ struct WallpaperGradient: Identifiable, Equatable {
     let dark: [Color]
     let tint: Color        // vivid representative colour → the "Apply Wallpaper" button tint
     let bubbleHex: UInt    // the bubble colour this wallpaper is PAIRED with (a "theme" = both)
+    // The real image this theme renders (user spec: themes/presets are photo wallpapers, not flat
+    // gradients). The gradient palettes stay as the fallback if the file is ever missing.
+    var imageId: String? = nil
     func colors(_ dark: Bool) -> [Color] { dark ? self.dark : light }
+    func image() -> UIImage? { imageId.flatMap { WallpaperPreset(id: $0).image() } }
+}
+
+/// Renders a built-in theme wallpaper: its real IMAGE when one is bundled, else the gradient
+/// palette. One place, so every tile/preview/chat background shows the same thing.
+struct GradientWallpaperView: View {
+    let g: WallpaperGradient
+    let dark: Bool
+    var body: some View {
+        if let img = g.image() {
+            Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
+        } else {
+            GradientWallpaperView(g: g, dark: dark)
+        }
+    }
 }
 
 enum ChatWallpapers {
@@ -92,27 +115,27 @@ enum ChatWallpapers {
         .init(id: "sunset", name: "Sunset",
               light: [Color(hex: 0xFFE9C7), Color(hex: 0xFFC9AE), Color(hex: 0xF6AEC6)],
               dark:  [Color(hex: 0x3A2A2C), Color(hex: 0x2A1E28), Color(hex: 0x1C161C)],
-              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D),
+              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D, imageId: "wp-sunset"),
         .init(id: "ocean", name: "Ocean",
               light: [Color(hex: 0xD6ECFF), Color(hex: 0xB8DCF6), Color(hex: 0xA6D5E6)],
               dark:  [Color(hex: 0x16283A), Color(hex: 0x142430), Color(hex: 0x101A22)],
-              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0),
+              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0, imageId: "wp-tide"),
         .init(id: "dusk", name: "Dusk",
               light: [Color(hex: 0xE7D9FF), Color(hex: 0xD3C1F5), Color(hex: 0xF3C6E4)],
               dark:  [Color(hex: 0x2A2340), Color(hex: 0x231C33), Color(hex: 0x1A1626)],
-              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0),
+              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0, imageId: "wp-violet"),
         .init(id: "forest", name: "Forest",
               light: [Color(hex: 0xDCF3D8), Color(hex: 0xBFE7C2), Color(hex: 0xA9DCC9)],
               dark:  [Color(hex: 0x1B2E22), Color(hex: 0x18271F), Color(hex: 0x121C18)],
-              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A),
+              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A, imageId: "wp-forest"),
         .init(id: "mono", name: "Mono",
               light: [Color(hex: 0xF2F2F5), Color(hex: 0xE4E4E9), Color(hex: 0xD5D5DB)],
               dark:  [Color(hex: 0x1E1E22), Color(hex: 0x191919), Color(hex: 0x121214)],
-              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C),
+              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C, imageId: "wp-graphite"),
         .init(id: "rose", name: "Rose",
               light: [Color(hex: 0xFFE1E6), Color(hex: 0xFFC9D5), Color(hex: 0xFAB0C6)],
               dark:  [Color(hex: 0x33212A), Color(hex: 0x2A1B24), Color(hex: 0x1D141A)],
-              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
+              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86, imageId: "wp-rose"),
     ]
 
     /// A theme = the paired wallpaper + bubble colour, applied together by a Chat Theme card.
@@ -289,7 +312,7 @@ struct ChatWallpaperBackground: View {
             Theme.bg(dark)
         case .gradient(let id):
             if let g = ChatWallpapers.gradient(id) {
-                LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+                GradientWallpaperView(g: g, dark: dark)
             } else {
                 Theme.bg(dark)
             }

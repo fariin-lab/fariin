@@ -356,8 +356,9 @@ struct WallpaperPickerSheet: View {
 
     private func gradientTile(_ g: WallpaperGradient) -> some View {
         tile(isSelected: selected == .gradient(g.id)) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom))
+            // Shows the theme's real image (falls back to its gradient), clipped to the tile.
+            GradientWallpaperView(g: g, dark: dark)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         } action: { preview(.gradient(g.id)) }
     }
 

@@ -524,7 +524,7 @@ struct AppearanceSettingsView: View {
             Color(.secondarySystemGroupedBackground)
         case .gradient(let id):
             if let g = ChatWallpapers.gradient(id) {
-                LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+                GradientWallpaperView(g: g, dark: dark)
             } else { Color(.secondarySystemGroupedBackground) }
         case .photo(let id):
             if let img = wallStore.libraryImage(id) {
@@ -571,7 +571,7 @@ struct AppearanceSettingsView: View {
                         }
                         .padding(10)
                         .frame(width: 92, height: 118)
-                        .background(LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom))
+                        .background(GradientWallpaperView(g: g, dark: dark))
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
