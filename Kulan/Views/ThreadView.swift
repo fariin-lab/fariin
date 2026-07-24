@@ -1363,7 +1363,13 @@ struct ThreadView: View {
         // their in-text match highlight as the query changed (only the jumped-to row, via highlightId).
         let term = searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
         // Audit M2: viewedOnceTick keys the cache so consuming a view-once photo repaints its bubble.
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)"
+        // Chat colour: a live colour change flips a row's route (UIKit default-colour cell ⇄
+        // colour-capable SwiftUI cell). It changes no message content, so without it in the
+        // signature the route-flip reload never fires and the colour didn't apply until you
+        // left and re-opened the chat (user report). Putting it in every row's signature makes
+        // the existing contentChanged→splitByRouteFlip→reloadItems path swap the cells live.
+        let colorTok = chatColorSpec?.stored ?? "-"
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -1374,7 +1380,7 @@ struct ThreadView: View {
                 let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
                 // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
                 let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)"
             }
             sigCache.key = key
             sigCache.base = out

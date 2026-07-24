@@ -90,7 +90,7 @@ struct AttachRecentsStrip: View {
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
     @State private var albums: [AttachAlbum] = []
 
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)   // 4 per row = smaller tiles (user: photos were too big)
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)   // 3 per row (user request)
 
     var body: some View {
         VStack(spacing: 0) {

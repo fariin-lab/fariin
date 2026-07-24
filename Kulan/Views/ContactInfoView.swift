@@ -152,7 +152,10 @@ struct ContactInfoView: View {
         .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(showProfilePhoto ? .hidden : .visible, for: .navigationBar)   // photo viewer owns the screen
+        // Keep the nav bar visible always: toggling it hidden while the photo viewer opens
+        // shrank the scroll's top inset, which jumped the whole page UP (user report). The
+        // viewer's own full-screen backdrop covers the bar, so no toggle is needed.
+        .toolbar(.visible, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(false)
         .toolbar { navTrailing }
