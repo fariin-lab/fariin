@@ -232,7 +232,9 @@ extension ChatWallpaper: Identifiable {
 struct WallpaperColorPage: View {
     @State private var previewing: ChatWallpaper?
     private var store: WallpaperStore { .shared }
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 14), count: 4)
+    // Same grid as the Set Wallpaper page (user spec): colours are wallpapers, so they preview as
+    // full tiles rather than little circles — you see the actual background you're choosing.
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 
     private var current: ChatWallpaper {
         ChatWallpaper(stored: UserDefaults.standard.string(forKey: WallpaperStore.defaultKey))
@@ -240,23 +242,28 @@ struct WallpaperColorPage: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: cols, spacing: 14) {
+            LazyVGrid(columns: cols, spacing: 10) {
                 ForEach(WallpaperColors.all, id: \.self) { hex in
                     Button { previewing = .color(hex) } label: {
-                        Circle().fill(Color(hex: hex))
-                            .frame(height: 68)
-                            .overlay(Circle().strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+                        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        Color(hex: hex)
+                            .frame(height: 150)
+                            .frame(maxWidth: .infinity)
+                            .clipShape(shape)
+                            .overlay(shape.strokeBorder(.primary.opacity(0.10), lineWidth: 1))
                             .overlay {
                                 if current == .color(hex) {
-                                    Image(systemName: "checkmark").font(.system(size: 20, weight: .bold))
+                                    Image(systemName: "checkmark").font(.system(size: 26, weight: .semibold))
                                         .foregroundStyle(hexIsDark(hex) ? .white : .black)
+                                        .shadow(color: .black.opacity(hexIsDark(hex) ? 0.5 : 0), radius: 3)
                                 }
                             }
+                            .contentShape(shape)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(18)
+            .padding(14)
             .background(Color(.secondarySystemGroupedBackground),
                         in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .padding(16)
