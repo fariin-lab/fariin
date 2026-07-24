@@ -256,6 +256,8 @@ struct AccountSettingsView: View {
                 }
                 Button(role: .destructive) { showDelete = true } label: {
                     Label("Delete Account", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
             }
         }
@@ -287,28 +289,11 @@ struct AccountSettingsView: View {
         } message: {
             Text("You'll need to sign back in to use Kulan on this device.")
         }
-        .alert("Delete account?", isPresented: $showDelete) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
-                Task {
-                    working = true
-                    do {
-                        try await profile.deleteAccount()
-                        SessionWipe.wipeAccountData()   // server data is gone; clear the device copy too
-                        working = false; dismiss(); onSignOut()   // only sign out if the server delete SUCCEEDED
-                    } catch {
-                        working = false
-                        deleteError = error.localizedDescription   // failed delete must NOT look like success
-                    }
-                }
-            }
-        } message: {
-            Text("This permanently deletes your account and profile. This can't be undone.")
-        }
-        .alert("Couldn't delete account", isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(deleteError ?? "Please try again.")
+        // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
+        // and re-verifies you first (an alert can't do the provider re-auth, and skipping it is
+        // what used to leave accounts half-deleted).
+        .navigationDestination(isPresented: $showDelete) {
+            DeleteAccountView { dismiss(); onSignOut() }
         }
     }
 

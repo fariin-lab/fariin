@@ -294,6 +294,38 @@ final class AuthService: NSObject {
     func connectEmail(email: String, password: String) async throws {
         try await link(EmailAuthProvider.credential(withEmail: email, password: password))
     }
+
+    // MARK: - Re-authentication (required before deleting an account)
+
+    /// Firebase refuses `user.delete()` unless the sign-in is recent. Rather than telling people
+    /// to sign out and back in (which for an anonymous session would destroy the account), we
+    /// re-verify them in place with the provider they already use.
+    var needsRecentLogin: Bool {
+        guard let user = Auth.auth().currentUser else { return false }
+        let last = user.metadata.lastSignInDate ?? .distantPast
+        return Date().timeIntervalSince(last) >= 4 * 60
+    }
+
+    /// Which doors this account can re-verify with (what it's actually linked to).
+    var reauthMethods: [SignInMethod] { SignInMethod.allCases.filter { isConnected($0) } }
+
+    private func reauthenticate(with credential: AuthCredential) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        _ = try await user.reauthenticate(with: credential)
+    }
+
+    func reauthApple(authorization: ASAuthorization) async throws {
+        try await reauthenticate(with: makeAppleCredential(authorization: authorization))
+    }
+
+    func reauthGoogle() async throws {
+        try await reauthenticate(with: obtainGoogleCredential())
+    }
+
+    func reauthEmail(password: String) async throws {
+        guard let email = Auth.auth().currentUser?.email else { throw AuthFlowError.notSignedIn }
+        try await reauthenticate(with: EmailAuthProvider.credential(withEmail: email, password: password))
+    }
 }
 
 extension AuthService: ASWebAuthenticationPresentationContextProviding {

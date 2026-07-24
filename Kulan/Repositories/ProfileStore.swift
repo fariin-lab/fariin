@@ -77,15 +77,15 @@ final class ProfileStore {
         guard let user = Auth.auth().currentUser else { return }
         let uid = user.uid
 
-        // PRE-FLIGHT: Firebase refuses `user.delete()` unless the sign-in is recent (~5 min),
-        // which is the normal case for a real deletion. This used to be discovered only AFTER
-        // the stories/photo/profile doc had already been destroyed, leaving the account
-        // half-deleted and unrecoverable: data gone, account alive, user stuck in onboarding.
-        // Check FIRST and bail with a clear instruction while everything is still intact.
-        let lastSignIn = user.metadata.lastSignInDate ?? .distantPast
-        guard Date().timeIntervalSince(lastSignIn) < 4 * 60 else {
+        // ORDER MATTERS: Firebase refuses `user.delete()` unless the sign-in is recent, and this
+        // used to be discovered only AFTER the stories/photo/profile doc were destroyed — leaving
+        // the account half-deleted and unrecoverable (data gone, account alive, user stranded in
+        // onboarding). DeleteAccountView now re-authenticates FIRST, so by the time we get here
+        // the delete is expected to succeed. The guard stays as a backstop: bail while everything
+        // is still intact rather than destroy data we can't finish deleting.
+        guard !AuthService.shared.needsRecentLogin else {
             throw NSError(domain: "Kulan", code: 17014, userInfo: [NSLocalizedDescriptionKey:
-                "For your security, deleting an account needs a fresh sign-in. Sign out, sign back in, then delete — nothing has been deleted yet."])
+                "Please verify it's you and try again — nothing has been deleted yet."])
         }
 
         // Remove the content I posted BEFORE the account goes away, so nothing of mine
