@@ -133,7 +133,9 @@ struct ChatWallpaperPage: View {
                         presetTile(.photo(pid)) {
                             Group {
                                 if let img = store.libraryImage(pid) {
-                                    Image(uiImage: img).resizable().scaledToFill()
+                                    // Color.clear takes the tile frame; the image fills it and
+                                    // is clipped, so any aspect ratio crops uniformly (no bleed).
+                                    Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
                                 } else {
                                     Color.secondary.opacity(0.15)
                                 }
@@ -150,7 +152,7 @@ struct ChatWallpaperPage: View {
                         presetTile(.preset(p.id)) {
                             Group {
                                 if let img = p.image() {
-                                    Image(uiImage: img).resizable().scaledToFill()
+                                    Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
                                 } else { Color.secondary.opacity(0.15) }
                             }
                         }
@@ -299,6 +301,7 @@ struct WallpaperPreviewScreen: View {
                     Spacer()
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 8)   // clear the top edge (status bar hidden below)
 
                 Spacer()
 
@@ -337,6 +340,7 @@ struct WallpaperPreviewScreen: View {
                 .padding(.bottom, 12)
             }
         }
+        .statusBarHidden()   // full-screen preview: no clock overlapping the X (user report)
     }
 
     @ViewBuilder private var background: some View {
@@ -350,7 +354,7 @@ struct WallpaperPreviewScreen: View {
         case .photo(let id):
             if let img = store.libraryImage(id) {
                 Color.clear
-                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 22 : 0) }
+                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 10 : 0) }
                     .clipped()
                     .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
             } else { Theme.bg(dark) }
@@ -359,7 +363,7 @@ struct WallpaperPreviewScreen: View {
         case .preset(let id):
             if let img = WallpaperPreset(id: id).image() {
                 Color.clear
-                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 22 : 0) }
+                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 10 : 0) }
                     .clipped()
                     .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
             } else { Theme.bg(dark) }
@@ -380,8 +384,11 @@ struct WallpaperPreviewScreen: View {
         // Blurred photo: bake the blur into a real library image so every chat renders it
         // for free (no live blur cost), and the pick stays a normal library wallpaper.
         if blurred, case .photo(let id) = wallpaper, let img = store.libraryImage(id),
-           let baked = Self.gaussianBlur(img, radius: 22),
+           let baked = Self.gaussianBlur(img, radius: 10),
            let bakedId = store.addToLibrary(baked) {
+            // Only ONE tile per photo: baking the blur replaces the sharp original, it
+            // doesn't add a second tile (user report of duplicate wallpapers).
+            if bakedId != id { store.deleteFromLibrary(id) }
             final = .photo(bakedId)
         }
         store.applyToAllChats(final)

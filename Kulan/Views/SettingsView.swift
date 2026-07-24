@@ -818,7 +818,7 @@ struct EditProfileView: View {
                 // Picking a photo now opens a CIRCULAR move-and-scale cropper first, so you
                 // control exactly how it's framed before it's set (user request).
                 Task {
-                    guard let item, let data = try? await item.loadTransferable(type: Data.self),
+                    guard let data = try? await item.loadTransferable(type: Data.self),
                           let img = UIImage(data: data) else { photoItem = nil; return }
                     await MainActor.run { cropCandidate = CropItem(image: img); photoItem = nil }
                 }
