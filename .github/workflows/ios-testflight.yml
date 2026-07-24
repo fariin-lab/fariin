@@ -72,9 +72,15 @@ jobs:
           TF_CHANGELOG: |
             What's new in this build:
 
-            Wallpaper: when you set a photo as your wallpaper you can now pinch to zoom and drag to position it, and that framing is saved. The Blurred option is a gentler blur, photos of any shape now fit their tiles evenly, and blurring a photo no longer leaves a duplicate. The close button no longer overlaps the clock.
-            All Media redesigned: an "All Media" header with a live photo and video count, a filter button, and tabs for Media, Files, Voice, Links and GIFs, with items grouped by Today, Yesterday and month.
-            Stories: a new "Everyone" audience. Pick it and anyone who finds your profile can watch your story (your contacts still see it in their tray as usual).
+            IMPORTANT FIX: signing out no longer makes your old messages unreadable. Your encryption key is now kept per account, so you can sign out and back in and your history is still there.
+            Signing up by email actually works now. It was broken: choosing "Create Account" with an email could never create an account.
+            Signing up with an account you already have now just logs you in, instead of dead-ending. A wrong password says so clearly.
+            Delete Account is now a proper page: it names the account, says exactly what is erased, and asks you to verify it's you first. Before, a delete could fail halfway and leave the account broken.
+            Account settings has a new Sign-in Methods section: see whether Apple, Google or Email is connected, and connect another so you can always get back in.
+            Tapping a photo in a chat opens it again (it had stopped opening once the photo finished loading).
+            Replying to a photo now shows the actual photo as a small preview, instead of a camera icon.
+            All Media tabs are now the liquid glass bar.
+            The "Create your profile" screen was redesigned to match the sign-up flow, with a live preview of your avatar.
 
-            Please try setting a photo wallpaper with zoom, open All Media from a chat, and post a story to Everyone, then tell me what feels off.
+            Please test: sign out and back in (your chats should still be readable), signing up by email, and the new Delete Account screen. Tell me what feels off.
         run: fastlane beta
