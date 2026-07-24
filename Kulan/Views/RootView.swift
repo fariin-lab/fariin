@@ -3,7 +3,7 @@ import LocalAuthentication
 import UIKit
 
 struct RootView: View {
-    enum Phase { case loading, onboarding, main }
+    enum Phase { case loading, welcome, onboarding, main }
     @State private var phase: Phase = .loading
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
@@ -22,6 +22,11 @@ struct RootView: View {
                 // screen so boot feels instant, like other chat apps. No "loading" UI.
                 Text("Kulan").font(.system(size: 40, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
+            case .welcome:
+                // Signed out → the front door (Apple / Google / email). After any door
+                // succeeds, route() decides onboarding (new account) vs main (returning).
+                WelcomeView(onAuthed: { Task { await route() } },
+                            onDemo: { phase = .main })
             case .onboarding:
                 OnboardingView { phase = .main }
             case .main:
@@ -80,7 +85,13 @@ struct RootView: View {
 
     private func route() async {
         phase = .loading
-        await AuthService.shared.bootstrap()   // local when already signed in
+        await AuthService.shared.bootstrap()   // adopts an existing session, creates nothing
+        // Signed out (fresh install, or after sign-out) → the account doors. Existing
+        // anonymous testers still have their session, so they never see this screen.
+        guard AuthService.shared.isSignedIn else {
+            phase = .welcome
+            return
+        }
         // Returning user: boot INSTANTLY from the on-disk cache (the WhatsApp model).
         // Launch must never wait on the network — offline, each awaited server call
         // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
@@ -172,6 +183,13 @@ struct OnboardingView: View {
                 Section {
                     TextField("Your name", text: $name)
                         .textInputAutocapitalization(.words)
+                        // Apple hands over the person's name exactly once, at first
+                        // authorization — prefill it so they just pick a username.
+                        .onAppear {
+                            if name.isEmpty, let n = AuthService.shared.pendingDisplayName {
+                                name = n
+                            }
+                        }
                     HStack(spacing: 1) {
                         Text("@").foregroundStyle(.secondary)
                         TextField("Username", text: $handle)

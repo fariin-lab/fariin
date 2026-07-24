@@ -74,6 +74,9 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.kulan.messenger
             CFBundleURLSchemes: [kulan]
+          # Google sign-in OAuth redirect (the reversed client id from GoogleService-Info).
+          - CFBundleURLName: com.kulan.messenger.google
+            CFBundleURLSchemes: [com.googleusercontent.apps.522284693527-teio4ph7vaedv5s59l3u589sjdfnavt2]
         UIBackgroundModes: [voip, audio]
     settings:
       base:
