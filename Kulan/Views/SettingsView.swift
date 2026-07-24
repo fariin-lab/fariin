@@ -694,6 +694,8 @@ struct EditProfileView: View {
     @State private var localPreview: UIImage?   // picked photo, shown instantly while uploading
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
+    @State private var showEditPhoto = false        // Edit Photo menu (Choose / Remove)
+    @State private var showPhotoPicker = false       // programmatic PhotosPicker present
     @State private var saving = false
     @State private var error: String?
     // What the fields held when the sheet opened — closing with UNSAVED text edits asks
@@ -713,15 +715,11 @@ struct EditProfileView: View {
             Form {
                 // Avatar header on the plain grouped background (Contacts / Settings edit style).
                 Section {
-                    // Every control here is .plain + its own contentShape: a DEFAULT-styled
-                    // button inside a Form stretches its tap zone across the whole row, which
-                    // made the empty white area open the gallery and let the picker swallow
-                    // taps meant for Remove (user's device report).
-                    VStack(spacing: 10) {
-                        PhotosPicker(selection: $photoItem, matching: .images) {
-                            // Seamless set (the WhatsApp feel): the picked photo shows INSTANTLY
-                            // as a local preview while the upload runs silently behind it — no
-                            // dark spinner blocking the avatar.
+                    // One "Edit Photo" pill (reference look). Avatar or button opens a menu:
+                    // Choose Photo / Remove Photo. Each control is .plain + own contentShape so a
+                    // Form-default button can't stretch its tap zone across the whole row.
+                    VStack(spacing: 12) {
+                        Button { showEditPhoto = true } label: {
                             ZStack {
                                 AvatarView(name: firstName, photoUrl: profile.me?.photoUrl, size: 100)
                                 if let localPreview {
@@ -732,21 +730,14 @@ struct EditProfileView: View {
                             .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        PhotosPicker(selection: $photoItem, matching: .images) {
-                            Text("Change Photo").font(.subheadline).foregroundStyle(Color.accentColor)
-                                .contentShape(Rectangle())
+                        Button { showEditPhoto = true } label: {
+                            Text("Edit Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                .padding(.horizontal, 20).frame(height: 36)
+                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                                .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
-                        if profile.me?.photoUrl?.isEmpty == false {
-                            Button {
-                                confirmRemovePhoto = true
-                            } label: {
-                                Text("Remove Photo").font(.subheadline).foregroundStyle(.red)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(uploading)
-                        }
+                        .disabled(uploading)
                     }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
@@ -830,6 +821,13 @@ struct EditProfileView: View {
                     guard let item, let data = try? await item.loadTransferable(type: Data.self),
                           let img = UIImage(data: data) else { photoItem = nil; return }
                     await MainActor.run { cropCandidate = CropItem(image: img); photoItem = nil }
+                }
+            }
+            .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+            .confirmationDialog("Profile Photo", isPresented: $showEditPhoto, titleVisibility: .visible) {
+                Button("Choose Photo") { showPhotoPicker = true }
+                if profile.me?.photoUrl?.isEmpty == false {
+                    Button("Remove Photo", role: .destructive) { confirmRemovePhoto = true }
                 }
             }
             .fullScreenCover(item: $cropCandidate) { c in

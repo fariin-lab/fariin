@@ -83,6 +83,7 @@ jobs:
             Add Story is hidden when you turn stories off.
             The loading screen no longer overlaps the search bar on Calls and Chats.
             New privacy control: Settings > Privacy > Messages lets you choose who can start a chat with you (Everyone, My Contacts, No One).
+            Setting a profile photo now opens a circular move-and-scale cropper so you control the framing.
 
             Please test signing in with Apple and Google on a fresh account, and tell me what feels off.
         run: fastlane beta
