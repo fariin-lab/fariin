@@ -45,6 +45,7 @@ platform :ios do
 
     upload_to_testflight(
       api_key: api_key,
+      changelog: ENV["TF_CHANGELOG"] || "Bug fixes and improvements.",
       # Pass the app's numeric App Store Connect id so pilot does NOT call the `list-apps`
       # endpoint to resolve it. That lookup is what returned 500s during an Apple API blip and
       # failed the job even though altool had already delivered the binary. With apple_id given,

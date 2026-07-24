@@ -69,4 +69,20 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
+          TF_CHANGELOG: |
+            What's fixed and new in this build:
+
+            New app icons. Long-press the app or Settings > Appearance > App Icon to pick Midnight, Blue, Ivory or Chrome.
+            Chat themes now set the wallpaper AND the bubble color together. Set them for all chats from Appearance.
+            Set Wallpaper page redone: your own photos show first, a new Wallpaper Color page for solid backgrounds, and built-in photo wallpapers.
+            Chat bubble color now changes live while you pick it.
+            Swiping a chat now shows the normal grey actions instead of a blank row.
+            Tapping a profile photo no longer jumps the page.
+            The photo picker in a chat shows 3 per row.
+            Removed the duplicate My QR Code row (the QR button is top-left).
+            Add Story is hidden when you turn stories off.
+            The loading screen no longer overlaps the search bar on Calls and Chats.
+            New privacy control: Settings > Privacy > Messages lets you choose who can start a chat with you (Everyone, My Contacts, No One).
+
+            Please test signing in with Apple and Google on a fresh account, and tell me what feels off.
         run: fastlane beta
