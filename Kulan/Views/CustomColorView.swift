@@ -26,12 +26,8 @@ struct CustomColorView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 22) {
-                Picker("", selection: $isGradient) {
-                    Text("Solid").tag(false)
-                    Text("Gradient").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
+                modeSwitch
+                    .padding(.horizontal, 16)
 
                 preview
 
@@ -90,6 +86,39 @@ struct CustomColorView: View {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
                     .fill(mine ? spec.fill : AnyShapeStyle(Theme.received(dark)))
             }
+    }
+
+    // Solid / Gradient switch, built from plain Buttons instead of a segmented Picker: the Picker
+    // would not change selection at all on device (taps did nothing), so the mode could never be
+    // switched to Gradient. Two buttons are explicit, always hit-testable, and match the segmented
+    // bar used elsewhere in the app.
+    private var modeSwitch: some View {
+        HStack(spacing: 4) {
+            modeButton("Solid", gradient: false)
+            modeButton("Gradient", gradient: true)
+        }
+        .padding(4)
+        .background(Color(.tertiarySystemFill), in: Capsule(style: .continuous))
+    }
+
+    private func modeButton(_ title: String, gradient: Bool) -> some View {
+        let on = isGradient == gradient
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) { isGradient = gradient; editingStop = 0 }
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(on ? .semibold : .medium))
+                .foregroundStyle(on ? Color.primary : Color.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background {
+                    if on {
+                        Capsule(style: .continuous).fill(Color(.secondarySystemGroupedBackground))
+                    }
+                }
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // Gradient: two dots to choose which end the sliders edit.
