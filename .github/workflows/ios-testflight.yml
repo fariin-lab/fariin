@@ -72,13 +72,12 @@ jobs:
           TF_CHANGELOG: |
             What's new in this build:
 
-            NEW: you now get an email when your account is signed into on a new device, showing the device, time and IP. Only for a device that has not signed in before, so it is not noise.
-            NEW: you get a confirmation email when you delete your account.
-            Opening someone's story from their profile can now be closed properly, with the X or by swiping down, the same as a story from the chat list.
-            Opening a profile no longer jumps: the story ring and the bio used to appear a moment late and push the page down. Most noticeable from the Calls tab.
-            The Google button now shows the real Google logo instead of a plain letter G, on the sign up screen, in Account settings and when verifying a delete.
-            The "Verify it's you" step before deleting an account was redesigned.
-            Signing up with an email that already has an account now tells you to use Log In instead, rather than quietly signing you in.
+            Photos now open instantly. They used to show a spinner for a moment first, even when the photo was already loaded.
+            Dragging a photo down to close it now lands exactly on the thumbnail it came from, instead of settling in the wrong place and then correcting itself.
+            Voice notes have a dot on the line you can drag to move through the audio, like WhatsApp. Dragging anywhere else on the bubble still swipes to reply.
+            Swipe to reply now buzzes the moment the swipe is far enough, so you can feel when it will send. Photo and voice bubbles only buzzed after you let go.
+            Opening a story from someone's profile now closes with the same drag and hold gesture as a story from the chat list.
+            Tapping the picture of someone who has a story now asks whether you want their profile photo or their story. Before, the story always won and the photo could not be opened.
 
-            Please try: signing in on a second phone (you should get an email), and opening a profile from the Calls tab to check nothing jumps.
+            Please try: dragging a photo down to close it, and dragging the dot on a voice note.
         run: fastlane beta
