@@ -4818,8 +4818,8 @@ struct MessageBubble: View, Equatable {
     @ViewBuilder private func storyReplyHeader(_ reply: ReplyRef) -> some View {
         let me = AuthService.shared.uid
         VStack(alignment: isMe ? .trailing : .leading, spacing: 5) {
-            Text(isMe ? (reply.authorId == me ? "You replied to your status" : "You replied to their status")
-                      : (reply.authorId == me ? "Replied to your status" : "Replied to their status"))
+            Text(isMe ? (reply.authorId == me ? "You replied to your story" : "You replied to their story")
+                      : (reply.authorId == me ? "Replied to your story" : "Replied to their story"))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
                 // ~92x160 (measured from the reference): small enough to read as a story CARD,

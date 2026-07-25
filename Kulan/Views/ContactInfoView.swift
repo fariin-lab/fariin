@@ -57,6 +57,22 @@ struct ContactInfoView: View {
     // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name. Read
     // the observable store DIRECTLY (not the async-loaded @State), so the nickname shows immediately —
     // no 2s flash of the old name on open.
+    /// Every story in their group already watched → the ring goes grey instead of coloured, same rule
+    /// as the chat list and the stories row.
+    private var storyAllSeen: Bool {
+        guard let g = publicStory, !g.stories.isEmpty else { return false }
+        return !StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt).contains(false)
+    }
+
+    /// Re-seed from the repository after the viewer closes: markSeenLocally advanced the group's
+    /// watermark there, and reassigning `publicStory` is what re-evaluates the ring.
+    private func refreshStorySeen() {
+        if let known = StoriesRepository.shared.others.first(where: { $0.authorUid == otherUid }),
+           !known.stories.isEmpty {
+            publicStory = known
+        }
+    }
+
     private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
     private var dark: Bool { scheme == .dark }
@@ -217,8 +233,13 @@ struct ContactInfoView: View {
                 // opened from the chat list: drag down, hold it part way, release and it springs back
                 // into the avatar it came from. With `true` the library's own pan ran instead, which
                 // is why closing here felt like a different (and worse) gesture.
-                StoryViewer(group: g, anonymous: true, ownSwipeDismiss: false,
-                            onClose: { storyViewerGroup = nil })
+                // anonymous: FALSE. With `true` the view was never recorded — not on the server and
+                // not even in the local seen flags (markSeenItem bails on anonymous) — so watching a
+                // story from a profile left the ring showing "unseen" forever. Viewing here counts
+                // exactly like viewing from the chat list. For a non-contact the server write may be
+                // refused by rules; that's non-fatal and the local watermark still updates.
+                StoryViewer(group: g, anonymous: false, ownSwipeDismiss: false,
+                            onClose: { storyViewerGroup = nil; refreshStorySeen() })
                     .navigationTransition(.zoom(sourceID: "profile-story", in: mediaNS))
             }
             .navigationDestination(isPresented: $showAllMedia) {
@@ -435,8 +456,10 @@ struct ContactInfoView: View {
                 // space (same trick as the @handle line below) means the ring can only fade in, and
                 // nothing ever moves.
                 Circle()
-                    .stroke(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                    .stroke(storyAllSeen
+                            ? AnyShapeStyle(Color.secondary.opacity(0.5))     // watched → quiet grey
+                            : AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
+                                                           startPoint: .topLeading, endPoint: .bottomTrailing)),
                             lineWidth: 3)
                     .frame(width: 100, height: 100)
                     .opacity(publicStory != nil && !showProfilePhoto ? 1 : 0)
