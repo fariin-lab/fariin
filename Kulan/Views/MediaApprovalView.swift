@@ -402,6 +402,19 @@ struct MediaApprovalView: View {
 
     private func send() {
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        // PHOTOS ONLY → there is NO export work to do, so don't show the exporting overlay and don't
+        // hop through a Task. Doing both flashed a full-screen dimmer + spinner on a send that only
+        // had to hand the images over; the chat adds the optimistic album bubble itself, so the send
+        // is instant. Only a video (trim export / first-frame extraction) actually needs to wait.
+        let photosOnly = items.allSatisfy { if case .image = $0 { return true } else { return false } }
+        if photosOnly {
+            let ordered: [SendMedia] = items.compactMap {
+                if case .image(_, let ui) = $0 { return .image(ui) } else { return nil }
+            }
+            onSend(ordered, cap, hd)
+            if selfDismissOnSend { dismiss() }
+            return
+        }
         exporting = true
         Task {
             // Build the ORDERED mixed list (selection order preserved) so the chat can deliver photos
