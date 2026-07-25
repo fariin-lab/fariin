@@ -143,6 +143,13 @@ struct ContactInfoView: View {
     // The "More" tile's menu: housekeeping only. Block/Report moved OUT to the always-visible
     // dangerCard at the bottom of the page (WhatsApp pattern, user decision).
     @ViewBuilder private var moreMenuItems: some View {
+        // When someone has a story, tapping their avatar plays the STORY — which left no way to open
+        // their profile photo. This is that way, and it's only offered when there's a photo to show.
+        if gatedPhotoUrl?.isEmpty == false {
+            Button { showProfilePhoto = true } label: {
+                Label("View Profile Photo", systemImage: "person.crop.circle")
+            }
+        }
         Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
         Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
@@ -451,6 +458,13 @@ struct ContactInfoView: View {
             .onTapGesture {
                 if let s = publicStory { storyViewerGroup = s }
                 else if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true }
+            }
+            // With a story present the tap is taken by the story, so LONG-PRESS opens the photo —
+            // the same shortcut also lives in the "more" menu for anyone who doesn't discover it.
+            .onLongPressGesture(minimumDuration: 0.35) {
+                guard publicStory != nil, gatedPhotoUrl?.isEmpty == false else { return }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                showProfilePhoto = true
             }
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
