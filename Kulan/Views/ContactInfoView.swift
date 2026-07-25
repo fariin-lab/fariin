@@ -73,6 +73,14 @@ struct ContactInfoView: View {
         }
     }
 
+    /// Real window safe-area insets. The photo viewer draws full-bleed (its container ignores the safe
+    /// area), so SwiftUI reports zero insets inside it and chrome has to be positioned from these.
+    private var winInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .max(by: { $0.top < $1.top }) ?? .zero
+    }
+
     private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
     private var dark: Bool { scheme == .dark }
@@ -781,8 +789,13 @@ private struct ProfilePhotoViewer: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)      // nav-bar height off the safe-area top = Apple's own placement
+                // Apple's real placement for a full-screen close button: leading margin 16pt, and
+                // vertically centred in the 44pt nav-bar strip that sits BELOW the safe-area top. The
+                // viewer's container ignores the safe area, so a plain .padding(.top, 8) was measured
+                // from the SCREEN top and parked the button up in status-bar territory at the corner.
+                // winInsets reads the real inset from the key window (same helper CallView uses).
+                .padding(.leading, 16)
+                .padding(.top, winInsets.top + 2)
                 .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
                 .animation(.easeOut(duration: 0.15), value: drag == .zero)
             }
