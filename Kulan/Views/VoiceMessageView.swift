@@ -369,9 +369,11 @@ struct WaveformBars: View {
             .overlay(alignment: .leading) {
                 let w = max(1, geo.size.width)
                 let sx = w * CGFloat(max(0, min(1, progress)))
+                // Solid dot in the played colour, like WhatsApp's. A soft shadow keeps it visible
+                // whatever the bubble colour is (white dot on a light custom bubble, etc).
                 Circle()
                     .fill(played)
-                    .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 1.5))
+                    .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.5)
                     .frame(width: 13, height: 13)
                     .frame(width: 40, height: 40)      // generous touch area around a small dot
                     .contentShape(Circle())
