@@ -1008,17 +1008,28 @@ struct ThreadView: View {
     // cluster. The date separator carries its own gap.
     private func topGap(at index: Int) -> CGFloat {
         if shouldShowDate(at: index) { return 0 }
-        return isFirstInCluster(at: index) ? 14 : 2
+        // Telegram: `bubble.defaultSpacing` (2 + 1px) between non-merged bubbles, `bubble.mergedSpacing`
+        // (0) between merged ones — grouping is carried by the corner radius, not by a gap.
+        return isFirstInCluster(at: index) ? TGBubble.defaultSpacing : TGBubble.mergedSpacing
     }
 
-    private static let clusterGap: TimeInterval = 300   // 5 min breaks a cluster
+    // Telegram's merge window: `abs(lhs.timestamp - rhs.timestamp) < Int32(10 * 60)`.
+    private static let clusterGap: TimeInterval = TGBubble.mergeWindow
 
-    // A new cluster starts on a date change, a sender change, or a >5min time gap.
+    // A new cluster starts on a date change, a sender change, or a >10min time gap (Telegram's window).
+    /// Telegram's `.none` cases that we have an equivalent for: action media and expired content.
+    private static func neverMerges(_ m: Message) -> Bool {
+        m.isCall || m.isFeatureMarker || m.viewOnce
+    }
+
     private func isFirstInCluster(at index: Int) -> Bool {
         let items = repo.items
         guard index > 0, index < items.count else { return true }
         if shouldShowDate(at: index) { return true }
         if items[index - 1].authorId != items[index].authorId { return true }
+        // Telegram returns .none for TelegramMediaAction / expired content, so service-ish rows
+        // (calls, feature markers) never merge with a neighbour.
+        if Self.neverMerges(items[index]) || Self.neverMerges(items[index - 1]) { return true }
         return items[index].createdAt.timeIntervalSince(items[index - 1].createdAt) > Self.clusterGap
     }
 
@@ -1029,6 +1040,7 @@ struct ThreadView: View {
         let next = items[index + 1], cur = items[index]
         if !Self.cal.isDate(cur.createdAt, inSameDayAs: next.createdAt) { return true }
         if next.authorId != cur.authorId { return true }
+        if Self.neverMerges(cur) || Self.neverMerges(next) { return true }
         return next.createdAt.timeIntervalSince(cur.createdAt) > Self.clusterGap
     }
 
@@ -1517,7 +1529,7 @@ struct ThreadView: View {
         let isMe = m.authorId == me
         let first = isFirstInCluster(at: idx)
         let last = isLastInCluster(at: idx)
-        let big: CGFloat = 18, small: CGFloat = 6
+        let big = TGBubble.cornerRadius, small = TGBubble.mergedCornerRadius
         let radii: UIKitBubbleModel.Radii = isMe
             ? .init(topLeading: big, topTrailing: first ? big : small, bottomLeading: big, bottomTrailing: last ? big : small)
             : .init(topLeading: first ? big : small, topTrailing: big, bottomLeading: last ? big : small, bottomTrailing: big)
@@ -1533,7 +1545,8 @@ struct ThreadView: View {
         return UIKitBubbleModel(
             isMe: isMe, text: text, edited: m.edited,
             timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
-            tick: tick, radii: radii, topSpacing: first ? 14 : 2)
+            tick: tick, radii: radii,
+            topSpacing: first ? TGBubble.defaultSpacing : TGBubble.mergedSpacing)
     }
 
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -3949,7 +3962,7 @@ struct MessageBubble: View, Equatable {
     // Fused-cluster corners (our look): full 18pt outer corners; the interior corners
     // on the sending side shrink to 6pt so a same-sender run reads as one block.
     private var bubbleCorners: RectangleCornerRadii {
-        let big: CGFloat = 18, small: CGFloat = 6
+        let big = TGBubble.cornerRadius, small = TGBubble.mergedCornerRadius
         if isMe {
             return RectangleCornerRadii(
                 topLeading: big, bottomLeading: big,
