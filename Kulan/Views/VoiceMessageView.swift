@@ -323,6 +323,9 @@ struct WaveformBars: View {
     var onSeek: (Double) -> Void
     var onScrub: (Bool) -> Void = { _ in }   // true while dragging the waveform → parent blocks reply-swipe
     @State private var dragStartPct: Double?   // non-nil while the knob is being dragged
+    // nil = undecided, true = this gesture belongs to the waveform, false = it belongs to the scroll.
+    // Decided once per gesture and never revisited, which is what makes the lock a lock.
+    @State private var scrubLock: Bool?
 
     var body: some View {
         GeometryReader { geo in
@@ -375,20 +378,40 @@ struct WaveformBars: View {
             // vertical movement too, so it blocked chat scrolling and swallowed the reply-swipe).
             // Here: a vertical drag is ignored below and the list scrolls; a horizontal drag seeks and
             // raises VoiceScrubState, which the bubble's reply pan and the message list both yield to.
+            // THE WAVEFORM LOCKS THE TOUCH (WhatsApp's rule, user's words: "when moving the wave the
+            // bubble will never move, regardless of where you start and where you're going"). The
+            // decision is made ONCE, as early as 3pt of movement, and then held for the whole gesture:
+            //
+            //   horizontal first  -> this waveform owns the touch. Scrub both directions, forwards and
+            //                        backwards, for as long as the finger is down. VoiceScrubState stays
+            //                        raised the entire time so swipe-to-reply can never take over.
+            //   vertical first    -> we ignore the gesture completely and the chat scrolls.
+            //
+            // The previous version waited for 8pt AND re-ran the axis test every frame. Swipe-to-reply
+            // begins at 18pt, so a drag that started even slightly diagonal failed the per-frame test,
+            // never raised VoiceScrubState, and the reply gesture claimed it at 18pt - which is why
+            // dragging BACKWARDS (leftwards, the same direction as reply) slid the bubble instead of
+            // rewinding, while dragging forwards worked fine.
             .simultaneousGesture(
-                DragGesture(minimumDistance: 8)
+                DragGesture(minimumDistance: 0)
                     .onChanged { v in
                         let w = max(1, geo.size.width)
-                        guard abs(v.translation.width) > abs(v.translation.height) else { return }
-                        if dragStartPct == nil {
-                            dragStartPct = max(0, min(1, progress))
-                            VoiceScrubState.active = true
-                            onScrub(true)
+                        if scrubLock == nil {
+                            let dx = abs(v.translation.width), dy = abs(v.translation.height)
+                            guard dx > 3 || dy > 3 else { return }   // too small to tell yet
+                            scrubLock = dx > dy
+                            if scrubLock == true {
+                                dragStartPct = max(0, min(1, progress))
+                                VoiceScrubState.active = true
+                                onScrub(true)
+                            }
                         }
+                        guard scrubLock == true else { return }   // locked to the chat's scroll instead
                         let pct = (dragStartPct ?? 0) + Double(v.translation.width / w)
                         onSeek(max(0, min(1, pct)))
                     }
                     .onEnded { _ in
+                        scrubLock = nil
                         guard dragStartPct != nil else { return }
                         dragStartPct = nil
                         VoiceScrubState.active = false
