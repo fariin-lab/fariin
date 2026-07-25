@@ -210,8 +210,13 @@ struct ContactInfoView: View {
             // anonymous: we don't write a view record (a non-contact may not have write access to the
             // author's story views).
             .fullScreenCover(item: $storyViewerGroup) { g in
-                StoryViewer(group: g, anonymous: true, ownSwipeDismiss: true,
+                // ownSwipeDismiss:FALSE + the native zoom transition = the identical close to a story
+                // opened from the chat list: drag down, hold it part way, release and it springs back
+                // into the avatar it came from. With `true` the library's own pan ran instead, which
+                // is why closing here felt like a different (and worse) gesture.
+                StoryViewer(group: g, anonymous: true, ownSwipeDismiss: false,
                             onClose: { storyViewerGroup = nil })
+                    .navigationTransition(.zoom(sourceID: "profile-story", in: mediaNS))
             }
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
@@ -440,6 +445,9 @@ struct ContactInfoView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
             }
             .contentShape(Circle())
+            // Hero source for the story's native zoom close, exactly like the story row in the chat
+            // list: the viewer grows out of this avatar and the drag-down rides back into it.
+            .matchedTransitionSource(id: "profile-story", in: mediaNS)
             .onTapGesture {
                 if let s = publicStory { storyViewerGroup = s }
                 else if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true }
