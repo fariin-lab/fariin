@@ -176,9 +176,18 @@ struct VoiceMessageView: View {
     }
 
     private func seek(_ pct: Double) {
-        guard let p = player else { return }   // no player yet → a tap must not move the scrubber visually
-        progress = max(0, min(1, pct))
-        p.currentTime = progress * p.duration
+        let pct = max(0, min(1, pct))
+        progress = pct
+        // BEFORE THE FIRST PLAY there is no AVAudioPlayer yet, and this used to `guard let p = player
+        // else { return }` — so on a note you had never played, dragging or tapping the waveform did
+        // nothing at all; it only started working after you pressed play once. Now the position is
+        // stashed instead, and play() picks it up (it already resumes a stored position), so you can
+        // scrub to where you want and then hit play.
+        guard let p = player else {
+            Self.pausedProgress[message.id] = pct
+            return
+        }
+        p.currentTime = pct * p.duration
     }
 
     private func toggle() {
