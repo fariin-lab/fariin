@@ -165,6 +165,10 @@ struct ImageViewerView: View {
                         return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
                     },
                     onHideContent: { dismissing = $0 },
+                    // Land on the thumbnail this photo came from. Reported live by MediaRectReporter,
+                    // keyed by the CURRENT page's id, so paging to another photo and closing lands on
+                    // that one's tile rather than the one we opened with.
+                    targetRect: { MediaOpenRects.rect(current) },
                     onDismiss: { instantDismiss() })
             }
         }
@@ -240,7 +244,12 @@ struct ImageViewerView: View {
     }
 
     @ViewBuilder private func pagerPage(_ m: Message) -> some View {
-        if let img = loaded[m.id] {
+        // SYNCHRONOUS warm-cache fallback so the photo is on the FIRST frame. `loaded` starts empty, so
+        // this used to render a spinner and only fill in after an async task — even though the bubble
+        // you just tapped had already decoded the image into the memory cache. That one-frame-plus gap
+        // is what read as "the image opens late".
+        if let img = loaded[m.id] ?? m.localImageData.flatMap(UIImage.init(data:))
+            ?? m.imageUrl.flatMap({ DiskImageCache.shared.memoryImage($0) }) {
             // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
@@ -324,7 +333,8 @@ struct ImageViewerView: View {
     }
 
     @ViewBuilder private func thumbImage(_ m: Message) -> some View {
-        if let img = loaded[m.id] {
+        // Same warm-cache fallback as the pages, so the filmstrip isn't a row of grey boxes on open.
+        if let img = loaded[m.id] ?? m.imageUrl.flatMap({ DiskImageCache.shared.memoryImage($0) }) {
             Image(uiImage: img).resizable().scaledToFill()
         } else {
             Color.white.opacity(0.15)

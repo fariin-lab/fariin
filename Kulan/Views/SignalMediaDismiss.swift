@@ -19,6 +19,11 @@ struct SignalDismissHost: UIViewRepresentable {
     var canBegin: () -> Bool                                  // e.g. current page at min zoom
     var media: () -> (frame: CGRect, image: UIImage?)?        // fitted media rect (screen coords) + image if loaded
     var onHideContent: (Bool) -> Void                         // hide/show the live SwiftUI viewer (once per gesture)
+    /// Where the media came from (the thumbnail's global rect), if known. Given one, the release
+    /// FLIES THE COPY HOME into that rect instead of fading out mid-air — so a drag-down close lands
+    /// exactly on the tile it opened from, which is what the system zoom transition failed to do
+    /// (it shrank the whole black viewer, so the photo only lined up at the very end).
+    var targetRect: () -> CGRect? = { nil }
     var onDismiss: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -181,6 +186,33 @@ struct SignalDismissHost: UIViewRepresentable {
         private func finish(offset o: CGPoint, velocity: CGPoint = .zero) {
             guard let c = container else { return }
             active = false
+
+            // FLY HOME when we know where the media came from: the copy scales and travels into the
+            // thumbnail's exact rect and only fades at the very end, so it visibly "lands" on the tile.
+            if let home = parent.targetRect(), home.width > 1, home.height > 1 {
+                let center = CGPoint(x: home.midX, y: home.midY)
+                let scale = max(0.05, min(home.width / max(1, fromFrame.width),
+                                          home.height / max(1, fromFrame.height)))
+                let spring = UISpringTimingParameters(
+                    dampingRatio: 0.86,
+                    initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
+                let animator = UIViewPropertyAnimator(duration: 0.34, timingParameters: spring)
+                animator.addAnimations {
+                    c.center = center
+                    c.transform = CGAffineTransform(scaleX: scale, y: scale)
+                    c.layer.cornerRadius = 14        // meet the tile's rounding as it arrives
+                    c.layer.shadowOpacity = 0
+                    self.backdrop?.alpha = 0
+                }
+                // Hold opacity almost to the end so it reads as landing, not vanishing.
+                animator.addAnimations({ c.alpha = 0 }, delayFactor: 0.75)
+                animator.addCompletion { _ in self.parent.onDismiss() }
+                animator.startAnimation()
+                return
+            }
+
+            // No known source (e.g. opened from somewhere that doesn't report a rect): the original
+            // Signal behaviour — drift on and fade out from where the finger let go.
             let target = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y + 40)
             let spring = UISpringTimingParameters(dampingRatio: 1,
                                                   initialVelocity: Self.springVelocity(velocity, from: c.center, to: target))

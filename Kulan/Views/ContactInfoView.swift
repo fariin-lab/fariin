@@ -202,7 +202,7 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in
-                ImageViewerView(message: msg, cid: cid, suppressDismissPan: true)
+                ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
                     .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
             }
             // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
@@ -601,6 +601,7 @@ struct ContactInfoView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .matchedTransitionSource(id: m.id, in: mediaNS)   // hero anchor
+                                .modifier(MediaRectReporter(id: m.id))            // drag-close landing target
                                 .onTapGesture { viewerImage = m }   // tap a THUMBNAIL → just that image
                         }
                     }

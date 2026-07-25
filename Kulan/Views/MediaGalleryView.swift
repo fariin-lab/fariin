@@ -114,11 +114,11 @@ struct MediaGalleryView: View {
         }
         .fullScreenCover(item: $viewerImage) { msg in
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
-                            cid: cid, suppressDismissPan: true)
+                            cid: cid, suppressDismissPan: false)
                 .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: true)
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
                 .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
@@ -336,6 +336,7 @@ struct MediaGalleryView: View {
             }
             .contentShape(Rectangle())
             .matchedTransitionSource(id: m.id, in: mediaNS)   // hero anchor for the viewer
+            .modifier(MediaRectReporter(id: m.id))            // landing target for the drag-down close
             .onTapGesture { tap(m) }
             .contextMenu { if !selecting { itemMenu(m) } }
     }
