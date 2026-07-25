@@ -72,12 +72,9 @@ jobs:
           TF_CHANGELOG: |
             What's new in this build:
 
-            Photos now open instantly. They used to show a spinner for a moment first, even when the photo was already loaded.
-            Dragging a photo down to close it now lands exactly on the thumbnail it came from, instead of settling in the wrong place and then correcting itself.
-            Voice notes have a dot on the line you can drag to move through the audio, like WhatsApp. Dragging anywhere else on the bubble still swipes to reply.
-            Swipe to reply now buzzes the moment the swipe is far enough, so you can feel when it will send. Photo and voice bubbles only buzzed after you let go.
-            Opening a story from someone's profile now closes with the same drag and hold gesture as a story from the chat list.
-            Tapping the picture of someone who has a story now asks whether you want their profile photo or their story. Before, the story always won and the photo could not be opened.
+            NEW, for testing: Settings > Privacy > Experimental Telegram Conversation. Turning it on uses Telegram's real message grouping in the conversation: their 10 minute merge window instead of our 5, grouped bubbles that touch instead of sitting 2pt apart, and their 16 and 8pt corners instead of our 18 and 6. Your header and composer are untouched.
+            There is also a "Preview Telegram Conversation" screen next to it. It lists your chats, opens one in the new mode, and shows every value beside the line of Telegram source it came from, so you can flip the switch while looking at the same chat.
+            Turning the switch off returns the conversation to exactly what it was. Nothing is converted or migrated either way, so it is safe to flip as often as you like.
 
-            Please try: dragging a photo down to close it, and dragging the dot on a voice note.
+            Please try: open a busy chat, then turn the switch on and off while looking at it. The clearest difference is that a run of messages from one person becomes one connected block instead of separate bubbles.
         run: fastlane beta
