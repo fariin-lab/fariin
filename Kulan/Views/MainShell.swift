@@ -1655,6 +1655,21 @@ struct ChatRow: View, Equatable {
 // simple read-only bubbles. Cache-first — a chat opened this session renders instantly from
 // ThreadMessageCache; otherwise one light fetch. Deliberately NOT ThreadView (a peek must stay
 // cheap and side-effect free: no listeners, no read receipts, no keyboard).
+// The long-press platter for a chat row.
+//
+// This used to be a hand-rolled fake: emoji text pills ("📷 Photo", "🎥 Video call") in a fixed 330pt
+// box on a plain background, which read as a mock-up rather than the chat.
+//
+// Signal's model (verified in their source: `CLVTableDataSource.tableView(_:contextMenuConfigurationForRowAt:point:)`
+// → `ChatListViewController.createPreviewController` → a real `ConversationViewController` with
+// `previewSetup()`) is to show the ACTUAL conversation view with only its chrome suppressed — real
+// image thumbnails, real voice notes, real call cells — and to set NO explicit size, letting UIKit size
+// the platter from the view controller (so it lands at the screen's own proportions).
+//
+// So: real `MessageBubble`s (the same view the chat renders), the chat's real wallpaper behind them,
+// bottom-aligned like a real conversation, at the screen's aspect. The one place we must diverge from
+// Signal is the frame: a SwiftUI preview auto-sizes to intrinsic content and would collapse, so the
+// size is stated explicitly and derived from the screen rather than being a magic number.
 private struct ChatPeekPreview: View {
     let cid: String
     let me: String
@@ -1666,56 +1681,45 @@ private struct ChatPeekPreview: View {
         self.cid = cid
         self.me = me
         let cached = (ThreadMessageCache.shared.messages(for: cid) ?? []).filter { !$0.isSystem }
-        _msgs = State(initialValue: Array(cached.suffix(12)))
+        _msgs = State(initialValue: Array(cached.suffix(14)))
         _loaded = State(initialValue: !cached.isEmpty)
     }
 
+    // Screen-proportional, like the platter Signal gets for free from a full view controller.
+    private var size: CGSize {
+        let screen = UIScreen.main.bounds.size
+        return CGSize(width: screen.width, height: screen.height * 0.62)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        ZStack(alignment: .bottom) {
+            ChatWallpaperBackground(cid: cid)
             if !loaded {
-                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 60)
+                ProgressView()
             } else if msgs.isEmpty {
                 Text("No messages yet").font(.subheadline).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 60)
+            } else {
+                // Bottom-aligned and clipped at the top: a conversation reads from the bottom up, and
+                // the newest messages are the ones worth previewing.
+                VStack(spacing: 3) {
+                    Spacer(minLength: 0)
+                    ForEach(msgs) { m in
+                        MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid)
+                            .allowsHitTesting(false)   // the platter is not interactive
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 12)
             }
-            ForEach(msgs) { m in bubble(m) }
         }
-        .padding(14)
-        .frame(width: 330, alignment: .leading)
-        .background(Color(.systemBackground))
+        .frame(width: size.width, height: size.height)
+        .clipped()
         .task {
             guard !loaded else { return }
-            // Newest-first fetch → ascending for display, capped to the last 12.
-            let fetched = await ChatService.galleryContent(cid, limit: 12)
+            // Newest-first fetch → ascending for display.
+            let fetched = await ChatService.galleryContent(cid, limit: 14)
             msgs = Array(fetched.reversed()).filter { !$0.isSystem }
             loaded = true
         }
-    }
-
-    private func label(_ m: Message) -> String {
-        if m.isCall { return m.callVideo ? "🎥 Video call" : "📞 Voice call" }
-        if m.isAlbum { return "📷 \(max(m.album.count, m.localAlbum.count)) Photos" }
-        if m.isImage { return m.viewOnce ? "① View-once photo" : "📷 Photo" }
-        if m.isVideo { return "🎥 Video" }
-        if m.isAudio { return "🎤 Voice message" }
-        if m.isGif { return "GIF" }
-        if m.isFile { return "📄 \(m.fileName ?? "Document")" }
-        return m.safeText.isEmpty ? "…" : m.safeText
-    }
-
-    @ViewBuilder private func bubble(_ m: Message) -> some View {
-        let mine = m.authorId == me
-        HStack {
-            if mine { Spacer(minLength: 44) }
-            Text(label(m))
-                .font(.system(size: 15)).lineLimit(4)
-                .foregroundStyle(mine ? Color.white : (scheme == .dark ? Color.white : .black))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(mine ? AnyShapeStyle(Theme.accent(scheme == .dark))
-                                 : AnyShapeStyle(Color.primary.opacity(0.08)),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            if !mine { Spacer(minLength: 44) }
-        }
-        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
     }
 }
