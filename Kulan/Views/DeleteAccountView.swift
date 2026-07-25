@@ -207,6 +207,11 @@ struct DeleteAccountView: View {
 
     private func performDelete() async {
         do {
+            // Send the confirmation BEFORE deleting: afterwards the auth record is gone and there's
+            // no address left to write to. Worded as "we received your request", so it's accurate
+            // even in the rare case the delete below fails. Fire-and-forget — email must never
+            // block or fail the deletion itself.
+            await AuthService.shared.reportAccountDeletion()
             try await profile.deleteAccount()
             SessionWipe.wipeAccountData()   // server data is gone; clear the device copy too
             dismiss()

@@ -232,6 +232,16 @@ final class AuthService: NSObject {
     /// else getting into your account is visible to you.
     ///
     /// Fire-and-forget on purpose: a sign-in must never fail or wait because email is down.
+    /// Email the account owner that deletion was requested. AWAITED (unlike reportLogin) because the
+    /// auth record is destroyed moments later and the address goes with it — but errors are ignored,
+    /// so a mail failure can never stop someone deleting their account.
+    func reportAccountDeletion() async {
+        guard let uid, !uid.isEmpty, !isAnonymousSession else { return }
+        _ = try? await Functions.functions(region: "me-central1")
+            .httpsCallable("notifyAccountDeleted")
+            .call()
+    }
+
     func reportLogin() {
         guard let uid, !uid.isEmpty else { return }
         guard !isAnonymousSession else { return }   // no email address to warn
