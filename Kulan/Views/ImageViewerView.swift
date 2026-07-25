@@ -243,7 +243,23 @@ struct ImageViewerView: View {
         .task { prefetchNeighbors() }
     }
 
+    private var currentIndex: Int { gallery.firstIndex { $0.id == current } ?? 0 }
+
     @ViewBuilder private func pagerPage(_ m: Message) -> some View {
+        // A paging TabView materialises EVERY child up front. In a chat with dozens of photos that
+        // meant dozens of ZoomImageViews — each with its own decrypt+decode task — all built before
+        // the first frame could appear, which is the rest of the "opens late" delay. Only the current
+        // page and its immediate neighbours get a real view; the far pages stay empty until you page
+        // near them (they were never on screen anyway).
+        let idx = gallery.firstIndex { $0.id == m.id } ?? 0
+        if abs(idx - currentIndex) > 1 {
+            Color.clear
+        } else {
+            realPagerPage(m)
+        }
+    }
+
+    @ViewBuilder private func realPagerPage(_ m: Message) -> some View {
         // SYNCHRONOUS warm-cache fallback so the photo is on the FIRST frame. `loaded` starts empty, so
         // this used to render a spinner and only fill in after an async task — even though the bubble
         // you just tapped had already decoded the image into the memory cache. That one-frame-plus gap

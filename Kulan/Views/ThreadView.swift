@@ -3946,6 +3946,20 @@ struct MessageBubble: View, Equatable {
         return CGSize(width: dw, height: dh)
     }
 
+    /// Video bubble box. Same as `imageDisplaySize`, plus the PHOTO path's caption min-width floor.
+    /// Without it a portrait video (aspect ~0.46 → ~157pt wide) forced the caption to 157pt, so a long
+    /// caption wrapped at roughly one word per line and the bubble became absurdly tall. The photo path
+    /// has always applied this floor; video never did.
+    private var videoBox: CGSize {
+        var s = imageDisplaySize
+        guard !message.text.isEmpty else { return s }
+        let boxMax = min(maxBubbleWidth, 350)
+        let textW = (message.text as NSString)
+            .size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24   // 2 × 12pt insets
+        s.width = min(boxMax, max(s.width, textW))
+        return s
+    }
+
     // Fused-cluster corners (our look): full 18pt outer corners; the interior corners
     // on the sending side shrink to 6pt so a same-sender run reads as one block.
     private var bubbleCorners: RectangleCornerRadii {
@@ -4192,7 +4206,7 @@ struct MessageBubble: View, Equatable {
             // right-aligns via the VStack's .trailing alignment; the fixed frame also clamps replyQuote's
             // fill so nothing can bloom.
             VStack(alignment: .trailing, spacing: 4) {
-                replyQuote.frame(maxWidth: .infinity, alignment: .leading)
+                replyQuoteBox(fillWidth: true)
                 VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState → the reply pan yields
                 metaRow   // time+tick, right-aligned; NO greedy Spacer (that was the bloom vector)
             }
@@ -4266,7 +4280,7 @@ struct MessageBubble: View, Equatable {
                             Rectangle().fill(Color.gray.opacity(0.18))
                         }
                     }
-                    .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                    .frame(width: videoBox.width, height: videoBox.height)
                     .clipped()
                     // Native zoom hero: the player grows out of this thumbnail and the drag-down close
                     // shrinks back into it (same as photos).
@@ -4313,10 +4327,10 @@ struct MessageBubble: View, Equatable {
                             metaRow.padding(.bottom, 1)   // time on EVERY bubble
                         }
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(width: imageDisplaySize.width, alignment: .leading)
+                        .frame(width: videoBox.width, alignment: .leading)
                     }
                 }
-                .frame(width: imageDisplaySize.width)
+                .frame(width: videoBox.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
@@ -4331,6 +4345,9 @@ struct MessageBubble: View, Equatable {
                     HStack(alignment: .bottom, spacing: 6) {
                         Text(message.text).font(.system(size: 17))   // caption text is never shrunk
                             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+                        // The bubble is a fixed `albumWidth`, so without this the time trailed the
+                        // caption text mid-bubble instead of sitting at the trailing edge.
+                        Spacer(minLength: 6)
                         metaRow.padding(.bottom, 1)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
@@ -4460,6 +4477,7 @@ struct MessageBubble: View, Equatable {
                         HStack(alignment: .bottom, spacing: 6) {
                             Text(message.text).font(.system(size: 17))   // same as a normal message (caption text is never shrunk)
                                 .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
+                            Spacer(minLength: 6)   // time pinned to the bubble edge, not trailing the text
                             metaRow.padding(.bottom, 1)   // time on EVERY bubble
                         }
                         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -4825,7 +4843,15 @@ struct MessageBubble: View, Equatable {
         .padding(.bottom, 2)
     }
 
-    @ViewBuilder private var replyQuote: some View {
+    /// The quote as used by most bubbles: its tinted box HUGS its content.
+    @ViewBuilder private var replyQuote: some View { replyQuoteBox(fillWidth: false) }
+
+    /// `fillWidth: true` stretches the tinted box to the full available width BEFORE the background is
+    /// applied. The voice bubble is a fixed 212pt column, and the caller's `.frame(maxWidth: .infinity)`
+    /// lands AFTER `.background()` inside the quote — so the tint stayed content-sized and the rest of
+    /// the row was empty space to its right. Only the voice path opts in; every other bubble keeps the
+    /// hugging behaviour untouched.
+    @ViewBuilder private func replyQuoteBox(fillWidth: Bool) -> some View {
         if let reply = message.replyTo, !reply.isStatus {
             let fg = isMe ? onMyBubble : (dark ? Color.white : .black)
             // The original message (if still loaded) so a media reply shows its real thumbnail.
@@ -4858,6 +4884,7 @@ struct MessageBubble: View, Equatable {
                 // so the accent line, name, and snippet stay put regardless of content length.
                 .frame(minWidth: 150, alignment: .leading)
             }
+            .frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 5)
             // In the text bubble the Grid stretches this to the bubble's content width (fill); elsewhere it
             // hugs content with the minWidth floor above. Long snippets truncate at the bubble width.

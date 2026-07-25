@@ -752,10 +752,13 @@ private struct ProfilePhotoViewer: View {
                 Button { close() } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(width: 38, height: 38)
-                        .background(Color.primary.opacity(0.08), in: Circle())
+                        .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
+                        .liquidGlass(Circle(), interactive: true)   // other full-screen close button
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
                 .padding(.horizontal, 16)
+                .padding(.top, 8)      // nav-bar height off the safe-area top = Apple's own placement
                 .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
                 .animation(.easeOut(duration: 0.15), value: drag == .zero)
             }

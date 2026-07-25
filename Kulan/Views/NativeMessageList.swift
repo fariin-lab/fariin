@@ -1249,9 +1249,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // The floating date pill normally sits just under the nav bar (safe-area top + 6). When a pinned-message
     // bar is showing, the list runs UNDER it, so the pill would hide behind the pin — drop it below the bar.
     func setTopOverlayHeight(_ h: CGFloat) {
-        guard abs(h - topOverlayHeight) > 0.5, datePillTop != nil else { return }
+        guard abs(h - topOverlayHeight) > 0.5 else { return }
         topOverlayHeight = h
-        datePillTop.constant = 6 + h
+        datePillTop?.constant = 6 + h
+        // ALSO reserve the space in the list. The pinned bar floats OVER the list, and this height was
+        // only ever used to push the date pill down — the messages themselves still ran underneath it.
+        // Invisible in a long chat (the top is scrolled away) but obvious in a short one, where the
+        // first bubbles sat behind the bar.
+        let wasAtBottom = computeAtBottom()
+        collectionView.contentInset.top = h
+        collectionView.verticalScrollIndicatorInsets.top = h
+        if wasAtBottom { UIView.performWithoutAnimation { pinBottom() } }
     }
 
     func setComposerBarHeight(_ h: CGFloat) {

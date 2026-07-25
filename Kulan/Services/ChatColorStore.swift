@@ -90,6 +90,9 @@ enum ChatColors {
 
     func color(for cid: String) -> ChatColorSpec? {
         if let c = cache[cid] { return c }
+        // An explicit per-chat reset is stored as `noneMarker` so it does NOT fall through to the
+        // all-chats default — "Reset" in one chat has to beat "Apply For All Chats" for that chat.
+        if UserDefaults.standard.string(forKey: Self.key(cid)) == Self.noneMarker { return nil }
         // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
         let raw = UserDefaults.standard.string(forKey: Self.key(cid))
             ?? UserDefaults.standard.string(forKey: Self.defaultKey)
@@ -102,6 +105,17 @@ enum ChatColors {
         cache[cid] = spec
         if let spec { UserDefaults.standard.set(spec.stored, forKey: Self.key(cid)) }
         else { UserDefaults.standard.removeObject(forKey: Self.key(cid)) }
+        version &+= 1
+    }
+
+    static let noneMarker = "__none__"
+
+    /// Per-chat "Reset": pin this chat to the APP default bubble colour, even when an all-chats
+    /// default is set. Removing the key would just re-inherit that default, which is why Reset
+    /// used to look like a dead button.
+    func resetToAppDefault(for cid: String) {
+        cache[cid] = nil
+        UserDefaults.standard.set(Self.noneMarker, forKey: Self.key(cid))
         version &+= 1
     }
 

@@ -650,8 +650,19 @@ struct ChatsView: View {
     // One chat-list row: full-row Button (a NavigationLink would draw the disclosure chevron;
     // in edit mode a Button is auto-disabled so native multi-select toggles via the row tag),
     // long-press menu + conversation PEEK preview, swipe actions both edges.
+    /// In edit mode the List's own selection only reacts to taps on NON-interactive row content, and
+    /// every chat row is a Button — so a tap on the avatar, the name, or the empty space was swallowed
+    /// and pushed the chat instead of selecting it. Only the checkbox (outside the Button) worked.
+    /// Route those taps here so the whole row toggles, like Mail and Telegram.
+    private func toggleSelection(_ id: String) {
+        withAnimation(.smooth(duration: 0.2)) {
+            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        }
+    }
+
     @ViewBuilder private func chatListRow(_ conv: Conversation) -> some View {
         Button {
+            if selecting { toggleSelection(conv.id); return }
             path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                    photo: conv.displayPhoto(me)))
         } label: {
@@ -695,6 +706,8 @@ struct ChatsView: View {
         ChatRow(conv: conv, me: me, dark: dark,
                 storySeen: storySeen(conv),
                 onStoryTap: {   // open this person's story in the same viewer the stories row uses
+                    // The ring has its own tap gesture, which would beat the row's selection toggle.
+                    if selecting { toggleSelection(conv.id); return }
                     if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
                         viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
                         viewerAnonymous = false; viewerGroup = g
@@ -1241,6 +1254,13 @@ struct ArchivedChatsView: View {
                         }
                         ForEach(archived) { conv in
                             Button {
+                                if selecting {   // whole row toggles in edit mode, not just the checkbox
+                                    withAnimation(.smooth(duration: 0.2)) {
+                                        if selection.contains(conv.id) { selection.remove(conv.id) }
+                                        else { selection.insert(conv.id) }
+                                    }
+                                    return
+                                }
                                 path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                                        photo: conv.displayPhoto(me)))
                             } label: {

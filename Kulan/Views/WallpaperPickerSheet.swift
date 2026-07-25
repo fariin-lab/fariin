@@ -217,10 +217,11 @@ struct WallpaperPickerSheet: View {
             store.applyToAllChats(.none)
             colorStore.applyToAllChats(nil)
         } else {
-            // Per-chat reset: this chat FOLLOWS the all-chats default again (remove the
-            // override — writing an explicit "none" would pin it to plain forever).
-            store.clearOverride(for: cid)
-            colorStore.set(nil, for: cid)
+            // Per-chat reset: this chat goes back to the PLAIN default look. Clearing the override
+            // instead made Reset do nothing whenever an "Apply For All Chats" wallpaper was set —
+            // the chat simply re-inherited it. An explicit per-chat "none" wins over the default.
+            store.set(.none, for: cid)
+            colorStore.resetToAppDefault(for: cid)
         }
         selected = .none; selectedColor = nil
         original = .none; originalColor = nil
