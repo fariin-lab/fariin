@@ -1008,30 +1008,18 @@ struct ThreadView: View {
     // cluster. The date separator carries its own gap.
     private func topGap(at index: Int) -> CGFloat {
         if shouldShowDate(at: index) { return 0 }
-        // Telegram: `bubble.defaultSpacing` (2 + 1px) between non-merged bubbles, `bubble.mergedSpacing`
-        // (0) between merged ones — grouping is carried by the corner radius, not by a gap.
-        return isFirstInCluster(at: index) ? TGMode.clusterSpacing : TGMode.mergedSpacing
+        return isFirstInCluster(at: index) ? 14 : 2
     }
 
-    // OFF: Kulan's original 300s. ON: Telegram's `Int32(10 * 60)`.
-    private var clusterGap: TimeInterval { TGMode.mergeWindow }
+    private static let clusterGap: TimeInterval = 300   // 5 min breaks a cluster
 
-    // A new cluster starts on a date change, a sender change, or a >10min time gap (Telegram's window).
-    /// Telegram's `.none` cases that we have an equivalent for: action media and expired content.
-    private static func neverMerges(_ m: Message) -> Bool {
-        m.isCall || m.isFeatureMarker || m.viewOnce
-    }
-
+    // A new cluster starts on a date change, a sender change, or a >5min time gap.
     private func isFirstInCluster(at index: Int) -> Bool {
         let items = repo.items
         guard index > 0, index < items.count else { return true }
         if shouldShowDate(at: index) { return true }
         if items[index - 1].authorId != items[index].authorId { return true }
-        // Telegram returns .none for TelegramMediaAction / expired content, so service-ish rows
-        // (calls, feature markers) never merge with a neighbour.
-        if TGMode.excludeServiceFromMerging,
-           Self.neverMerges(items[index]) || Self.neverMerges(items[index - 1]) { return true }
-        return items[index].createdAt.timeIntervalSince(items[index - 1].createdAt) > clusterGap
+        return items[index].createdAt.timeIntervalSince(items[index - 1].createdAt) > Self.clusterGap
     }
 
     // A cluster ends at the last message, a sender change, a date change, or a >5min gap.
@@ -1041,8 +1029,7 @@ struct ThreadView: View {
         let next = items[index + 1], cur = items[index]
         if !Self.cal.isDate(cur.createdAt, inSameDayAs: next.createdAt) { return true }
         if next.authorId != cur.authorId { return true }
-        if TGMode.excludeServiceFromMerging, Self.neverMerges(cur) || Self.neverMerges(next) { return true }
-        return next.createdAt.timeIntervalSince(cur.createdAt) > clusterGap
+        return next.createdAt.timeIntervalSince(cur.createdAt) > Self.clusterGap
     }
 
     private func dayLabel(_ d: Date) -> String {
@@ -1530,7 +1517,7 @@ struct ThreadView: View {
         let isMe = m.authorId == me
         let first = isFirstInCluster(at: idx)
         let last = isLastInCluster(at: idx)
-        let big = TGMode.cornerRadius, small = TGMode.mergedCornerRadius
+        let big: CGFloat = 18, small: CGFloat = 6
         let radii: UIKitBubbleModel.Radii = isMe
             ? .init(topLeading: big, topTrailing: first ? big : small, bottomLeading: big, bottomTrailing: last ? big : small)
             : .init(topLeading: first ? big : small, topTrailing: big, bottomLeading: last ? big : small, bottomTrailing: big)
@@ -1546,8 +1533,7 @@ struct ThreadView: View {
         return UIKitBubbleModel(
             isMe: isMe, text: text, edited: m.edited,
             timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
-            tick: tick, radii: radii,
-            topSpacing: first ? TGMode.clusterSpacing : TGMode.mergedSpacing)
+            tick: tick, radii: radii, topSpacing: first ? 14 : 2)
     }
 
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -3737,8 +3723,6 @@ struct MessageBubble: View, Equatable {
     private var onMyBubble: Color { .white }
 
     @AppStorage("readReceipts") private var readReceiptsPref = true
-    // Observed so toggling Experimental Telegram Conversation re-renders bubbles immediately.
-    @AppStorage(TGMode.key) private var tgMode = false
     @State private var dragX: CGFloat = 0   // swipe-to-reply offset (SwiftUI bubbles move INSIDE the cell)
     @State private var swipeArmed = false   // past the commit point → the threshold haptic already fired
 
@@ -3965,7 +3949,7 @@ struct MessageBubble: View, Equatable {
     // Fused-cluster corners (our look): full 18pt outer corners; the interior corners
     // on the sending side shrink to 6pt so a same-sender run reads as one block.
     private var bubbleCorners: RectangleCornerRadii {
-        let big = TGMode.cornerRadius, small = TGMode.mergedCornerRadius
+        let big: CGFloat = 18, small: CGFloat = 6
         if isMe {
             return RectangleCornerRadii(
                 topLeading: big, bottomLeading: big,

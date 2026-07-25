@@ -622,7 +622,6 @@ struct PrivacySettingsView: View {
     @AppStorage("priv.bio") private var privBio = "everyone"
     @AppStorage("priv.calls") private var privCalls = "everyone"
     @AppStorage("priv.groups") private var privGroups = "everyone"
-    @AppStorage(TGMode.key) private var tgConversation = false
     @State private var showDefaultDisappear = false
 
     private func label(_ raw: String) -> String {
@@ -675,17 +674,6 @@ struct PrivacySettingsView: View {
                     audienceRow("Groups", key: "groups", value: privGroups,
                                 footerText: "Who can add you to groups.")
                 }
-            }
-
-            // EXPERIMENTAL comparison switch. Off = the conversation behaves exactly as it always
-            // has; on = Telegram's measured grouping values apply. Nothing is migrated either way.
-            Section {
-                Toggle("Experimental Telegram Conversation", isOn: $tgConversation)
-                NavigationLink { TelegramConversationPreview() } label: {
-                    Text("Preview Telegram Conversation")
-                }
-            } footer: {
-                Text("Uses Telegram's measured message grouping in the conversation: their 10 minute merge window, bubbles that touch when grouped, and their 16/8pt corners. Your header and composer are untouched. Turn it off and the conversation returns to exactly how it was.")
             }
         }
         .navigationTitle("Privacy & Security")

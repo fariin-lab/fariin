@@ -193,4 +193,3 @@ struct GoogleGIcon: View {
             .frame(width: size, height: size)
     }
 }
-
