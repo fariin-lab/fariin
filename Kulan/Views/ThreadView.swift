@@ -1372,7 +1372,14 @@ struct ThreadView: View {
         // left and re-opened the chat (user report). Putting it in every row's signature makes
         // the existing contentChanged→splitByRouteFlip→reloadItems path swap the cells live.
         let colorTok = chatColorSpec?.stored ?? "-"
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)"
+        // EVERY value rowView reads eagerly must be in this key, or hosted cells keep stale content
+        // (the class of bug that produced the frozen bubble corners). Added:
+        //   dark          - SwiftUI bubbles baked the palette in, so flipping Dark Mode left received
+        //                   bubbles light-grey while UIKit text cells adapted instantly = mixed palette.
+        //   firstUnreadId - the unread divider changes a row's content AND its height by ~33pt.
+        //   iBlocked      - read state is forced to 0 when blocked; the uikit model cache already keyed
+        //                   on this, the SwiftUI side did not, so ticks disagreed between row types.
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -1512,6 +1519,10 @@ struct ThreadView: View {
         guard !isGroup, !selecting, chatColorSpec == nil,
               let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         guard !shouldShowDate(at: idx) else { return nil }             // date-header rows render the pill in SwiftUI
+        // The "Unread Messages" divider is drawn by rowView in SwiftUI. A plain delivered 1:1 text took
+        // the UIKit path, which draws a bubble and nothing else and measures itself the same way, so in
+        // the commonest case the divider was missing from BOTH render and measurement.
+        guard rowId != firstUnreadId else { return nil }
         let m = repo.items[idx]
         guard m.id != highlightId, m.sendState == nil,                 // delivered only
               m.replyTo == nil, m.reactions.isEmpty,
@@ -3862,7 +3873,9 @@ struct MessageBubble: View, Equatable {
         var metaStr = message.edited ? "edited " : ""
         metaStr += timeString
         var metaW = (metaStr as NSString).size(withAttributes: [.font: metaFont]).width
-        if isMe { metaW += 16 }   // tick glyph + gaps
+        // Two overlapping checkmarks once read (see metaRow) are wider than the single delivered tick,
+        // so the reservation has to grow with them or the second check paints over the last characters.
+        if isMe { metaW += (isRead && readReceiptsPref) ? 25 : 16 }
         metaW += 8                // gap between the last word and the time
         let longestWord = message.text.split(whereSeparator: { $0.isWhitespace })
             .map { (String($0) as NSString).size(withAttributes: [.font: bodyFont]).width }.max() ?? 0
@@ -3877,7 +3890,12 @@ struct MessageBubble: View, Equatable {
         var t = Text(metaNeedsOwnLine ? "\n  " : "  ")   // own line for long text; else a small gap
         if message.edited { t = t + Text("edited ").italic() }
         t = t + Text(timeString)
-        if isMe { t = t + Text(" ") + Text(Image(systemName: "checkmark.circle.fill")) }
+        // Must mirror metaRow EXACTLY (that is this placeholder's whole job): one checkmark delivered,
+        // two once read. It said checkmark.circle.fill, which is a different width from either.
+        if isMe {
+            t = t + Text(" ") + Text(Image(systemName: "checkmark"))
+            if isRead && readReceiptsPref { t = t + Text(Image(systemName: "checkmark")) }
+        }
         return t.font(.system(size: 10))
     }
 
@@ -4200,6 +4218,12 @@ struct MessageBubble: View, Equatable {
                 }
             }
             .onEnded { _ in
+                // If the waveform took over mid-drag, put the bubble back. The UIKit path calls
+                // resetSwipe for exactly this case; the SwiftUI path just returned and left it offset.
+                if VoiceScrubState.active, dragX != 0 {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { dragX = 0 }
+                    swipeArmed = false
+                }
                 let fire = !VoiceScrubState.active && dragX <= -50
                 swipeArmed = false
                 if fire { onReply(message) }   // haptic already fired at the threshold, don't double-buzz

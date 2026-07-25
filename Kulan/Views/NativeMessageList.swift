@@ -1455,7 +1455,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 guard let self, !self.isDisappearing else { return }
                 guard !self.collectionView.isDragging, !self.collectionView.isDecelerating else { return }
                 self.updateBottomInset()
-                if wasAtBottom { UIView.performWithoutAnimation { self.pinBottom() } }
+                // Re-check the LIVE position: a slow upward drag that ends without deceleration passes
+                // the guard above, and trusting only the captured flag pinned the reader back down.
+                if wasAtBottom, self.safeDistanceFromBottom <= 44 {
+                    UIView.performWithoutAnimation { self.pinBottom() }
+                }
             }
         }
     }
@@ -1640,7 +1644,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func scrollTo(id: String) {
         // Sentinel: the scroll-to-latest button + own-send-while-scrolled-up route here — a smooth
         // animated glide to the exact bottom (the old ScrollViewProxy path was a no-op on this list).
-        if id == "BOTTOM" { pinBottom(animated: true); return }
+        if id == "BOTTOM" {
+            // NEVER glide to the bottom while the user is working the list. The typing-indicator and
+            // input-focus triggers (ThreadView) fire this off a DEBOUNCED isAtBottom with a 44pt
+            // tolerance, so it stays true for the first ~100ms and first 44pt of an upward drag: a peer's
+            // typing flag arriving in that window animated the reader straight back down. Signal refuses
+            // the same thing twice over (its auto-scroll block is skipped entirely while isUserScrolling,
+            // and its at-bottom tolerance is 5pt). An own-send or a jump-button tap is never mid-drag, so
+            // those still land.
+            guard !collectionView.isDragging, !collectionView.isTracking,
+                  !collectionView.isDecelerating else { return }
+            pinBottom(animated: true); return
+        }
         guard let ip = dataSource.indexPath(for: id) else { return }
         guard let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
         let visible = CGRect(x: 0,
@@ -1803,7 +1818,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         img.tintColor = .secondaryLabel
         img.contentMode = .scaleAspectFit
         img.alpha = 0
-        img.frame = CGRect(x: cell.frame.maxX - 36, y: cell.frame.midY - 9, width: 20, height: 18)
+        // Anchor to the BUBBLE's trailing edge, not the row's. Rows are full width, so for an INCOMING
+        // (left-aligned) bubble this put the arrow ~250pt away at the screen edge while the bubble slid.
+        let bubbleRect: CGRect = {
+            guard let b = (cell as? UIKitBubbleCell)?.previewBubble else { return cell.frame }
+            return b.convert(b.bounds, to: collectionView)
+        }()
+        img.frame = CGRect(x: min(cell.frame.maxX - 36, bubbleRect.maxX + 8),
+                           y: bubbleRect.midY - 9, width: 20, height: 18)
         collectionView.addSubview(img)
         swipeArrow = img
     }
@@ -1893,6 +1915,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let arrow = swipeArrow
         swipingCell = nil; swipingId = nil; swipeArrow = nil; swipeTriggered = false
         // Reset the BUBBLE VIEW's transform (we now move the bubble inside the cell, not the cell).
+        // The scroll pan is disabled in .began ("Restored on end") but .ended only ever assigned
+        // isScrollEnabled, which was never set false. Restoration relied on UIScrollView re-asserting
+        // the recogniser for an unchanged value. Restore it explicitly, here at the single choke point,
+        // so a swipe can never leave the thread unscrollable.
+        collectionView.panGestureRecognizer.isEnabled = true
         let bubble = (cell as? UIKitBubbleCell)?.previewBubble
         let reset = { bubble?.transform = .identity; cell?.transform = .identity; arrow?.alpha = 0 }
         if animated {
@@ -1952,6 +1979,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // stickBottom is otherwise only recomputed on LAYOUT passes, which don't run during quiet
             // reading — invalidate it the moment the user scrolls away so no stale TRUE survives (S1).
             if stickBottom, safeDistanceFromBottom > 44 { stickBottom = false }
+            // ...and so must the keyboard-CLOSE latch. This was the hole: the close drive forces a
+            // layout pass EVERY FRAME for duration+0.55s, and each pass recomputed stickBottom from the
+            // stale latch (keyboardCloseFromBottom ?? computeAtBottom()), so clearing stickBottom above
+            // achieved nothing while the latch lived. Only the isDragging/isDecelerating guard masked it,
+            // and that stops masking the instant deceleration ends inside the window, which is exactly the
+            // "I scroll up and it scrolls itself back down" the user reports after typing.
+            if keyboardCloseFromBottom == true, safeDistanceFromBottom > 44 { keyboardCloseFromBottom = false }
         }
         // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
         // 0.1s one-shot timer on the COMMON runloop mode (fires during scrolling) — the reference model:
