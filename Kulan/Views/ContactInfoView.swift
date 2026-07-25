@@ -47,6 +47,7 @@ struct ContactInfoView: View {
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
+    @State private var showAvatarChoice = false     // has BOTH a story and a photo → ask which to open
     // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
     // drag-down close shrinks back into it.
     @Namespace private var mediaNS
@@ -143,13 +144,8 @@ struct ContactInfoView: View {
     // The "More" tile's menu: housekeeping only. Block/Report moved OUT to the always-visible
     // dangerCard at the bottom of the page (WhatsApp pattern, user decision).
     @ViewBuilder private var moreMenuItems: some View {
-        // When someone has a story, tapping their avatar plays the STORY — which left no way to open
-        // their profile photo. This is that way, and it's only offered when there's a photo to show.
-        if gatedPhotoUrl?.isEmpty == false {
-            Button { showProfilePhoto = true } label: {
-                Label("View Profile Photo", systemImage: "person.crop.circle")
-            }
-        }
+        // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
+        // person has both a story and a photo, so a menu duplicate would be clutter.)
         Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
         Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
@@ -456,15 +452,20 @@ struct ContactInfoView: View {
             // list: the viewer grows out of this avatar and the drag-down rides back into it.
             .matchedTransitionSource(id: "profile-story", in: mediaNS)
             .onTapGesture {
-                if let s = publicStory { storyViewerGroup = s }
-                else if gatedPhotoUrl?.isEmpty == false { showProfilePhoto = true }
+                let hasPhoto = gatedPhotoUrl?.isEmpty == false
+                // Both a story AND a photo → ASK which one (WhatsApp's "Select an action"). A single
+                // tap can't serve both, and silently preferring the story is what made the profile
+                // photo unreachable. With only one of them available, go straight there.
+                if publicStory != nil, hasPhoto { showAvatarChoice = true }
+                else if let s = publicStory { storyViewerGroup = s }
+                else if hasPhoto { showProfilePhoto = true }
             }
-            // With a story present the tap is taken by the story, so LONG-PRESS opens the photo —
-            // the same shortcut also lives in the "more" menu for anyone who doesn't discover it.
-            .onLongPressGesture(minimumDuration: 0.35) {
-                guard publicStory != nil, gatedPhotoUrl?.isEmpty == false else { return }
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                showProfilePhoto = true
+            // Attached HERE, on the hero, not on the outer chain that already carries three alerts:
+            // stacking presentations on one view is what made the Edit Photo sheet never appear.
+            .confirmationDialog("Select an action", isPresented: $showAvatarChoice, titleVisibility: .visible) {
+                Button("View profile photo") { showProfilePhoto = true }
+                Button("View story") { storyViewerGroup = publicStory }
+                Button("Cancel", role: .cancel) {}
             }
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
