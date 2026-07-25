@@ -73,14 +73,6 @@ struct ContactInfoView: View {
         }
     }
 
-    /// Real window safe-area insets. The photo viewer draws full-bleed (its container ignores the safe
-    /// area), so SwiftUI reports zero insets inside it and chrome has to be positioned from these.
-    private var winInsets: UIEdgeInsets {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
-            .max(by: { $0.top < $1.top }) ?? .zero
-    }
-
     private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
     private var dark: Bool { scheme == .dark }
@@ -722,6 +714,14 @@ struct SharedMediaGridView: View {
 // Profile photos are plain URLs (not E2EE) served from the same DiskImageCache AvatarView
 // fills, so it opens instantly.
 private struct ProfilePhotoViewer: View {
+    /// Real window safe-area insets. The photo viewer draws full-bleed (its container ignores the safe
+    /// area), so SwiftUI reports zero insets inside it and chrome has to be positioned from these.
+    private var winInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .max(by: { $0.top < $1.top }) ?? .zero
+    }
+
     let name: String
     let photoUrl: String
     let sourceFrame: CGRect          // the hero avatar, in global coords — morph start AND end
