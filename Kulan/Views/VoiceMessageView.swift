@@ -313,6 +313,7 @@ struct WaveformBars: View {
     var playing: Bool = false
     var onSeek: (Double) -> Void
     var onScrub: (Bool) -> Void = { _ in }   // true while dragging the waveform → parent blocks reply-swipe
+    @State private var dragStartPct: Double?   // non-nil while the knob is being dragged
 
     var body: some View {
         GeometryReader { geo in
@@ -359,6 +360,40 @@ struct WaveformBars: View {
             .simultaneousGesture(SpatialTapGesture().onEnded { v in
                 onSeek(Double(v.location.x / max(1, geo.size.width)))
             })
+            // DRAGGABLE PLAYHEAD KNOB (WhatsApp model, user request): you can now drag to move
+            // through a voice note. It's a SMALL target on the playhead rather than the whole
+            // waveform — that's the entire point. A full-width drag-scrub is what used to block chat
+            // scrolling and swallow the reply-swipe, so the bar itself stays tap-only and only this
+            // knob claims the pan. While dragging it sets VoiceScrubState, which the message list and
+            // the bubble already watch in order to yield their own gestures.
+            .overlay(alignment: .leading) {
+                let w = max(1, geo.size.width)
+                let sx = w * CGFloat(max(0, min(1, progress)))
+                Circle()
+                    .fill(played)
+                    .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 1.5))
+                    .frame(width: 13, height: 13)
+                    .frame(width: 40, height: 40)      // generous touch area around a small dot
+                    .contentShape(Circle())
+                    .offset(x: sx - 20)
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { v in
+                                if dragStartPct == nil {
+                                    dragStartPct = max(0, min(1, progress))
+                                    VoiceScrubState.active = true
+                                    onScrub(true)
+                                }
+                                let pct = (dragStartPct ?? 0) + Double(v.translation.width / w)
+                                onSeek(max(0, min(1, pct)))
+                            }
+                            .onEnded { _ in
+                                dragStartPct = nil
+                                VoiceScrubState.active = false
+                                onScrub(false)
+                            }
+                    )
+            }
         }
     }
 }
