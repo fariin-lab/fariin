@@ -360,6 +360,32 @@ struct WaveformBars: View {
             .simultaneousGesture(SpatialTapGesture().onEnded { v in
                 onSeek(Double(v.location.x / max(1, geo.size.width)))
             })
+            // SCRUB ACROSS THE WHOLE WAVEFORM (user request: dragging on the bar means seek, dragging
+            // anywhere else on the bubble means reply). `simultaneousGesture` is what makes this safe —
+            // it never CLAIMS the touch, which is exactly what the old drag-scrub did wrong (it tracked
+            // vertical movement too, so it blocked chat scrolling and swallowed the reply-swipe).
+            // Here: a vertical drag is ignored below and the list scrolls; a horizontal drag seeks and
+            // raises VoiceScrubState, which the bubble's reply pan and the message list both yield to.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { v in
+                        let w = max(1, geo.size.width)
+                        guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                        if dragStartPct == nil {
+                            dragStartPct = max(0, min(1, progress))
+                            VoiceScrubState.active = true
+                            onScrub(true)
+                        }
+                        let pct = (dragStartPct ?? 0) + Double(v.translation.width / w)
+                        onSeek(max(0, min(1, pct)))
+                    }
+                    .onEnded { _ in
+                        guard dragStartPct != nil else { return }
+                        dragStartPct = nil
+                        VoiceScrubState.active = false
+                        onScrub(false)
+                    }
+            )
             // DRAGGABLE PLAYHEAD KNOB (WhatsApp model, user request): you can now drag to move
             // through a voice note. It's a SMALL target on the playhead rather than the whole
             // waveform — that's the entire point. A full-width drag-scrub is what used to block chat

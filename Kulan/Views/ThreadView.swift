@@ -2881,7 +2881,7 @@ struct ThreadView: View {
         HStack {
             Button { showBulkDeleteConfirm = true } label: {
                 Image(systemName: "trash").font(.system(size: 18)).foregroundStyle(.red)
-                    .frame(width: 52, height: 52).liquidGlass(Circle(), interactive: true)
+                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())   // whole circle is the tap target, not just the icon
             }
             .buttonStyle(.plain).disabled(selectedIds.isEmpty)
@@ -2891,7 +2891,7 @@ struct ThreadView: View {
             Spacer()
             Button { bulkForwardStart() } label: {
                 Image(systemName: "arrowshape.turn.up.right").font(.system(size: 18)).foregroundStyle(.primary)
-                    .frame(width: 52, height: 52).liquidGlass(Circle(), interactive: true)
+                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())   // whole circle is the tap target, not just the icon
             }
             .buttonStyle(.plain).disabled(selectedIds.isEmpty)
