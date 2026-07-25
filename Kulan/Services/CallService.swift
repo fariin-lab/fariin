@@ -692,7 +692,8 @@ final class CallService: NSObject {
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
                     self.state = .incoming
-                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName, video: isVideoCall)
+                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
+                                                        video: isVideoCall, callerUid: caller)
                     self.markRinging()
                     self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
                 }

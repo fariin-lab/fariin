@@ -104,6 +104,7 @@ struct SoundPickerView: View {
         self.cid = cid; self.kind = kind; self.title = title; self.onDone = onDone
         let id = SoundStore.soundId(cid, kind)
         _selectedId = State(initialValue: id)
+        _ = SoundStore.defaultSound(kind)   // per-kind default (call = ringtone, message = alert)
         if id.hasPrefix("custom:") { _custom = State(initialValue: NotificationSound.resolve(id)) }
     }
 
@@ -111,7 +112,9 @@ struct SoundPickerView: View {
         NavigationStack {
             List {
                 soundRow(.none)
-                ForEach(NotificationSound.builtIn) { soundRow($0) }
+                // Calls get REAL ringtones (long, looping, melodic); messages get short alert tones.
+                // Feeding both from `builtIn` is what made a call sound identical to a message.
+                ForEach(kind == .call ? NotificationSound.ringtones : NotificationSound.builtIn) { soundRow($0) }
                 if let c = custom { soundRow(c) }
                 Button { showImporter = true } label: {
                     HStack {
@@ -148,7 +151,8 @@ struct SoundPickerView: View {
     private func soundRow(_ s: NotificationSound) -> some View {
         Button {
             selectedId = s.id
-            SoundPlayer.shared.play(s)   // preview on tap
+            // Preview: a ringtone previews as a single pass (looping it would trap the user in a ring).
+            SoundPlayer.shared.play(s)
         } label: {
             HStack {
                 Text(s.name).foregroundStyle(.primary)
@@ -161,7 +165,9 @@ struct SoundPickerView: View {
 
     private func commit() {
         let s: NotificationSound = selectedId == "none" ? .none
-            : (custom?.id == selectedId ? custom! : NotificationSound.resolve(selectedId))
+            : (custom?.id == selectedId ? custom!
+               : (kind == .call ? NotificationSound.resolveRingtone(selectedId)
+                                : NotificationSound.resolve(selectedId)))
         SoundStore.set(cid, kind, s)
         onDone(); dismiss()
     }

@@ -16,21 +16,37 @@ final class CallKitManager: NSObject {
     private(set) var activeUUID: UUID?
     private(set) var activeCallId: String?   // maps the system call UUID to our callId
 
-    private override init() {
+    /// Provider config for a given ringtone file. CallKit can only ring a file that ships in the app
+    /// bundle, which is why the Call Sound picker offers bundled ringtones rather than system tones.
+    private static func makeConfig(ringtone: String?) -> CXProviderConfiguration {
         let config = CXProviderConfiguration()
         config.supportsVideo = true
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
-        // Branded incoming ringtone (bundled resource) instead of the generic iOS ring — this is
-        // what the RECEIVER hears while their phone rings, the way standard messengers ship their own.
-        // CallKit loops it for the whole ring. Swap the file to change the sound; keep the name.
-        config.ringtoneSound = "kulan_ringtone.wav"
-        provider = CXProvider(configuration: config)
+        // What the RECEIVER hears while their phone rings. CallKit loops it for the whole ring.
+        config.ringtoneSound = ringtone
+        return config
+    }
+
+    private override init() {
+        provider = CXProvider(configuration: Self.makeConfig(ringtone: NotificationSound.defaultRingtone.bundleFile))
         super.init()
         provider.setDelegate(self, queue: nil)
         // WebRTC must not touch the audio session itself under CallKit.
         RTCAudioSession.sharedInstance().useManualAudio = true
         RTCAudioSession.sharedInstance().isAudioEnabled = false
+    }
+
+    /// Point the provider at whatever ringtone this chat is set to (nil ringtone = this chat's ring
+    /// is set to None, so CallKit shows the call silently).
+    private func applyRingtone(callerUid: String?) {
+        let cid: String? = {
+            guard let callerUid, !callerUid.isEmpty, let me = AuthService.shared.uid else { return nil }
+            return ChatService.convId(me, callerUid)
+        }()
+        let file = SoundStore.ringtoneFile(cid)
+        guard provider.configuration.ringtoneSound != file else { return }
+        provider.configuration = Self.makeConfig(ringtone: file)
     }
 
     // MARK: - Outgoing
@@ -53,8 +69,13 @@ final class CallKitManager: NSObject {
     func reportConnected() { if let u = activeUUID { provider.reportOutgoingCall(with: u, connectedAt: nil) } }
 
     // MARK: - Incoming (idempotent per callId so two paths can't make two UUIDs)
-    func reportIncoming(callId: String, name: String, video: Bool = false, completion: (() -> Void)? = nil) {
+    /// `callerUid` is only used to find the per-chat Call Sound. The ringtone has to be set on the
+    /// PROVIDER before the call is reported — there is no per-call ringtone property — so the config
+    /// is swapped here, right before reporting.
+    func reportIncoming(callId: String, name: String, video: Bool = false,
+                        callerUid: String? = nil, completion: (() -> Void)? = nil) {
         if activeCallId == callId, activeUUID != nil { completion?(); return }
+        applyRingtone(callerUid: callerUid)
         // A DIFFERENT call is already live/ringing: iOS requires reporting something for a VoIP
         // push, but this second caller must NOT steal activeUUID (End would then target the wrong
         // system call). Report a transient call and end it immediately (busy).

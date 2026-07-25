@@ -14,6 +14,9 @@ struct NotificationSound: Identifiable, Equatable {
     let name: String
     var systemID: SystemSoundID? = nil   // built-in tone (fallback playback)
     var customPath: String? = nil        // imported file (app support dir)
+    var bundleFile: String? = nil        // ringtone shipped in the app bundle (CallKit needs a
+                                         // bundle FILENAME, which is why ringtones can't be
+                                         // system tones or imported files)
 
     // The on-device .caf file backing a built-in tone. Playing THIS through an AVAudioPlayer on a
     // .playback session makes the tone actually audible (even on the mute switch) — the fix for
@@ -49,6 +52,33 @@ struct NotificationSound: Identifiable, Equatable {
 
     static let `default` = builtIn[0]
 
+    // RINGTONES — a separate list from the message tones above, which is the actual bug the user hit:
+    // both pickers were fed `builtIn`, so a call and a message played the identical short alert blip.
+    // A ring has to be a LONG, LOOPING, melodic phrase, and CallKit will only play a file that ships
+    // in the app bundle. These are our own synthesised tones (Kulan/Resources/Ringtones), so there's
+    // no licensing question and nothing is copied from another app.
+    static let ringtones: [NotificationSound] = [
+        NotificationSound(id: "kulan",   name: "Kulan (default)", bundleFile: "kulan_ringtone.wav"),
+        NotificationSound(id: "ascend",  name: "Ascend",  bundleFile: "ring_ascend.wav"),
+        NotificationSound(id: "beacon",  name: "Beacon",  bundleFile: "ring_beacon.wav"),
+        NotificationSound(id: "ripple",  name: "Ripple",  bundleFile: "ring_ripple.wav"),
+        NotificationSound(id: "lantern", name: "Lantern", bundleFile: "ring_lantern.wav"),
+        NotificationSound(id: "nomad",   name: "Nomad",   bundleFile: "ring_nomad.wav"),
+    ]
+
+    static let defaultRingtone = ringtones[0]
+
+    /// Resolve a stored id against the RINGTONE list (calls), not the alert list.
+    static func resolveRingtone(_ id: String?) -> NotificationSound {
+        guard let id else { return .defaultRingtone }
+        if id == "none" { return .none }
+        if id.hasPrefix("custom:") {
+            let path = String(id.dropFirst("custom:".count))
+            return NotificationSound(id: id, name: (path as NSString).lastPathComponent, customPath: path)
+        }
+        return ringtones.first { $0.id == id } ?? .defaultRingtone
+    }
+
     // Resolve a stored id (built-in or "custom:<path>") back to a sound.
     static func resolve(_ id: String?) -> NotificationSound {
         guard let id, id != "none" else { return id == "none" ? .none : .default }
@@ -66,11 +96,24 @@ enum SoundStore {
     enum Kind: String, Identifiable { case message, call; var id: String { rawValue } }
     private static func key(_ cid: String, _ kind: Kind) -> String { "sound_\(kind.rawValue)_\(cid)" }
 
+    /// Message and call have DIFFERENT defaults — the old shared default is why both rows read
+    /// "Note (default)" and both played the same blip.
+    static func defaultSound(_ kind: Kind) -> NotificationSound {
+        kind == .call ? .defaultRingtone : .default
+    }
     static func soundId(_ cid: String, _ kind: Kind) -> String {
-        UserDefaults.standard.string(forKey: key(cid, kind)) ?? NotificationSound.default.id
+        UserDefaults.standard.string(forKey: key(cid, kind)) ?? defaultSound(kind).id
     }
     static func sound(_ cid: String, _ kind: Kind) -> NotificationSound {
-        NotificationSound.resolve(soundId(cid, kind))
+        let id = soundId(cid, kind)
+        return kind == .call ? NotificationSound.resolveRingtone(id) : NotificationSound.resolve(id)
+    }
+    /// The bundle filename CallKit should ring for this chat (nil → the app default).
+    static func ringtoneFile(_ cid: String?) -> String? {
+        guard let cid else { return NotificationSound.defaultRingtone.bundleFile }
+        let s = sound(cid, .call)
+        if s.id == "none" { return nil }                     // muted ring for this chat
+        return s.bundleFile ?? NotificationSound.defaultRingtone.bundleFile
     }
     static func set(_ cid: String, _ kind: Kind, _ sound: NotificationSound) {
         let stored = sound.customPath.map { "custom:\($0)" } ?? sound.id
@@ -100,8 +143,24 @@ final class SoundPlayer {
     private var player: AVAudioPlayer?
     private var registered: [String: SystemSoundID] = [:]
 
-    func play(_ sound: NotificationSound) {
+    func play(_ sound: NotificationSound, loop: Bool = false) {
         guard sound.id != "none" else { return }
+        // A bundled ringtone is a real file — play it directly (this is the preview you hear in the
+        // Call Sound picker; CallKit plays the same file when the phone actually rings).
+        if let file = sound.bundleFile,
+           let url = Bundle.main.url(forResource: (file as NSString).deletingPathExtension,
+                                     withExtension: (file as NSString).pathExtension) {
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, options: [.duckOthers])
+                try session.setActive(true)
+                let p = try AVAudioPlayer(contentsOf: url)
+                p.numberOfLoops = loop ? -1 : 0
+                player = p
+                p.play()
+                return
+            } catch { /* fall through */ }
+        }
         // Prefer a real audio file (custom import, else the tone's on-device .caf) played through a
         // .playback session so it's AUDIBLE — the system-alert route (AudioServicesPlaySystemSound)
         // is muted by the ring/silent switch, which is why it only vibrated. Fall back to the system
