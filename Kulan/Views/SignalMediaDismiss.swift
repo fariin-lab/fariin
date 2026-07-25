@@ -57,8 +57,13 @@ struct SignalDismissHost: UIViewRepresentable {
         // "too hard"). Telegram and WhatsApp commit around a short drag or any real flick, so a normal
         // downward swipe should already mean "close". Changing your mind still works: the decision uses
         // the NET downward offset, so dragging back up above the threshold cancels.
-        private static let completionDistance: CGFloat = 90      // drag past this ↓ → dismiss (else recover)
-        private static let completionVelocity: CGFloat = 500     // ...or a downward flick faster than this
+        // Signal's own rule is `percentComplete > 0` — ANY movement commits and cancel is effectively
+        // unreachable (MediaInteractiveDismiss `.ended`). We deliberately do NOT copy that: being able
+        // to drag down, change your mind and have it spring back is behaviour the user asked for and
+        // liked. Instead the threshold is small enough that a deliberate short drag closes, which is
+        // what "it must work like Signal" actually means in feel.
+        private static let completionDistance: CGFloat = 40      // drag past this ↓ → dismiss (else recover)
+        private static let completionVelocity: CGFloat = 320     // ...or a downward flick faster than this
 
         init(_ p: SignalDismissHost) { parent = p }
 
@@ -138,6 +143,10 @@ struct SignalDismissHost: UIViewRepresentable {
                 root.addSubview(c)
                 backdrop = bd
                 container = c
+                // Signal zeroes the translation on .began (MediaInteractiveDismiss). Without it the
+                // first .changed already carries the recogniser's pre-recognition slop, so the copy
+                // JUMPS by ~10pt the instant the drag is picked up instead of starting under the finger.
+                g.setTranslation(.zero, in: root)
                 parent.onHideContent(true)   // exactly ONE SwiftUI update for the whole gesture
 
             case .changed:
@@ -193,24 +202,34 @@ struct SignalDismissHost: UIViewRepresentable {
 
             // FLY HOME when we know where the media came from: the copy scales and travels into the
             // thumbnail's exact rect and only fades at the very end, so it visibly "lands" on the tile.
-            if let home = parent.targetRect(), home.width > 1, home.height > 1 {
+            // The rect must still be ON SCREEN. `MediaOpenRects` keeps the last reported rect with no
+            // liveness check, so after scrolling the source bubble away the copy used to fly to a
+            // stale offscreen position. Signal detects the missing context and falls back to dropping
+            // straight down by one media height — do the same.
+            let reported = parent.targetRect()
+            let onScreen = reported.map { $0.intersects(c.superview?.bounds ?? .zero) } ?? false
+            if let home = reported, onScreen, home.width > 1, home.height > 1 {
                 let center = CGPoint(x: home.midX, y: home.midY)
-                let scale = max(0.05, min(home.width / max(1, fromFrame.width),
-                                          home.height / max(1, fromFrame.height)))
                 let spring = UISpringTimingParameters(
-                    dampingRatio: 0.9,
+                    dampingRatio: 1,     // Signal: springDamping 1, no overshoot on a landing
                     initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
-                // 0.22s, not 0.34: the return should feel immediate, like Telegram/WhatsApp.
-                let animator = UIViewPropertyAnimator(duration: 0.22, timingParameters: spring)
+                let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
                 animator.addAnimations {
-                    c.center = center
-                    c.transform = CGAffineTransform(scaleX: scale, y: scale)
-                    c.layer.cornerRadius = 14        // meet the tile's rounding as it arrives
+                    // FRAME match with transform identity, the way Signal lands
+                    // (MediaDismissAnimationController: `frame = destinationFrame`, `transform =
+                    // .identity`). The old version kept a transform SCALE derived from min(w,h) ratios,
+                    // which cannot match a tile of a different aspect — the copy arrived the wrong
+                    // shape. cornerRadius also did nothing without masksToBounds.
+                    c.transform = .identity
+                    c.frame = CGRect(x: center.x - home.width / 2, y: center.y - home.height / 2,
+                                     width: home.width, height: home.height)
+                    c.layer.cornerRadius = 14
                     c.layer.shadowOpacity = 0
                     self.backdrop?.alpha = 0
                 }
-                // Hold opacity nearly to the end so it reads as landing, not vanishing.
-                animator.addAnimations({ c.alpha = 0 }, delayFactor: 0.8)
+                c.layer.masksToBounds = true   // without this the corner radius was invisible
+                // NO alpha fade: Signal lands the copy opaque and swaps it for the real thumbnail.
+                // Fading it out at 0.8 was what made the return read as "vanishing near the tile".
                 animator.addCompletion { _ in self.parent.onDismiss() }
                 animator.startAnimation()
                 return

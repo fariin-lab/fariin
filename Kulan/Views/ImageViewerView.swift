@@ -40,7 +40,14 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let v = velocity(in: view)
             switch dir {
             case .left, .right: if abs(v.y) > abs(v.x) { state = .cancelled }
-            case .up, .down, .vertical: if abs(v.x) > abs(v.y) { state = .cancelled }
+            // NO self-cancel for a vertical dismiss drag. Signal's DirectionalPanGestureRecognizer
+            // takes `.vertical` as an OptionSet that matches neither their `.up/.down` nor
+            // `.left/.right` case, so it falls through to `default: break` and never cancels. Ours
+            // cancelled whenever |vx| > |vy| for one sample — and a cancelled recogniser is DEAD for
+            // the rest of the touch, so any slightly diagonal drag did nothing at all. That
+            // intermittent dead drag is the "not working very well".
+            case .up, .down: if abs(v.x) > abs(v.y) { state = .cancelled }
+            case .vertical: break
             }
         }
     }
