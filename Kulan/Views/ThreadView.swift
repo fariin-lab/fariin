@@ -77,6 +77,7 @@ struct ThreadView: View {
     @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (idle pause timer)
     @State private var viewerImage: Message?
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
+    @State private var albumScreen: Message?           // tapped a photo GROUP → the album list screen
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
     @State private var storyToOpen: StoryGroup?      // tapped a status reply → open that status
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
@@ -647,6 +648,13 @@ struct ThreadView: View {
         // zoom hero as single photos (user spec): each album CELL is a matchedTransitionSource with the
         // synthetic per-item id, so the viewer grows out of the tapped tile and the button-close shrinks
         // back into it. The drag-down close stays media-only via SignalDismissHost.
+        // The album list. Its viewers are presented from INSIDE it, so closing a photo returns to the
+        // group instead of dropping you back out to the chat (explicit user requirement).
+        .fullScreenCover(item: $albumScreen) { m in
+            AlbumScreenView(message: m, cid: cid,
+                            senderName: m.authorId == me ? "You" : personName(m.authorId),
+                            onSave: { img in Task { await saveImageToPhotos(img) } })
+        }
         .fullScreenCover(item: $albumViewer) { wrap in
             ImageViewerView(message: wrap.gallery.first { $0.id == wrap.startId } ?? wrap.gallery[0],
                             in: wrap.gallery, cid: cid, suppressDismissPan: false,
@@ -1251,6 +1259,7 @@ struct ThreadView: View {
                     else { viewerImage = m }
                 },
                 onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
+                onOpenAlbum: { m in albumScreen = m },
                 onTapVideo: { m in
                     if telegramMediaOpen { withoutPresentationAnimation { viewerVideo = m } }
                     else { viewerVideo = m }
@@ -3686,6 +3695,9 @@ struct MessageBubble: View, Equatable {
     var onTapContact: (_ uid: String, _ name: String, _ photo: String?) -> Void = { _, _, _ in }   // card "message" → open chat
     var onTapImage: (Message) -> Void = { _ in }
     var onTapAlbum: (_ gallery: [Message], _ startId: String) -> Void = { _, _ in }
+    /// Tapping a group of photos opens the ALBUM SCREEN (a scrollable list of the group) rather than
+    /// jumping straight into one full-screen photo. See AlbumScreenView.
+    var onOpenAlbum: (Message) -> Void = { _ in }
     var onTapVideo: (Message) -> Void = { _ in }
     var onReact: (String?) -> Void = { _ in }
     var onPin: (Message) -> Void = { _ in }
@@ -4819,7 +4831,10 @@ struct MessageBubble: View, Equatable {
         // user spec). The synthetic per-item ids ("<msgId>-<i>") match the viewer covers' sourceIDs; the
         // +N cell taps through its own visible cell, so every open has a real source.
         .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
-        .onTapGesture { if message.sendState == nil { openAlbumItem(i) } }
+        // Was openAlbumItem(i) — straight into the full-screen pager, which gave no way to see what
+        // else was in the group or choose from it. Now the group opens as a list first (user's
+        // WhatsApp reference); picking an item there is what opens the viewer.
+        .onTapGesture { if message.sendState == nil { onOpenAlbum(message) } }
     }
 
     private func albumVideoDuration(_ s: Double) -> String {
