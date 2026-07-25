@@ -53,8 +53,12 @@ struct SignalDismissHost: UIViewRepresentable {
         private var fromFrame: CGRect = .zero
         private var active = false
         private static let distanceToCompletion: CGFloat = 88    // visual scrub (scale/alpha) reference
-        private static let completionDistance: CGFloat = 160     // drag past this ↓ → dismiss (else recover)
-        private static let completionVelocity: CGFloat = 800     // ...or a downward flick faster than this
+        // Commit thresholds. Were 160pt / 800 — that much travel made closing feel like work (user:
+        // "too hard"). Telegram and WhatsApp commit around a short drag or any real flick, so a normal
+        // downward swipe should already mean "close". Changing your mind still works: the decision uses
+        // the NET downward offset, so dragging back up above the threshold cancels.
+        private static let completionDistance: CGFloat = 90      // drag past this ↓ → dismiss (else recover)
+        private static let completionVelocity: CGFloat = 500     // ...or a downward flick faster than this
 
         init(_ p: SignalDismissHost) { parent = p }
 
@@ -194,9 +198,10 @@ struct SignalDismissHost: UIViewRepresentable {
                 let scale = max(0.05, min(home.width / max(1, fromFrame.width),
                                           home.height / max(1, fromFrame.height)))
                 let spring = UISpringTimingParameters(
-                    dampingRatio: 0.86,
+                    dampingRatio: 0.9,
                     initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
-                let animator = UIViewPropertyAnimator(duration: 0.34, timingParameters: spring)
+                // 0.22s, not 0.34: the return should feel immediate, like Telegram/WhatsApp.
+                let animator = UIViewPropertyAnimator(duration: 0.22, timingParameters: spring)
                 animator.addAnimations {
                     c.center = center
                     c.transform = CGAffineTransform(scaleX: scale, y: scale)
@@ -204,8 +209,8 @@ struct SignalDismissHost: UIViewRepresentable {
                     c.layer.shadowOpacity = 0
                     self.backdrop?.alpha = 0
                 }
-                // Hold opacity almost to the end so it reads as landing, not vanishing.
-                animator.addAnimations({ c.alpha = 0 }, delayFactor: 0.75)
+                // Hold opacity nearly to the end so it reads as landing, not vanishing.
+                animator.addAnimations({ c.alpha = 0 }, delayFactor: 0.8)
                 animator.addCompletion { _ in self.parent.onDismiss() }
                 animator.startAnimation()
                 return
@@ -216,7 +221,7 @@ struct SignalDismissHost: UIViewRepresentable {
             let target = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y + 40)
             let spring = UISpringTimingParameters(dampingRatio: 1,
                                                   initialVelocity: Self.springVelocity(velocity, from: c.center, to: target))
-            let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
+            let animator = UIViewPropertyAnimator(duration: 0.18, timingParameters: spring)
             animator.addAnimations {
                 c.center = target
                 c.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
@@ -241,7 +246,7 @@ struct SignalDismissHost: UIViewRepresentable {
             let home = CGPoint(x: fromFrame.midX, y: fromFrame.midY)
             let spring = UISpringTimingParameters(dampingRatio: 1,
                                                   initialVelocity: Self.springVelocity(velocity, from: c.center, to: home))
-            let animator = UIViewPropertyAnimator(duration: 0.35, timingParameters: spring)
+            let animator = UIViewPropertyAnimator(duration: 0.26, timingParameters: spring)
             animator.addAnimations {
                 c.center = home
                 c.transform = .identity
