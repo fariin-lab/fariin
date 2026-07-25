@@ -90,13 +90,21 @@ struct DeleteAccountView: View {
     // MARK: - Step 2: prove it's you (with the door this account actually uses)
 
     @ViewBuilder private var verifySection: some View {
+        // A lock badge + centred copy, so this reads as a deliberate security step rather than a
+        // blank card with a stray button on it.
         Section {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Verify it's you").font(.title3.weight(.bold))
-                Text("For your security, confirm your account before it's deleted.")
+            VStack(spacing: 10) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.red)
+                Text("Verify it's you").font(.title2.weight(.bold))
+                Text("Confirm your account to finish deleting it. Nothing has been deleted yet.")
                     .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .listRowBackground(Color.clear)
         }
 
         let methods = AuthService.shared.reauthMethods
@@ -116,22 +124,29 @@ struct DeleteAccountView: View {
                     }
                 }
                 .signInWithAppleButtonStyle(.black)
-                .frame(height: 48)
+                .frame(height: 50)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             if methods.contains(.google) {
                 Button {
                     run { try await AuthService.shared.reauthGoogle() }
                 } label: {
-                    HStack(spacing: 8) {
-                        Text("G").font(.system(size: 17, weight: .bold))
-                        Text("Continue with Google").fontWeight(.semibold)
+                    HStack(spacing: 10) {
+                        GoogleGIcon(size: 20)
+                        Text("Continue with Google")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
                     }
-                    .frame(maxWidth: .infinity).frame(height: 44)
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.black.opacity(0.14), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.primary)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             if methods.contains(.email) {
@@ -153,6 +168,7 @@ struct DeleteAccountView: View {
             }
         } footer: {
             Text("Your account is deleted as soon as you're verified.")
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 

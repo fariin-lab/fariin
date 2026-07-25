@@ -375,7 +375,7 @@ struct AccountSettingsView: View {
     @ViewBuilder private func signInIcon(_ method: AuthService.SignInMethod) -> some View {
         switch method {
         case .apple:  Image(systemName: "apple.logo").font(.system(size: 19)).foregroundStyle(.primary)
-        case .google: Text("G").font(.system(size: 18, weight: .bold)).foregroundStyle(.primary)
+        case .google: GoogleGIcon(size: 20)   // the real multi-colour mark, not a letter G
         case .email:  Image(systemName: "envelope.fill").font(.system(size: 16)).foregroundStyle(.primary)
         }
     }

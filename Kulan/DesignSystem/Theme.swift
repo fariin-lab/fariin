@@ -181,3 +181,15 @@ struct AvatarView: View {
             .overlay(Text(initial).font(.system(size: size * 0.42, weight: .bold)).foregroundColor(.white))
     }
 }
+
+/// Google's multi-colour "G" mark (bundled PNG in Resources/Brand), for the Google sign-in and
+/// connect rows. A plain letter "G" read as a placeholder next to Apple's real glyph.
+struct GoogleGIcon: View {
+    var size: CGFloat = 20
+    var body: some View {
+        Image("google-g")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+    }
+}
