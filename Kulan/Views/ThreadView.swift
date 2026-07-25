@@ -3724,6 +3724,7 @@ struct MessageBubble: View, Equatable {
 
     @AppStorage("readReceipts") private var readReceiptsPref = true
     @State private var dragX: CGFloat = 0   // swipe-to-reply offset (SwiftUI bubbles move INSIDE the cell)
+    @State private var swipeArmed = false   // past the commit point → the threshold haptic already fired
 
     private var myUid: String { AuthService.shared.uid ?? "" }
     private var myReaction: String? { message.reactions[myUid] }
@@ -4155,13 +4156,24 @@ struct MessageBubble: View, Equatable {
                     let t = v.translation.width
                     dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
                 }
+                // Buzz the INSTANT the swipe crosses the commit point, so the finger feels that a
+                // reply is armed — and again (once) if you pull back under it. This is what the plain
+                // text cells (the UIKit swipe path) already did; media/voice/reply bubbles only
+                // buzzed after release, so on those you couldn't feel the threshold at all.
+                if dragX <= -50, !swipeArmed {
+                    swipeArmed = true
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } else if dragX > -50, swipeArmed {
+                    swipeArmed = false
+                }
             }
             .onEnded { _ in
-                if !VoiceScrubState.active, dragX <= -50 {
-                    onReply(message)
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { dragX = 0 }
+                let fire = !VoiceScrubState.active && dragX <= -50
+                swipeArmed = false
+                if fire { onReply(message) }   // haptic already fired at the threshold, don't double-buzz
+                // Snappier, more physical return than the old 0.4/0.8 spring: it leaves the finger
+                // quickly and settles without a floaty tail.
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { dragX = 0 }
             }
     }
 

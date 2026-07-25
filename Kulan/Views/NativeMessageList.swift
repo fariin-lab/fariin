@@ -1852,7 +1852,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // Seed the spring with the release velocity so a fast flick snaps back livelier than a slow let-go.
             let distance = abs(bubble?.transform.tx ?? 0)
             let v = distance > 0 ? min(3, abs(velocity) / max(1, distance)) : 0.4
-            UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: v,
+            // 0.28/0.72 matches the SwiftUI bubbles' spring exactly, so a text message and a
+            // voice/media message return with the same weight instead of two different feels.
+            UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.72, initialSpringVelocity: v,
                            options: [.allowUserInteraction], animations: reset) { _ in arrow?.removeFromSuperview() }
         } else {
             reset(); arrow?.removeFromSuperview()
