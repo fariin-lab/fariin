@@ -1085,6 +1085,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         isDisappearing = true
         shouldAnimateKeyboardChanges = false   // off-screen keyboard changes apply silently (reference)
         kbCloseLink?.invalidate(); kbCloseLink = nil   // stop the close-layout drive when leaving the chat
+        keyboardCloseFromBottom = nil
     }
 
     // Rotation / size change (the reference's setScrollActionForSizeTransition): capture the position
@@ -1146,8 +1147,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         // Remember (before a keyboard/composer resize) whether we were at the bottom, so we can stay there.
+        // During a keyboard CLOSE use the latch taken before the fold — see keyboardCloseFromBottom.
+        let atBottom = keyboardCloseFromBottom ?? computeAtBottom()
         stickBottom = didInitialScroll && !pendingBottomOnOpen && !sendAnimating
-            && !programmaticScrollAnimating && computeAtBottom()   // never re-pin under an in-flight jump
+            && !programmaticScrollAnimating && atBottom   // never re-pin under an in-flight jump
         // Keep the registration's width pin fresh: cells configured during this pass read hostWidth.
         if collectionView.bounds.width > 0 { hostWidth = collectionView.bounds.width }
         // Width change (rotation / split view): every measured height is width-dependent — drop + re-measure,
@@ -1228,6 +1231,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var keyboardOverlap: CGFloat = 0
     private var keyboardAnimating = false     // a keyboard-synced inset animation is in flight — layout passes
                                               // must NOT re-assert the inset/pin instantly and override it
+    // BUG B root cause: `computeAtBottom()` is `safeDistanceFromBottom <= 44` with NO lower bound, and the
+    // keyboard fold DROPS maxContentOffsetY by the keyboard height (~330pt). So mid-close a reader who is
+    // scrolled up measures a large NEGATIVE distance and reads as "at bottom" — and the scroll-away
+    // invalidations (`> 44`) can't clear it either. The drive then pins them to the bottom: the "scroll up
+    // and it jumps back down" yank. keyboardWillHide's comment claims live re-capture makes this safe; it
+    // doesn't, for exactly that reason. Fix: latch the answer while the keyboard is still UP (a truthful
+    // reading) and let the drive use the latch. This restores the `keyboardCloseFromBottom` flag that
+    // commit 7e5dceb had and dc9d1ce deleted.
+    private var keyboardCloseFromBottom: Bool?   // non-nil only for the duration of a close drive
     private var kbCloseLink: CADisplayLink?       // drives layout each frame during the keyboard CLOSE so the
     private var kbCloseDriveUntil = Date.distantPast  // stickBottom pin actually runs (composer SwiftUI bar doesn't trigger it)
     // At-bottom truth CAPTURED when the keyboard animation starts. Mid-animation inset updates (the reply
@@ -1394,8 +1406,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        let userScrolling = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        guard !userScrolling else { return }
+        // BUG A root cause: this used to include `isTracking`, which is true from TOUCH-DOWN. Tap-to-dismiss
+        // resigns first responder synchronously inside that same touch, so keyboardWillHide always arrived
+        // with isTracking == true and bailed — leaving NO owner to correct position during the close, so the
+        // last bubbles sat under the composer until a stray layout pass ~1s later. Only real MOVEMENT should
+        // stop us; a stationary finger is a tap.
+        let userScrolling = collectionView.isDragging || collectionView.isDecelerating
+        guard !userScrolling else {
+            keyboardCloseBackstop()   // interactive drag-dismiss: correct once the finger is up
+            return
+        }
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         guard duration > 0 else { return }   // hardware keyboard / instant changes: didHide settles
         // ROOT CAUSE (finally nailed): the pin that keeps content above the composer lives in
@@ -1412,7 +1432,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // computeAtBottom() each pass and is cleared on scroll-away (scrollViewDidScroll), so a reader who
         // flicks UP into history during the fold is never pinned — that's the "scroll up → auto-scroll down"
         // yank fixed by the same mechanism.
+        // Latch NOW, while the keyboard is still up and the reading is truthful.
+        keyboardCloseFromBottom = computeAtBottom()
         startKeyboardCloseLayoutDrive(duration + 0.55)
+    }
+
+    /// Re-assert the resting inset + position a few times after a close we deliberately didn't drive
+    /// (interactive drag-dismiss). Restores the tick backstop removed in dc9d1ce, but position-neutral:
+    /// it only pins when the reader was at the bottom when the close began.
+    private func keyboardCloseBackstop() {
+        let wasAtBottom = computeAtBottom()
+        for delay in [0.08, 0.2, 0.36, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, !self.isDisappearing else { return }
+                guard !self.collectionView.isDragging, !self.collectionView.isDecelerating else { return }
+                self.updateBottomInset()
+                if wasAtBottom { UIView.performWithoutAnimation { self.pinBottom() } }
+            }
+        }
     }
 
     // Force a layout pass every display frame for `seconds` (the keyboard-close window + a settle tail), so the
@@ -1427,7 +1464,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     @objc private func kbCloseLayoutTick() {
         guard !isDisappearing, Date() < kbCloseDriveUntil else {
-            kbCloseLink?.invalidate(); kbCloseLink = nil; return
+            kbCloseLink?.invalidate(); kbCloseLink = nil
+            keyboardCloseFromBottom = nil   // drive over → stickBottom goes back to live evaluation
+            return
         }
         view.setNeedsLayout()
     }
