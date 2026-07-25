@@ -149,8 +149,8 @@ struct AuthMethodView: View {
                 Button {
                     run { try await AuthService.shared.signInWithGoogle() }
                 } label: {
-                    HStack(spacing: 8) {
-                        Text("G").font(.system(size: 20, weight: .bold))
+                    HStack(spacing: 10) {
+                        GoogleGIcon(size: 22)   // the real mark, matching Apple's real glyph above
                         Text("Continue with Google").font(.system(size: 18, weight: .semibold))
                     }
                     .foregroundStyle(.black)
