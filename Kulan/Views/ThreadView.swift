@@ -3908,7 +3908,12 @@ struct MessageBubble: View, Equatable {
     }
 
     // Time + status, shown INSIDE the bubble bottom-right. Status = clock while sending,
-    // red "!" if it failed, single check when sent, filled check once the other read it.
+    // red "!" if it failed, ONE check when delivered, TWO checks once the other person has read it.
+    //
+    // The read state used to be `checkmark.circle.fill` — still a SINGLE glyph, just inside a circle,
+    // in the same colour at 9pt. That is why read receipts looked broken: the data was arriving and
+    // the tick was upgrading, but the upgrade was invisible. The chat list already drew real double
+    // ticks (MainShell `ticksView`); the thread now matches it.
     @ViewBuilder private var metaRow: some View {
         HStack(spacing: 3) {
             if message.edited { Text("edited").font(.system(size: 10)).italic() }
@@ -3920,9 +3925,12 @@ struct MessageBubble: View, Equatable {
                 case .failed:
                     Image(systemName: "exclamationmark.circle.fill").font(.system(size: 10)).foregroundStyle(.red)
                 case nil:
-                    Image(systemName: (isRead && readReceiptsPref) ? "checkmark.circle.fill" : "checkmark")
-                        .font(.system(size: 9, weight: .semibold))
-                        .contentTransition(.symbolEffect(.replace))   // tick "turns read" with a morph
+                    // Overlapping pair, same spacing as the chat list's ticks.
+                    HStack(spacing: -2.5) {
+                        Image(systemName: "checkmark")
+                        if isRead && readReceiptsPref { Image(systemName: "checkmark") }
+                    }
+                    .font(.system(size: 9, weight: .semibold))
                 }
             }
         }

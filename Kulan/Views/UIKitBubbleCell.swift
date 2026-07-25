@@ -127,8 +127,24 @@ final class UIKitBubbleView: UIView {
         case .failed: return UIImage(systemName: "exclamationmark.circle.fill",
                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))
         case .sent: return UIImage(systemName: "checkmark", withConfiguration: cfg)
-        case .read: return UIImage(systemName: "checkmark.circle.fill", withConfiguration: cfg)
+        // TWO overlapping checks, matching the SwiftUI bubble and the chat list. `checkmark.circle.fill`
+        // was a single glyph in the same colour and size, so a read receipt that WAS arriving looked
+        // identical to a plain delivered tick — the whole reason read receipts appeared not to work.
+        case .read: return doubleCheck(cfg)
         }
+    }
+
+    /// Two `checkmark` glyphs drawn with a -2.5pt overlap, as one template image.
+    private static func doubleCheck(_ cfg: UIImage.SymbolConfiguration) -> UIImage? {
+        guard let one = UIImage(systemName: "checkmark", withConfiguration: cfg) else { return nil }
+        let overlap: CGFloat = 2.5
+        let size = CGSize(width: one.size.width * 2 - overlap, height: one.size.height)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let img = renderer.image { _ in
+            one.draw(in: CGRect(origin: .zero, size: one.size))
+            one.draw(in: CGRect(origin: CGPoint(x: one.size.width - overlap, y: 0), size: one.size))
+        }
+        return img.withRenderingMode(.alwaysTemplate)   // tint follows the meta colour like the single tick
     }
 
     private static func metaWidth(_ m: UIKitBubbleModel) -> CGFloat {
