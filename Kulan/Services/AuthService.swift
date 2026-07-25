@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import FirebaseAuth
 import FirebaseCore
+import FirebaseFunctions
 import AuthenticationServices
 import CryptoKit
 import UIKit
@@ -41,6 +42,7 @@ final class AuthService: NSObject {
             do {
                 let result = try await user.link(with: credential)
                 uid = result.user.uid
+                reportLogin()
                 return
             } catch let e as NSError where e.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
                 // This Apple/Google identity already has a Kulan account — enter it.
@@ -48,6 +50,7 @@ final class AuthService: NSObject {
                 let updated = (e.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential) ?? credential
                 let result = try await Auth.auth().signIn(with: updated)
                 uid = result.user.uid
+                reportLogin()
                 return
             } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
                 throw AuthFlowError.emailTaken
@@ -55,6 +58,7 @@ final class AuthService: NSObject {
         }
         let result = try await Auth.auth().signIn(with: credential)
         uid = result.user.uid
+        reportLogin()
     }
 
     // MARK: - Apple
@@ -205,6 +209,7 @@ final class AuthService: NSObject {
             // email at all. That's fixed by using createUser.)
             let result = try await Auth.auth().createUser(withEmail: email, password: password)
             uid = result.user.uid
+            reportLogin()
         } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
             // A SIGN-UP door must not quietly sign you in (user decision 2026-07-24, matching
             // Twitch): this screen says Create Account, so an email that already has an account is
@@ -217,6 +222,27 @@ final class AuthService: NSObject {
     func signInEmail(email: String, password: String) async throws {
         let result = try await Auth.auth().signIn(withEmail: email, password: password)
         uid = result.user.uid
+        reportLogin()
+    }
+
+    // MARK: - New-device security email
+
+    /// Tell the backend this device signed in. The function emails the account owner only when the
+    /// device is NEW (and never for the very first device, which is the sign-up itself), so someone
+    /// else getting into your account is visible to you.
+    ///
+    /// Fire-and-forget on purpose: a sign-in must never fail or wait because email is down.
+    func reportLogin() {
+        guard let uid, !uid.isEmpty else { return }
+        guard !isAnonymousSession else { return }   // no email address to warn
+        guard let deviceId = UIDevice.current.identifierForVendor?.uuidString, !deviceId.isEmpty else { return }
+        let model = UIDevice.current.model
+        let os = "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
+        Task.detached {
+            _ = try? await Functions.functions(region: "me-central1")
+                .httpsCallable("notifyNewLogin")
+                .call(["deviceId": deviceId, "device": model, "os": os])
+        }
     }
 
     func resetPassword(email: String) async throws {
