@@ -319,7 +319,7 @@ struct EmailAuthView: View {
         case 17026: return "Password must be at least 6 characters."
         case 17009, 17004: return "Wrong email or password."
         case 17011: return "No account with that email. Create one instead."
-        case 17007: return "That email already has an account. Try logging in."
+        case 17007: return "This email already has an account. Go back and choose Log In instead."
         case 17020: return "No internet connection. Try again."
         default: return error.localizedDescription
         }

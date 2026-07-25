@@ -196,8 +196,7 @@ final class AuthService: NSObject {
                 return
             } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue
                                         || e.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
-                // Falls through to the create-or-sign-in path below, which logs them into the
-                // existing account when the password is right.
+                throw AuthFlowError.emailTaken
             }
         }
         do {
@@ -207,13 +206,11 @@ final class AuthService: NSObject {
             let result = try await Auth.auth().createUser(withEmail: email, password: password)
             uid = result.user.uid
         } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
-            // Already registered → try to just log them in with what they typed.
-            do {
-                let result = try await Auth.auth().signIn(withEmail: email, password: password)
-                uid = result.user.uid
-            } catch {
-                throw AuthFlowError.emailTakenWrongPassword
-            }
+            // A SIGN-UP door must not quietly sign you in (user decision 2026-07-24, matching
+            // Twitch): this screen says Create Account, so an email that already has an account is
+            // an error that points at Log In. Previously we signed them in when the password
+            // matched, which left people inside an existing account with no explanation.
+            throw AuthFlowError.emailTaken
         }
     }
 
@@ -344,7 +341,7 @@ enum AuthFlowError: LocalizedError {
         switch self {
         case .appleFailed: return "Apple sign-in didn't complete. Please try again."
         case .googleFailed: return "Google sign-in didn't complete. Please try again."
-        case .emailTaken: return "That email already has an account. Try logging in instead."
+        case .emailTaken: return "This email already has an account. Go back and choose Log In instead."
         case .emailTakenWrongPassword:
             return "You already have an account with this email, but that password doesn't match. Enter the right password to log in, or tap \"Forgot password?\"."
         case .notSignedIn: return "You're not signed in."
