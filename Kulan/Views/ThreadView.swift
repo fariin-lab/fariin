@@ -1376,14 +1376,24 @@ struct ThreadView: View {
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
-            for m in repo.items {
+            for (i, m) in repo.items.enumerated() {
+                // CLUSTER GEOMETRY BELONGS IN THE SIGNATURE. The corner radii and top gap are read
+                // EAGERLY when a row view is built (rowView passes isFirstInCluster/isLastInCluster and
+                // applies topGap) and then frozen into the cell's UIHostingConfiguration. A hosted cell
+                // is only rebuilt when its signature changes — so when a new message arrived, the row
+                // ABOVE it kept the geometry it had when it was still the last row: full 18pt corners,
+                // ungrouped. Confirmed plain text hid the bug because it routes to a UIKit cell, and
+                // repaintUikitCells pushes fresh radii onto those on every update; SwiftUI-hosted rows
+                // (every PENDING message, plus media/reply/reaction rows) have no such self-heal, which
+                // is exactly why the user saw it only on 0-mark bubbles.
+                let cluster = "\(isFirstInCluster(at: i))\(isLastInCluster(at: i))"
                 let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
                 let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
                 // View-once consumption (audit M2) — the bubble flips to "Viewed" only via reconfigure.
                 let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
                 // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
                 let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)"
             }
             sigCache.key = key
             sigCache.base = out
