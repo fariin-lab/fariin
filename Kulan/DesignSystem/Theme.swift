@@ -194,24 +194,3 @@ struct GoogleGIcon: View {
     }
 }
 
-/// Bubble geometry taken from Telegram iOS, so clustering reads the same way it does there.
-///
-/// Source: `ChatMessageItemCommon.swift` (`ChatMessageItemLayoutConstants.bubble` / `.image`) and
-/// `ChatMessageItemImpl.mergedWithItems`. Values are the "regular" (non-compact) set.
-///
-/// The important structural idea, which our old numbers got wrong: Telegram signals grouping almost
-/// entirely through CORNER RADIUS, not through gaps. Merged neighbours sit flush at 0pt apart and are
-/// distinguished only by the tightened corners on the joined edges. We were using a 14pt gap between
-/// clusters and 2pt inside them, which reads as separate blocks rather than one speech run.
-enum TGBubble {
-    /// `bubble.defaultSpacing` = 2.0 + UIScreenPixel — gap between two NON-merged bubbles.
-    static var defaultSpacing: CGFloat { 2.0 + 1.0 / max(1, UIScreen.main.scale) }
-    /// `bubble.mergedSpacing` = 0.0 — merged neighbours touch.
-    static let mergedSpacing: CGFloat = 0
-    /// `image.defaultCornerRadius` = 16.0 (regular). Free corners.
-    static let cornerRadius: CGFloat = 16
-    /// `image.mergedCornerRadius` = 8.0 (regular). The joined edge of a merged bubble.
-    static let mergedCornerRadius: CGFloat = 8
-    /// `mergedWithItems`: `abs(lhsEffectiveTimestamp - rhsEffectiveTimestamp) < Int32(10 * 60)`.
-    static let mergeWindow: TimeInterval = 600
-}
