@@ -846,13 +846,16 @@ struct EditProfileView: View {
                     // already carries a confirmationDialog (discard changes) and an alert (remove
                     // photo), and stacking a second confirmationDialog on the same view made this
                     // one silently never present — tapping "Edit Photo" did nothing.
-                    .confirmationDialog("Profile Photo", isPresented: $showEditPhoto, titleVisibility: .visible) {
-                        Button("Choose Photo") { showPhotoPicker = true }
+                    // Bottom sheet, not confirmationDialog (iOS 26 anchors that to the button as a
+                    // callout). The picked action runs in the sheet's onDismiss, which is also what
+                    // lets the photo picker / remove alert present at all from here.
+                    .bottomActionSheet("Profile Photo", isPresented: $showEditPhoto, actions: {
+                        var a: [SheetAction] = [SheetAction("Choose Photo") { showPhotoPicker = true }]
                         if profile.me?.photoUrl?.isEmpty == false {
-                            Button("Remove Photo", role: .destructive) { confirmRemovePhoto = true }
+                            a.append(SheetAction("Remove Photo", role: .destructive) { confirmRemovePhoto = true })
                         }
-                        Button("Cancel", role: .cancel) {}
-                    }
+                        return a
+                    }())
                     .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                 }
 

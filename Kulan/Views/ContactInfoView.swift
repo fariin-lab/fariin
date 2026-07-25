@@ -485,11 +485,12 @@ struct ContactInfoView: View {
             }
             // Attached HERE, on the hero, not on the outer chain that already carries three alerts:
             // stacking presentations on one view is what made the Edit Photo sheet never appear.
-            .confirmationDialog("Select an action", isPresented: $showAvatarChoice, titleVisibility: .visible) {
-                Button("View profile photo") { showProfilePhoto = true }
-                Button("View story") { storyViewerGroup = publicStory }
-                Button("Cancel", role: .cancel) {}
-            }
+            // Bottom sheet, not confirmationDialog: on iOS 26 the system dialog anchors itself to the
+            // avatar as a little callout bubble, and the user wants a sheet from the bottom.
+            .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
+                SheetAction("View profile photo") { showProfilePhoto = true },
+                SheetAction("View story") { storyViewerGroup = publicStory },
+            ])
             Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
