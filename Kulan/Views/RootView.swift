@@ -3,7 +3,9 @@ import LocalAuthentication
 import UIKit
 
 struct RootView: View {
-    enum Phase { case loading, welcome, onboarding, main, restore(handle: String, due: Date) }
+    // Equatable must be DECLARED now: Swift synthesises it automatically only for enums with no
+    // associated values, and `.restore` added two. onChange(of: phase) depends on it.
+    enum Phase: Equatable { case loading, welcome, onboarding, main, restore(handle: String, due: Date) }
     @State private var phase: Phase = .loading
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
