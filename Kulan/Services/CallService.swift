@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import AVFoundation
-import UIKit   // app-lifecycle notifications (background camera pause/resume)
+import UIKit   // app-lifecycle notification (foreground backstop for the background camera)
 import CoreMedia
 import WebRTC
 import FirebaseAuth
@@ -21,13 +21,19 @@ final class CallService: NSObject {
     private func observeLifecycleIfNeeded() {
         guard !lifecycleObserved else { return }
         lifecycleObserved = true
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            self?.appDidEnterBackground()
-        }
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.appWillEnterForeground()
+        }
+        // The camera is driven by what the CAPTURE SESSION actually does, not by the app lifecycle.
+        // See the "Background camera" section below for why.
+        NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification,
+                                               object: nil, queue: .main) { [weak self] note in
+            self?.captureInterrupted(note)
+        }
+        NotificationCenter.default.addObserver(forName: AVCaptureSession.interruptionEndedNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.captureInterruptionEnded()
         }
     }
 
@@ -54,7 +60,7 @@ final class CallService: NSObject {
                 if cameraOn || startedAsVideo { isSpeaker = true; wantsSpeaker = true }
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
                 startRouteObservation()   // smart speaker button: track where audio actually goes
-                observeLifecycleIfNeeded()   // background camera pause/resume (frozen-frame fix)
+                observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
             if state == .idle {
@@ -224,6 +230,9 @@ final class CallService: NSObject {
     // Ask for camera access, then feed frames into the local track (off the main thread). Without
     // the access check the capturer can silently never produce frames -> black video on both ends.
     private func startCameraCapture() {
+        // Register BEFORE the first frame: an outgoing video call captures while still ringing, so
+        // waiting for .active would miss a backgrounding during the ring.
+        observeLifecycleIfNeeded()
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted, let self else { return }
             DispatchQueue.global(qos: .userInitiated).async { self.startCapture(front: self.usingFrontCamera) }
@@ -245,9 +254,27 @@ final class CallService: NSObject {
         })
         guard let format else { return }
         let fps = min(30, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
+        allowBackgroundCamera(on: capturer.captureSession)
         capturer.startCapture(with: device, format: format, fps: fps)
         // Observed @Observable state must be written on main (this runs on a background queue).
         DispatchQueue.main.async { self.usingFrontCamera = front }
+    }
+
+    // Lets the capture session survive backgrounding, so leaving the app does not black out my video
+    // for the other side. Apple requires this to be set BEFORE the session starts running, which is
+    // why it sits immediately above startCapture — and re-applied on every start, because a camera
+    // flip stops and reconfigures the session underneath us.
+    //
+    // `isMultitaskingCameraAccessSupported` is the system's own answer, not a version check: it is
+    // true here because we link iOS 18+ and declare `voip` in UIBackgroundModes (project.yml). If it
+    // ever goes false the assignment is refused anyway, and the interruption path below covers us.
+    // Apple also requires an ACTIVE PiP window for the frames to keep coming (CallPiPController).
+    private func allowBackgroundCamera(on session: AVCaptureSession) {
+        guard session.isMultitaskingCameraAccessSupported,
+              !session.isMultitaskingCameraAccessEnabled else { return }
+        session.beginConfiguration()
+        session.isMultitaskingCameraAccessEnabled = true
+        session.commitConfiguration()
     }
 
     func toggleCamera() { setMyCamera(on: !cameraOn) }
@@ -312,26 +339,76 @@ final class CallService: NSObject {
         }
     }
 
-    // MARK: - Background camera pause (standard behavior)
-    // iOS suspends the capture session in the background, so without this the OTHER side stared at a
-    // FROZEN last frame the whole time. On background: stop capture + broadcast cams=false (they see
-    // the avatar placeholder); on foreground: resume capture + re-broadcast. `cameraOn` stays true as
-    // the INTENT so the UI and resume path know to restore.
+    // MARK: - Background camera (leaving the app keeps your video going, like WhatsApp)
+    //
+    // OLD BEHAVIOUR, and why it changed: we used to stop the capturer on didEnterBackground and
+    // broadcast cams=false, because iOS suspended the session anyway and the other side was left
+    // staring at a FROZEN last frame. iOS 18 opened background capture to any app with `voip` in
+    // UIBackgroundModes (we have it) via AVCaptureSession.isMultitaskingCameraAccessEnabled, so
+    // stopping ourselves is now the ONLY thing preventing the WhatsApp behaviour.
+    //
+    // We no longer guess. The app lifecycle no longer touches the camera at all; we react to what the
+    // SESSION reports:
+    //   • multitasking access working + PiP up -> no interruption -> video keeps flowing. They see me.
+    //   • not working (PiP never started, PiP stashed, another app grabbed the camera) -> the session
+    //     is interrupted -> disable the track and broadcast cams=false, so they get the avatar rather
+    //     than a freeze. That is exactly the old behaviour, now reached only when actually needed.
+    // Self-correcting either way, which is why there is no "does this device support it" branch.
+    //
+    // `cameraOn` stays true throughout as the INTENT, so the UI and the resume path know to restore.
     private(set) var cameraPausedByBackground = false
-    func appDidEnterBackground() {
-        guard state == .active || state == .reconnecting, cameraOn, !cameraPausedByBackground else { return }
-        cameraPausedByBackground = true
-        videoCapturer?.stopCapture()
-        localVideoTrack?.isEnabled = false
-        if let id = callId { db.collection("calls").document(id).updateData(["cams.\(me)": false]) }
+
+    // Anywhere the camera may legitimately be running. Wider than .active on purpose: an OUTGOING
+    // video call is already capturing while it rings, and backgrounding during the ring must be
+    // handled too.
+    private var inLiveCall: Bool { state != .idle && state != .ended }
+
+    // Interruptions that mean "no camera frames". Audio-only reasons must NOT touch the video track.
+    private func isVideoInterruption(_ reason: AVCaptureSession.InterruptionReason) -> Bool {
+        switch reason {
+        case .videoDeviceNotAvailableInBackground,
+             .videoDeviceNotAvailableWithMultipleForegroundApps,
+             .videoDeviceNotAvailableDueToSystemPressure,
+             .videoDeviceInUseByAnotherClient:
+            return true
+        default:
+            return false   // .audioDeviceInUseByAnotherClient and anything new: leave video alone
+        }
     }
-    func appWillEnterForeground() {
+
+    private func captureInterrupted(_ note: Notification) {
+        // Only OUR capture session, and only reasons that actually stop video frames.
+        guard let session = note.object as? AVCaptureSession,
+              session === videoCapturer?.captureSession,
+              let raw = note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int,
+              let reason = AVCaptureSession.InterruptionReason(rawValue: raw),
+              isVideoInterruption(reason) else { return }
+        guard inLiveCall, cameraOn, !cameraPausedByBackground else { return }
+        cameraPausedByBackground = true
+        localVideoTrack?.isEnabled = false   // stop sending, so they get the avatar and not a frozen face
+        broadcastCameraState()
+    }
+
+    private func captureInterruptionEnded() {
         guard cameraPausedByBackground else { return }
         cameraPausedByBackground = false
-        guard state == .active || state == .reconnecting, cameraOn else { return }
+        // The user may have hung up or turned the camera off while it was interrupted — re-check the
+        // intent instead of blindly restoring.
+        guard inLiveCall, cameraOn else { return }
         localVideoTrack?.isEnabled = true
-        startCameraCapture()
+        // Apple preserves the startRunning intent across an interruption as long as we never called
+        // stopRunning, so the session resumes itself. Restart only if it genuinely did not.
+        if videoCapturer?.captureSession.isRunning == false { startCameraCapture() }
         broadcastCameraState()   // they see my video come back
+    }
+
+    // Backstop only. If an interruption ended without its notification (or one never fired), returning
+    // to the foreground must never leave the camera dark while the intent says it is on.
+    func appWillEnterForeground() {
+        guard inLiveCall, cameraOn else { return }
+        guard cameraPausedByBackground || localVideoTrack?.isEnabled == false else { return }
+        cameraPausedByBackground = true   // so captureInterruptionEnded's own guard passes
+        captureInterruptionEnded()
     }
 
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
