@@ -35,7 +35,26 @@ final class ThreadMessageCache {
     }
     func messages(for cid: String) -> [Message]? { byCid[cid] }
 
+    // UNSENT MESSAGES, kept across leaving and re-entering a chat.
+    //
+    // ThreadRepository is created per-cid and deallocated when you leave the conversation, and its
+    // `pending` array — the optimistic messages that have not been echoed back by the server yet — died
+    // with it. Send while offline, go back to the chat list, reopen: the message was simply gone, even
+    // though the send was still owed. It looked like the message was lost, and there was nothing left on
+    // screen to retry from.
+    //
+    // This cache outlives the repository, so pending messages ride along with the decrypted window that
+    // is already kept here. Bounded like everything else; unsent counts are tiny in practice.
+    //
+    // HONEST LIMIT: this is memory, so it survives leaving the chat but NOT killing the app. A true
+    // durable outbox needs Message to be Codable and a disk store, which is its own piece of work.
+    private var pendingByCid: [String: [Message]] = [:]
+    func storePending(_ cid: String, _ messages: [Message]) {
+        if messages.isEmpty { pendingByCid[cid] = nil } else { pendingByCid[cid] = messages }
+    }
+    func pending(for cid: String) -> [Message] { pendingByCid[cid] ?? [] }
+
     /// Sign-out/delete: these are DECRYPTED messages — never let them survive into
     /// another account's session on this device.
-    func removeAll() { byCid = [:] }
+    func removeAll() { byCid = [:]; pendingByCid = [:] }
 }

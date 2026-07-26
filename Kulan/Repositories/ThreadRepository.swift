@@ -37,7 +37,12 @@ final class ThreadRepository {
     private var windowTrimmed = false   // oldestDoc cursor no longer matches the kept window → cursor by value
 
     var messages: [Message] = []           // confirmed server messages (ascending)
-    var pending: [Message] = []            // optimistic, not yet echoed back
+    // Optimistic, not yet echoed back. Mirrored into ThreadMessageCache on every change so leaving the
+    // conversation cannot throw away a send that is still owed — this repository is per-cid and dies when
+    // you navigate away, which is why an offline message vanished on reopen.
+    var pending: [Message] = [] {
+        didSet { ThreadMessageCache.shared.storePending(cid, pending) }
+    }
     var canLoadOlder = true
     var loadingOlder = false
 
@@ -68,6 +73,10 @@ final class ThreadRepository {
 
     init(cid: String) {
         self.cid = cid
+        // Restore anything still unsent from a previous visit to this chat, BEFORE the cached window is
+        // seeded, so a pending message is on screen from the very first frame with its sending/failed
+        // state intact and its retry affordance available.
+        pending = ThreadMessageCache.shared.pending(for: cid)
         // Seed the last-decrypted messages SYNCHRONOUSLY so the conversation is fully rendered and
         // frozen on the first frame — before the push transition — as standard messengers do, instead of
         // fading in a beat late while the E2EE decrypt runs off the main thread. The live listener
