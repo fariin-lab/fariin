@@ -941,6 +941,19 @@ struct ChatsView: View {
                       ForEach(visible) { conv in chatListRow(conv) }
                     }
                     .listStyle(.plain)
+                    // THE STUCK GREY ROW, real cause. This List carries a `selection` binding for
+                    // multi-select, and every row carries a `.tag`. A NavigationLink row does not only
+                    // push - it ALSO sets the List's selection - and SwiftUI does not clear that on the
+                    // way back, so the row stays SELECTED, and selected renders as a permanent grey fill.
+                    // It is not a press highlight at all, which is why removing the custom press style
+                    // did not fix it: the highlight was correct, the selection underneath it was not.
+                    // Outside edit mode there is no such thing as a selected chat, so say so.
+                    .onChange(of: selection) { _, sel in
+                        if !selecting, !sel.isEmpty { selection.removeAll() }
+                    }
+                    .onChange(of: selecting) { _, on in
+                        if !on, !selection.isEmpty { selection.removeAll() }   // leaving edit mode clears it
+                    }
                     // When a new message bumps a chat to the top, the rows
                     // slide to their new order instead of popping. Scoped to the order/
                     // membership only, so it won't animate unrelated content changes.
