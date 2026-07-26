@@ -66,7 +66,7 @@ final class CallService: NSObject {
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
-                cameraPausedByBackground = false
+                cameraPausedByBackground = false; stopPausedCameraRetry()
                 calleeRinging = false; recordWritten = false; minimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
@@ -298,6 +298,11 @@ final class CallService: NSObject {
     private func setMyCamera(on: Bool) {
         guard state == .active || state == .reconnecting else { return }
         cameraOn = on
+        // An explicit toggle overrides any pause. Without this, a camera turned off and on again while
+        // paused left the flag set, and its `!cameraPausedByBackground` guard then swallowed the NEXT
+        // real interruption — so the other side would have been left on a frozen frame.
+        cameraPausedByBackground = false
+        stopPausedCameraRetry()
         localVideoTrack?.isEnabled = on
         if on {
             if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone
@@ -387,28 +392,64 @@ final class CallService: NSObject {
         cameraPausedByBackground = true
         localVideoTrack?.isEnabled = false   // stop sending, so they get the avatar and not a frozen face
         broadcastCameraState()
+        startPausedCameraRetry()             // some interruptions never post an "ended" — see below
     }
 
-    private func captureInterruptionEnded() {
-        guard cameraPausedByBackground else { return }
-        cameraPausedByBackground = false
+    private func captureInterruptionEnded(_ note: Notification) {
+        // MUST filter by session, exactly like captureInterrupted does. This notification is posted for
+        // EVERY AVCaptureSession in the process, and StoryCameraView runs its own. Without this, the
+        // story camera ending its interruption would resume the CALL camera and announce cams=true
+        // while our session was still interrupted, putting the other side on a frozen frame.
+        guard let session = note.object as? AVCaptureSession,
+              session === videoCapturer?.captureSession else { return }
+        resumeCameraIfReallyBack()
+    }
+
+    // The single resume path. Trusts the SESSION, never a flag: `isInterrupted` and `isRunning` are the
+    // system's own answer, so this is safe to call speculatively from anywhere and cannot announce video
+    // we are not actually producing.
+    private func resumeCameraIfReallyBack() {
         // The user may have hung up or turned the camera off while it was interrupted — re-check the
         // intent instead of blindly restoring.
-        guard inLiveCall, cameraOn else { return }
-        localVideoTrack?.isEnabled = true
+        guard inLiveCall, cameraOn, let session = videoCapturer?.captureSession else { return }
+        // Still interrupted: do NOT clear the flag and do NOT claim video. Announcing cams=true here
+        // was the bug that put the other side on a frozen frame AND swallowed the real resume later.
+        guard !session.isInterrupted else { return }
         // Apple preserves the startRunning intent across an interruption as long as we never called
         // stopRunning, so the session resumes itself. Restart only if it genuinely did not.
-        if videoCapturer?.captureSession.isRunning == false { startCameraCapture() }
+        if !session.isRunning { startCameraCapture(); return }   // its own start will resume us
+        stopPausedCameraRetry()
+        guard cameraPausedByBackground || localVideoTrack?.isEnabled == false else { return }
+        cameraPausedByBackground = false
+        localVideoTrack?.isEnabled = true
         broadcastCameraState()   // they see my video come back
     }
 
+    // Some interruptions never post an "ended". The documented example is thermal/system pressure, whose
+    // recovery Apple expects the app to earn by lowering the frame rate (we do not, yet — see the audit),
+    // and it fires in the FOREGROUND, where no app-lifecycle backstop can ever run. Camera-stolen-by-
+    // another-app is the same shape. So while paused we re-check the session on a timer; the check is
+    // cheap and self-cancels. Without this the camera stays dark and cams=false for the rest of the call.
+    private var pausedCameraRetry: Timer?
+    private func startPausedCameraRetry() {
+        guard pausedCameraRetry == nil else { return }
+        pausedCameraRetry = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard inLiveCall, cameraOn, cameraPausedByBackground else { stopPausedCameraRetry(); return }
+            resumeCameraIfReallyBack()
+        }
+    }
+    private func stopPausedCameraRetry() {
+        pausedCameraRetry?.invalidate()
+        pausedCameraRetry = nil
+    }
+
     // Backstop only. If an interruption ended without its notification (or one never fired), returning
-    // to the foreground must never leave the camera dark while the intent says it is on.
+    // to the foreground must never leave the camera dark while the intent says it is on. Note it does
+    // NOT force the flag first: resumeCameraIfReallyBack decides from the session, so a still-interrupted
+    // session correctly does nothing here rather than announcing video that does not exist.
     func appWillEnterForeground() {
-        guard inLiveCall, cameraOn else { return }
-        guard cameraPausedByBackground || localVideoTrack?.isEnabled == false else { return }
-        cameraPausedByBackground = true   // so captureInterruptionEnded's own guard passes
-        captureInterruptionEnded()
+        resumeCameraIfReallyBack()
     }
 
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
@@ -416,6 +457,12 @@ final class CallService: NSObject {
     private func handleRemoteCallState(_ d: [String: Any]) {
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
             remoteCameraOn = on
+            // Their video is what the swapped layout is BUILT ON: expanded means my feed is fullscreen
+            // and theirs is in the tile. If they kill their camera while we are swapped, that tile has
+            // nothing to draw and hides itself - taking the tap target with it and stranding me
+            // fullscreen on my own face with no way back. Un-swap instead, so their avatar returns to
+            // the big view and I go back to the corner, which is the layout for "their camera is off".
+            if on == false, isLocalExpanded { isLocalExpanded = false }
             updateInCallScreenBehavior()   // their video appearing/leaving flips keep-awake/proximity
         }
     }

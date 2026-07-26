@@ -289,7 +289,12 @@ struct CallView: View {
                             pipBase = CGSize(width: targetX, height: targetY)
                         }
                 )
+                // Swap only when there is actually a remote feed to swap TO. Without this guard, tapping
+                // while their camera is off put me fullscreen on my own face, left the tile hidden
+                // (a remote pip needs hasRemote), and took the tap target away with it - so the other
+                // person vanished AND there was no way back short of ending the call.
                 .onTapGesture {
+                    guard hasRemote else { return }
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }
                 }
                 .padding(.top, winInsets.top + 70)
