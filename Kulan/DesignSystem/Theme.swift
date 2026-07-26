@@ -182,12 +182,18 @@ struct AvatarView: View {
     }
 }
 
-/// Google's multi-colour "G" mark (bundled PNG in Resources/Brand), for the Google sign-in and
-/// connect rows. A plain letter "G" read as a placeholder next to Apple's real glyph.
+/// Google's multi-colour "G" mark, for the Google sign-in and connect rows. A plain letter "G" read
+/// as a placeholder next to Apple's real glyph, and there is no SF Symbol for it - Apple does not
+/// ship third-party brand logos, so this has to be a bundled image.
+///
+/// It lives in the ASSET CATALOG. It was previously a loose PNG in Resources/Brand, and
+/// `Image("google-g")` does not search subfolders, so it silently resolved to nothing and the row
+/// drew an empty gap where the logo should be.
 struct GoogleGIcon: View {
     var size: CGFloat = 20
     var body: some View {
         Image("google-g")
+            .renderingMode(.original)   // keep Google's four colours, never tinted by the row
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
