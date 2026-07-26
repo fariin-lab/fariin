@@ -150,6 +150,15 @@ extension CallKitManager: CXProviderDelegate {
         action.fulfill()
     }
 
+    // HOLD. There was no handler at all, so when a normal cellular call arrived mid-call iOS had no way
+    // to put us on hold and the outcome was undefined — while the other side saw a running timer, silence
+    // and no explanation, with that dead air counted into the call duration. Now we actually go quiet and
+    // tell them, and unhold restores whatever the user's own mute setting was.
+    func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
+        CallService.shared.setHeld(action.isOnHold)
+        action.fulfill()
+    }
+
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()

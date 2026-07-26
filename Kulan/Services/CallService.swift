@@ -75,7 +75,7 @@ final class CallService: NSObject {
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
-                cameraOn = false; remoteCameraOn = false; remoteMuted = false
+                cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false
                 isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
@@ -579,11 +579,26 @@ final class CallService: NSObject {
     // MARK: - In-call controls
     func toggleMute() {
         isMuted.toggle()
-        localAudioTrack?.isEnabled = !isMuted
+        localAudioTrack?.isEnabled = !(isMuted || isHeld)
         CallKitManager.shared.setMuted(isMuted)   // lock-screen/system UI stays in sync
-        // Tell them. A disabled audio track is silence, which is indistinguishable from a dropped
-        // connection — so without this the other side had no way to tell "muted" from "broken".
-        if let id = callId { db.collection("calls").document(id).updateData(["muted.\(me)": isMuted]) }
+        broadcastMuteState()
+    }
+
+    /// CallKit put us on hold (almost always: a normal cellular call arrived). Go genuinely quiet and
+    /// say so, instead of leaving them with silence they cannot distinguish from a broken connection.
+    /// `isMuted` is untouched, so unholding restores the user's OWN choice rather than guessing.
+    private(set) var isHeld = false
+    func setHeld(_ held: Bool) {
+        guard isHeld != held else { return }
+        isHeld = held
+        localAudioTrack?.isEnabled = !(isMuted || isHeld)
+        broadcastMuteState()
+    }
+
+    // What the other side needs to know is simply "can they hear me right now", which is mute OR hold.
+    private func broadcastMuteState() {
+        guard let id = callId else { return }
+        db.collection("calls").document(id).updateData(["muted.\(me)": isMuted || isHeld])
     }
 
     // MARK: - Peer liveness (force-quit detection)
