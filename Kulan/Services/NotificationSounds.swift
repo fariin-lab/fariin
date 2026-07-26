@@ -68,6 +68,33 @@ struct NotificationSound: Identifiable, Equatable {
 
     static let defaultRingtone = ringtones[0]
 
+    // MESSAGE TONES — OUR OWN bundled sounds, and deliberately the SAME list Settings > Notifications >
+    // Sound offers. Those two screens used to show completely different catalogues for the same setting:
+    // Settings offered these bundled files (and stores the choice in `notif.sound`, which the server puts
+    // in the APNs payload), while the per-chat picker offered Apple's system alert tones. So a per-chat
+    // choice could never match what a notification actually played, and the two lists shared no names.
+    // The user asked for the Settings list everywhere, which is also the correct one: it is what pushes use.
+    static let messageTones: [NotificationSound] = [
+        NotificationSound(id: "default", name: "Default", systemID: 1007),
+        NotificationSound(id: "rebound", name: "Rebound", bundleFile: "rebound.wav"),
+        NotificationSound(id: "chime",   name: "Chime",   bundleFile: "chime.wav"),
+        NotificationSound(id: "pop",     name: "Pop",     bundleFile: "pop.wav"),
+        NotificationSound(id: "pulse",   name: "Pulse",   bundleFile: "pulse.wav"),
+        NotificationSound(id: "marimba", name: "Marimba", bundleFile: "marimba.wav"),
+    ]
+
+    static let defaultMessageTone = messageTones[0]
+
+    /// Resolve a stored id against the MESSAGE tone list. Falls back through `builtIn` so a choice made
+    /// before this list existed still resolves to the tone it named instead of silently becoming Default.
+    static func resolveMessageTone(_ id: String?) -> NotificationSound {
+        guard let id else { return .defaultMessageTone }
+        if id == "none" { return .none }
+        return messageTones.first { $0.id == id }
+            ?? builtIn.first { $0.id == id }
+            ?? .defaultMessageTone
+    }
+
     /// Resolve a stored id against the RINGTONE list (calls), not the alert list.
     static func resolveRingtone(_ id: String?) -> NotificationSound {
         guard let id else { return .defaultRingtone }
@@ -99,7 +126,7 @@ enum SoundStore {
     /// Message and call have DIFFERENT defaults — the old shared default is why both rows read
     /// "Note (default)" and both played the same blip.
     static func defaultSound(_ kind: Kind) -> NotificationSound {
-        kind == .call ? .defaultRingtone : .default
+        kind == .call ? .defaultRingtone : .defaultMessageTone
     }
     static func soundId(_ cid: String, _ kind: Kind) -> String {
         UserDefaults.standard.string(forKey: key(cid, kind)) ?? defaultSound(kind).id

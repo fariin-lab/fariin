@@ -87,7 +87,8 @@ struct SoundsNotificationsView: View {
     }
 }
 
-// The sound picker sheet: None + real built-in tones (tap to preview) + any custom sound + import.
+// The sound picker sheet: None + the app's own tones, tap to preview. No custom import: every sound
+// ships with the app, so a call tone is always a bundle file CallKit can actually play.
 // X cancels, checkmark commits the highlighted sound.
 struct SoundPickerView: View {
     let cid: String
@@ -97,32 +98,23 @@ struct SoundPickerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedId: String
-    @State private var custom: NotificationSound?     // an imported sound (kept selectable)
-    @State private var showImporter = false
 
     init(cid: String, kind: SoundStore.Kind, title: String, onDone: @escaping () -> Void) {
         self.cid = cid; self.kind = kind; self.title = title; self.onDone = onDone
         let id = SoundStore.soundId(cid, kind)
         _selectedId = State(initialValue: id)
         _ = SoundStore.defaultSound(kind)   // per-kind default (call = ringtone, message = alert)
-        if id.hasPrefix("custom:") { _custom = State(initialValue: NotificationSound.resolve(id)) }
     }
 
     var body: some View {
         NavigationStack {
             List {
                 soundRow(.none)
-                // Calls get REAL ringtones (long, looping, melodic); messages get short alert tones.
-                // Feeding both from `builtIn` is what made a call sound identical to a message.
-                ForEach(kind == .call ? NotificationSound.ringtones : NotificationSound.builtIn) { soundRow($0) }
-                if let c = custom { soundRow(c) }
-                Button { showImporter = true } label: {
-                    HStack {
-                        Text("Add custom sound…").foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
-                    }
-                }
+                // Calls get REAL ringtones (long, looping, melodic); messages get our own bundled tones -
+                // the SAME list Settings > Notifications > Sound shows, so the two screens finally agree.
+                // They used to disagree completely: Settings offered these files while this picker offered
+                // Apple's system alert tones, so a per-chat choice could never match what a push played.
+                ForEach(kind == .call ? NotificationSound.ringtones : NotificationSound.messageTones) { soundRow($0) }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(title)
@@ -136,13 +128,6 @@ struct SoundPickerView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { commit() } label: { Image(systemName: "checkmark").font(.headline) }
-                }
-            }
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
-                if case .success(let urls) = result, let url = urls.first, let path = SoundStore.importCustom(from: url) {
-                    let s = NotificationSound.resolve("custom:\(path)")
-                    custom = s; selectedId = s.id
-                    SoundPlayer.shared.play(s)
                 }
             }
         }
@@ -159,15 +144,20 @@ struct SoundPickerView: View {
                 Spacer()
                 if selectedId == s.id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
             }
+            // The WHOLE ROW is the target. Without this the hit area collapsed onto the label's own
+            // content - the name text and the checkmark - so tapping the empty middle of a row did
+            // nothing and the list felt broken (user report).
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
     private func commit() {
+        // Custom imported sounds are gone on purpose: only tones that ship with the app, so every sound
+        // is one we control and a call tone is always a file CallKit can actually play from the bundle.
         let s: NotificationSound = selectedId == "none" ? .none
-            : (custom?.id == selectedId ? custom!
-               : (kind == .call ? NotificationSound.resolveRingtone(selectedId)
-                                : NotificationSound.resolve(selectedId)))
+            : (kind == .call ? NotificationSound.resolveRingtone(selectedId)
+                             : NotificationSound.resolveMessageTone(selectedId))
         SoundStore.set(cid, kind, s)
         onDone(); dismiss()
     }

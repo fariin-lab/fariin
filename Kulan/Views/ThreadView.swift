@@ -111,6 +111,7 @@ struct ThreadView: View {
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
     @State private var micDenied = false            // mic permission denied → "open Settings" alert
+    @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
     @State private var infoTarget: Message?        // group message → "read by" info sheet
@@ -191,7 +192,6 @@ struct ThreadView: View {
     @State private var pendingDelete: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
-    @State private var reportTarget: Message?     // abuse-report confirm (App Store 1.2)
     @FocusState private var inputFocused: Bool
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
@@ -546,6 +546,9 @@ struct ThreadView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Allow microphone access in Settings to record voice messages.") }
+        .alert("You're on a call", isPresented: $recordingBlockedByCall) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Can't record voice messages during a call.") }
     }
 
     // Split into two halves at an erased boundary: this modifier chain (~28 covers/sheets/alerts on one
@@ -915,7 +918,7 @@ struct ThreadView: View {
             }
         }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
-                                       pendingDelete: $pendingDelete, reportTarget: $reportTarget,
+                                       pendingDelete: $pendingDelete,
                                        onDeleteForMe: { m in repo.hideForMe(m.id) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
@@ -1279,7 +1282,6 @@ struct ThreadView: View {
                     input = m.text
                     inputFocused = true
                 },
-                onReport: { reportTarget = $0 },
                 onReactMore: { morePickerTarget = $0 },
                 onConfirmLink: { tappedLink = $0 },
                 onUserNotFound: { tappedUserNotFound = true },
@@ -1505,14 +1507,14 @@ struct ThreadView: View {
         items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
             withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
         })
-        let destructive: UIAction = m.authorId == me
-            ? UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
-                pendingDelete = m
-            }
-            : UIAction(title: "Report", image: UIImage(systemName: "flag"), attributes: .destructive) { _ in
-                reportTarget = m
-            }
-        items.append(UIMenu(options: .displayInline, children: [destructive]))   // the divider + Delete/Report
+        // NO "Report" on a message. The whole point of end-to-end encryption is that we cannot read what
+        // was sent, so a message report would either carry nothing useful or force us to ship the plaintext
+        // off the device - which would quietly break the guarantee the app makes. Reporting a PERSON or a
+        // GROUP still exists (ContactInfoView / GroupInfoView); it just does not attach message contents.
+        // Both sides get Delete instead, and the dialog offers "Delete for Me" for someone else's message.
+        let destructive = UIAction(title: "Delete", image: UIImage(systemName: "trash"),
+                                   attributes: .destructive) { _ in pendingDelete = m }
+        items.append(UIMenu(options: .displayInline, children: [destructive]))   // the divider + Delete
         return UIMenu(children: items)
     }
 
@@ -3440,6 +3442,13 @@ struct ThreadView: View {
 
     private func beginHoldRecording() {
         guard !holdStarted, !recordLocked else { return }
+        // A live call OWNS the microphone. CallKit holds the audio session in manual mode and WebRTC has
+        // the mic hot, so starting a recording here would either capture nothing or fight the call for the
+        // session - and the user would only find out afterwards, from a silent voice note. Say so instead.
+        if CallService.shared.state != .idle && CallService.shared.state != .ended {
+            recordingBlockedByCall = true
+            return
+        }
         // Permission already DENIED: don't flip into the recording UI (nothing would be captured —
         // the bar ran with a frozen 0:00). Point the user at Settings instead. A first-ever hold
         // (undetermined) still falls through to requestAndStart(), which shows the system prompt.
@@ -3715,7 +3724,6 @@ struct MessageBubble: View, Equatable {
     var onSelect: (Message) -> Void = { _ in }
     var onInfo: (Message) -> Void = { _ in }
     var onEdit: (Message) -> Void = { _ in }
-    var onReport: (Message) -> Void = { _ in }
     var onReactMore: (Message) -> Void = { _ in }
     // Link/username taps route UP to the screen (ONE dialog at ThreadView level) instead of every
     // bubble carrying its own confirmationDialog + alert: ~40 live cells each configured presentation
@@ -4174,11 +4182,8 @@ struct MessageBubble: View, Equatable {
                         }
                         Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
                         Divider()
-                        if isMe {
-                            Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
-                        } else {
-                            Button(role: .destructive) { onReport(message) } label: { Label("Report", systemImage: "flag") }
-                        }
+                        // Delete for both directions - see the UIKit menu above for why Report is gone.
+                        Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
                         }   // end normal (non-sending) menu
                     }
                     // Double-tap to quick-react with a heart.
@@ -5063,7 +5068,6 @@ private struct MessageActionDialogs: ViewModifier {
     let title: String
     let me: String
     @Binding var pendingDelete: Message?
-    @Binding var reportTarget: Message?
     var onDeleteForMe: (Message) -> Void = { _ in }
 
     func body(content: Content) -> some View {
@@ -5086,31 +5090,6 @@ private struct MessageActionDialogs: ViewModifier {
                     }
                 }
                 Button("Cancel", role: .cancel) { pendingDelete = nil }
-            }
-            .confirmationDialog("Report this message?",
-                                isPresented: Binding(get: { reportTarget != nil },
-                                                     set: { if !$0 { reportTarget = nil } }),
-                                titleVisibility: .visible) {
-                Button("Report", role: .destructive) {
-                    if let m = reportTarget {
-                        Task { await ChatService.report(reportedUid: m.authorId, cid: cid,
-                                                         messageId: m.id, messageText: m.text, reason: "message") }
-                    }
-                    reportTarget = nil
-                }
-                Button("Report and Block", role: .destructive) {
-                    if let m = reportTarget {
-                        Task {
-                            await ChatService.report(reportedUid: m.authorId, cid: cid,
-                                                     messageId: m.id, messageText: m.text, reason: "message")
-                            await ChatService.setBlocked(cid, true)
-                        }
-                    }
-                    reportTarget = nil
-                }
-                Button("Cancel", role: .cancel) { reportTarget = nil }
-            } message: {
-                Text("Our team will review this message within 24 hours. \(title) won't be told.")
             }
     }
 }
