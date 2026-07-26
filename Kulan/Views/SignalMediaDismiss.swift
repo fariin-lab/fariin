@@ -222,6 +222,9 @@ struct SignalDismissHost: UIViewRepresentable {
             let onScreen = reported.map { $0.intersects(c.superview?.bounds ?? .zero) } ?? false
             if let home = reported, onScreen, home.width > 1, home.height > 1 {
                 let center = CGPoint(x: home.midX, y: home.midY)
+                // Resolved OUTSIDE the animation closure: reading `parent` inside it needs an explicit
+                // self capture, and the value cannot change mid-flight anyway.
+                let landingRadius = parent.targetId().map { MediaOpenRects.cornerRadius($0) } ?? 14
                 let spring = UISpringTimingParameters(
                     dampingRatio: 1,     // Signal: springDamping 1, no overshoot on a landing
                     initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
@@ -237,7 +240,7 @@ struct SignalDismissHost: UIViewRepresentable {
                                      width: home.width, height: home.height)
                     // The tile's OWN radius, not a hardcoded 14 - media whose bubble uses a different
                     // radius visibly changed shape at the moment the copy took over.
-                    c.layer.cornerRadius = parent.targetId().map { MediaOpenRects.cornerRadius($0) } ?? 14
+                    c.layer.cornerRadius = landingRadius
                     c.layer.shadowOpacity = 0
                     self.backdrop?.alpha = 0
                 }
