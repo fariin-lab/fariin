@@ -780,22 +780,28 @@ private struct ProfilePhotoViewer: View {
             }
             // Just the X (user spec): no name label — the photo is the subject, and the page's own
             // back/Edit chrome is hidden while this is open so nothing else floats over it.
-            .overlay(alignment: .topLeading) {
-                Button { close() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
-                        .liquidGlass(Circle(), interactive: true)   // other full-screen close button
-                        .contentShape(Circle())
+            .overlay {
+                // ABSOLUTE placement from the true screen top, measured against Signal's own profile
+                // photo viewer: their close button's centre sits ~10pt below the safe-area top (69pt on
+                // a Dynamic Island device), hard against the 16pt leading margin.
+                //
+                // Padding was the wrong tool twice here. This overlay's container is neither the full
+                // screen nor safe-area-aligned, so `.padding(.top, 8)` put the button at ~121pt and
+                // adding winInsets.top on top of that pushed it to ~174pt - both far below Signal's
+                // 69pt. A GeometryReader that ignores the safe area gives a coordinate space whose
+                // origin IS the screen corner, so .position needs no assumptions about the container.
+                GeometryReader { _ in
+                    Button { close() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
+                            .liquidGlass(Circle(), interactive: true)   // other full-screen close button
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .position(x: 16 + 24, y: winInsets.top + 10)   // leading 16 + half the 48pt button
                 }
-                .buttonStyle(.plain)
-                // Apple's real placement for a full-screen close button: leading margin 16pt, and
-                // vertically centred in the 44pt nav-bar strip that sits BELOW the safe-area top. The
-                // viewer's container ignores the safe area, so a plain .padding(.top, 8) was measured
-                // from the SCREEN top and parked the button up in status-bar territory at the corner.
-                // winInsets reads the real inset from the key window (same helper CallView uses).
-                .padding(.leading, 16)
-                .padding(.top, winInsets.top + 2)
+                .ignoresSafeArea()
                 .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
                 .animation(.easeOut(duration: 0.15), value: drag == .zero)
             }
