@@ -1562,7 +1562,7 @@ struct ThreadView: View {
             // (otherLastRead passed as 0 when iBlocked) — the uikit tick must match, or a blocked chat
             // shows ✓✓ on text rows and ✓ on media rows, and a route flip visibly demotes the tick.
             let read = !repo.iBlocked && repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
-            tick = (read && readReceiptsOn) ? .read : .sent
+            tick = read ? .read : .sent   // same rule as the SwiftUI bubble and the chat list
         } else { tick = .none }
 
         return UIKitBubbleModel(
@@ -3892,7 +3892,7 @@ struct MessageBubble: View, Equatable {
         var metaW = (metaStr as NSString).size(withAttributes: [.font: metaFont]).width
         // Two overlapping checkmarks once read (see metaRow) are wider than the single delivered tick,
         // so the reservation has to grow with them or the second check paints over the last characters.
-        if isMe { metaW += (isRead && readReceiptsPref) ? 25 : 16 }
+        if isMe { metaW += isRead ? 25 : 16 }
         metaW += 8                // gap between the last word and the time
         let longestWord = message.text.split(whereSeparator: { $0.isWhitespace })
             .map { (String($0) as NSString).size(withAttributes: [.font: bodyFont]).width }.max() ?? 0
@@ -3911,7 +3911,7 @@ struct MessageBubble: View, Equatable {
         // two once read. It said checkmark.circle.fill, which is a different width from either.
         if isMe {
             t = t + Text(" ") + Text(Image(systemName: "checkmark"))
-            if isRead && readReceiptsPref { t = t + Text(Image(systemName: "checkmark")) }
+            if isRead { t = t + Text(Image(systemName: "checkmark")) }
         }
         return t.font(.system(size: 10))
     }
@@ -3973,7 +3973,13 @@ struct MessageBubble: View, Equatable {
                     // Overlapping pair, same spacing as the chat list's ticks.
                     HStack(spacing: -2.5) {
                         Image(systemName: "checkmark")
-                        if isRead && readReceiptsPref { Image(systemName: "checkmark") }
+                        // NOT gated on our own readReceipts pref. The chat list's ticks never were
+                        // (MainShell ticksView), so with the pref off the list showed 2 ticks while the
+                        // bubbles showed 1 for the very same message - the asymmetry the user reported.
+                        // Privacy lives on the WRITE (ChatService.markRead returns early when the pref is
+                        // off, so we don't broadcast our own reads); hiding information the other side
+                        // already sent us was just an inconsistency.
+                        if isRead { Image(systemName: "checkmark") }
                     }
                     .font(.system(size: 9, weight: .semibold))
                 }
