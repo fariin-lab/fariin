@@ -32,7 +32,15 @@ final class DiskImageCache {
 
     private let mem = NSCache<NSString, UIImage>()
     private let dir: URL
+    // WRITES + TRIMMING stay SERIAL: two writers and the LRU trim must not interleave.
     private let io = DispatchQueue(label: "DiskImageCache.io", qos: .utility)
+    // READS are CONCURRENT and user-initiated. They were on the serial `io` queue at .utility, so
+    // after a relaunch - when the memory cache is empty and every visible photo needs a disk read -
+    // all of them queued behind each other, one file read plus one full bitmap decode at a time, at a
+    // QoS iOS deliberately throttles. That is what made already-seen photos fill in one by one from
+    // grey placeholders. Nothing was being re-downloaded; the reads were just single-file.
+    private let read = DispatchQueue(label: "DiskImageCache.read", qos: .userInitiated,
+                                     attributes: .concurrent)
     private let maxBytes = 250 * 1024 * 1024   // 250 MB budget
 
     private init() {
@@ -89,7 +97,7 @@ final class DiskImageCache {
     func image(for url: String) async -> UIImage? {
         if let m = mem.object(forKey: url as NSString) { return m }
         return await withCheckedContinuation { cont in
-            io.async {
+            read.async {
                 let f = self.fileURL(url)
                 guard let data = try? Data(contentsOf: f), let raw = UIImage(data: data) else {
                     cont.resume(returning: nil); return
