@@ -32,8 +32,8 @@ final class CallService: NSObject {
             self?.captureInterrupted(note)
         }
         NotificationCenter.default.addObserver(forName: AVCaptureSession.interruptionEndedNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            self?.captureInterruptionEnded()
+                                               object: nil, queue: .main) { [weak self] note in
+            self?.captureInterruptionEnded(note)
         }
     }
 
