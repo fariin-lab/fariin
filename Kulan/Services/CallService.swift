@@ -77,6 +77,12 @@ final class CallService: NSObject {
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
                 updateInCallScreenBehavior() // proximity off + allow sleep again
+                // Glare: I stood down so the other side's call could win. Re-arm the listener now that
+                // I am genuinely idle — their doc is unchanged, so only a fresh snapshot will ring me.
+                if recheckIncomingWhenIdle {
+                    recheckIncomingWhenIdle = false
+                    observeIncoming()
+                }
             }
         }
     }
@@ -172,6 +178,28 @@ final class CallService: NSObject {
             return RTCIceServer(urlStrings: urls)
         }
         if !servers.isEmpty { fetchedIceServers = servers }
+    }
+
+    /// Make sure we have a real TURN list BEFORE building a peer connection, without ever holding a call
+    /// hostage to a slow network.
+    ///
+    /// Both call paths used to fire `Task { await refreshIceServers() }` and then build the connection on
+    /// the very next line, so the fetch almost never won that race and `config` fell back to STUN-only —
+    /// exactly the CGNAT/mobile-data case the TURN relay exists for, and the likeliest cause of "the first
+    /// call after opening the app doesn't connect".
+    ///
+    /// Returns instantly when the list is already warm (the common case: `observeIncoming` fetches at
+    /// launch), so this costs nothing except on a genuinely cold start. On timeout we proceed with the
+    /// STUN fallback rather than fail the call — a call that might not traverse beats no call at all — and
+    /// the in-flight fetch is left running so the NEXT call is warm either way.
+    private func awaitIceServers(timeout: Double = 2.0) async {
+        if fetchedIceServers != nil { return }
+        let fetch = Task { await self.refreshIceServers() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while fetchedIceServers == nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        _ = fetch   // deliberately NOT cancelled: let it finish and warm the next call
     }
 
     // Audio session is owned by CallKit (manual mode) — see CallKitManager.
@@ -677,10 +705,20 @@ final class CallService: NSObject {
         CallKitManager.shared.startOutgoing(name: name)   // native call UI + audio session
         CallKitManager.shared.reportConnecting()
 
-        Task { await refreshIceServers() }   // fresh TURN creds before we build the connection
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
             guard granted else { self.hangUp(); return }   // no mic -> don't start a dead call
+            // TURN creds must be in hand BEFORE makePeerConnection reads `config` — see awaitIceServers.
+            Task { @MainActor in
+                await self.awaitIceServers()
+                guard self.state == .outgoing else { return }   // cancelled while we waited
+                self.beginOutgoingMedia(to: uid)
+            }
+        }
+    }
+
+    // The media half of startCall, split out so the TURN wait can sit between the mic prompt and here.
+    private func beginOutgoingMedia(to uid: String) {
             // Ringback starts IMMEDIATELY (user decision 2026-07-22, verified against Signal live):
             // the caller never sits in dead silence. The SOUND is comfort; the LABEL is truth —
             // "Calling…" flips to "Ringing…" only when their phone confirms it is actually ringing.
@@ -723,7 +761,6 @@ final class CallService: NSObject {
                     }
                 }
             }
-        }
     }
 
     private func ensureMicPermission(_ done: @escaping (Bool) -> Void) {
@@ -759,6 +796,22 @@ final class CallService: NSObject {
             if (d["status"] as? String) == "ended", self.state == .incoming {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
                 self.remoteEnded(reason: EndReason(rawValue: d["endReason"] as? String ?? "") ?? .hangup)
+                return
+            }
+            // ANSWERED ELSEWHERE. `voipTokens` is an array and every signed-in device of mine rings, but
+            // this watcher only ever handled "ended" and a callee mismatch — "active" matched neither, so
+            // the OTHER phones kept ringing forever after I picked up on one. This watcher is removed the
+            // moment THIS device answers (see completeAnswer), so still being .incoming while the doc says
+            // active means someone else took it. Stop ringing without touching the doc: the device that
+            // answered owns the call now, and writing anything here would fight it.
+            if (d["status"] as? String) == "active", self.state == .incoming {
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                // No tone (localUser: true) — I did answer, just on my other phone — and no doc write,
+                // which would fight the device that owns the call now. recordWritten is forced so we do
+                // NOT log a missed call: the answering device writes the real record for this same
+                // callId, and ours would overwrite it with "missed".
+                self.recordWritten = true
+                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
             }
         }
     }
@@ -780,8 +833,41 @@ final class CallService: NSObject {
                 // H4: already in a call → send this new caller a busy signal instead of dropping them silently.
                 if self.state != .idle {
                     if doc.documentID != self.callId {
+                        let caller = d["caller"] as? String ?? ""
+                        // GLARE: we dialled each other at the same moment, so we are each other's
+                        // "incoming call while busy" and both sides sent busy — killing BOTH calls and
+                        // leaving two Missed rows in one chat. Break the tie on the only thing both
+                        // phones already agree on: the two uids. Lower uid keeps its outgoing call and
+                        // busies the other; higher uid gives up its own so the survivor can ring here.
+                        if self.state == .outgoing, !caller.isEmpty, caller == self.otherUid {
+                            if self.me < caller {
+                                self.db.collection("calls").document(doc.documentID)
+                                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+                                return
+                            }
+                            // I lose: cancel MY outgoing call, then re-arm the incoming listener once we
+                            // are actually idle. Re-arming is required, not optional — their doc does not
+                            // change when I stand down, so no further snapshot would ever arrive and I
+                            // would sit idle while their phone rings on alone.
+                            self.recheckIncomingWhenIdle = true
+                            self.endReason = .hangup
+                            self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+                            return
+                        }
                         self.db.collection("calls").document(doc.documentID)
                             .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+                        // A busy call left NO trace on this phone: the caller got a Missed row, I got
+                        // nothing and never learned they tried. Log it here (same deterministic doc id
+                        // the caller uses, same "missed" outcome, so the two writes agree).
+                        if !caller.isEmpty {
+                            let cid = [self.me, caller].sorted().joined(separator: "_")
+                            let isVideo = (d["type"] as? String) == "video"
+                            Task {
+                                await ChatService.recordCall(cid: cid, callId: doc.documentID,
+                                                             callerUid: caller, outcome: "missed",
+                                                             video: isVideo, durationSec: 0)
+                            }
+                        }
                     }
                     return
                 }
@@ -881,7 +967,17 @@ final class CallService: NSObject {
     }
 
     // Build the answering peer connection from the caller's offer, publish the answer + my camera state.
+    // The TURN wait sits HERE rather than in answer(), because this is the one place that builds the
+    // peer connection and so the last point at which `config` can still pick up real relay servers.
     private func completeAnswer(ref: DocumentReference, offerSdp: String) {
+        Task { @MainActor in
+            await self.awaitIceServers()
+            guard self.state == .active else { return }   // ended while we waited
+            self.buildAnswer(ref: ref, offerSdp: offerSdp)
+        }
+    }
+
+    private func buildAnswer(ref: DocumentReference, offerSdp: String) {
         pc = makePeerConnection()   // cameraOn is already known → the local video track is added if it's a video call
         guard let pc else { hangUp(); return }
         let remote = RTCSessionDescription(type: .offer, sdp: offerSdp)
@@ -1010,6 +1106,7 @@ final class CallService: NSObject {
     // those candidate writes hit a non-existent parent → rule-denied + lost. Buffer local candidates
     // until the doc exists, then flush.
     private var callDocCreated = false
+    private var recheckIncomingWhenIdle = false   // glare: I stood down, re-arm the ring listener at idle
     private var localCandidateBuffer: [[String: Any]] = []
     private func flushLocalCandidates() {
         guard let col = myCandidatesCollection, !localCandidateBuffer.isEmpty else { return }
@@ -1044,7 +1141,10 @@ final class CallService: NSObject {
             let connected = connectedDate != nil
             let dur = connected ? Int(Date().timeIntervalSince(connectedDate!)) : 0
             let callerUidVal = isCaller ? me : otherUid
-            let outcome = connected ? "answered" : "missed"
+            // A DECLINE is not a miss. endReason was already known here and simply never reached the
+            // record, so deliberately rejecting a call wrote "missed" — which the chat row then renders
+            // red as "Missed call · Tap to call back" on the phone of the person who chose to decline it.
+            let outcome = connected ? "answered" : (endReason == .declined ? "declined" : "missed")
             let cid = [me, otherUid].sorted().joined(separator: "_")
             let cidCallId = callId ?? UUID().uuidString
             let video = startedAsVideo   // capture before the idle reset clears it

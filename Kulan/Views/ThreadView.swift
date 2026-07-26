@@ -2538,6 +2538,10 @@ struct ThreadView: View {
         // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" —
         // neutral colors, outgoing arrow — never red, never "tap to call back" (I was the one calling).
         let incomingMissed = missed && !mine
+        // A decline is its own outcome, never red and never "tap to call back": the person reading that
+        // row is the one who chose to reject it. Previously it was written as "missed", so declining a
+        // call put "Missed call · Tap to call back" in the decliner's own chat.
+        let declined = m.callOutcome == "declined"
         let statusText: String = {
             if video { return incomingMissed ? "Missed video call" : "Video call" }
             return incomingMissed ? "Missed voice call" : "Voice call"
@@ -2545,6 +2549,7 @@ struct ThreadView: View {
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
+            if declined { return "Declined · \(time)" }
             if incomingMissed { return "Tap to call back · \(time)" }
             if missed { return "No answer · \(time)" }            // MY unanswered outgoing call
             if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
