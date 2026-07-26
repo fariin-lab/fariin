@@ -648,14 +648,27 @@ struct ChatsView: View {
     }
 
     @ViewBuilder private func chatListRow(_ conv: Conversation) -> some View {
-        Button {
-            if selecting { toggleSelection(conv.id); return }
-            path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
-                                   photo: conv.displayPhoto(me)))
-        } label: {
-            chatListRowLabel(conv)
+        // A real NavigationLink, not a Button with a hand-rolled press style.
+        //
+        // THE STUCK GREY ROW: ChatRowPressStyle painted the highlight from the ButtonStyle's `isPressed`.
+        // That flag strands whenever the button's identity changes mid-press - and this list RE-SORTS on
+        // updatedAt, so a message arriving while a finger rests on a row does exactly that. The row then
+        // stayed grey with nothing to clear it, which is the "selected grey without selecting" report.
+        // The system's own row highlight cannot get stuck this way, and it is also what makes the swipe
+        // actions behave properly, since UIKit owns the whole cell interaction instead of splitting it
+        // between a Button and the swipe platter.
+        Group {
+            if selecting {
+                chatListRowLabel(conv)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSelection(conv.id) }
+            } else {
+                NavigationLink(value: ChatTarget(id: conv.id, name: conv.displayName(me),
+                                                 photo: conv.displayPhoto(me))) {
+                    chatListRowLabel(conv)
+                }
+            }
         }
-        .buttonStyle(ChatRowPressStyle())   // grey highlight while held
         .tag(conv.id)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)   // clean, no row lines
@@ -1349,13 +1362,6 @@ private struct StoryRowHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-private struct ChatRowPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
-    }
-}
 
 // Registers the ringed avatar as a zoom-transition anchor when a namespace is provided —
 // the story viewer grows out of, and closes back into, this exact circle. The namespace is
