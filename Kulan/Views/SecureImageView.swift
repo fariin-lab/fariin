@@ -41,8 +41,16 @@ struct SecureImageView: View {
                     .overlay { if waitingTap { downloadBadge } }
             } else if waitingTap {
                 Rectangle().fill(Color.gray.opacity(0.18)).overlay { downloadBadge }
+            } else if DiskImageCache.shared.isCached(imageUrl) {
+                // ALREADY ON DISK — this is a decode, not a download, so it lands within a frame or two.
+                // A shimmer here was actively misleading: it says "waiting on the network" for a file the
+                // phone has had for a week, and it fired on EVERY relaunch and every app switch because
+                // the only synchronous check available was memory-only. Hold a calm blank instead, so the
+                // image simply appears. Skeleton.swift's own contract says the shimmer is for a cold load;
+                // this restores that meaning.
+                Color.clear
             } else {
-                SkeletonFill()   // shimmer skeleton while loading (replaces the spinner)
+                SkeletonFill()   // shimmer skeleton while genuinely downloading
             }
         }
         .onTapGesture {

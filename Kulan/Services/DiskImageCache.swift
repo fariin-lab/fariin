@@ -74,9 +74,53 @@ final class DiskImageCache {
         // The standard LRU cache evacuates in the background: decoded UIImages are the app's biggest heap
         // objects, and a backgrounded app holding hundreds of them is first in line for jetsam (and
         // background thermal work). The disk tier stays, so reopening is still instant.
-        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+        // Evict on real MEMORY PRESSURE, not on every backgrounding. Clearing on background meant that
+        // switching to another app and coming straight back re-shimmered every visible photo - the user
+        // reported this as "restarting the app", but it fired far more often than that. NSCache already
+        // evacuates itself under pressure and when the app is jetsam-eligible, so the original concern is
+        // handled by the system; throwing the whole tier away on every app switch was pure cost.
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.mem.removeAllObjects()
+        }
+        seedIndex()   // one directory listing, no file reads — see isCached
+    }
+
+    // WHAT IS ON DISK, answerable synchronously and with ZERO file IO.
+    //
+    // The problem this solves: the only synchronous "do I already have this?" check in the app was
+    // `memoryImage`, i.e. memory only - and memory is empty on every launch AND wiped on every
+    // backgrounding (see the observer above). So a photo that has been on disk for a week still had no
+    // way to say so before the first frame was committed, and every view fell through to a skeleton
+    // shimmer and only swapped in the real image a frame or more later. Nothing was being re-downloaded;
+    // the app simply could not tell.
+    //
+    // A `Set` of hashed filenames answers it instantly. It is seeded once from a SINGLE directory
+    // listing - no file reads, no decodes - and kept in step by every path that adds or removes a file.
+    // Deliberately NOT a disk probe per lookup: `fileExists` on the main thread during a scroll is the
+    // kind of hitch this cache exists to avoid.
+    private var index = Set<String>()
+    private let indexLock = NSLock()
+
+    private func indexInsert(_ k: String) { indexLock.lock(); index.insert(k); indexLock.unlock() }
+    private func indexRemove(_ k: String) { indexLock.lock(); index.remove(k); indexLock.unlock() }
+
+    /// Is this URL already on disk? Pure in-memory set lookup, safe to call on the main thread from a
+    /// view body. A false positive is harmless: the view holds a blank frame instead of a shimmer and
+    /// the normal async load fills it exactly as before.
+    func isCached(_ url: String) -> Bool {
+        if mem.object(forKey: url as NSString) != nil { return true }
+        let k = key(url)
+        indexLock.lock(); defer { indexLock.unlock() }
+        return index.contains(k)
+    }
+
+    private func seedIndex() {
+        io.async { [weak self] in
+            guard let self else { return }
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            let keys = names.filter { $0.hasSuffix(".img") }.map { String($0.dropLast(4)) }
+            indexLock.lock(); index.formUnion(keys); indexLock.unlock()
         }
     }
 
@@ -122,8 +166,13 @@ final class DiskImageCache {
         let bytes = data ?? image.jpegData(compressionQuality: 0.85)
         guard let bytes else { return }
         let f = fileURL(url)
+        let k = key(url)
         io.async { [weak self] in
-            try? bytes.write(to: f, options: [.atomic, .completeFileProtectionUnlessOpen])
+            // completeFileProtectionUntilFirstUserAuthentication, matching VideoCache and AudioCache.
+            // `UnlessOpen` files cannot be OPENED while the device is locked, so a push-triggered launch
+            // on a locked phone read nil, concluded "not cached", and re-downloaded.
+            try? bytes.write(to: f, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            self?.indexInsert(k)
             self?.trimIfNeeded()
         }
     }
@@ -149,6 +198,7 @@ final class DiskImageCache {
                 if let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
                    d < cutoff {
                     try? fm.removeItem(at: u)
+                    self.indexRemove(u.deletingPathExtension().lastPathComponent)
                 }
             }
         }
@@ -163,6 +213,7 @@ final class DiskImageCache {
             if let items = try? fm.contentsOfDirectory(at: self.dir, includingPropertiesForKeys: nil) {
                 for u in items { try? fm.removeItem(at: u) }
             }
+            self.indexLock.lock(); self.index.removeAll(); self.indexLock.unlock()
         }
     }
 
@@ -181,6 +232,7 @@ final class DiskImageCache {
         files.sort { $0.2 < $1.2 }   // oldest first
         for (u, size, _) in files where total > maxBytes {
             try? fm.removeItem(at: u); total -= size
+            indexRemove(u.deletingPathExtension().lastPathComponent)
         }
     }
 }
