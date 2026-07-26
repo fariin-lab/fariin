@@ -18,7 +18,18 @@ extension Notification.Name {
 // A voice-note waveform scrub is in progress. The conversation's single swipe-to-reply pan reads this
 // and yields, so dragging the waveform to seek never also drags the bubble into a reply. (The waveform's
 // scrub is a horizontal SwiftUI gesture inside the hosted cell; this flag is how the UIKit pan defers to it.)
-enum VoiceScrubState { static var active = false }   // set/read on the main thread only (gesture + UI)
+enum VoiceScrubState {
+    static var active = false
+    /// TRUE from the first movement of a touch that LANDED ON A WAVEFORM, regardless of direction.
+    ///
+    /// This is ownership, not arbitration. Both the scrub and the reply-swipe are simultaneous
+    /// gestures, so both run and race; `active` was only raised once the drag proved horizontal, and by
+    /// then the reply gesture (18pt) could already have claimed a slightly diagonal drag. This flag is
+    /// set at the FIRST onChanged of a 0-distance gesture, which always beats 18pt, and the reply
+    /// gesture simply refuses for the rest of that touch. The waveform is a no-reply zone; the rest of
+    /// the voice card still swipes normally.
+    static var touchOnWaveform = false
+}   // set/read on the main thread only (gesture + UI)
 
 enum VoiceAudio {
     static var activeId: String?
@@ -396,6 +407,9 @@ struct WaveformBars: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in
                         let w = max(1, geo.size.width)
+                        // Claim the touch for the waveform IMMEDIATELY, before deciding the axis:
+                        // the reply gesture must be refused from the first movement, not after 3pt.
+                        VoiceScrubState.touchOnWaveform = true
                         if scrubLock == nil {
                             let dx = abs(v.translation.width), dy = abs(v.translation.height)
                             guard dx > 3 || dy > 3 else { return }   // too small to tell yet
@@ -412,6 +426,7 @@ struct WaveformBars: View {
                     }
                     .onEnded { _ in
                         scrubLock = nil
+                        VoiceScrubState.touchOnWaveform = false
                         guard dragStartPct != nil else { return }
                         dragStartPct = nil
                         VoiceScrubState.active = false

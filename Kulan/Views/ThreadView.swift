@@ -4218,6 +4218,12 @@ struct MessageBubble: View, Equatable {
         DragGesture(minimumDistance: 18)
             .onChanged { v in
                 guard message.sendState == nil, !VoiceScrubState.active else { return }
+                // THE WAVEFORM IS A NO-REPLY ZONE (user's "red area"). Refused for the whole touch,
+                // whichever way it goes, because the flag is raised on the waveform's first movement -
+                // earlier than this gesture's own 18pt threshold. Ownership, not arbitration: the two
+                // gestures are both simultaneous, so racing them is what kept failing. The rest of the
+                // voice card still swipes to reply normally.
+                guard !VoiceScrubState.touchOnWaveform else { return }
                 guard abs(v.translation.width) > abs(v.translation.height) else { return }   // horizontal only
                 if v.translation.width < 0 {
                     let t = v.translation.width
@@ -4241,6 +4247,7 @@ struct MessageBubble: View, Equatable {
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { dragX = 0 }
                     swipeArmed = false
                 }
+                VoiceScrubState.touchOnWaveform = false   // belt: a stuck flag would kill reply everywhere
                 let fire = !VoiceScrubState.active && dragX <= -50
                 swipeArmed = false
                 if fire { onReply(message) }   // haptic already fired at the threshold, don't double-buzz
