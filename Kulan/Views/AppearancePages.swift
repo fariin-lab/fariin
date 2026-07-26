@@ -679,3 +679,87 @@ private extension Bundle {
         return UIImage(named: last)
     }
 }
+
+// MARK: - Quick Reaction
+
+// Which emoji a double-tap on a message sends. It was hard-coded to ❤️ in two separate places (the
+// SwiftUI bubble's double-tap and the UIKit-routed row's), so a double tap always meant "love" and there
+// was no way to change it. One stored value now feeds both.
+enum QuickReaction {
+    static let key = "chat.quickReaction"
+    static let fallback = "❤️"
+    /// The emoji a double-tap sends. Read from UserDefaults so the UIKit row path can reach it too.
+    static var current: String {
+        let v = UserDefaults.standard.string(forKey: key) ?? fallback
+        return v.isEmpty ? fallback : v
+    }
+    /// Offered in the picker. The common reaction set, so a choice is one tap rather than a keyboard.
+    static let choices = ["❤️", "👍", "👎", "😂", "😮", "😢", "🙏", "🔥", "🎉", "💯"]
+}
+
+struct QuickReactionPage: View {
+    @AppStorage(QuickReaction.key) private var emoji = QuickReaction.fallback
+
+    private let columns = [GridItem(.adaptive(minimum: 56), spacing: 12)]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Show what the setting actually does, rather than describing it. Tapping the sample
+                // reacts to it with the current choice, so the behaviour is visible before you commit.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("DOUBLE TAP ON A MESSAGE TO REACT")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .padding(.leading, 4)
+                    HStack {
+                        Text("I hope you're enjoying your day as much as I am.")
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(Color(.secondarySystemGroupedBackground),
+                                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .overlay(alignment: .bottomTrailing) {
+                                Text(emoji).font(.system(size: 20))
+                                    .padding(5)
+                                    .background(Color(.systemBackground), in: Circle())
+                                    .offset(x: 6, y: 10)
+                            }
+                        Spacer(minLength: 0)
+                    }
+                }
+
+                Text("CHOOSE YOUR QUICK REACTION")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(QuickReaction.choices, id: \.self) { e in
+                        Button {
+                            emoji = e
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        } label: {
+                            Text(e).font(.system(size: 30))
+                                .frame(width: 56, height: 56)
+                                .background {
+                                    if emoji == e {
+                                        Circle().fill(Color.accentColor.opacity(0.18))
+                                            .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                                    } else {
+                                        Circle().fill(Color(.secondarySystemGroupedBackground))
+                                    }
+                                }
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Text("Double tap any message to send this reaction.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            }
+            .padding(16)
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Quick Reaction")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}

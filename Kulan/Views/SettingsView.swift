@@ -484,6 +484,9 @@ struct AppearanceSettingsView: View {
                     doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
                     Divider().padding(.leading, 16)
                     doorRow("App Icon") { AppIconPage() }
+                    Divider().padding(.leading, 16)
+                    doorRow("Quick Reaction",
+                            accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
                 }
                 .background(Color(.secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 24, style: .continuous))

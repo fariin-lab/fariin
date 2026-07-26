@@ -591,7 +591,10 @@ struct ContactInfoView: View {
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(cardColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // 24, matching every other card on this screen (the sections below, the action tiles, the
+                // media card). This one was left at 14, so it sat directly above a 24 card with visibly
+                // tighter corners - the mismatch the user circled. `.continuous` is the Apple curve.
+                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             }
         }
     }
@@ -807,7 +810,12 @@ private struct ProfilePhotoViewer: View {
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
-                    .position(x: 16 + 24, y: winInsets.top + 10)   // leading 16 + half the 48pt button
+                    // .position places the CENTRE. `winInsets.top + 10` therefore put the button's TOP
+                    // edge 14pt ABOVE the safe area (centre 10 below it, minus half of 48), which is
+                    // inside the status bar - the overlap the user reported. The safe-area top is exactly
+                    // the line chrome must not cross, so the button's top edge goes 8pt below it and the
+                    // centre follows: inset + 8 + half the button.
+                    .position(x: 16 + 24, y: winInsets.top + 8 + 24)
                 }
                 .ignoresSafeArea()
                 .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest

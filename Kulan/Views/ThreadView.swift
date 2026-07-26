@@ -1523,7 +1523,9 @@ struct ThreadView: View {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
         let m = repo.items[idx]
         guard m.sendState == nil else { return }
-        let emoji: String? = m.reactions[me] == "❤️" ? nil : "❤️"
+        // The user's chosen quick reaction, not a hard-coded heart (Settings > Appearance).
+        let quick = QuickReaction.current
+        let emoji: String? = m.reactions[me] == quick ? nil : quick
         Task {
             await ChatService.setReaction(cid: cid, messageId: m.id, emoji: emoji,
                                           toAuthor: m.authorId, group: isGroup ? groupMembers : nil)
@@ -4186,11 +4188,13 @@ struct MessageBubble: View, Equatable {
                         Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
                         }   // end normal (non-sending) menu
                     }
-                    // Double-tap to quick-react with a heart.
+                    // Double-tap to quick-react. The emoji is the user's choice (Settings > Appearance >
+                    // Quick Reaction), read here AND in uikitQuickReact so both row paths agree.
                     .highPriorityGesture(TapGesture(count: 2).onEnded {
                         guard message.sendState == nil, !restricted else { return }   // not until on server; muted can't react
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        onReact(myReaction == "❤️" ? nil : "❤️")
+                        let quick = QuickReaction.current
+                        onReact(myReaction == quick ? nil : quick)
                     })
                     // SWIPE-TO-REPLY (build-285 model, restored): move the bubble via SwiftUI .offset
                     // INSIDE the cell — the cell frame never changes, so neighbors can't drift and
