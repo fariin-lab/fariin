@@ -333,8 +333,22 @@ final class AuthService: NSObject {
     /// Firebase refuses `user.delete()` unless the sign-in is recent. Rather than telling people
     /// to sign out and back in (which for an anonymous session would destroy the account), we
     /// re-verify them in place with the provider they already use.
+    /// When a reauthenticate() last succeeded, and for which uid.
+    ///
+    /// Firebase does NOT refresh the cached `currentUser.metadata.lastSignInDate` when you
+    /// reauthenticate — that value still reflects the ORIGINAL sign-in. So a metadata-only check kept
+    /// reporting "needs recent login" immediately after a successful verification, and the delete-account
+    /// backstop in ProfileStore refused with "Please verify it's you and try again" even though the user
+    /// had just re-signed in (Google's own confirmation email proved the grant went through).
+    private(set) var lastReauthAt: Date?
+    private var lastReauthUid: String?
+
     var needsRecentLogin: Bool {
         guard let user = Auth.auth().currentUser else { return false }
+        // Our OWN record of the verification wins, because it is the only one that is actually fresh.
+        // Tied to the uid so it can never carry over to a different account on this device.
+        if let at = lastReauthAt, lastReauthUid == user.uid,
+           Date().timeIntervalSince(at) < 4 * 60 { return false }
         let last = user.metadata.lastSignInDate ?? .distantPast
         return Date().timeIntervalSince(last) >= 4 * 60
     }
@@ -345,6 +359,12 @@ final class AuthService: NSObject {
     private func reauthenticate(with credential: AuthCredential) async throws {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
         _ = try await user.reauthenticate(with: credential)
+        // Record it ourselves — see lastReauthAt. Only reached when reauthenticate did NOT throw, so a
+        // cancelled or mismatched sign-in never marks the session as verified.
+        lastReauthAt = Date()
+        lastReauthUid = user.uid
+        // Best effort: pull fresh server metadata too, so lastSignInDate stops lying for other callers.
+        try? await user.reload()
     }
 
     func reauthApple(authorization: ASAuthorization) async throws {
