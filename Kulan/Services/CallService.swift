@@ -272,25 +272,72 @@ final class CallService: NSObject {
         }
     }
 
-    // Pick the camera + a ~720p format and start feeding frames into the local track.
+    // How hot the phone is decides how hard we drive the camera. Nothing watched this before, so a long
+    // video call just cooked until iOS interrupted the capture session outright — and lowering the frame
+    // rate is Apple's DOCUMENTED way to earn a system-pressure interruption back, which means without
+    // this the camera could stay dark for the rest of the call. Numbers, not a curve: the point is to
+    // back off well before the OS has to.
+    private var thermalCaps: (fps: Int, height: Int) {
+        switch ProcessInfo.processInfo.thermalState {
+        case .critical: return (15, 480)
+        case .serious:  return (20, 540)
+        default:        return (30, 720)
+        }
+    }
+    private var thermalObserver: NSObjectProtocol?
+    private var appliedThermalFps = 30
+    private func observeThermalIfNeeded() {
+        guard thermalObserver == nil else { return }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, cameraOn, !cameraPausedByBackground, videoCapturer != nil else { return }
+                // Only restart when the cap actually MOVED — a restart costs a ~200ms black frame on
+                // the other side, so reacting to every notification would be worse than the heat.
+                guard thermalCaps.fps != appliedThermalFps else { return }
+                let front = usingFrontCamera
+                videoCapturer?.stopCapture { [weak self] in
+                    DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: front) }
+                }
+        }
+    }
+
+    // Pick the camera + a format and start feeding frames into the local track.
     private func startCapture(front: Bool) {
         guard let capturer = videoCapturer else { return }
         let position: AVCaptureDevice.Position = front ? .front : .back
         let devices = RTCCameraVideoCapturer.captureDevices()
         guard let device = devices.first(where: { $0.position == position }) ?? devices.first else { return }
         let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
-        let target = 720
+        let caps = thermalCaps
         let format = formats.min(by: {
             let d1 = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
             let d2 = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-            return abs(Int(d1.height) - target) < abs(Int(d2.height) - target)
+            return abs(Int(d1.height) - caps.height) < abs(Int(d2.height) - caps.height)
         })
         guard let format else { return }
-        let fps = min(30, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
+        let fps = min(caps.fps, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
+        appliedThermalFps = caps.fps
         allowBackgroundCamera(on: capturer.captureSession)
-        capturer.startCapture(with: device, format: format, fps: fps)
+        capturer.startCapture(with: device, format: format, fps: fps) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                // Only claim video once the session is REALLY running. `cams` was published purely from
+                // intent, so a start that never succeeded (most visibly a video call answered from the
+                // lock screen, where the camera cannot start and no interruption is posted either) left
+                // the other side staring at a BLACK full-screen video with a running timer, forever.
+                guard self.cameraOn, self.inLiveCall else { return }
+                if capturer.captureSession.isRunning {
+                    if self.cameraPausedByBackground { self.resumeCameraIfReallyBack() }
+                } else if !self.cameraPausedByBackground {
+                    self.cameraPausedByBackground = true
+                    self.localVideoTrack?.isEnabled = false   // avatar, never a black rectangle
+                    self.broadcastCameraState()
+                    self.startPausedCameraRetry()
+                }
+            }
+        }
         // Observed @Observable state must be written on main (this runs on a background queue).
-        DispatchQueue.main.async { self.usingFrontCamera = front }
+        DispatchQueue.main.async { self.usingFrontCamera = front; self.observeThermalIfNeeded() }
     }
 
     // Lets the capture session survive backgrounding, so leaving the app does not black out my video
@@ -1252,7 +1299,10 @@ final class CallService: NSObject {
             endReason = connectedDate != nil ? .hangup : (isCaller ? .missed : .declined)
         }
         // Write a call record into the chat (once). Each side writes its own row.
-        if !recordWritten, !otherUid.isEmpty {
+        // callId != nil matters: denying the mic on an OUTGOING call hangs up before the call doc is
+        // ever created, and the `callId ?? UUID()` fallback below then wrote a phantom "Missed call" row
+        // under a random id - for a call that was never placed, and undedupable against the other side.
+        if !recordWritten, !otherUid.isEmpty, callId != nil {
             recordWritten = true
             let connected = connectedDate != nil
             let dur = connected ? Int(Date().timeIntervalSince(connectedDate!)) : 0
@@ -1276,6 +1326,7 @@ final class CallService: NSObject {
         // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
         // screen behaviour — with no call in progress at all.
         if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
+        if let obs = thermalObserver { NotificationCenter.default.removeObserver(obs); thermalObserver = nil }
         stopHeartbeat()
         // The camera used to keep capturing through the whole 1-2s .ended tail, because teardown only
         // happened at .idle. Nobody can see those frames; stop them the moment the call is over.
