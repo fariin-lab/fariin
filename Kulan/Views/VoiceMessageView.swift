@@ -86,16 +86,19 @@ struct VoiceMessageView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button { toggle() } label: {
-                Group {
-                    if loading { ProgressView().tint(tint) }
-                    else { Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 17)) }
-                }
-                .foregroundStyle(tint)
-                .frame(width: 42, height: 42)
-                .background(tint.opacity(0.18), in: Circle())   // big round play button (reference)
+            // NOT a Button, for the reason the file bubble already documents (ThreadView "NOT a Button:
+            // inside the hosted cell a Button's press gesture claimed the touch"). A 42x42 Button on every
+            // voice bubble meant a drag starting on the play disc was swallowed and the chat would not
+            // scroll. A plain tap gesture reads identically and claims nothing.
+            Group {
+                if loading { ProgressView().tint(tint) }
+                else { Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 17)) }
             }
-            .buttonStyle(.plain)
+            .foregroundStyle(tint)
+            .frame(width: 42, height: 42)
+            .background(tint.opacity(0.18), in: Circle())   // big round play button (reference)
+            .contentShape(Circle())
+            .onTapGesture { toggle() }
 
             VStack(alignment: .leading, spacing: 4) {
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
@@ -118,12 +121,12 @@ struct VoiceMessageView: View {
                     // measured cell height and overflowed into the next bubble (the "spacing disappears").
                     // Rendering it unconditionally makes the pre-measure and the played render IDENTICAL, so
                     // nothing shifts. Before load it simply pre-selects the rate cycleRate() applies on play.
-                    Button { cycleRate() } label: {
-                        Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(tint.opacity(0.16), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
+                    // Tap gesture, not a Button — same reason as the play disc above.
+                    Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(tint.opacity(0.16), in: Capsule())
+                        .contentShape(Capsule())
+                        .onTapGesture { cycleRate() }
                 }
                 // Pin the meta row to the waveform's fixed width. Height needs NO hard-coding now: the toggle
                 // renders unconditionally (above), so the row's tallest element (the 11pt bold capsule) is

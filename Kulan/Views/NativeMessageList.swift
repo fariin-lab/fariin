@@ -802,6 +802,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         for id in contentChanged { heights[id] = measure(id, width: width) }   // changed content → fresh height
+        // PREPEND BOUNDARY — the small jump when older messages land (user report).
+        // The row that WAS first structurally changes the moment older messages appear above it: both
+        // `shouldShowDate` and `isFirstInCluster` return true for index 0, so that row was carrying a date
+        // pill and cluster spacing it no longer deserves — a ~29pt height change on a row the reader is not
+        // even looking at. `contentChanged` above only covers VISIBLE cells, and loading fires three screens
+        // from the top, so that row was never re-measured; `lastRowSigs = rowSignatures` then consumed the
+        // evidence that it changed at all. Its stale height fed straight into `afterY` below, so the atomic
+        // offset compensation was wrong by that amount, the completion-time check tripped its 2pt tolerance,
+        // and the correction landed A FRAME LATE — which is exactly the small jump.
+        // Signal does not have this class of bug because their date header is its OWN list item: a prepend
+        // is a pure insert there and no existing row's height can change. Re-measuring the join is the cheap
+        // equivalent (typically one row) until the separator is modelled as its own item.
+        if isPrepend {
+            for id in currentIds.prefix(3) where ids.contains(id) { heights[id] = measure(id, width: width) }
+        }
         if ids.count < currentIds.count {   // rows left (trim/delete): drop their cached heights too
             let keep = Set(ids)
             heights = heights.filter { keep.contains($0.key) }
@@ -1187,6 +1202,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Keep the bottom edge-effect OFF (UIKit can reset it) — content stays fully clear/raw under the composer.
         if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
             collectionView.bottomEdgeEffect.isHidden = true
+        }
+        // SCROLL-LOCK BACKSTOP (user report: "sometimes I just can't scroll up"). handleSwipePan disables
+        // the scroll view's pan for the duration of a swipe-to-reply and resetSwipe is the single choke
+        // point that restores it — so ANY path that ends a swipe without reaching resetSwipe leaves the
+        // thread permanently unscrollable, with nothing to recover it because a disabled pan cannot produce
+        // the scroll events that would notice. Cheap, unconditional truth instead: no swipe in progress
+        // means the pan must be enabled.
+        if swipingId == nil, !collectionView.panGestureRecognizer.isEnabled {
+            collectionView.panGestureRecognizer.isEnabled = true
         }
         if !didInitialScroll {
             if !currentIds.isEmpty { performFirstOpenIfReady() }   // width just became valid → open now
