@@ -131,14 +131,14 @@ struct VideoPlayerScreen: View {
                     // snapshot of the screen.
                     return (mediaFitRect(size, in: bounds), tgPoster)
                 },
-                // Land on the thumbnail this video came from. Without this the default { nil } was used,
-                // so video drifted and faded in mid-air while photos flew home to their tile - the single
-                // most visible difference between the two media types.
-                targetRect: { MediaOpenRects.rect(message.id) },
                 onHideContent: { hidden in
                     if hidden { player?.pause() }   // freeze playback the moment the copy takes over
                     dismissing = hidden
                 },
+                // Land on the thumbnail this video came from. Without this the default { nil } was used,
+                // so video drifted and faded in mid-air while photos flew home to their tile - the single
+                // most visible difference between the two media types.
+                targetRect: { MediaOpenRects.rect(message.id) },
                 onDismiss: { instantDismiss() })
             }
         }
