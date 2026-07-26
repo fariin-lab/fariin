@@ -299,3 +299,121 @@ func mediaFitRect(_ media: CGSize, in bounds: CGRect) -> CGRect {
     return CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
                   width: size.width, height: size.height)
 }
+
+// MARK: - Open (the mirror of the drag-close above)
+
+/// Flies a media copy from its bubble to its fullscreen position, then reveals the viewer.
+///
+/// WHY THIS EXISTS. Opening used SwiftUI's `.navigationTransition(.zoom)`, which scales the ENTIRE
+/// presented cover — black backdrop, header, thumb strip, toolbar — out of the bubble. Signal instead
+/// moves only the MEDIA, inside a clipping view, and cross-fades the backdrop
+/// (MediaZoomAnimationController). That is the whole difference, and it is why our open never matched
+/// theirs no matter how the timing was tuned.
+///
+/// It deliberately lives in this file, next to the close, because the two must agree: same geometry
+/// source (`MediaOpenRects` / `mediaFitRect`), same spring, same copy construction. An earlier attempt
+/// at this was a SwiftUI per-frame animation, which is why it felt different from the close even when
+/// the numbers matched — SwiftUI cannot hold a 1:1 frame animation the way a property animator does.
+@MainActor
+enum SignalMediaOpen {
+
+    /// Signal's spring, from SignalUI/UIKitExtensions/UIKit+Animations.swift:
+    /// `springDamping: 1, springResponse: 0.25` is NOT `usingSpringWithDamping` — it expands to
+    /// `stiffness = (2π / response)²` and `damping = 4π · damping / response` at mass 1, i.e. a
+    /// critically damped spring. Reaching for `usingSpringWithDamping:` here is the usual way to get
+    /// this subtly wrong: it is a different parameterisation and produces a visibly different curve.
+    /// Neither of Signal's animation controllers seeds an initial velocity, and that is deliberate.
+    static let duration: TimeInterval = 0.25
+    static var spring: UISpringTimingParameters {
+        let response: CGFloat = 0.25, damping: CGFloat = 1
+        return UISpringTimingParameters(mass: 1,
+                                        stiffness: pow(2 * .pi / response, 2),
+                                        damping: 4 * .pi * damping / response,
+                                        initialVelocity: .zero)
+    }
+
+    private static var keyWindow: UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first
+    }
+
+    /// - Parameters:
+    ///   - image: the media to fly. Videos pass their poster — Signal flies a still frame for video too,
+    ///            never a layer and never a snapshot of the screen.
+    ///   - source: the bubble's rect in window coordinates (`MediaOpenRects`).
+    ///   - sourceCornerRadius: the bubble's radius, interpolated to 0 as it fills the screen.
+    ///   - clip: the region the source is allowed to draw in — the message list's frame. A bubble half
+    ///           scrolled under the header must not appear to fly OVER the header, which is exactly what
+    ///           a transition with no clipping view does.
+    ///   - present: reveals the real viewer. Called with the copy still on screen and matching it exactly.
+    static func fly(image: UIImage,
+                    from source: CGRect,
+                    sourceCornerRadius: CGFloat = 14,
+                    clip: CGRect? = nil,
+                    present: @escaping () -> Void) {
+        guard let window = keyWindow, source != .zero, !source.isEmpty else {
+            present()   // no geometry to fly from — never block opening the viewer
+            return
+        }
+
+        let destination = mediaFitRect(image.size, in: window.bounds)
+
+        // Backdrop, fading in underneath the media exactly as the close fades it out.
+        let backdrop = UIView(frame: window.bounds)
+        backdrop.backgroundColor = .black
+        backdrop.alpha = 0
+        backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+        // The clipping view. Starts as the region the bubble lives in and grows to the whole window, so
+        // the media is revealed from behind the bars rather than flying over them.
+        let clipView = UIView(frame: clip ?? window.bounds)
+        clipView.clipsToBounds = true
+
+        let container = UIView(frame: clipView.convert(source, from: window))
+        container.clipsToBounds = true
+        container.layer.cornerRadius = sourceCornerRadius
+        container.layer.cornerCurve = .continuous
+
+        let content = UIImageView(image: image)
+        // scaleAspectFill + clipping is what reconciles the two aspect ratios: the bubble renders the
+        // photo filled and cropped, the viewer renders it fitted. Animating the frame between the two
+        // rects with this content mode makes the crop resolve continuously instead of snapping.
+        content.contentMode = .scaleAspectFill
+        content.clipsToBounds = true
+        content.frame = container.bounds
+        content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(content)
+
+        window.addSubview(backdrop)
+        window.addSubview(clipView)
+        clipView.addSubview(container)
+
+        let animator = UIViewPropertyAnimator(duration: duration, timingParameters: spring)
+        animator.addAnimations {
+            clipView.frame = window.bounds
+            container.frame = destination
+            container.layer.cornerRadius = 0
+            backdrop.alpha = 1
+        }
+        // cornerRadius is a CALayer property and does not ride a UIView animation block on its own.
+        let radius = CABasicAnimation(keyPath: "cornerRadius")
+        radius.fromValue = sourceCornerRadius
+        radius.toValue = 0
+        radius.duration = duration
+        radius.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        container.layer.add(radius, forKey: "cornerRadius")
+
+        animator.addCompletion { _ in
+            // Reveal the viewer while the copy still covers the same pixels, then drop the copy a tick
+            // later. Presenting first would put the viewer OVER the copy mid-flight; removing the copy
+            // first would show one frame of the chat underneath. Neither order flashes if they overlap.
+            withoutPresentationAnimation { present() }
+            DispatchQueue.main.async {
+                backdrop.removeFromSuperview()
+                clipView.removeFromSuperview()
+            }
+        }
+        animator.startAnimation()
+    }
+}

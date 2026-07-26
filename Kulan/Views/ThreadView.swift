@@ -637,7 +637,9 @@ struct ThreadView: View {
             // inside SignalDismissHost so the two can never fight.
             // TELEGRAM-OPEN TEST: when the toggle is on, the system transition is skipped entirely —
             // the animating copy (springing from the bubble rect) is the whole open/close.
-            .modifier(ConditionalZoomTransition(enabled: true, sourceID: msg.id, ns: imageViewerNS))
+            // The system zoom is OFF for media: it scaled the whole cover out of the bubble, and
+            // SignalMediaOpen now flies just the media. Leaving both on would animate twice.
+            .modifier(ConditionalZoomTransition(enabled: false, sourceID: msg.id, ns: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
     }
@@ -678,7 +680,9 @@ struct ThreadView: View {
                 // media-only pan (same as photos): chrome hides instantly, only the video moves, the
                 // page behind stays fixed. The zoom transition's own pan is disabled in SignalDismissHost.
                 // Telegram-open test ON → skip the system transition; the poster copy is the animation.
-                .modifier(ConditionalZoomTransition(enabled: true, sourceID: msg.id, ns: imageViewerNS))
+                // The system zoom is OFF for media: it scaled the whole cover out of the bubble, and
+            // SignalMediaOpen now flies just the media. Leaving both on would animate twice.
+            .modifier(ConditionalZoomTransition(enabled: false, sourceID: msg.id, ns: imageViewerNS))
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
@@ -1260,10 +1264,31 @@ struct ThreadView: View {
                     AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
                     AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
                 },
-                onTapImage: { m in viewerImage = m },
+                // OPEN LIKE SIGNAL: fly only the MEDIA out of its bubble, then reveal the viewer.
+                // `.navigationTransition(.zoom)` scaled the ENTIRE cover - black backdrop, header, thumb
+                // strip, toolbar - out of the bubble, which is the one thing that never matched Signal
+                // no matter how the timing was tuned. Falls straight through to the plain presentation
+                // when there is no live rect or no decoded image to fly, so opening can never be blocked.
+                onTapImage: { m in
+                    if let rect = MediaOpenRects.rect(m.id),
+                       let url = m.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
+                        SignalMediaOpen.fly(image: img, from: rect) { viewerImage = m }
+                    } else {
+                        viewerImage = m
+                    }
+                },
                 onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
                 onOpenAlbum: { m in albumScreen = m },
-                onTapVideo: { m in viewerVideo = m },
+                // Video takes the SAME path with its poster - one pipeline for all media, which is also
+                // how Signal does it (they fly a still frame for video, never a layer).
+                onTapVideo: { m in
+                    if let rect = MediaOpenRects.rect(m.id),
+                       let url = m.thumbUrl, let img = DiskImageCache.shared.memoryImage(url) {
+                        SignalMediaOpen.fly(image: img, from: rect) { viewerVideo = m }
+                    } else {
+                        viewerVideo = m
+                    }
+                },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
