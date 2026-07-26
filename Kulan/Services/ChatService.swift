@@ -1083,25 +1083,36 @@ enum ChatService {
         }
     }
 
-    /// Write ONE call record into the shared chat, keyed by callId so both ends can't
-    /// create duplicates (whoever writes first wins; the other's create is a no-op).
+    /// Write ONE call record into the shared chat, keyed by callId so the two ends converge on a single
+    /// row rather than creating duplicates.
+    ///
+    /// The old doc comment claimed "whoever writes first wins; the other's create is a no-op". That was
+    /// FALSE for a non-merging setData: BOTH ends reach here and the second write clobbered the first, so
+    /// authorId and callDuration were whichever device happened to land last (the two sides compute
+    /// duration from their own connectedDate, so they never agree). Now merged, and only the CALLER
+    /// writes the duration — one authoritative source instead of a race. The callee's row still creates
+    /// the record on its own if the caller never manages to write, so nothing is lost.
     /// Stores who the caller was, so each client renders outgoing/incoming for itself.
     static func recordCall(cid: String, callId: String, callerUid: String, outcome: String, video: Bool, durationSec: Int) async {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document("call_\(callId)")
-        try? await msgRef.setData([
+        var fields: [String: Any] = [
             "type": "call",
-            "authorId": uid,
+            "authorId": callerUid,             // deterministic: the caller, not whoever wrote last
             "callerUid": callerUid,            // viewer compares to itself for direction
-            "callOutcome": outcome,            // answered | missed
+            "callOutcome": outcome,            // answered | missed | declined
             "callVideo": video,                // placed as a video call (log/preview label)
-            "callDuration": durationSec,
             "text": "",
             "createdAt": FieldValue.serverTimestamp(),
-        ])
-        let marker = video
-            ? (outcome == "missed" ? "📹 Missed video call" : "📹 Video call")
-            : (outcome == "missed" ? "📞 Missed call" : "📞 Call")
+        ]
+        if uid == callerUid { fields["callDuration"] = durationSec }
+        try? await msgRef.setData(fields, merge: true)
+        // "declined" is its own outcome now, so it must not fall through to the plain "Call" label.
+        let marker: String = {
+            if outcome == "declined" { return video ? "📹 Declined video call" : "📞 Declined call" }
+            if outcome == "missed"   { return video ? "📹 Missed video call"   : "📞 Missed call" }
+            return video ? "📹 Video call" : "📞 Call"
+        }()
         try? await convRef.setData([
             "lastMessage": marker,
             "updatedAt": FieldValue.serverTimestamp(),

@@ -435,6 +435,17 @@ struct CallContainer<Content: View>: View {
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
                     }
+                    // KEEP A PiP SOURCE VIEW ALIVE WHILE MINIMIZED. The only other CallPiPHost lives
+                    // inside CallView, which the cover DESTROYS on minimize — so minimizing silently
+                    // turned off background video: leaving the app then had no PiP window to detach
+                    // into, the capture session was interrupted, and the other side dropped to the
+                    // avatar. Apple wants a real on-screen view here, and the bar is exactly that.
+                    .overlay {
+                        if call.isVideo {
+                            CallView.CallPiPHost(track: call.remoteVideoTrack)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             // ONGOING GROUP CALL, swiped down: a live call (mic possibly hot) must NEVER be invisible.
