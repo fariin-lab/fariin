@@ -24,6 +24,13 @@ struct UserProfile: Identifiable, Equatable {
     /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
     var deletionScheduledFor: Date?
 
+    /// True while this account is inside its deletion grace period: hidden from search, contacts and
+    /// stories, but not yet destroyed.
+    var isAwaitingDeletion: Bool {
+        guard let d = deletionScheduledFor else { return false }
+        return d > Date()
+    }
+
     init(id: String, data: [String: Any]) {
         self.id = id
         self.name = data["name"] as? String ?? ""

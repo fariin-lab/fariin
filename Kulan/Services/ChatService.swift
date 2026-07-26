@@ -1336,6 +1336,11 @@ enum ChatService {
                 .limit(to: 1).getDocuments()
             guard let d = snap.documents.first else { return nil }
             let u = UserProfile(id: d.documentID, data: d.data())
+            // An account scheduled for deletion is invisible: it must not be findable or startable a
+            // chat with while it sits in its grace period. Filtered HERE rather than in a security
+            // rule because Firestore rules are not filters - a data-dependent read rule would make
+            // this whole query fail instead of skipping the row.
+            if u.isAwaitingDeletion { return nil }
             return u.id == uid ? nil : u   // never "find" yourself
         } catch {
             print("findByHandle failed:", error)
@@ -1354,6 +1359,7 @@ enum ChatService {
                 .limit(to: 20).getDocuments()
             return snap.documents.compactMap { d -> UserProfile? in
                 let u = UserProfile(id: d.documentID, data: d.data())
+                if u.isAwaitingDeletion { return nil }   // hidden during its grace period
                 return u.id == uid ? nil : u
             }
         } catch {
