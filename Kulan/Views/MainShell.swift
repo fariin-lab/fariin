@@ -582,24 +582,11 @@ struct ChatsView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Button { showNew = true } label: {
-                Text("Find People")
-                    .font(.body.weight(.semibold))
-                    .padding(.horizontal, 36).frame(height: 46)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.primary)
-            .padding(.top, 8)
-            HStack(spacing: 18) {
-                Button { showMyQR = true } label: {
-                    Label("My QR", systemImage: "qrcode").font(.footnote.weight(.medium))
-                }
-                ShareLink(item: inviteText) {
-                    Label("Invite", systemImage: "square.and.arrow.up").font(.footnote.weight(.medium))
-                }
-            }
-            .tint(.secondary)
-            .padding(.top, 2)
+            // NOTHING ELSE. A fresh account used to get a "Find People" button plus "My QR" and
+            // "Invite" links stacked under the message, which read as a landing page rather than an
+            // empty inbox. X, Signal and iMessage all show only a glyph, a title and one line here -
+            // the actions already live in the compose button in the nav bar, so repeating them cluttered
+            // the first thing a new user ever sees.
         }
         .padding(.horizontal, 32)
     }
