@@ -332,23 +332,44 @@ final class CallService: NSObject {
         cameraPausedByBackground = false
         stopPausedCameraRetry()
         localVideoTrack?.isEnabled = on
-        if on {
-            if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone
-            // Re-tune echo cancellation for LOUDSPEAKER (the hear-your-own-voice fix): .videoChat mode
-            // engages the speakerphone-tuned voice processing. Keep the speaker override.
-            try? AVAudioSession.sharedInstance().setMode(.videoChat)
-            try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
-            startCameraCapture()
-        } else {
-            videoCapturer?.stopCapture()
-            // Both cameras now off → it's a voice call again: return to the earpiece and
-            // back to the earpiece-tuned echo cancellation.
-            if !remoteCameraOn && isSpeaker { toggleSpeaker() }
-            if !remoteCameraOn { try? AVAudioSession.sharedInstance().setMode(.voiceChat) }
-        }
+        if on { startCameraCapture() } else { videoCapturer?.stopCapture() }
+        applyVideoAudioPolicy()
         CallKitManager.shared.updateHasVideo(on)
         broadcastCameraState()
         updateInCallScreenBehavior()   // video showing ↔ keep-awake / proximity
+    }
+
+    /// The ONE place that decides how call audio is routed and tuned for the current set of live
+    /// cameras. Every event that can change that set calls this: my own toggle and THEIRS arriving over
+    /// Firestore.
+    ///
+    /// It exists because those two were not symmetric. `setMyCamera` did route + mode + CallKit + screen
+    /// work; `handleRemoteCallState` did almost none. Three separate bugs came out of that one gap:
+    ///  • whoever turned their camera off FIRST was stranded on loudspeaker for the rest of the call —
+    ///    the earpiece restore only ran on the local toggle path, and it no-ops while the other camera
+    ///    is still on, so it never ran again for that person once THEIR camera went off too.
+    ///  • turning my camera on force-overrode the output to the built-in speaker even while the user was
+    ///    wearing AirPods, contradicting "external devices always win" three lines away in updateAudioRoute.
+    ///  • their camera turning on flipped MY proximity sensor off (updateInCallScreenBehavior gates on
+    ///    audioRoute == .earpiece) while leaving me on the earpiece — a live screen against the cheek.
+    private func applyVideoAudioPolicy() {
+        let session = AVAudioSession.sharedInstance()
+        let videoShowing = cameraOn || remoteCameraOn
+        // Echo cancellation follows what the audio is actually DOING, not who owns the camera:
+        // .videoChat is tuned for the loudspeaker, .voiceChat for the earpiece. The wrong one is the
+        // hear-your-own-voice bug.
+        try? session.setMode(videoShowing ? .videoChat : .voiceChat)
+        // An external device ALWAYS wins. Never yank audio out of someone's AirPods.
+        guard audioRoute != .external else { return }
+        if videoShowing {
+            isSpeaker = true
+            wantsSpeaker = true            // survives CallKit re-activating and resetting the route
+            try? session.overrideOutputAudioPort(.speaker)
+        } else {
+            isSpeaker = false
+            wantsSpeaker = false           // without this, updateAudioRoute re-asserts loudspeaker forever
+            try? session.overrideOutputAudioPort(.none)
+        }
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
@@ -491,6 +512,7 @@ final class CallService: NSObject {
             // fullscreen on my own face with no way back. Un-swap instead, so their avatar returns to
             // the big view and I go back to the corner, which is the layout for "their camera is off".
             if on == false, isLocalExpanded { isLocalExpanded = false }
+            applyVideoAudioPolicy()        // SAME handling as my own toggle — see applyVideoAudioPolicy
             updateInCallScreenBehavior()   // their video appearing/leaving flips keep-awake/proximity
         }
     }
@@ -554,7 +576,11 @@ final class CallService: NSObject {
         // connecting mid-call, CallKit) — the button highlight reads from this.
         isSpeaker = audioRoute == .speaker
         // Manual earpiece choice / external route: intent follows reality so we don't re-assert later.
-        if audioRoute == .external { wantsSpeaker = false }
+        // NOT while video is showing, though. Clearing it unconditionally meant plugging in AirPods
+        // destroyed the speakerphone intent a video call had set, so UNPLUGGING them later landed the
+        // call on the EARPIECE — a video call held at arm's length with the audio in the earpiece,
+        // because the re-assert branch above had nothing left to re-assert.
+        if audioRoute == .external, !(cameraOn || remoteCameraOn) { wantsSpeaker = false }
         // Any external playback device around? Bluetooth headsets surface as available INPUTS
         // during a playAndRecord call; a currently-external route obviously counts too.
         let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
@@ -1156,6 +1182,15 @@ final class CallService: NSObject {
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil
+        // The route observer was installed on the first .active call and NEVER removed, so it lived for
+        // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
+        // screen behaviour — with no call in progress at all.
+        if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
+        // The camera used to keep capturing through the whole 1-2s .ended tail, because teardown only
+        // happened at .idle. Nobody can see those frames; stop them the moment the call is over.
+        videoCapturer?.stopCapture()
+        localVideoTrack?.isEnabled = false
+        stopPausedCameraRetry()
         pc?.close()
         pc = nil
         callId = nil

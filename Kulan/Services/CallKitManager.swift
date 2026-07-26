@@ -108,7 +108,13 @@ final class CallKitManager: NSObject {
 
     // MARK: - End
     func end() {   // user pressed End in our UI -> route through CallKit (handler does teardown)
-        guard let uuid = activeUUID else { return }
+        guard let uuid = activeUUID else {
+            // No CallKit call to end. This used to `return` and the End button did NOTHING — the user's
+            // only way out of a live call silently failing. CallKit is how teardown normally reaches
+            // CallService, so with no UUID we have to call it ourselves.
+            CallService.shared.endFromCallKit()
+            return
+        }
         controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { _ in }
     }
     /// Remote hung up / call failed — clear the system UI without a user action.
