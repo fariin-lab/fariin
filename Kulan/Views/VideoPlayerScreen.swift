@@ -125,8 +125,16 @@ struct VideoPlayerScreen: View {
                     if let w = message.width, let h = message.height, w > 0, h > 0 {
                         size = CGSize(width: w, height: h)
                     }
-                    return (mediaFitRect(size, in: bounds), nil)   // nil image → live region snapshot
+                    // Fly the POSTER, not a live-region snapshot. Passing nil took the
+                    // resizableSnapshotView branch, which captures whatever chrome has not finished
+                    // hiding yet - Signal always flies a still frame for video, never a layer or a
+                    // snapshot of the screen.
+                    return (mediaFitRect(size, in: bounds), tgPoster)
                 },
+                // Land on the thumbnail this video came from. Without this the default { nil } was used,
+                // so video drifted and faded in mid-air while photos flew home to their tile - the single
+                // most visible difference between the two media types.
+                targetRect: { MediaOpenRects.rect(message.id) },
                 onHideContent: { hidden in
                     if hidden { player?.pause() }   // freeze playback the moment the copy takes over
                     dismissing = hidden

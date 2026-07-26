@@ -111,6 +111,7 @@ struct ImageViewerView: View {
     @State private var shareItems: [Any]?
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
+    @State private var zoomOutToken = 0                  // bump to ask the current page to return to fit
     @State private var dismissing = false                 // dismiss in flight → live content hidden ONCE
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
@@ -140,6 +141,15 @@ struct ImageViewerView: View {
     // Header X: Telegram mode flies the copy back into the bubble, then dismisses with no animation
     // (the copy IS the animation). Normal mode keeps the plain dismiss (zoom transition or slide).
     private func closeViewer() {
+        // ZOOM OUT FIRST, like Signal. Closing while zoomed swapped a zoomed live view for an unzoomed
+        // transition copy, and that swap is visible as a jump - Signal's own comment calls it
+        // "perceptible". The drag path already refuses to start while zoomed; the X button did not.
+        guard pageZoom <= 1.02 else {
+            zoomOutToken += 1
+            // Let the zoom settle before the copy is taken, so the copy matches what is on screen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeViewer() }
+            return
+        }
         if telegramSourceRect != nil {
             tg.close { withoutPresentationAnimation { dismiss() } }
         } else { dismiss() }
@@ -279,7 +289,8 @@ struct ImageViewerView: View {
                           onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
                           onDim: { _ in }, onDismiss: {},
                           allowsDismissPan: false,
-                          onZoom: { pageZoom = $0 })
+                          onZoom: { pageZoom = $0 },
+                          zoomOutToken: zoomOutToken)
         } else {
             ProgressView().tint(.white)
                 .task { await load(m) }
@@ -472,6 +483,12 @@ struct ZoomImageView: UIViewControllerRepresentable {
     // the full screen (the chrome floats over it) — the same unclipped growth as the video editor's
     // scaleEffect zoom, so at full zoom there are no top/bottom borders. Viewers keep the default clip.
     var clipsZoomOverflow: Bool = true
+    // Bumped by the container to ask this page to zoom back to fit. Signal zooms out BEFORE it starts a
+    // dismiss, with the comment "Swapping mediaView for presentationView will be perceptible if we're not
+    // zoomed out all the way" - closing a zoomed photo otherwise swaps a zoomed view for an unzoomed
+    // transition and the swap is visible as a jump. A counter rather than a Bool so repeated requests
+    // still fire, and so the value can never get stuck on.
+    var zoomOutToken: Int = 0
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
@@ -483,9 +500,17 @@ struct ZoomImageView: UIViewControllerRepresentable {
         vc.onZoom = onZoom
         vc.mediaCornerRadius = cornerRadius
         vc.clipsZoomOverflow = clipsZoomOverflow
+        context.coordinator.lastZoomOutToken = zoomOutToken
         return vc
     }
+
+    final class Coordinator { var lastZoomOutToken = 0 }
+    func makeCoordinator() -> Coordinator { Coordinator() }
     func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {
+        if zoomOutToken != context.coordinator.lastZoomOutToken {
+            context.coordinator.lastZoomOutToken = zoomOutToken
+            uiViewController.zoomOutToFit(animated: true)
+        }
         if uiViewController.image !== image {
             uiViewController.image = image
             uiViewController.reloadImage()
@@ -515,6 +540,13 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
     }
 
     // Editor swaps the image (filter/crop applied) — refresh in place, keeping the zoom view.
+    /// Return this page to fit. Signal zooms out BEFORE dismissing - swapping a zoomed live view for an
+    /// unzoomed transition copy is visible as a jump, which their own source calls "perceptible".
+    func zoomOutToFit(animated: Bool) {
+        guard let sv = scrollView, sv.zoomScale != sv.minimumZoomScale else { return }
+        sv.setZoomScale(sv.minimumZoomScale, animated: animated)
+    }
+
     func reloadImage() {
         guard let imageView else { return }
         imageView.image = image

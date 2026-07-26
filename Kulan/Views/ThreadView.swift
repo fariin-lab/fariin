@@ -4722,6 +4722,10 @@ struct MessageBubble: View, Equatable {
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
             .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
+            // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
+            // photo had no destination: the copy drifted off into nothing instead of flying back
+            // to its tile, which is what single photos have done all along.
+            .modifier(MediaRectReporter(id: "\(message.id)-\(i)"))
     }
 
     // The image/poster content of an album item (local optimistic bytes, else the decrypted remote photo).
@@ -4863,6 +4867,10 @@ struct MessageBubble: View, Equatable {
         // user spec). The synthetic per-item ids ("<msgId>-<i>") match the viewer covers' sourceIDs; the
         // +N cell taps through its own visible cell, so every open has a real source.
         .modifier(HeroSource(ns: imageNS, id: "\(message.id)-\(i)"))
+        // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
+        // photo had no destination: the copy drifted off into nothing instead of flying back
+        // to its tile, which is what single photos have done all along.
+        .modifier(MediaRectReporter(id: "\(message.id)-\(i)"))
         // Was openAlbumItem(i) — straight into the full-screen pager, which gave no way to see what
         // else was in the group or choose from it. Now the group opens as a list first (user's
         // WhatsApp reference); picking an item there is what opens the viewer.

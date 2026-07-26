@@ -1694,15 +1694,26 @@ private struct ChatPeekPreview: View {
             } else {
                 // Bottom-aligned and clipped at the top: a conversation reads from the bottom up, and
                 // the newest messages are the ones worth previewing.
-                VStack(spacing: 3) {
-                    Spacer(minLength: 0)
-                    ForEach(msgs) { m in
-                        MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid)
-                            .allowsHitTesting(false)   // the platter is not interactive
+                // ANCHORED TO THE BOTTOM, so the NEWEST message is always fully visible and it is the
+                // oldest that gets cut off at the top. The previous version was a plain VStack inside a
+                // fixed frame: 14 bubbles are routinely taller than the platter, and SwiftUI centres an
+                // oversized child, so it clipped BOTH ends - the last message was sliced in half at the
+                // bottom, which is the opposite of what a conversation preview is for. A Spacer cannot fix
+                // that, because it only has room to push when the content is SHORTER than the frame.
+                // Scrolling is off: the platter is a preview, not an interactive view.
+                ScrollView {
+                    VStack(spacing: 3) {
+                        ForEach(msgs) { m in
+                            MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid)
+                                .allowsHitTesting(false)   // the platter is not interactive
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 12)
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 12)
+                .defaultScrollAnchor(.bottom)
+                .scrollDisabled(true)
             }
         }
         .frame(width: size.width, height: size.height)

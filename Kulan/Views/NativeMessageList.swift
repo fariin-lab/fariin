@@ -201,6 +201,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         ])
     }
     #endif
+    // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
+    private var sizerRefused = Set<String>()
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
@@ -536,6 +538,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         guard didReveal else { return }   // never reconcile during the open — the pre-measure owns it
+        // ROWS THE SIZER CAN NEVER AGREE WITH. A LinkPreviewCard renders nothing until an async fetch
+        // completes, while measure() is synchronous - so for any message containing a link the sizer is
+        // permanently short and the rendered height NEVER matches. Left alone, such a row re-armed the
+        // settle machinery on every single dequeue: it landed in pendingSettleHeights, the settle
+        // re-measured it, the sizer returned the same short value, nothing was resolved, and the loop
+        // began again at the next stop. That kept a burst of settle work running forever in any chat
+        // containing one link. Once the sizer has refused a row, stop asking it.
+        if sizerRefused.contains(id) { return }
         // Land-when-safe: a rendered-height signal that arrives mid-scroll/animation is coalesced and
         // handled on settle — reconciling now would invalidate the layout under a live scroll (overlap).
         // Remember WHICH row changed so the settle flush re-measures just it (not every visible cell).
@@ -548,6 +558,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let w = collectionView.bounds.width
         guard w > 0 else { return }
         let sized = measure(id, width: w)
+        // The sizer disagrees with what was actually rendered and will keep doing so (async content it
+        // cannot see). Record it once so the loop above never re-arms for this row again.
+        if abs(sized - hh) > 2 { sizerRefused.insert(id) }
         guard let cached = heights[id], abs(cached - sized) > 2 else { return }
         heights[id] = sized
         DispatchQueue.main.async { [weak self] in self?.reconcile() }

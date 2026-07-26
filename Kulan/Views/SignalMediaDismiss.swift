@@ -172,7 +172,12 @@ struct SignalDismissHost: UIViewRepresentable {
                 // mind, drag back up, and fully recover — the net downward offset is what counts, so
                 // dragging back above the threshold cancels. The release velocity is handed to the
                 // spring either way, so the motion CONTINUES the finger instead of restarting from zero.
-                if o.y > Self.completionDistance || v.y > Self.completionVelocity {
+                // 2D length, matching the SCRUB. The visual progress above uses hypot on both axes but
+                // the commit test used o.y alone, so a diagonal drag could scrub the photo most of the way
+                // out and then snap all the way back. The 40pt / 320 thresholds themselves are the user's
+                // deliberate choice (Signal commits on ANY movement) and are unchanged.
+                let travelled = hypot(o.x, o.y)
+                if travelled > Self.completionDistance || v.y > Self.completionVelocity {
                     finish(offset: o, velocity: v)
                 } else {
                     cancel(velocity: v)
@@ -237,14 +242,16 @@ struct SignalDismissHost: UIViewRepresentable {
 
             // No known source (e.g. opened from somewhere that doesn't report a rect): the original
             // Signal behaviour — drift on and fade out from where the finger let go.
-            let target = CGPoint(x: fromFrame.midX + o.x, y: fromFrame.midY + o.y + 40)
+            // Leave the SCREEN rather than evaporating on the spot. Drifting 40pt while fading read as
+            // the photo dissolving in mid-air; carrying it a full frame-height down is an exit.
+            let target = CGPoint(x: fromFrame.midX + o.x,
+                                 y: fromFrame.midY + o.y + fromFrame.height)
             let spring = UISpringTimingParameters(dampingRatio: 1,
                                                   initialVelocity: Self.springVelocity(velocity, from: c.center, to: target))
-            let animator = UIViewPropertyAnimator(duration: 0.18, timingParameters: spring)
+            let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
             animator.addAnimations {
                 c.center = target
                 c.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
-                c.alpha = 0
                 c.layer.shadowOpacity = 0
                 self.backdrop?.alpha = 0
             }
