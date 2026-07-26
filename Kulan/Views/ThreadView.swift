@@ -650,7 +650,12 @@ struct ThreadView: View {
         // back into it. The drag-down close stays media-only via SignalDismissHost.
         // The album list. Its viewers are presented from INSIDE it, so closing a photo returns to the
         // group instead of dropping you back out to the chat (explicit user requirement).
-        .fullScreenCover(item: $albumScreen) { m in
+        //
+        // A SHEET, not a fullScreenCover, so you can leave it by SWIPING DOWN with your thumb (user
+        // request). That interactive dismissal is native: it follows the finger, springs back if you
+        // change your mind, and knows to only start when the list is scrolled to the top - none of
+        // which a hand-rolled drag would get right.
+        .sheet(item: $albumScreen) { m in
             AlbumScreenView(message: m, cid: cid,
                             senderName: m.authorId == me ? "You" : personName(m.authorId),
                             onSave: { img in Task { await saveImageToPhotos(img) } })

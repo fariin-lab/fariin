@@ -73,6 +73,9 @@ struct AlbumScreenView: View {
                 }
             }
         }
+        // Full height, no grabber: it should read as a page you can flick away, not a half sheet.
+        .presentationDetents([.large])
+        .presentationDragIndicator(.hidden)
         // Presented FROM this screen, which is what makes "back" land on the album again.
         .fullScreenCover(item: $viewerImage) { m in
             ImageViewerView(message: m, in: imageGallery, cid: cid, suppressDismissPan: false,
