@@ -454,6 +454,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 let h = UIKitBubbleView.sizes(m, width: self.collectionView.bounds.width).cell.height
                 if abs(cached - h) > 2 {
                     self.heights[id] = h
+                    // Bump the generation WITH the write. Without it the cache said one thing and the
+                    // laid-out frame another for the rest of the fling, and only the deferred reconcile
+                    // at the next stop resolved the difference - as one visible offset move. During a
+                    // fast scroll over rows that went stale off-screen this fires repeatedly, so those
+                    // corrections all collected into a single jump at every stop.
+                    self.layout.generation += 1
                     DispatchQueue.main.async { [weak self] in self?.reconcile() }
                 }
             }
@@ -556,7 +562,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // settle signature/height diff can come up empty — without this flag the relayout was dropped and
         // the cache and on-screen frames diverged permanently (overlap + a wrong continuity delta later).
         if isInMotion { needsRefreshOnSettle = true; needsReconcileOnSettle = true; return }
-        let wasBottom = computeAtBottom()
+        // EXACT bottom, not computeAtBottom()'s 44pt tolerance. This is the small jump when scrolling
+        // fast up and down: a fast flick settles anywhere from 5 to 40pt short of the bottom (bounce
+        // settle), computeAtBottom() called that "at the bottom", and pinBottom() then TELEPORTED the
+        // reader the remaining distance with a non-animated setContentOffset - once per stop, and a fast
+        // up-down scroll produces several stops a second. 44pt is the right tolerance for deciding
+        // INTENT ("should a new message pull me down?"), and completely wrong for deciding whether to
+        // move someone who has already stopped. Signal's equivalent at-bottom test is 5pt.
+        let wasBottom = safeDistanceFromBottom <= 5
         let anchor = captureTopAnchor()
         layout.generation += 1
         layout.invalidateLayout()
@@ -624,7 +637,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A message arrived at the bottom mid-scroll: pin now (only if the reader is still at the bottom).
         if needsPinOnSettle {
             needsPinOnSettle = false
-            if computeAtBottom() { pinBottom() }
+            if safeDistanceFromBottom <= 5 { pinBottom() }   // exact, not 44pt - see reconcile()
         }
         guard needsRefreshOnSettle else { return }
         needsRefreshOnSettle = false
@@ -1085,7 +1098,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         guard let ip = dataSource.indexPath(for: anchor.id),
               let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
-        let y = attr.frame.minY - anchor.distanceFromTop
+        // Clamp to the real content bounds, exactly as the continuity path does. Unclamped, a large
+        // height delta could push the offset past the content edge and the next frame rubber-banded it
+        // back - a visible snap immediately after a settle.
+        let minY = -collectionView.adjustedContentInset.top
+        let maxY = max(minY, collectionView.contentSize.height - collectionView.bounds.height
+                             + collectionView.adjustedContentInset.bottom)
+        let y = min(maxY, max(minY, attr.frame.minY - anchor.distanceFromTop))
         lastStableOffset = y   // our intentional position → screenshot recovery target
         collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
     }
@@ -1281,6 +1300,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // bar is showing, the list runs UNDER it, so the pill would hide behind the pin — drop it below the bar.
     func setTopOverlayHeight(_ h: CGFloat) {
         guard abs(h - topOverlayHeight) > 0.5 else { return }
+        // Same rule as updateBottomInset: this writes contentInset.top and can pinBottom(), and it runs
+        // from every SwiftUI body pass - including ones caused by scrolling itself.
+        guard !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating else {
+            needsRefreshOnSettle = true
+            return
+        }
         topOverlayHeight = h
         datePillTop?.constant = 6 + h
         // ALSO reserve the space in the list. The pinned bar floats OVER the list, and this height was
@@ -1615,6 +1640,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // viewDidLayoutSubviews via `stickBottom` (captured in viewWillLayoutSubviews, BEFORE the resize).
     private func updateBottomInset(animated: Bool = false) {
         guard isViewLoaded, !isDisappearing else { return }
+        // RULE 3 OF THE REFERENCE ALGORITHM, quoted in this function's own header and never actually
+        // implemented: "While the user is dragging, touch NOTHING." The write below changes
+        // contentInset.bottom and then setContentOffset - during a fling that is a one-frame content
+        // shift. It is reachable mid-scroll because scrollViewDidScroll writes the isAtBottom binding,
+        // which re-runs the SwiftUI body, which calls setComposerBarHeight -> here.
+        guard !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating else {
+            needsRefreshOnSettle = true   // re-derive once the list is at rest
+            return
+        }
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
