@@ -741,7 +741,10 @@ private struct ProfilePhotoViewer: View {
     var body: some View {
         GeometryReader { geo in
             let origin = geo.frame(in: .global).origin
-            let d = min(geo.size.width - 40, 360)   // open diameter, breathing room at the edges
+            // Signal's exact sizing: AvatarViewController pins its CircleView to the view width minus
+            // 48 (24pt inset each side), with no upper cap — so on a wide phone the circle keeps
+            // growing instead of stopping at an arbitrary maximum, which is what our `min(…, 360)` did.
+            let d = geo.size.width - 48
             // Interpolate the circle between the avatar's frame and the screen center.
             let size = sourceFrame.width + (d - sourceFrame.width) * progress
             let srcX = sourceFrame.midX - origin.x, srcY = sourceFrame.midY - origin.y
@@ -771,9 +774,14 @@ private struct ProfilePhotoViewer: View {
                         .onChanged { if zoom == 1, !closing, progress == 1 { drag = $0.translation } }
                         .onEnded { v in
                             guard zoom == 1, !closing else { return }
+                            // Signal's rule, matched exactly (MediaInteractiveDismiss): progress is the
+                            // straight-line distance over distanceToCompletion = 88, and `.ended`
+                            // finishes whenever `percentComplete > 0` — ANY real movement closes it,
+                            // cancel is effectively unreachable. Ours demanded 120pt before it would
+                            // let go, which is why closing felt like work next to theirs.
                             let dist = sqrt(v.translation.width * v.translation.width
                                             + v.translation.height * v.translation.height)
-                            if dist > 120 { close() }   // far enough → fly home from right here
+                            if dist > 0 { close() }
                             else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
                         }
                 )
