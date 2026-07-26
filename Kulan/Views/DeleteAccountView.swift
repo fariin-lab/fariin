@@ -26,20 +26,68 @@ struct DeleteAccountView: View {
     private var handle: String { profile.me?.handle ?? "" }
 
     var body: some View {
-        Form {
-            switch step {
-            case .confirm, .working: confirmSection
-            case .verify:            verifySection
-            }
-
-            if let error {
-                Section { Text(error).foregroundStyle(.red).font(.footnote) }
+        Group {
+            // The verify step is ONE focused security gate, so it gets a centred page of its own. As a
+            // Form section it stacked at the top and left two thirds of the screen empty under a bare
+            // white bar, which is what looked unfinished.
+            if step == .verify {
+                verifyPage
+            } else {
+                deleteForm
             }
         }
         .navigationTitle("Delete Account")
         .navigationBarTitleDisplayMode(.inline)
         .interactiveDismissDisabled(step == .working)
         .disabled(step == .working)
+    }
+
+    private var deleteForm: some View {
+        Form {
+            confirmSection
+            if let error {
+                Section { Text(error).foregroundStyle(.red).font(.footnote) }
+            }
+        }
+    }
+
+    // MARK: - Step 2 as a page
+
+    private var verifyPage: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                Spacer(minLength: 40)
+                VStack(spacing: 12) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.red)
+                    Text("Verify it's you").font(.title2.weight(.bold))
+                    Text("Confirm your account to finish deleting it. Nothing has been deleted yet.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 32)
+
+                VStack(spacing: 12) { verifyControls }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 32)
+
+                Text("Your account is deleted as soon as you're verified.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32).padding(.top, 14)
+
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32).padding(.top, 12)
+                }
+                Spacer(minLength: 40)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 
     // MARK: - Step 1: what this does, and to whom
@@ -89,26 +137,10 @@ struct DeleteAccountView: View {
 
     // MARK: - Step 2: prove it's you (with the door this account actually uses)
 
-    @ViewBuilder private var verifySection: some View {
-        // A lock badge + centred copy, so this reads as a deliberate security step rather than a
-        // blank card with a stray button on it.
-        Section {
-            VStack(spacing: 10) {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.red)
-                Text("Verify it's you").font(.title2.weight(.bold))
-                Text("Confirm your account to finish deleting it. Nothing has been deleted yet.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .listRowBackground(Color.clear)
-        }
-
+    /// Just the sign-in doors this account actually has. The heading and footer live in verifyPage.
+    @ViewBuilder private var verifyControls: some View {
         let methods = AuthService.shared.reauthMethods
-        Section {
+        Group {
             if methods.contains(.apple) {
                 SignInWithAppleButton(.continue) { request in
                     AuthService.shared.prepareAppleRequest(request)
@@ -126,8 +158,6 @@ struct DeleteAccountView: View {
                 .signInWithAppleButtonStyle(.black)
                 .frame(height: 50)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
             }
 
             if methods.contains(.google) {
@@ -145,30 +175,38 @@ struct DeleteAccountView: View {
                         .strokeBorder(.black.opacity(0.14), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
             }
 
             if methods.contains(.email) {
                 SecureField("Your password", text: $password)
                     .textContentType(.password)
-                Button("Verify and Delete") {
+                    .padding(.horizontal, 14).frame(height: 50)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Button {
                     run { try await AuthService.shared.reauthEmail(password: password) }
+                } label: {
+                    Text("Verify and Delete").fontWeight(.semibold)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .foregroundStyle(.white)
+                        .background(password.isEmpty ? Color.red.opacity(0.4) : Color.red,
+                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                .buttonStyle(.plain)
                 .disabled(password.isEmpty)
-                .fontWeight(.semibold)
             }
 
             // No linked provider (a legacy anonymous session): nothing to verify against, so
             // deletion can proceed directly — Firebase doesn't demand a recent login for those.
             if methods.isEmpty {
-                Button(role: .destructive) { deleteNow() } label: {
+                Button { deleteNow() } label: {
                     Text("Delete Account").fontWeight(.semibold)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .foregroundStyle(.white)
+                        .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                .buttonStyle(.plain)
             }
-        } footer: {
-            Text("Your account is deleted as soon as you're verified.")
-                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
