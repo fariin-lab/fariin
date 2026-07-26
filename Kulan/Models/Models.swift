@@ -20,12 +20,16 @@ struct UserProfile: Identifiable, Equatable {
     var photoUrl: String?
     var publicKeyB64: String?
     var privacy: [String: String]   // per-field audience: "everyone" | "contacts" | "nobody"
+    /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
+    /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
+    var deletionScheduledFor: Date?
 
     init(id: String, data: [String: Any]) {
         self.id = id
         self.name = data["name"] as? String ?? ""
         self.handle = data["handle"] as? String ?? ""
         self.about = data["about"] as? String ?? ""
+        if let ts = data["deletionScheduledFor"] as? Timestamp { self.deletionScheduledFor = ts.dateValue() }
         self.photoUrl = data["photoUrl"] as? String
         self.publicKeyB64 = data["publicKey"] as? String
         self.privacy = (data["privacy"] as? [String: String]) ?? [:]

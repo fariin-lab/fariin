@@ -3,7 +3,7 @@ import LocalAuthentication
 import UIKit
 
 struct RootView: View {
-    enum Phase { case loading, welcome, onboarding, main }
+    enum Phase { case loading, welcome, onboarding, main, restore(handle: String, due: Date) }
     @State private var phase: Phase = .loading
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
@@ -29,6 +29,12 @@ struct RootView: View {
                             onDemo: { phase = .main })
             case .onboarding:
                 OnboardingView { phase = .main }
+            case .restore(let handle, let due):
+                // A scheduled-for-deletion account cannot enter the app: it is hidden from everyone
+                // else, so being half-inside it would be worse than either choice. Restore or finish.
+                RestoreAccountView(handle: handle, scheduledFor: due,
+                                   onRestored: { Task { await route() } },
+                                   onDeletedNow: { Task { await route() } })
             case .main:
                 // Root-level call container so an active call (full screen or top mini
                 // bar) lives above every screen and survives all navigation.
@@ -97,6 +103,12 @@ struct RootView: View {
         // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
         // is Keychain-only now, so the whole fast path is local.
         if await ProfileStore.shared.loadCachedMine() {
+            // Deliberately re-checked from the SERVER before using the cache: the deletion may have
+            // been scheduled on another device, and the cached copy would happily let them in.
+            if let due = await ProfileStore.shared.scheduledDeletionDate() {
+                phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
+                return
+            }
             try? await Crypto.shared.ensureReady()
             Push.register(); Push.saveVoipToken()
             phase = .main
@@ -113,6 +125,10 @@ struct RootView: View {
         try? await Crypto.shared.ensureReady()
         await ProfileStore.shared.loadMine()
         await Crypto.shared.publishPublicKey()
+        if let due = ProfileStore.shared.me?.deletionScheduledFor, due > Date() {
+            phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
+            return
+        }
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
         if ready { Push.register(); Push.saveVoipToken() }   // notifications + VoIP token now that we're signed in
         phase = ready ? .main : .onboarding

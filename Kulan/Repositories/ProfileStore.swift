@@ -82,8 +82,50 @@ final class ProfileStore {
         me = await fetch(uid)
     }
 
-    /// Permanently delete the account (Apple requires in-app deletion): removes
-    /// the profile doc and the Firebase auth user.
+    /// How long a deleted account can still be brought back.
+    static let gracePeriodDays = 30
+
+    /// SOFT DELETE (the normal path). Marks the account for deletion in `gracePeriodDays` and signs
+    /// out, destroying nothing: the profile, username, chats and encryption key all survive so signing
+    /// back in can restore everything. A scheduled server job performs the real purge once the date
+    /// passes, and `deleteAccount()` below is that purge (also reachable from "Delete It Now").
+    ///
+    /// Apple's in-app-deletion rule (5.1.1(v)) is satisfied by deletion being STARTED in the app; a
+    /// grace period is allowed, which is how Instagram and WhatsApp do it.
+    func scheduleDeletion() async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        let due = Calendar.current.date(byAdding: .day, value: Self.gracePeriodDays, to: Date()) ?? Date()
+        try await db.collection("users").document(user.uid).setData([
+            "deletionScheduledFor": Timestamp(date: due),
+            // Denormalised so security rules and queries can hide the account without reading a date.
+            "isHidden": true,
+        ], merge: true)
+        me?.deletionScheduledFor = due
+    }
+
+    /// Server-truth check used on the boot fast path. Returns the date when this account is scheduled
+    /// for deletion, or nil. Read from the server rather than the cache on purpose: the deletion may
+    /// have been scheduled on another device, and a stale cache would let the user straight in.
+    func scheduledDeletionDate() async -> Date? {
+        guard let uid = Auth.auth().currentUser?.uid else { return nil }
+        guard let snap = try? await db.collection("users").document(uid).getDocument(),
+              let ts = snap.data()?["deletionScheduledFor"] as? Timestamp else { return nil }
+        let due = ts.dateValue()
+        return due > Date() ? due : nil
+    }
+
+    /// Undo a scheduled deletion. Everything is still where it was, so this is just clearing the flags.
+    func restoreAccount() async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        try await db.collection("users").document(user.uid).setData([
+            "deletionScheduledFor": FieldValue.delete(),
+            "isHidden": FieldValue.delete(),
+        ], merge: true)
+        me?.deletionScheduledFor = nil
+        me = await fetch(user.uid)
+    }
+
+    /// PERMANENTLY delete the account: removes the profile doc and the Firebase auth user.
     func deleteAccount() async throws {
         guard let user = Auth.auth().currentUser else { return }
         let uid = user.uid

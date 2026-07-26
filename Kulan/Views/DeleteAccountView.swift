@@ -97,7 +97,7 @@ struct DeleteAccountView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Permanently Delete Account")
                     .font(.title2.weight(.bold))
-                Text("This erases your profile, your photo and your stories, and releases your username. It cannot be undone.")
+                Text("Your account is hidden straight away and deleted for good after \(ProfileStore.gracePeriodDays) days. Sign in before then to bring it back exactly as it was.")
                     .font(.subheadline).foregroundStyle(.secondary)
                 // Honest about what deleting your account does NOT reach: messages already
                 // delivered live on other people's phones, and we can't reach into those.
@@ -229,7 +229,7 @@ struct DeleteAccountView: View {
         Task {
             do {
                 try await work()
-                await performDelete()
+                await performScheduling()
             } catch {
                 self.error = error.localizedDescription
                 step = .verify
@@ -240,7 +240,27 @@ struct DeleteAccountView: View {
     private func deleteNow() {
         step = .working
         error = nil
-        Task { await performDelete() }
+        Task { await performScheduling() }
+    }
+
+    /// The normal path now SCHEDULES the deletion instead of performing it, so a change of mind within
+    /// the grace period costs nothing. The account is hidden immediately and signed out here; the real
+    /// destruction is done by the server once the date passes (or by "Delete It Now" on the restore
+    /// screen). Nothing on the device is wiped, because the encryption key is exactly what makes a
+    /// restore able to read old messages.
+    private func performScheduling() async {
+        do {
+            await AuthService.shared.reportAccountDeletion()
+            try await profile.scheduleDeletion()
+            // Same order Settings uses: stop this phone's pushes while we still have auth, then sign out.
+            await Push.unregister()
+            try? Auth.auth().signOut()
+            dismiss()
+            onDeleted()
+        } catch {
+            self.error = error.localizedDescription
+            step = .confirm
+        }
     }
 
     private func performDelete() async {
