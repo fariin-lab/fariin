@@ -202,6 +202,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     #endif
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
+    private var needsBottomInsetOnSettle = false   // an inset update was refused mid-scroll; owe it at rest
     private var sizerRefused = Set<String>()
     private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
@@ -648,6 +649,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard !isInMotion else { return }
         }
         // A message arrived at the bottom mid-scroll: pin now (only if the reader is still at the bottom).
+        // Pay back any inset update refused while the finger was down, BEFORE the pin decision below
+        // reads distances that depend on it.
+        if needsBottomInsetOnSettle {
+            needsBottomInsetOnSettle = false
+            updateBottomInset()
+        }
         if needsPinOnSettle {
             needsPinOnSettle = false
             if safeDistanceFromBottom <= 5 { pinBottom() }   // exact, not 44pt - see reconcile()
@@ -1659,7 +1666,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // shift. It is reachable mid-scroll because scrollViewDidScroll writes the isAtBottom binding,
         // which re-runs the SwiftUI body, which calls setComposerBarHeight -> here.
         guard !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating else {
-            needsRefreshOnSettle = true   // re-derive once the list is at rest
+            // MUST be re-run at settle, not merely dropped. needsRefreshOnSettle only drives a row
+            // refresh - it never calls back here - so deferring through it alone meant the inset update
+            // was DISCARDED and the stale value survived until some unrelated layout pass happened to
+            // recompute it. That is the "large gap that fixes itself after a few seconds".
+            needsBottomInsetOnSettle = true
+            needsRefreshOnSettle = true
             return
         }
         if let pop = navigationController?.interactivePopGestureRecognizer {
