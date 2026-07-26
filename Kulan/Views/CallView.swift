@@ -6,7 +6,7 @@ import WebRTC
 // Full-screen in-app call UI — rebuilt from scratch to match the reference:
 //   • Top bar: back (minimize) · centered name + timer · ⋯ menu
 //   • Voice: purple gradient + centered avatar
-//   • Video: full-screen remote feed + draggable bottom-right self-PiP (with flip glyph)
+//   • Video: full-screen remote feed + draggable self-PiP anchored TOP-right (with flip glyph)
 //   • Bottom: dark frosted control capsule (icon-only circular buttons, red end)
 // NOTE: only the UI is new. All bindings go to CallService.shared exactly as before — no call
 // logic, WebRTC, signaling, or CallKit code was touched. Controls shown match what actually
@@ -198,7 +198,18 @@ struct CallView: View {
             VStack(spacing: 3) {
                 Text(call.otherName).font(.system(size: 26, weight: .bold)).foregroundStyle(.white).lineLimit(1)
                     .minimumScaleFactor(0.6)
-                Text(statusText).font(.system(size: 15)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
+                // THEIR mute, shown in place of the duration. Muting was never signalled at all, so the
+                // other person just heard silence and could not tell it apart from a broken connection.
+                if call.remoteMuted, call.state == .active {
+                    HStack(spacing: 5) {
+                        Image(systemName: "mic.slash.fill").font(.system(size: 12, weight: .semibold))
+                        Text("Muted").font(.system(size: 15, weight: .medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.75))
+                    .transition(.opacity)
+                } else {
+                    Text(statusText).font(.system(size: 15)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
+                }
             }
             Spacer()
 
@@ -496,9 +507,30 @@ struct MiniCallBar: View {
                 .monospacedDigit()
                 .opacity(0.9)
             Spacer(minLength: 6)
-            Text("Tap to return")
-                .font(.system(size: 12))
-                .opacity(0.85)
+            // Mute + End live HERE, not only behind a tap-to-return. The bar used to be a label with no
+            // controls at all, which meant a live mic (and a live camera) with no way to kill either
+            // without first reopening the call screen.
+            Button {
+                call.toggleMute()
+            } label: {
+                Image(systemName: call.isMuted ? "mic.slash.fill" : "mic.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 30, height: 30)
+                    .background(.white.opacity(call.isMuted ? 0.28 : 0.14), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(call.isMuted ? "Unmute" : "Mute")
+
+            Button {
+                CallKitManager.shared.end()
+            } label: {
+                Image(systemName: "phone.down.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 30, height: 30)
+                    .background(.red, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("End call")
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)

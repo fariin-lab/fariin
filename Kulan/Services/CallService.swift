@@ -54,13 +54,16 @@ final class CallService: NSObject {
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             }
             if state == .active {
-                // Video calls default to speakerphone. startedAsVideo covers the CALLEE in the
-                // camera-off-on-answer model: their camera starts OFF on answer, but they're watching video at arm's
-                // length — audio must still go loud.
+                // Video calls default to speakerphone. startedAsVideo covers the CALLEE: cameraOn is
+                // set on the answer paths, and this also holds if that ever changes — they're watching
+                // video at arm's length either way, so audio must go loud.
+                // (This comment used to describe a "camera-off-on-answer model". That is WRONG: three
+                // sites set cameraOn = isVideoCall on answer. Corrected so it stops misleading.)
                 if cameraOn || startedAsVideo { isSpeaker = true; wantsSpeaker = true }
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
+                startHeartbeat()             // prove we're alive; detect a force-quit on the other side
                 updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
             if state == .idle {
@@ -72,7 +75,8 @@ final class CallService: NSObject {
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
-                cameraOn = false; remoteCameraOn = false; usingFrontCamera = true; startedAsVideo = false
+                cameraOn = false; remoteCameraOn = false; remoteMuted = false
+                usingFrontCamera = true; startedAsVideo = false
                 isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
@@ -103,6 +107,7 @@ final class CallService: NSObject {
     // video layout shows whenever EITHER camera is on.
     var cameraOn = false            // is MY camera sending
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
+    var remoteMuted = false         // is THEIR mic muted (from the `muted` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
     private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
     var usingFrontCamera = true
@@ -504,6 +509,13 @@ final class CallService: NSObject {
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
     // reveal/hide it). Their track keeps arriving; `remoteCameraOn` gates whether we render it.
     private func handleRemoteCallState(_ d: [String: Any]) {
+        notePeerHeartbeat(d)
+        // Their mute state. Never signalled before, so muting was completely invisible to the other
+        // person: they just heard silence, indistinguishable from a network stall. Our own GROUP call
+        // UI already draws a mic-slash for remote participants, so 1:1 was the odd one out.
+        if let m = d["muted"] as? [String: Bool], let mutedNow = m[otherUid], mutedNow != remoteMuted {
+            remoteMuted = mutedNow
+        }
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
             remoteCameraOn = on
             // Their video is what the swapped layout is BUILT ON: expanded means my feed is fullscreen
@@ -522,6 +534,58 @@ final class CallService: NSObject {
         isMuted.toggle()
         localAudioTrack?.isEnabled = !isMuted
         CallKitManager.shared.setMuted(isMuted)   // lock-screen/system UI stays in sync
+        // Tell them. A disabled audio track is silence, which is indistinguishable from a dropped
+        // connection — so without this the other side had no way to tell "muted" from "broken".
+        if let id = callId { db.collection("calls").document(id).updateData(["muted.\(me)": isMuted]) }
+    }
+
+    // MARK: - Peer liveness (force-quit detection)
+    //
+    // Force-quitting the app runs NOTHING: no terminate hook exists, so no "ended" is ever written and
+    // the other phone sits on a frozen last frame until its own 30s ICE give-up. There is no Firestore
+    // equivalent of onDisconnect, so the only client-side answer is for each side to prove it is alive.
+    //
+    // Deliberately a plain changing NUMBER, not a serverTimestamp: we never compare their clock to ours,
+    // only note LOCALLY when the value last changed. That makes clock skew irrelevant.
+    //
+    // It only ends the call when BOTH signals agree — their beat stopped AND our own ICE already
+    // dropped us into .reconnecting. A stalled Firestore listener alone must never kill a healthy call.
+    private var heartbeatTimer: Timer?
+    private var lastPeerBeatAt: Date?
+    private var lastPeerBeatValue: Double = 0
+
+    private func startHeartbeat() {
+        guard heartbeatTimer == nil else { return }
+        lastPeerBeatAt = Date()
+        writeHeartbeat()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.writeHeartbeat()
+            self?.checkPeerLiveness()
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate(); heartbeatTimer = nil
+        lastPeerBeatAt = nil; lastPeerBeatValue = 0
+    }
+
+    private func writeHeartbeat() {
+        guard let id = callId, state == .active || state == .reconnecting else { return }
+        db.collection("calls").document(id).updateData(["hb.\(me)": Date().timeIntervalSince1970])
+    }
+
+    private func notePeerHeartbeat(_ d: [String: Any]) {
+        guard let hb = d["hb"] as? [String: Any],
+              let v = (hb[otherUid] as? NSNumber)?.doubleValue, v != lastPeerBeatValue else { return }
+        lastPeerBeatValue = v
+        lastPeerBeatAt = Date()
+    }
+
+    private func checkPeerLiveness() {
+        guard state == .reconnecting, let last = lastPeerBeatAt else { return }
+        guard Date().timeIntervalSince(last) > 15 else { return }
+        endReason = .failed
+        hangUp()   // ~15s instead of frozen for 30s+
     }
     // The user's EXPLICIT speaker choice. CallKit/WebRTC re-activate the audio session at
     // connect/answer and reset the route to the earpiece — which used to silently erase a speaker
@@ -961,6 +1025,32 @@ final class CallService: NSObject {
         Task { await refreshIceServers() }   // ensure fresh TURN before the callee builds its connection
         markRinging()
         watchRingingCancel(callId)   // tear down if the caller cancels before I answer
+        // BLOCKED / PRIVACY. The Firestore listener path gates on both; this PUSH path gated on
+        // NEITHER, so with the app killed a blocked caller — or one excluded by "No One" / "My
+        // Contacts" — rang straight through, which is the exact situation blocking is for.
+        // iOS requires reportNewIncomingCall in the same run loop as the push, so the ring genuinely
+        // cannot wait on an async lookup: PushManager reports first and we end it the moment we know.
+        callAllowed(from: uid) { [weak self] ok in
+            guard let self, !ok, self.state == .incoming, self.callId == callId else { return }
+            self.db.collection("calls").document(callId)
+                .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
+            self.recordWritten = true   // a blocked call leaves no trace, same as the listener path
+            self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+        }
+    }
+
+    /// Blocked + Calls-privacy gate, shared by both incoming paths so they cannot drift apart again.
+    private func callAllowed(from caller: String, completion: @escaping (Bool) -> Void) {
+        guard !caller.isEmpty, !me.isEmpty else { completion(true); return }
+        let cid = [me, caller].sorted().joined(separator: "_")
+        db.collection("conversations").document(cid).getDocument { [weak self] cs, _ in
+            guard let self else { return }
+            let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
+            let audience = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.calls") ?? "") ?? .everyone
+            let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
+            let allowed = !blocked && (audience == .everyone || (audience == .contacts && isContact))
+            DispatchQueue.main.async { completion(allowed) }
+        }
     }
 
     func answer() {
@@ -1186,6 +1276,7 @@ final class CallService: NSObject {
         // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
         // screen behaviour — with no call in progress at all.
         if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
+        stopHeartbeat()
         // The camera used to keep capturing through the whole 1-2s .ended tail, because teardown only
         // happened at .idle. Nobody can see those frames; stop them the moment the call is over.
         videoCapturer?.stopCapture()
