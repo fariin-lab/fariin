@@ -186,6 +186,7 @@ struct ImageViewerView: View {
                     // keyed by the CURRENT page's id, so paging to another photo and closing lands on
                     // that one's tile rather than the one we opened with.
                     targetRect: { MediaOpenRects.rect(current) },
+                    targetId: { current },
                     onDismiss: { instantDismiss() })
             }
         }

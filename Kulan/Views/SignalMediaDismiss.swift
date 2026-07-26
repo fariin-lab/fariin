@@ -24,6 +24,9 @@ struct SignalDismissHost: UIViewRepresentable {
     /// exactly on the tile it opened from, which is what the system zoom transition failed to do
     /// (it shrank the whole black viewer, so the photo only lined up at the very end).
     var targetRect: () -> CGRect? = { nil }
+    /// The message id behind `targetRect`. Needed for two things the rect alone cannot give: the tile's
+    /// REAL corner radius, and the ability to hide that tile while the copy is flying onto it.
+    var targetId: () -> String? = { nil }
     var onDismiss: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -148,6 +151,10 @@ struct SignalDismissHost: UIViewRepresentable {
                 // JUMPS by ~10pt the instant the drag is picked up instead of starting under the finger.
                 g.setTranslation(.zero, in: root)
                 parent.onHideContent(true)   // exactly ONE SwiftUI update for the whole gesture
+                // Hide the tile we are flying towards. Without this the copy converges onto an
+                // already-visible thumbnail, so for a moment the same photo is on screen twice and there
+                // is no cross-fade at the landing.
+                MediaSourceVisibility.shared.hide(parent.targetId())
 
             case .changed:
                 guard active, let c = container else { return }
@@ -228,14 +235,21 @@ struct SignalDismissHost: UIViewRepresentable {
                     c.transform = .identity
                     c.frame = CGRect(x: center.x - home.width / 2, y: center.y - home.height / 2,
                                      width: home.width, height: home.height)
-                    c.layer.cornerRadius = 14
+                    // The tile's OWN radius, not a hardcoded 14 - media whose bubble uses a different
+                    // radius visibly changed shape at the moment the copy took over.
+                    c.layer.cornerRadius = parent.targetId().map { MediaOpenRects.cornerRadius($0) } ?? 14
                     c.layer.shadowOpacity = 0
                     self.backdrop?.alpha = 0
                 }
                 c.layer.masksToBounds = true   // without this the corner radius was invisible
                 // NO alpha fade: Signal lands the copy opaque and swaps it for the real thumbnail.
                 // Fading it out at 0.8 was what made the return read as "vanishing near the tile".
-                animator.addCompletion { _ in self.parent.onDismiss() }
+                animator.addCompletion { _ in
+                    // Reveal the tile BEFORE the copy goes, so the two overlap for a frame and the swap
+                    // is invisible. Revealing after would flash the empty tile.
+                    MediaSourceVisibility.shared.reveal()
+                    self.parent.onDismiss()
+                }
                 animator.startAnimation()
                 return
             }

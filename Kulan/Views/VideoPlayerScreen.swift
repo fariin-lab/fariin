@@ -139,6 +139,7 @@ struct VideoPlayerScreen: View {
                 // so video drifted and faded in mid-air while photos flew home to their tile - the single
                 // most visible difference between the two media types.
                 targetRect: { MediaOpenRects.rect(message.id) },
+                targetId: { message.id },
                 onDismiss: { instantDismiss() })
             }
         }
