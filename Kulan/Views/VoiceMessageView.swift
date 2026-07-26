@@ -333,10 +333,8 @@ struct WaveformBars: View {
     var playing: Bool = false
     var onSeek: (Double) -> Void
     var onScrub: (Bool) -> Void = { _ in }   // true while dragging the waveform → parent blocks reply-swipe
-    @State private var dragStartPct: Double?   // non-nil while the knob is being dragged
-    // nil = undecided, true = this gesture belongs to the waveform, false = it belongs to the scroll.
-    // Decided once per gesture and never revisited, which is what makes the lock a lock.
-    @State private var scrubLock: Bool?
+    // Scrub state now lives in the UIKit recogniser (WaveformGestureArea), which is the only place that
+    // can refuse a vertical touch before it claims one. The old @State drag bookkeeping went with it.
 
     var body: some View {
         GeometryReader { geo in
@@ -371,68 +369,24 @@ struct WaveformBars: View {
                 }
             }
             .contentShape(Rectangle())
-            // SEEK IS TAP-ONLY, and the tap is SIMULTANEOUS so it never captures the pan. The old drag-scrub
-            // (DragGesture minDistance 0) claimed the touch and tracked ALL movement — including VERTICAL — so
-            // resting a finger on the waveform (which covers most of the voice bubble) BLOCKED chat scrolling
-            // AND made the reply-swipe bail (user reports: "voice blocks scrolling", "laggy / hard to swipe").
-            // A spatial tap only recognizes a stationary tap: a vertical drag fails it → the collection view's
-            // pan scrolls; a horizontal drag fails it → the bubble's reply-swipe runs; a stationary tap seeks.
-            // simultaneousGesture guarantees it co-exists with (never pre-empts) the scroll pan and the reply
-            // swipe — exactly why the original used simultaneousGesture. (onScrub is now unused; VoiceScrubState
-            // never gets set, so it never blocks the reply.)
-            .simultaneousGesture(SpatialTapGesture().onEnded { v in
-                onSeek(Double(v.location.x / max(1, geo.size.width)))
-            })
-            // SCRUB ACROSS THE WHOLE WAVEFORM (user request: dragging on the bar means seek, dragging
-            // anywhere else on the bubble means reply). `simultaneousGesture` is what makes this safe —
-            // it never CLAIMS the touch, which is exactly what the old drag-scrub did wrong (it tracked
-            // vertical movement too, so it blocked chat scrolling and swallowed the reply-swipe).
-            // Here: a vertical drag is ignored below and the list scrolls; a horizontal drag seeks and
-            // raises VoiceScrubState, which the bubble's reply pan and the message list both yield to.
-            // THE WAVEFORM LOCKS THE TOUCH (WhatsApp's rule, user's words: "when moving the wave the
-            // bubble will never move, regardless of where you start and where you're going"). The
-            // decision is made ONCE, as early as 3pt of movement, and then held for the whole gesture:
+            // Tap to seek, drag sideways to scrub — in UIKit, because SwiftUI cannot express the one
+            // rule that matters here: NEVER take a vertical touch.
             //
-            //   horizontal first  -> this waveform owns the touch. Scrub both directions, forwards and
-            //                        backwards, for as long as the finger is down. VoiceScrubState stays
-            //                        raised the entire time so swipe-to-reply can never take over.
-            //   vertical first    -> we ignore the gesture completely and the chat scrolls.
+            // A SwiftUI DragGesture(minimumDistance: 0) claims the touch on CONTACT and then tracks every
+            // axis, so resting a finger on the waveform (which covers most of a voice bubble) BLOCKED chat
+            // scrolling. That exact bug was fixed once by deleting such a gesture - 05b9242 kept the bar
+            // tap-only and said so in its message - and came straight back when full-waveform scrubbing was
+            // re-added in fa060a1. minimumDistance can't fix it either: any SwiftUI drag that eventually
+            // claims is a race against the scroll view starting.
             //
-            // The previous version waited for 8pt AND re-ran the axis test every frame. Swipe-to-reply
-            // begins at 18pt, so a drag that started even slightly diagonal failed the per-frame test,
-            // never raised VoiceScrubState, and the reply gesture claimed it at 18pt - which is why
-            // dragging BACKWARDS (leftwards, the same direction as reply) slid the bubble instead of
-            // rewinding, while dragging forwards worked fine.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { v in
-                        let w = max(1, geo.size.width)
-                        // Claim the touch for the waveform IMMEDIATELY, before deciding the axis:
-                        // the reply gesture must be refused from the first movement, not after 3pt.
-                        VoiceScrubState.touchOnWaveform = true
-                        if scrubLock == nil {
-                            let dx = abs(v.translation.width), dy = abs(v.translation.height)
-                            guard dx > 3 || dy > 3 else { return }   // too small to tell yet
-                            scrubLock = dx > dy
-                            if scrubLock == true {
-                                dragStartPct = max(0, min(1, progress))
-                                VoiceScrubState.active = true
-                                onScrub(true)
-                            }
-                        }
-                        guard scrubLock == true else { return }   // locked to the chat's scroll instead
-                        let pct = (dragStartPct ?? 0) + Double(v.translation.width / w)
-                        onSeek(max(0, min(1, pct)))
-                    }
-                    .onEnded { _ in
-                        scrubLock = nil
-                        VoiceScrubState.touchOnWaveform = false
-                        guard dragStartPct != nil else { return }
-                        dragStartPct = nil
-                        VoiceScrubState.active = false
-                        onScrub(false)
-                    }
-            )
+            // So the axis is decided BEFORE the gesture is allowed to begin, which only UIKit can do, and
+            // which is how Signal's swipe recogniser works too. Vertical -> we fail instantly and the list
+            // scrolls, every time. Horizontal -> we claim, and keep it for the whole gesture in both
+            // directions (the WhatsApp rule the user asked for: "when moving the wave the bubble will never
+            // move"). Recognises simultaneously with everything else, so long-press-for-menu still works.
+            .overlay {
+                WaveformGestureArea(progress: progress, onSeek: onSeek, onScrub: onScrub)
+            }
             // DRAGGABLE PLAYHEAD KNOB (WhatsApp model, user request): you can now drag to move
             // through a voice note. It's a SMALL target on the playhead rather than the whole
             // waveform — that's the entire point. A full-width drag-scrub is what used to block chat
@@ -449,25 +403,12 @@ struct WaveformBars: View {
                     .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.5)
                     .frame(width: 13, height: 13)
                     .frame(width: 40, height: 40)      // generous touch area around a small dot
-                    .contentShape(Circle())
                     .offset(x: sx - 20)
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { v in
-                                if dragStartPct == nil {
-                                    dragStartPct = max(0, min(1, progress))
-                                    VoiceScrubState.active = true
-                                    onScrub(true)
-                                }
-                                let pct = (dragStartPct ?? 0) + Double(v.translation.width / w)
-                                onSeek(max(0, min(1, pct)))
-                            }
-                            .onEnded { _ in
-                                dragStartPct = nil
-                                VoiceScrubState.active = false
-                                onScrub(false)
-                            }
-                    )
+                    // VISUAL ONLY. This used to carry its own DragGesture(minimumDistance: 0) behind a
+                    // .highPriorityGesture — which pre-empts everything, so a 40x40 patch of every voice
+                    // bubble froze chat scrolling outright. The whole waveform scrubs now, so the knob
+                    // needs no gesture of its own.
+                    .allowsHitTesting(false)
             }
         }
     }
@@ -491,5 +432,102 @@ struct LiveWaveform: View {
             // touch of momentum as it settles, so the waveform reads fluid rather than stepped.
             .animation(.interpolatingSpring(stiffness: 260, damping: 26), value: levels)
         }
+    }
+}
+
+// MARK: - Waveform gestures (UIKit)
+
+// Tap to seek, horizontal drag to scrub, and a hard guarantee that a VERTICAL touch is never taken so
+// the chat always scrolls. See the call site for the full history — the short version is that every
+// SwiftUI DragGesture attempt at this eventually claims the touch and locks scrolling, because SwiftUI
+// has no way to refuse a gesture based on its direction before it begins. UIKit does.
+struct WaveformGestureArea: UIViewRepresentable {
+    var progress: Double
+    var onSeek: (Double) -> Void
+    var onScrub: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let pan = AxisLockedScrubRecognizer(target: context.coordinator,
+                                            action: #selector(Coordinator.handlePan(_:)))
+        pan.delegate = context.coordinator
+        v.addGestureRecognizer(pan)
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handleTap(_:)))
+        tap.delegate = context.coordinator
+        v.addGestureRecognizer(tap)
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.parent = self }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: WaveformGestureArea
+        private var startPct: Double = 0
+        init(_ parent: WaveformGestureArea) { self.parent = parent }
+
+        // Co-exist with everything: the bubble's long-press-for-menu lives on an ancestor view and must
+        // keep receiving these touches, and the scroll view's pan is vertical-only so it can never fight us.
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+        @objc func handleTap(_ g: UITapGestureRecognizer) {
+            let w = max(1, g.view?.bounds.width ?? 1)
+            parent.onSeek(max(0, min(1, Double(g.location(in: g.view).x / w))))
+        }
+
+        @objc func handlePan(_ g: AxisLockedScrubRecognizer) {
+            let w = max(1, g.view?.bounds.width ?? 1)
+            switch g.state {
+            case .began:
+                startPct = max(0, min(1, parent.progress))
+                VoiceScrubState.touchOnWaveform = true   // refuse swipe-to-reply for this whole gesture
+                VoiceScrubState.active = true
+                parent.onScrub(true)
+                fallthrough
+            case .changed:
+                let pct = startPct + Double(g.translation(in: g.view).x / w)
+                parent.onSeek(max(0, min(1, pct)))
+            case .ended, .cancelled, .failed:
+                VoiceScrubState.touchOnWaveform = false
+                VoiceScrubState.active = false
+                parent.onScrub(false)
+            default:
+                break
+            }
+        }
+    }
+}
+
+// A pan that FAILS the instant it sees a vertical movement, so the enclosing scroll view is left
+// completely alone, and otherwise behaves as a normal horizontal pan. The decision is made once per
+// gesture and never revisited — that is what makes the horizontal lock a lock, in both directions.
+final class AxisLockedScrubRecognizer: UIPanGestureRecognizer {
+    private var decided = false
+    private var startPoint: CGPoint = .zero
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        decided = false
+        startPoint = touches.first?.location(in: view) ?? .zero
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if !decided, let p = touches.first?.location(in: view) {
+            let dx = abs(p.x - startPoint.x), dy = abs(p.y - startPoint.y)
+            if dx > 3 || dy > 3 {           // 3pt is enough to tell the axis apart
+                decided = true
+                if dy > dx { state = .failed; return }   // vertical: not ours, ever
+            }
+        }
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func reset() {
+        super.reset()
+        decided = false
     }
 }
