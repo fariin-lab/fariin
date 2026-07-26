@@ -145,7 +145,6 @@ struct ThreadView: View {
     // the bubble rect instead of the system zoom transition.
     // Retired experiment (Settings toggle removed 2026-07-23): hard-off, ignoring any stored
     // value, so nobody stays stuck on the Telegram media-open path with no way back.
-    private let telegramMediaOpen = false
     @AppStorage("readReceipts") private var readReceiptsOn = true   // feeds the uikit tick + its cache key
 
     // Arrival high-water mark (audit S6): per-message arrival classification, not per-batch. A class
@@ -616,14 +615,14 @@ struct ThreadView: View {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid, suppressDismissPan: false,
-                                    telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
+                                    telegramSourceRect: nil,
                                     onDeleteForMe: { m in repo.hideForMe(m.id) })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
                                     cid: cid, suppressDismissPan: false,
-                                    telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil,
+                                    telegramSourceRect: nil,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     },
@@ -638,7 +637,7 @@ struct ThreadView: View {
             // inside SignalDismissHost so the two can never fight.
             // TELEGRAM-OPEN TEST: when the toggle is on, the system transition is skipped entirely —
             // the animating copy (springing from the bubble rect) is the whole open/close.
-            .modifier(ConditionalZoomTransition(enabled: !telegramMediaOpen, sourceID: msg.id, ns: imageViewerNS))
+            .modifier(ConditionalZoomTransition(enabled: true, sourceID: msg.id, ns: imageViewerNS))
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
     }
@@ -674,12 +673,12 @@ struct ThreadView: View {
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false,
-                              telegramSourceRect: telegramMediaOpen ? MediaOpenRects.rect(msg.id) : nil)
+                              telegramSourceRect: nil)
                 // Zoom = hero open + button-close shrink into the bubble. The drag-down close is the
                 // media-only pan (same as photos): chrome hides instantly, only the video moves, the
                 // page behind stays fixed. The zoom transition's own pan is disabled in SignalDismissHost.
                 // Telegram-open test ON → skip the system transition; the poster copy is the animation.
-                .modifier(ConditionalZoomTransition(enabled: !telegramMediaOpen, sourceID: msg.id, ns: imageViewerNS))
+                .modifier(ConditionalZoomTransition(enabled: true, sourceID: msg.id, ns: imageViewerNS))
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
@@ -1261,17 +1260,10 @@ struct ThreadView: View {
                     AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
                     AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
                 },
-                onTapImage: { m in
-                    // Telegram-open test: present with NO system animation — the copy IS the animation.
-                    if telegramMediaOpen { withoutPresentationAnimation { viewerImage = m } }
-                    else { viewerImage = m }
-                },
+                onTapImage: { m in viewerImage = m },
                 onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
                 onOpenAlbum: { m in albumScreen = m },
-                onTapVideo: { m in
-                    if telegramMediaOpen { withoutPresentationAnimation { viewerVideo = m } }
-                    else { viewerVideo = m }
-                },
+                onTapVideo: { m in viewerVideo = m },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
