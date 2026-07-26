@@ -1225,8 +1225,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var lastReportedTop: CGFloat = -1
     private var composerBarH: CGFloat = 0
     private var restingComposerBarH: CGFloat = 0   // composerBarH measured while the keyboard is DOWN (its FULL
-                                                   // height incl. home indicator) — used during a close, when the
-                                                   // live measure lags ~34pt short and the last bubble dips.
+                                                   // height incl. home indicator) — fallback only, see the pad below.
+    // The home-indicator space the composer bar carries ONLY while the keyboard is down (the bar rides the
+    // keyboard when it's up, so it loses that space). This is what the close-time correction actually needs,
+    // and unlike restingComposerBarH it is a device constant: it does NOT move when the composer's CONTENT
+    // changes. Storing the absolute resting height instead was a bug — replying from a closed keyboard
+    // captured a resting height that INCLUDED the reply bar, and cancelling the reply left that number stale
+    // and ~34pt too tall, so closing the keyboard reserved too much and left a visible gap between the last
+    // bubble and the composer until the keyboard finished and it re-measured (user report, with screenshot).
+    private var composerSafeAreaPad: CGFloat = 0
     private var keyboardUp = false                 // true between keyboardWillShow and keyboardDidHide
     private var keyboardOverlap: CGFloat = 0
     private var keyboardAnimating = false     // a keyboard-synced inset animation is in flight — layout passes
@@ -1273,7 +1280,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // fully gone), and updateBottomInset uses this resting value so the clearance stays correct — else the
         // last bubble dips behind the composer for a beat (the drop-then-recover, proven by the diagnostic:
         // inset 66 during the close → 100 at rest).
-        if !keyboardUp { restingComposerBarH = h }
+        if !keyboardUp {
+            restingComposerBarH = h
+        } else if composerSafeAreaPad == 0, restingComposerBarH > h {
+            // Learn the pad ONCE, from the first keyboard-up measurement: at that instant the composer's
+            // content has not changed, so resting − live is purely the home indicator. Bounded so a
+            // transient mid-transition reading can never poison it. Content-independent from then on, which
+            // is the whole point: the reply bar can appear or vanish in any order and this stays correct.
+            let pad = restingComposerBarH - h
+            if pad > 4, pad < 60 { composerSafeAreaPad = pad }
+        }
         updateBottomInset()
     }
 
@@ -1586,7 +1602,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // reserves too little clearance and dips the last bubble behind the composer. Use the resting (full)
         // height then, so the clearance is already correct as the frame grows back. Every other time use the
         // live value (keyboard-up layout is unchanged).
-        let barH = (kbCloseLink != nil && restingComposerBarH > composerBarH) ? restingComposerBarH : composerBarH
+        // Add the pad to the LIVE height rather than substituting a remembered absolute one, so this tracks
+        // whatever the composer contains right now. restingComposerBarH stays as the fallback for the window
+        // before the pad has been learned (first keyboard open of the screen).
+        let barH: CGFloat = {
+            guard kbCloseLink != nil else { return composerBarH }
+            if composerSafeAreaPad > 0 { return composerBarH + composerSafeAreaPad }
+            return max(composerBarH, restingComposerBarH)
+        }()
         let newBottom: CGFloat = barH + 12
         guard abs(collectionView.contentInset.bottom - newBottom) > 0.5 else { return }
         // Signal's rule: at the bottom → STAY at the bottom; scrolled away → hold position. When the composer
