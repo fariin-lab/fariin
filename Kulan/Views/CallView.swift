@@ -237,8 +237,12 @@ struct CallView: View {
         // The LOCAL PiP shows whenever my camera is on and my feed isn't fullscreen — including when
         // the remote camera is OFF (their avatar owns the big view, I stay in the corner tile; their
         // video simply replaces the avatar when they turn it on). A remote PiP still needs their video.
-        let visible = pipTrack != nil && !showLocalFull
-            && (pipIsLocal ? (call.cameraOn && connectedCall) : hasRemote)
+        // `!showLocalFull` applies ONLY to a LOCAL pip ("my feed is not already fullscreen"). It used to
+        // gate BOTH cases, and showLocalFull is true precisely when isLocalExpanded is - i.e. exactly
+        // when the pip should be showing the REMOTE feed. So tapping to swap promoted me to fullscreen
+        // and then hid the tile instead of putting the other person in it: they vanished from the call.
+        let visible = pipTrack != nil
+            && (pipIsLocal ? (!showLocalFull && call.cameraOn && connectedCall) : hasRemote)
         return Group {
             if visible, let track = pipTrack {
                 ZStack(alignment: .topTrailing) {
