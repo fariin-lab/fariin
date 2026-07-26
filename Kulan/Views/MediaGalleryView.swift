@@ -149,8 +149,12 @@ struct MediaGalleryView: View {
                         .background {
                             // Selected segment: a raised glass pill inside the bar.
                             if tab == t {
+                                // Real glass, not a flat tint. The bar itself is liquidGlass; the selected
+                                // segment was a plain 14% primary fill, so it read as a grey blob sitting
+                                // on glass instead of a raised glass pill.
                                 Capsule(style: .continuous)
-                                    .fill(.primary.opacity(0.14))
+                                    .fill(.clear)
+                                    .liquidGlass(Capsule(style: .continuous), interactive: true)
                             }
                         }
                         .contentShape(Capsule(style: .continuous))
@@ -164,14 +168,20 @@ struct MediaGalleryView: View {
         .padding(.top, 2)
     }
 
+    // Swipe left/right to move between tabs, using the NATIVE paging TabView rather than a hand-rolled
+    // drag gesture: it carries the interactive rubber-banding, the velocity handling and the correct
+    // relationship with the screen-edge back gesture for free (an edge pan still pops the screen, because
+    // the system edge recogniser outranks a scroll view's pan).
     @ViewBuilder private var content: some View {
-        switch tab {
-        case .media: grid(mediaItems, emptyIcon: "photo.on.rectangle", emptyText: "No media")
-        case .gifs:  grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs")
-        case .voice: voiceList
-        case .links: linksList
-        case .files: filesList
+        TabView(selection: $tab) {
+            grid(mediaItems, emptyIcon: "photo.on.rectangle", emptyText: "No media").tag(Tab.media)
+            filesList.tag(Tab.files)
+            voiceList.tag(Tab.voice)
+            linksList.tag(Tab.links)
+            grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs").tag(Tab.gifs)
         }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .animation(.easeInOut(duration: 0.22), value: tab)
     }
 
     // Shown until the first load finishes, so the empty state never flashes while loading.
@@ -205,9 +215,12 @@ struct MediaGalleryView: View {
                     filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
                 }
             }
-            if !currentItems.isEmpty {
-                Button { selecting = true } label: { Label("Select", systemImage: "checkmark.circle") }
-            }
+            // ALWAYS present, disabled when there is nothing to select. A SwiftUI Menu with no children
+            // renders as a button that does nothing at all when tapped - which is exactly what happened on
+            // Files, Voice, Links and GIFs, because the "Show" section is Media-only and this Select was
+            // conditional on the tab having items. The menu looked broken rather than empty.
+            Button { selecting = true } label: { Label("Select", systemImage: "checkmark.circle") }
+                .disabled(currentItems.isEmpty)
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
         }
