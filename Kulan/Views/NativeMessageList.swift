@@ -216,6 +216,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     #endif
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
     // (needsBottomInsetOnSettle is gone: the inset is never deferred, so nothing is ever owed at settle.)
+    // A REAL pinned-bar height change that arrived mid-scroll. Distinct from the old
+    // `needsRefreshOnSettle` route, which armed on every body pass and then discarded the value: nothing
+    // in settleFlush ever called back into setTopOverlayHeight, so the height it refused was simply lost
+    // until an unrelated layout pass happened to recompute it.
+    private var pendingTopOverlayHeight: CGFloat?
     private var sizerRefused = Set<String>()
     private var pendingSettleHeights: Set<String> = []   // rows whose height changed while an animation blocked us
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
@@ -748,6 +753,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // work below would land content mid-animation, the exact violation the gate exists to
             // prevent (audit S3). The pending flags survive; the animation's completion re-settles.
             guard canLandLoad else { return }
+        }
+        // A real pinned-bar height change that was refused mid-scroll. Unlike the old route this actually
+        // calls back, so the value can no longer be silently lost.
+        if let h = pendingTopOverlayHeight {
+            pendingTopOverlayHeight = nil
+            setTopOverlayHeight(h)
         }
         // NOTE: there is deliberately no inset payback here any more. `updateBottomInset` never defers —
         // it writes the inset immediately and stands down only on the OFFSET compensation. Paying an
@@ -1493,8 +1504,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard abs(h - topOverlayHeight) > 0.5 else { return }
         // Same rule as updateBottomInset: this writes contentInset.top and can pinBottom(), and it runs
         // from every SwiftUI body pass - including ones caused by scrolling itself.
+        // CHANGE DETECTION FIRST. This is called from every SwiftUI body pass — including the ones
+        // scrolling itself causes, via the isAtBottom binding — and it had none. So during a scroll it was
+        // invoked over and over with an IDENTICAL height, hit the motion guard below, and set
+        // needsRefreshOnSettle every time. settleFlush then ran a full refresh at finger-lift: re-measure
+        // and reconfigure every visible cell, plus a reconcile if any height moved, for a value that had
+        // not changed. Every scroll ended with that pass, which is the split-second jump.
+        //
+        // The pinned-bar height changes when someone pins or unpins a message. That is the only time any
+        // of this should run.
+        guard abs(topOverlayHeight - h) > 0.5 else { return }
+        // Only a REAL change is worth deferring. A top-inset write does shift the content coordinate
+        // origin, so unlike the bottom inset it genuinely must not land under a moving finger.
         guard !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating else {
-            needsRefreshOnSettle = true
+            pendingTopOverlayHeight = h
             return
         }
         topOverlayHeight = h
