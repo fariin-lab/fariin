@@ -1389,6 +1389,15 @@ struct ThreadView: View {
     private final class SignatureCache {
         var key = ""
         var base: [String: String] = [:]
+        // The DECORATED set (selection + highlight suffixes) memoised on its own key. Without this, the
+        // slow path below rebuilt a full copy of the dictionary — one string concatenation per loaded
+        // message — on EVERY body run for as long as selection mode was open or a jump flash was up.
+        // The body re-runs on typing flags, presence, read receipts and keyboard focus, so in a long
+        // conversation that was thousands of pointless string builds a second during exactly the two
+        // interactions that need the main thread most: dragging through selection, and the moment after
+        // a jump lands.
+        var decoratedKey = ""
+        var decorated: [String: String] = [:]
     }
     @State private var sigCache = SignatureCache()
 
@@ -1445,12 +1454,19 @@ struct ThreadView: View {
         //  • HIGHLIGHT must be in the signature: the jump-to flash renders via isHighlighted — without a
         //    signature change the target row never reconfigured (the "jump didn't work" bug).
         if !selecting && highlightId == nil { return sigCache.base }
+        // Only the SELECTED ids and the highlighted id can change a decorated value, so they are the whole
+        // key. `selectedIds` is hashed rather than joined: Set's hashValue is order-independent and does
+        // not allocate, and this runs on the body path.
+        let decoratedKey = "\(key)|\(selecting)|\(selectedIds.count)|\(selectedIds.hashValue)|\(highlightId ?? "-")"
+        if sigCache.decoratedKey == decoratedKey { return sigCache.decorated }
         var out = sigCache.base
         for m in repo.items {
             let sel = selecting ? (selectedIds.contains(m.id) ? "S1" : "S0") : "S-"
             let hl = m.id == highlightId ? "H1" : "H0"
             out[m.rowId] = (out[m.rowId] ?? "") + "|\(sel)|\(hl)"
         }
+        sigCache.decoratedKey = decoratedKey
+        sigCache.decorated = out
         return out
     }
 
@@ -1470,6 +1486,9 @@ struct ThreadView: View {
     private final class UikitModelCache {
         var key = ""
         var models: [String: UIKitBubbleModel] = [:]
+        // Bumped only when the models are actually rebuilt. The list uses it to skip its direct repaint
+        // pass entirely when nothing can have changed — see `uikitModelsVersion` at the call site.
+        var version = 0
     }
     @State private var uikitModelCache = UikitModelCache()
 
@@ -1487,6 +1506,7 @@ struct ThreadView: View {
         }
         uikitModelCache.key = key
         uikitModelCache.models = out
+        uikitModelCache.version &+= 1
         return out
     }
 
@@ -1617,6 +1637,9 @@ struct ThreadView: View {
             // UIKit bubble migration: plain 1:1 delivered text renders as a native UIKit cell. The models
             // are a frozen per-emission snapshot (routing can never flip between measure and render).
             uikitModels: uikitModels,
+            // MUST stay directly after `uikitModels:` — argument expressions evaluate in source order, and
+            // reading `uikitModels` above is what refreshes the cache this version comes from.
+            uikitModelsVersion: uikitModelCache.version,
             uikitMenu: { id in uikitMenu(for: id) },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
             onReachedTop: { repo.loadOlder() },

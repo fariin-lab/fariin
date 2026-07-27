@@ -30,6 +30,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // provider read the same frozen routing, so a state flip can never route a row differently between
     // its measurement and its render (the mismatch that stranded the layout when this path first ran).
     var uikitModels: [String: UIKitBubbleModel] = [:]
+    // Bumped by ThreadView only when the model dictionary is genuinely rebuilt. `repaintUikitCells` walks
+    // the visible cells on every SwiftUI update, and the body re-runs on typing flags, presence dots and
+    // keyboard focus — all of which leave the models identical. Comparing one integer skips that walk.
+    var uikitModelsVersion: Int = 0
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
     var onReachedTop: () -> Void               // near-top -> page older
@@ -90,7 +94,13 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.apply(rowIds: rowIds, scrollTarget: scrollTarget)
         // Belt-and-braces from the 325 field failure: push geometry-neutral model changes (read ticks)
         // STRAIGHT onto the visible uikit cells — even if the reconfigure chain misses, ticks repaint.
-        vc.repaintUikitCells()
+        // Only when the models actually changed: `repaintIfMetaChanged` reads nothing but the model, so an
+        // identical dictionary can have nothing to repaint, and this used to walk every visible cell on
+        // every body run.
+        if vc.lastRepaintedModelsVersion != uikitModelsVersion {
+            vc.lastRepaintedModelsVersion = uikitModelsVersion
+            vc.repaintUikitCells()
+        }
         if scrollTarget != nil {
             DispatchQueue.main.async { scrollTarget = nil }   // one-shot
         }
@@ -164,6 +174,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // stopped, which is the worst moment. Signal drops the auto-scroll instead — see apply().)
     private var needsReconcileOnSettle = false // a reconcile deferred mid-motion whose heights were pre-adopted
     var initialScrollId: String?              // first-unread rowId → the FIRST open lands here (reference)
+    // Last model version pushed through repaintUikitCells; -1 so the first update always repaints.
+    var lastRepaintedModelsVersion = -1
 
     // Branch marker — compiles to a no-op outside DEBUG.
     private func dbg(_ s: String) {
