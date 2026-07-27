@@ -139,7 +139,10 @@ struct CallView: View {
                         .allowsHitTesting(controlsVisible) // hidden buttons must not eat the tap
                     Spacer()
                     if showAvatar {
-                        AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 180)
+                        // WHOSE photo follows who is on the big screen, not always theirs.
+                        AvatarView(name: showLocalFull ? call.myName : call.otherName,
+                                   photoUrl: showLocalFull ? call.myPhotoUrl : call.otherPhotoUrl,
+                                   size: 180)
                             .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
                             // Soft expanding rings while the other side hasn't picked up yet —
                             // the frozen avatar read as "dead"; big apps pulse here.
@@ -205,11 +208,13 @@ struct CallView: View {
     }
     // Avatar fills the big view whenever there is no remote video to show (voice call, or their
     // camera is off mid-call) and I haven't swapped my own feed fullscreen.
+    // The photo fills the big view whenever whoever is BIG has no live camera — including MYSELF, now
+    // that you can swap your own switched-off camera up there. It used to hard-return false for
+    // `isLocalExpanded`, which left that case as a black screen.
     private var showAvatar: Bool {
         if !call.isVideo { return true }
-        if isLocalExpanded { return false }
-        if connectedCall { return !hasRemote }
-        return !hasRemote && (!call.cameraOn || call.localVideoTrack == nil)
+        if showLocalFull { return !call.cameraOn }   // my feed owns the big view
+        return !hasRemote
     }
 
     // MARK: - Background (video feed, or avatar/gradient fallback)
@@ -372,9 +377,11 @@ struct CallView: View {
                 // directions, and it is how tapping once stranded the user full screen on their own
                 // face with the other person gone and no way back.
                 .onTapGesture {
-                    // A photo tile cannot be swapped to, but the tap should not feel dead either:
-                    // it does what a tap on the rest of the screen does.
-                    guard feeds.big != nil, feeds.tile != nil else { toggleControls(); return }
+                    // SWAP IS ALWAYS ALLOWED while the tile is up, video or photo. It was once gated on
+                    // two live feeds because a swap could strand you: the tile HID itself when its
+                    // camera went off, taking the only way back with it. The tile never hides now, so
+                    // any swap can always be undone by tapping it again.
+                    guard feeds.showsTile else { toggleControls(); return }
                     showControls()
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }
                 }
