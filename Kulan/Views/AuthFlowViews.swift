@@ -1,10 +1,18 @@
 import SwiftUI
 import AuthenticationServices
 
-// The front door (user decision 2026-07-24: DARK, Discord skeleton, our skin).
-// Welcome → Create Account / Log In → Apple / Google / Email → onboarding (name,
-// @username) for new accounts, straight in for returning ones. Always dark: the
-// chrome logo was born on black.
+// The front door. Welcome → Create Account / Log In → Apple / Google / Email →
+// onboarding (name, @username) for new accounts, straight in for returning ones.
+//
+// User decision 2026-07-27, replacing the always-dark call of 2026-07-24: the front
+// door is ALWAYS LIGHT, pinned with `.preferredColorScheme(.light)`, and does NOT
+// follow the phone's setting — LINE's welcome screen was the reference, and the user's
+// rule was "big apps don't use dark or light out front". The decorative greeting wall
+// came out with it ("make it pro like big corporate apps").
+// The colours are still semantic (`AuthPalette`): pinned to light they resolve to white
+// / #F2F2F7 / black, and nothing here can disagree with its neighbour the way four
+// separate hard-coded `.black`s did. The theme returns to the user's choice the moment
+// the flow ends, since only these four screens pin it.
 struct WelcomeView: View {
     var onAuthed: () -> Void
     var onDemo: () -> Void = {}   // Appetize preview: straight to main, no routing
@@ -12,38 +20,29 @@ struct WelcomeView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
-                greetingWall
+                AuthPalette.page.ignoresSafeArea()
                 VStack(spacing: 0) {
                     Spacer()
                     ShiningLogo()
-                        .frame(width: 140, height: 140)
-                        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                        .frame(width: 108, height: 108)
+                        .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                     Text("Welcome to Kulan")
-                        .font(.system(size: 32, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .padding(.top, 28)
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .padding(.top, 22)
                     Text("Private chats, calls and stories.\nMade for Somalis everywhere.")
-                        .font(.system(size: 16))
-                        .foregroundStyle(Color(white: 0.62))
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.top, 10)
+                        .padding(.top, 8)
                     Spacer()
                     Spacer()
                     VStack(spacing: 12) {
                         NavigationLink { AuthMethodView(mode: .create, onAuthed: onAuthed) } label: {
-                            Text("Create Account")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(.black)
-                                .frame(maxWidth: .infinity).frame(height: 54)
-                                .background(.white, in: Capsule())
+                            Text("Create Account").authPrimaryPill()
                         }
                         NavigationLink { AuthMethodView(mode: .login, onAuthed: onAuthed) } label: {
-                            Text("Log In")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity).frame(height: 54)
-                                .background(Color(white: 0.14), in: Capsule())
+                            Text("Log In").authSecondaryPill()
                         }
                         #if DEBUG
                         // Appetize preview: a Firebase-free local demo account. Debug-only.
@@ -52,7 +51,7 @@ struct WelcomeView: View {
                             onDemo()
                         }
                         .font(.caption)
-                        .foregroundStyle(Color(white: 0.4))
+                        .foregroundStyle(.tertiary)
                         .padding(.top, 2)
                         #endif
                     }
@@ -62,23 +61,53 @@ struct WelcomeView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
+    }
+}
+
+// MARK: - One palette for the whole entry flow
+
+/// The entry screens' colours, in one place, so no screen can drift from its neighbour.
+/// Semantic rather than literal white/black: the flow is pinned light today, and if that
+/// decision is ever reversed these resolve correctly instead of needing a hunt.
+enum AuthPalette {
+    /// The page. White while the flow is pinned light.
+    static let page = Color(.systemBackground)
+    /// Field boxes and the second-choice button. #F2F2F7 in light.
+    static let raised = Color(.secondarySystemBackground)
+    /// Hairline edge: on white a light-grey fill alone is too weak to read as a button.
+    static let hairline = Color.primary.opacity(0.12)
+}
+
+// Not private: the onboarding screen in RootView is the last step of this same flow
+// and must wear the same two buttons.
+extension View {
+    /// The main action: black pill, white text.
+    func authPrimaryPill() -> some View {
+        self.font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(AuthPalette.page)          // always the inverse of the fill
+            .frame(maxWidth: .infinity).frame(height: 50)
+            .background(Color.primary, in: Capsule())
     }
 
-    // Our personality move: faint Somali greetings drifting in the dark, ours alone.
-    private var greetingWall: some View {
-        VStack(spacing: 44) {
-            ForEach(Array(["Salaam", "Nabad", "Iska warran", "Maalin wanaagsan", "Soo dhawoow"].enumerated()),
-                    id: \.offset) { i, word in
-                Text(word)
-                    .font(.system(size: 34, weight: .heavy))
-                    .foregroundStyle(Color(white: 0.10))
-                    .frame(maxWidth: .infinity, alignment: i.isMultiple(of: 2) ? .leading : .trailing)
-                    .padding(.horizontal, 20)
-            }
-        }
-        .rotationEffect(.degrees(-8))
-        .allowsHitTesting(false)
+    /// One of the sign-in doors. Matched to `SignInWithAppleButtonStyle.whiteOutline` —
+    /// same height, same capsule, same white-with-a-thin-outline — so Apple, Google and
+    /// Email read as one set of three instead of three different apps' buttons.
+    func authDoorPill() -> some View {
+        self.font(.system(size: 17, weight: .medium))
+            .foregroundStyle(.black)               // dark text on white: Google's rule and Apple's
+            .labelStyle(.titleAndIcon)
+            .frame(maxWidth: .infinity).frame(height: 50)   // 50, not 54: still well over the 44pt tap minimum
+            .background(.white, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.black.opacity(0.5), lineWidth: 1))
+    }
+
+    func authSecondaryPill() -> some View {
+        self.font(.system(size: 17, weight: .medium))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity).frame(height: 50)
+            .background(AuthPalette.raised, in: Capsule())
+            .overlay(Capsule().strokeBorder(AuthPalette.hairline, lineWidth: 1))
     }
 }
 
@@ -122,16 +151,21 @@ struct AuthMethodView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            AuthPalette.page.ignoresSafeArea()
             VStack(spacing: 14) {
                 Spacer()
                 Text(title)
-                    .font(.system(size: 28, weight: .heavy)).foregroundStyle(.white)
+                    .font(.system(size: 24, weight: .bold)).foregroundStyle(.primary)
                 Text(mode == .create ? "Pick a door. Takes less than a minute."
                                      : "Welcome back.")
-                    .font(.subheadline).foregroundStyle(Color(white: 0.6))
+                    .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
 
+                // THE THREE DOORS ARE ONE SET. What made the reference screens (Twitch, and the
+                // "How do you want to log in?" pattern) read as professional was that every choice
+                // is the SAME button — one shape, one height, one weight — and only the brand mark
+                // changes. Apple's own `whiteOutline` style is that button, so we use their API
+                // rather than drawing a look-alike, and Google and Email are matched to it.
                 SignInWithAppleButton(mode == .create ? .signUp : .signIn) { request in
                     AuthService.shared.prepareAppleRequest(request)
                 } onCompletion: { result in
@@ -142,32 +176,28 @@ struct AuthMethodView: View {
                         break   // user cancelled the sheet — not an error worth showing
                     }
                 }
-                .signInWithAppleButtonStyle(.white)
-                .frame(height: 54)
+                .signInWithAppleButtonStyle(.whiteOutline)
+                .frame(height: 50)              // matches authDoorPill exactly
                 .clipShape(Capsule())
 
                 Button {
                     run { try await AuthService.shared.signInWithGoogle() }
                 } label: {
-                    HStack(spacing: 10) {
-                        GoogleGIcon(size: 22)   // the real mark, matching Apple's real glyph above
-                        Text("Continue with Google").font(.system(size: 18, weight: .semibold))
-                    }
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity).frame(height: 54)
-                    .background(.white, in: Capsule())
+                    // Google's brand rules also call for a white button with dark text, so the
+                    // matched set costs us nothing on either company's guidelines.
+                    Label(title: { Text("Continue with Google") },
+                          icon: { GoogleGIcon(size: 20) })
+                        .authDoorPill()
                 }
                 .disabled(busy)
 
                 NavigationLink { EmailAuthView(mode: mode, onAuthed: onAuthed) } label: {
-                    Text(mode == .create ? "Sign up with Email" : "Log in with Email")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).frame(height: 54)
-                        .background(Color(white: 0.14), in: Capsule())
+                    Label(title: { Text(mode == .create ? "Sign up with Email" : "Log in with Email") },
+                          icon: { Image(systemName: "envelope.fill").font(.system(size: 18)) })
+                        .authDoorPill()
                 }
 
-                if busy { ProgressView().tint(.white).padding(.top, 6) }
+                if busy { ProgressView().padding(.top, 6) }
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
                         .multilineTextAlignment(.center).padding(.top, 4)
@@ -175,15 +205,15 @@ struct AuthMethodView: View {
 
                 if mode == .create {
                     Text("By continuing you agree to Kulan's [Terms](https://kulan-2ef85.web.app/terms.html) and [Privacy Policy](https://kulan-2ef85.web.app/privacy.html).")
-                        .font(.caption2).foregroundStyle(Color(white: 0.5))
-                        .multilineTextAlignment(.center).tint(Color(white: 0.75))
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center).tint(.primary)
                         .padding(.top, 10)
                 }
                 Spacer()
             }
             .padding(.horizontal, 24)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -216,14 +246,14 @@ struct EmailAuthView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            AuthPalette.page.ignoresSafeArea()
             VStack(spacing: 14) {
                 Spacer().frame(height: 40)
                 Text(mode == .create ? "Sign up with Email" : "Log in with Email")
-                    .font(.system(size: 26, weight: .heavy)).foregroundStyle(.white)
+                    .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
 
                 field("Email") {
-                    TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(Color(white: 0.4)))
+                    TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
                         .keyboardType(.emailAddress)
                         .textContentType(.emailAddress)
                         .textInputAutocapitalization(.never)
@@ -231,22 +261,21 @@ struct EmailAuthView: View {
                         .focused($focus)
                 }
                 field("Password") {
-                    SecureField("", text: $password, prompt: Text(mode == .create ? "At least 6 characters" : "Your password").foregroundStyle(Color(white: 0.4)))
+                    SecureField("", text: $password, prompt: Text(mode == .create ? "At least 6 characters" : "Your password").foregroundStyle(.tertiary))
                         .textContentType(mode == .create ? .newPassword : .password)
                 }
 
                 Button {
                     submit()
                 } label: {
-                    if busy {
-                        ProgressView().tint(.black).frame(maxWidth: .infinity).frame(height: 54)
-                            .background(.white, in: Capsule())
-                    } else {
-                        Text(mode == .create ? "Create Account" : "Log In")
-                            .font(.system(size: 18, weight: .bold)).foregroundStyle(.black)
-                            .frame(maxWidth: .infinity).frame(height: 54)
-                            .background(.white, in: Capsule())
+                    Group {
+                        if busy {
+                            ProgressView().tint(AuthPalette.page)   // spinner reads on the filled pill
+                        } else {
+                            Text(mode == .create ? "Create Account" : "Log In")
+                        }
                     }
+                    .authPrimaryPill()
                 }
                 .disabled(busy || email.isEmpty || password.isEmpty)
                 .opacity(email.isEmpty || password.isEmpty ? 0.55 : 1)
@@ -264,7 +293,7 @@ struct EmailAuthView: View {
                         }
                     }
                     .font(.footnote)
-                    .foregroundStyle(resetSent ? Color.green : Color(white: 0.6))
+                    .foregroundStyle(resetSent ? Color.green : Color.secondary)
                     .disabled(resetSent)
                 }
 
@@ -276,19 +305,19 @@ struct EmailAuthView: View {
             }
             .padding(.horizontal, 24)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { focus = true }
     }
 
     private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.caption.weight(.semibold)).foregroundStyle(Color(white: 0.55))
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             content()
                 .font(.system(size: 17))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16).frame(height: 52)
-                .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 16).frame(height: 50)
+                .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 

@@ -14,6 +14,9 @@ struct RootView: View {
     @AppStorage("screenSecurity") private var screenSecurity = false
     @State private var locked = false
     @State private var backgroundedAt: Date?
+    // Someone signed this phone out from Settings › Devices on another phone.
+    @ObservedObject private var devices = DeviceRegistry.shared
+    @State private var showRevokedNotice = false
 
     var body: some View {
         ZStack {
@@ -66,6 +69,21 @@ struct RootView: View {
             #endif
         }
         .onAppear { if lockEnabled { locked = true; authenticate() } }
+        // Remote sign-out: our own device record was deleted from another phone. Same teardown
+        // as tapping Sign Out here, then back to the front door with a word about why.
+        .onChange(of: devices.revoked) { _, revoked in
+            guard revoked else { return }
+            Task {
+                await DeviceRegistry.shared.performRevokedSignOut()
+                await route()
+                showRevokedNotice = true
+            }
+        }
+        .alert("Signed out", isPresented: $showRevokedNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This device was signed out from another device.")
+        }
         .onChange(of: scenePhase) { _, new in
             if new == .background {
                 backgroundedAt = Date()
@@ -116,6 +134,7 @@ struct RootView: View {
             }
             try? await Crypto.shared.ensureReady()
             Push.register(); Push.saveVoipToken()
+            DeviceRegistry.shared.start()   // record this phone in Settings › Devices, and watch for a remote sign-out
             phase = .main
             Task {   // background refresh + key self-heal, off the boot path
                 await ProfileStore.shared.loadMine()
@@ -135,7 +154,10 @@ struct RootView: View {
             return
         }
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
-        if ready { Push.register(); Push.saveVoipToken() }   // notifications + VoIP token now that we're signed in
+        if ready {
+            Push.register(); Push.saveVoipToken()   // notifications + VoIP token now that we're signed in
+            DeviceRegistry.shared.start()
+        }
         phase = ready ? .main : .onboarding
     }
 
@@ -207,32 +229,32 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        // Matches the dark sign-up flow this screen follows (the old light Form was a jarring
-        // hand-off from the black Welcome/Apple/Google/Email screens).
+        // Last step of the sign-up flow, so it wears the flow's skin: pinned light, same
+        // palette and pills as Welcome/Apple/Google/Email (see AuthFlowViews).
         ZStack {
-            Color.black.ignoresSafeArea()
+            AuthPalette.page.ignoresSafeArea()
             ScrollView {
                 VStack(spacing: 0) {
                     Spacer().frame(height: 24)
 
                     // Live avatar preview: their initials + hashed color, exactly how they'll appear
                     // to everyone else. Fills in as they type, so the profile feels theirs immediately.
-                    AvatarView(name: name.isEmpty ? "?" : name, size: 96)
-                        .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                    AvatarView(name: name.isEmpty ? "?" : name, size: 84)
+                        .overlay(Circle().strokeBorder(AuthPalette.hairline, lineWidth: 1))
                         .animation(.easeOut(duration: 0.2), value: name)
 
                     Text("Create your profile")
-                        .font(.system(size: 27, weight: .heavy)).foregroundStyle(.white)
-                        .padding(.top, 18)
+                        .font(.system(size: 23, weight: .bold)).foregroundStyle(.primary)
+                        .padding(.top, 16)
                     Text("This is how people will find and know you on Kulan.")
-                        .font(.subheadline).foregroundStyle(Color(white: 0.55))
+                        .font(.subheadline).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 5).padding(.horizontal, 24)
 
                     VStack(spacing: 14) {
                         field("YOUR NAME") {
                             TextField("", text: $name,
-                                      prompt: Text("e.g. Amina Yusuf").foregroundStyle(Color(white: 0.35)))
+                                      prompt: Text("e.g. Amina Yusuf").foregroundStyle(.tertiary))
                                 .textInputAutocapitalization(.words)
                                 .focused($focus, equals: .name)
                                 .submitLabel(.next)
@@ -243,14 +265,14 @@ struct OnboardingView: View {
                             // Inline validity tick, so the rules are felt rather than read.
                             if !handle.isEmpty {
                                 Image(systemName: handleValid ? "checkmark.circle.fill" : "circle.dashed")
-                                    .foregroundStyle(handleValid ? Color.green : Color(white: 0.45))
+                                    .foregroundStyle(handleValid ? Color.green : Color.secondary)
                                     .font(.system(size: 17))
                             }
                         }) {
                             HStack(spacing: 2) {
-                                Text("@").foregroundStyle(Color(white: 0.45))
+                                Text("@").foregroundStyle(.secondary)
                                 TextField("", text: $handle,
-                                          prompt: Text("username").foregroundStyle(Color(white: 0.35)))
+                                          prompt: Text("username").foregroundStyle(.tertiary))
                                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                                     .focused($focus, equals: .handle)
                                     .submitLabel(.done)
@@ -262,7 +284,7 @@ struct OnboardingView: View {
                         }
 
                         Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
-                            .font(.caption).foregroundStyle(Color(white: 0.4))
+                            .font(.caption).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.top, 26)
@@ -280,13 +302,12 @@ struct OnboardingView: View {
                     } label: {
                         Group {
                             if saving {
-                                ProgressView().tint(.black)
+                                ProgressView().tint(AuthPalette.page)   // spinner reads on the filled pill
                             } else {
-                                Text("Continue").font(.system(size: 18, weight: .bold)).foregroundStyle(.black)
+                                Text("Continue")
                             }
                         }
-                        .frame(maxWidth: .infinity).frame(height: 54)
-                        .background(.white, in: Capsule())
+                        .authPrimaryPill()
                     }
                     .disabled(!canContinue)
                     .opacity(canContinue ? 1 : 0.5)
@@ -297,9 +318,9 @@ struct OnboardingView: View {
                     // abusive users) before they can post content. Links open in Safari.
                     Text("By tapping Continue you agree to Kulan's [Terms](https://kulan-2ef85.web.app/terms.html) and [Privacy Policy](https://kulan-2ef85.web.app/privacy.html). Kulan has zero tolerance for objectionable content or abusive behavior.")
                         .font(.caption2)
-                        .foregroundStyle(Color(white: 0.42))
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .tint(Color(white: 0.75))
+                        .tint(.primary)
                         .padding(.top, 14)
                     #if DEBUG
                     Text("Preview: type **apple** in either field, then Continue, to load a demo account.")
@@ -312,7 +333,7 @@ struct OnboardingView: View {
             }
             .scrollDismissesKeyboard(.interactively)
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .onAppear {
             // Apple hands over the person's name exactly once, at first authorization —
             // prefill it so they just pick a username.
@@ -320,21 +341,21 @@ struct OnboardingView: View {
         }
     }
 
-    // Dark labelled field box, same shape language as the email sign-up screen.
+    // Labelled field box, same shape language as the email sign-up screen.
     private func field<C: View, A: View>(_ label: String,
                                          @ViewBuilder accessory: () -> A = { EmptyView() },
                                          @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(label).font(.caption2.weight(.bold)).foregroundStyle(Color(white: 0.5))
+            Text(label).font(.caption2.weight(.bold)).foregroundStyle(.secondary)
                 .tracking(0.6)
             HStack(spacing: 8) {
                 content()
                     .font(.system(size: 17))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 accessory()
             }
-            .padding(.horizontal, 16).frame(height: 54)
-            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 16).frame(height: 50)
+            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
