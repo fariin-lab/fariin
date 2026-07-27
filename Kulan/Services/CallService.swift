@@ -115,6 +115,26 @@ final class CallService: NSObject {
     /// showed one feed and the PiP the other. `isLocalExpanded` is the same state the layout uses, so the
     /// two can never disagree again.
     var bigScreenTrack: RTCVideoTrack? { isLocalExpanded ? localVideoTrack : remoteVideoTrack }
+
+    /// The WHOLE call layout for a floating window — big feed plus corner tile, like FaceTime — so the
+    /// floating window is the call screen in miniature instead of one lone feed. Both follow the same
+    /// `isLocalExpanded` swap the call screen uses, and a feed is offered only while its camera is
+    /// actually sending (the track object lingers after someone turns their camera off).
+    struct PiPFeeds {
+        var big: RTCVideoTrack?
+        var tile: RTCVideoTrack?
+        var mirrorBig = false
+        var mirrorTile = false
+    }
+    var pipFeeds: PiPFeeds {
+        let remoteLive = remoteCameraOn ? remoteVideoTrack : nil
+        let localLive = cameraOn ? localVideoTrack : nil
+        if isLocalExpanded {
+            return PiPFeeds(big: localLive, tile: remoteLive, mirrorBig: usingFrontCamera)
+        }
+        return PiPFeeds(big: remoteLive, tile: localLive, mirrorTile: usingFrontCamera)
+    }
+
     private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
     var usingFrontCamera = true
     // Video layout state — owned HERE so minimize/restore keeps the user's big/small choice and PiP

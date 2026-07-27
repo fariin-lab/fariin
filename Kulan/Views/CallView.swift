@@ -76,8 +76,8 @@ struct CallView: View {
             ZStack {
                 background(geo)
                 if call.isVideo {
-                    // The BIG-SCREEN feed, not always the remote one — see CallService.bigScreenTrack.
-                    CallPiPHost(track: call.bigScreenTrack).allowsHitTesting(false)   // native PiP source
+                    // The whole layout, not one feed — see CallService.pipFeeds.
+                    CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
                     pipLayer(geo)
                 }
 
@@ -118,15 +118,16 @@ struct CallView: View {
         }
     }
 
-    // Invisible host whose UIView is the PiP "source view"; binds the remote track to the controller.
+    // Invisible host whose UIView is the PiP "source view"; binds both feeds to the controller so the
+    // floating window carries the same big + corner-tile layout as the call screen.
     struct CallPiPHost: UIViewRepresentable {
-        let track: RTCVideoTrack?
+        let feeds: CallService.PiPFeeds
         func makeUIView(context: Context) -> UIView {
             let v = UIView(); v.isUserInteractionEnabled = false; v.backgroundColor = .clear
             return v
         }
         func updateUIView(_ uiView: UIView, context: Context) {
-            CallPiPController.shared.configure(sourceView: uiView, remoteTrack: track)
+            CallPiPController.shared.configure(sourceView: uiView, feeds: feeds)
         }
     }
 
@@ -214,8 +215,9 @@ struct CallView: View {
             }
             Spacer()
 
+            // No "Minimize" here: the chevron on the left already does it, and two controls for the
+            // same thing on one bar just read as one of them being broken.
             Menu {
-                Button { withAnimation { call.minimized = true } } label: { Label("Minimize", systemImage: "arrow.down.right.and.arrow.up.left") }
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -237,6 +239,10 @@ struct CallView: View {
             // NON-interactive glass: `.interactive()` glass consumes the touch itself, so the
             // wrapping Button's action never fired — the minimize chevron did nothing when tapped.
             .liquidGlass(Circle(), interactive: false)
+            // The whole 48pt circle takes the tap. A `.frame` around an Image is only hit-testable
+            // where the glyph is drawn, and the glass behind it is an effect, not a shape — so the
+            // real target was the ~17pt chevron itself, which is why this button felt dead.
+            .contentShape(Circle())
     }
 
 
@@ -428,24 +434,18 @@ struct CallContainer<Content: View>: View {
         }
     }
 
+    // A minimized VIDEO call gets the floating video window; only a voice call gets the green bar.
+    // Minimizing used to drop every call into that same bar, so a video call looked like it had
+    // turned into a voice one — the video was still running, nothing on screen was showing it.
+    private var showsFloatingVideo: Bool { isActive && call.minimized && call.isVideo }
+
     var body: some View {
         VStack(spacing: 0) {
-            if isActive && call.minimized {
+            if isActive && call.minimized && !call.isVideo {
                 MiniCallBar()
                     .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
-                    }
-                    // KEEP A PiP SOURCE VIEW ALIVE WHILE MINIMIZED. The only other CallPiPHost lives
-                    // inside CallView, which the cover DESTROYS on minimize — so minimizing silently
-                    // turned off background video: leaving the app then had no PiP window to detach
-                    // into, the capture session was interrupted, and the other side dropped to the
-                    // avatar. Apple wants a real on-screen view here, and the bar is exactly that.
-                    .overlay {
-                        if call.isVideo {
-                            CallView.CallPiPHost(track: call.bigScreenTrack)
-                                .allowsHitTesting(false)
-                        }
                     }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -474,6 +474,13 @@ struct CallContainer<Content: View>: View {
             }
             content
         }
+        .overlay {
+            if showsFloatingVideo {
+                FloatingCallWindow()
+                    .transition(.scale(scale: 0.7).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: showsFloatingVideo)
         .fullScreenCover(isPresented: Binding(
             get: { isActive && !call.minimized },
             set: { _ in }
@@ -481,6 +488,126 @@ struct CallContainer<Content: View>: View {
             CallView()
         }
         .fullScreenCover(isPresented: $showGroupRestore) { GroupCallView() }
+    }
+}
+
+// MARK: - FloatingCallWindow
+
+// The minimized VIDEO call: a small draggable window carrying the whole call layout — the big feed
+// plus the corner tile, following the same big/small choice as the call screen. Tap it to go back.
+struct FloatingCallWindow: View {
+    private var call: CallService { CallService.shared }
+    @State private var offset: CGSize = .zero
+    @State private var base: CGSize = .zero
+
+    private let w: CGFloat = 112
+    private let h: CGFloat = 199   // 9:16
+
+    private var insets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .max(by: { $0.top < $1.top }) ?? .zero
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            window
+                .offset(offset)
+                // Plain gesture, not high-priority: the end button inside the window must still get
+                // its own taps.
+                .gesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { v in
+                            let (maxLeft, maxDown) = limits(geo.size)
+                            offset = CGSize(
+                                width: min(0, max(maxLeft, base.width + v.translation.width)),
+                                height: min(maxDown, max(0, base.height + v.translation.height))
+                            )
+                        }
+                        .onEnded { _ in
+                            let (maxLeft, maxDown) = limits(geo.size)
+                            let x: CGFloat = offset.width < maxLeft / 2 ? maxLeft : 0
+                            let y: CGFloat = offset.height > maxDown / 2 ? maxDown : 0
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                offset = CGSize(width: x, height: y)
+                            }
+                            base = CGSize(width: x, height: y)
+                        }
+                )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
+                }
+                .padding(.top, insets.top + 8)
+                .padding(.trailing, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+        .ignoresSafeArea()
+    }
+
+    // How far the window may travel from its top-right resting place.
+    private func limits(_ size: CGSize) -> (CGFloat, CGFloat) {
+        let maxLeft = -(size.width - w - 24)
+        let maxDown = max(0, size.height - h - (insets.top + 8) - insets.bottom - 8)
+        return (maxLeft, maxDown)
+    }
+
+    private var window: some View {
+        let feeds = call.pipFeeds
+        return ZStack(alignment: .topTrailing) {
+            Color.black
+            if let big = feeds.big {
+                VideoRendererView(track: big, mirror: feeds.mirrorBig)
+                    .frame(width: w, height: h)
+                    .clipped()
+            } else {
+                // Their camera is off (or the call hasn't connected): the avatar owns the big view,
+                // exactly like the call screen.
+                AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56)
+                    .frame(width: w, height: h)
+            }
+            if let tile = feeds.tile {
+                let tw = w * 0.34
+                VideoRendererView(track: tile, mirror: feeds.mirrorTile)
+                    .frame(width: tw, height: tw * 16 / 9)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(.white.opacity(0.35), lineWidth: 0.5)
+                    )
+                    .padding(5)
+            }
+            // KEEP A PiP SOURCE VIEW ALIVE WHILE MINIMIZED. The only other CallPiPHost lives inside
+            // CallView, which the cover DESTROYS on minimize — so minimizing silently turned off
+            // background video: leaving the app then had no PiP window to detach into, the capture
+            // session was interrupted, and the other side dropped to the avatar. Apple wants a real
+            // on-screen view here, and this window is exactly that.
+            CallView.CallPiPHost(feeds: feeds)
+                .allowsHitTesting(false)
+        }
+        .frame(width: w, height: h)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.22), lineWidth: 1)
+        )
+        // End stays reachable without reopening the call — a live mic and camera must always have
+        // a one-tap kill.
+        .overlay(alignment: .bottom) {
+            Button {
+                CallKitManager.shared.end()
+            } label: {
+                Image(systemName: "phone.down.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(.red, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 8)
+            .accessibilityLabel("End call")
+        }
+        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
     }
 }
 
