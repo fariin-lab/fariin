@@ -43,6 +43,9 @@ struct RootView: View {
                 CallContainer {
                     MainShell(onSignOut: { Task { await route() } })
                 }
+                // Our own message banner, mounted once here so it rides above every screen. It sits
+                // UNDER the call screen on purpose: a call already owns the whole display.
+                .inAppBanner()
             }
 
             // Screen security: blank the app preview in the app switcher.

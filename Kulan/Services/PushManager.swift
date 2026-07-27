@@ -90,18 +90,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     // Foreground banner — but NOT for the chat you're already looking at.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        let cid = notification.request.content.userInfo["cid"] as? String
+        let content = notification.request.content
+        let cid = content.userInfo["cid"] as? String
         if let cid, cid == AppRouter.shared.activeChatId { return [] }
+        // A CHAT notification gets OUR banner, not the system one. The iOS drop-down reads as
+        // "something outside the app happened" while you are looking at the app; every messenger
+        // draws its own instead. Anything that is not a chat keeps the system banner — there is
+        // nothing for ours to route to.
+        guard let cid else { return [.banner, .sound, .badge] }
+        await MainActor.run {
+            InAppBannerCenter.shared.show(cid: cid, title: content.title, body: content.body)
+        }
         // Play the chat's CHOSEN message sound (real, foreground) and suppress the system push
         // sound. Background pushes still use the server payload's sound (per-chat sound there is
         // a follow-up). "None" → silent banner.
-        if let cid {
-            let sound = SoundStore.sound(cid, .message)
-            guard sound.id != "none" else { return [.banner, .badge] }
-            await MainActor.run { SoundPlayer.shared.play(sound) }
-            return [.banner, .badge]
-        }
-        return [.banner, .sound, .badge]
+        let sound = SoundStore.sound(cid, .message)
+        guard sound.id != "none" else { return [.badge] }
+        await MainActor.run { SoundPlayer.shared.play(sound) }
+        return [.badge]
     }
 
     // Tapping a push opens the right chat (works from background AND cold launch —
