@@ -114,6 +114,12 @@ final class CallService: NSObject {
     /// video call keeps behaving like one, so the controls do not start reappearing permanently just
     /// because someone closed their camera for a minute. Cleared only when the call ends.
     private(set) var everVideo = false
+    /// Latch `everVideo`. It must be called from EVERY place a camera can come on, not just the mid-call
+    /// toggle path: a call PLACED or ANSWERED as video sets `cameraOn` directly at setup and never goes
+    /// through `setMyCamera`/`applyVideoAudioPolicy`. Latching only there left the flag false for the
+    /// person who ANSWERED — their tap-to-hide-the-controls did nothing while the caller's worked, which
+    /// is exactly what two phones showed.
+    private func noteVideo() { if cameraOn || remoteCameraOn { everVideo = true } }
     /// Whatever is on the BIG screen right now — which is what the floating PiP window must show when you
     /// leave the app. The PiP was hard-wired to the remote feed, so after tapping the tile to swap
     /// yourself fullscreen, leaving the app put the OTHER person in the floating window: the big screen
@@ -465,9 +471,7 @@ final class CallService: NSObject {
     private func applyVideoAudioPolicy() {
         let session = AVAudioSession.sharedInstance()
         let videoShowing = cameraOn || remoteCameraOn
-        // This is already the one place BOTH camera paths (mine and theirs) meet, so it is the only
-        // honest place to latch "this call has been a video call".
-        if videoShowing { everVideo = true }
+        noteVideo()   // both camera paths (mine and theirs) meet here
         // Echo cancellation follows what the audio is actually DOING, not who owns the camera:
         // .videoChat is tuned for the loudspeaker, .voiceChat for the earpiece. The wrong one is the
         // hear-your-own-voice bug.
@@ -910,6 +914,7 @@ final class CallService: NSObject {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
         startedAsVideo = video
+        noteVideo()
         isCaller = true
         otherUid = uid
         otherName = name
@@ -1112,6 +1117,7 @@ final class CallService: NSObject {
                     // both sides see each other the instant the call connects.
                     self.cameraOn = isVideoCall
                     self.startedAsVideo = isVideoCall
+                    self.noteVideo()
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
                     self.state = .incoming
@@ -1139,6 +1145,7 @@ final class CallService: NSObject {
         }
         self.cameraOn = video   // camera-on-answer model: accepting a video call opens my camera immediately
         self.startedAsVideo = video
+        self.noteVideo()
         self.callId = callId
         self.otherName = name
         self.otherUid = uid
