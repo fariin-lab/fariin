@@ -169,10 +169,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var pendingBottomOnOpen = false   // brief open window: keep pinned to bottom
     private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
-    private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
+    private var needsRefreshOnSettle = false  // a refresh blocked by an ANIMATION → coalesced, lands when it ends
     // (needsPinOnSettle is gone: a pin owed to a settle is a yank that arrives just after the user
     // stopped, which is the worst moment. Signal drops the auto-scroll instead — see apply().)
-    private var needsReconcileOnSettle = false // a reconcile deferred mid-motion whose heights were pre-adopted
+    private var needsReconcileOnSettle = false // a reconcile blocked by an animation whose heights were pre-adopted
     var initialScrollId: String?              // first-unread rowId → the FIRST open lands here (reference)
     // Last model version pushed through repaintUikitCells; -1 so the first update always repaints.
     var lastRepaintedModelsVersion = -1
@@ -217,7 +217,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
     private var needsBottomInsetOnSettle = false   // an inset update was refused mid-scroll; owe it at rest
     private var sizerRefused = Set<String>()
-    private var pendingSettleHeights: Set<String> = []   // rows whose rendered height changed mid-motion
+    private var pendingSettleHeights: Set<String> = []   // rows whose height changed while an animation blocked us
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
     private var lastKnownDistanceFromBottom: CGFloat = 0 // continuity scalar, tracked on every scroll (reference)
@@ -822,10 +822,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Apply
 
-    // Signal's land gate applies to LOADS too (their loads build async and land only when scrolling
-    // settles): an ids-change landing mid-drag/mid-fling is the worst moment — the continuity
-    // compensation runs against a moving list and any miss fights the finger. Deferred lands coalesce
-    // (.lastOnly) and flush from settleFlush. Jumps (scrollTarget) are exempt: they TAKE OVER the scroll.
+    // The box a load waits in when it cannot land yet. It holds ONE set of ids — the latest — so a burst
+    // of Firestore emissions collapses into a single land instead of a queue of stale ones.
+    //
+    // (This comment used to claim Signal's loads "land only when scrolling settles". That was wrong, and
+    // reading their source is what corrected it: `canLandLoad` never mentions scrolling. The belief cost
+    // us the settle-funnel architecture that produced the jump.)
     private var pendingIdsApply: [String]?
 
     /// Signal's retry loop, same reasoning for the tight interval: `asyncAfter` takes longer than `async`
@@ -880,11 +882,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 return
             }
             // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick).
-            // SIGNAL'S "LAND WHEN SAFE" GATE (CVLoadCoordinator.canLandLoad): NOTHING lands while the list
-            // is in motion — no reconfigure, no re-measure, no relayout during dragging/deceleration or the
-            // send animation. Landing an update mid-motion positions cells from two layout generations =
-            // the overlapping-bubbles-while-scrolling bug. The request is coalesced (.lastOnly — the ids
-            // are unchanged, only content) and flushed once the list settles (scroll end / animation end).
+            // Signal's land gate, which blocks on animations and NOT on scrolling: a read tick arriving
+            // while you scroll reconfigures its row there and then. Any height change it causes goes
+            // through the layout's contentOffsetAdjustment, so it cannot move the reader. Coalesced
+            // (.lastOnly, since the ids are unchanged) and flushed when the animation ends.
             guard canLandLoad else {
                 needsRefreshOnSettle = true
                 return
