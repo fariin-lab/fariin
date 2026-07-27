@@ -215,7 +215,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     #endif
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
-    private var needsBottomInsetOnSettle = false   // an inset update was refused mid-scroll; owe it at rest
+    // (needsBottomInsetOnSettle is gone: the inset is never deferred, so nothing is ever owed at settle.)
     private var sizerRefused = Set<String>()
     private var pendingSettleHeights: Set<String> = []   // rows whose height changed while an animation blocked us
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
@@ -749,12 +749,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // prevent (audit S3). The pending flags survive; the animation's completion re-settles.
             guard canLandLoad else { return }
         }
-        // Pay back an inset update that was refused while the finger was down, BEFORE anything below
-        // reads distances that depend on it.
-        if needsBottomInsetOnSettle {
-            needsBottomInsetOnSettle = false
-            updateBottomInset()
-        }
+        // NOTE: there is deliberately no inset payback here any more. `updateBottomInset` never defers —
+        // it writes the inset immediately and stands down only on the OFFSET compensation. Paying an
+        // inset update back at settle meant an inset write plus an offset write in the same runloop as
+        // the finger lifting, which is precisely the split-second jump at the end of a scroll.
         guard needsRefreshOnSettle else { return }
         needsRefreshOnSettle = false
         let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
@@ -1838,15 +1836,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // contentInset.bottom and then setContentOffset - during a fling that is a one-frame content
         // shift. It is reachable mid-scroll because scrollViewDidScroll writes the isAtBottom binding,
         // which re-runs the SwiftUI body, which calls setComposerBarHeight -> here.
-        guard !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating else {
-            // MUST be re-run at settle, not merely dropped. needsRefreshOnSettle only drives a row
-            // refresh - it never calls back here - so deferring through it alone meant the inset update
-            // was DISCARDED and the stale value survived until some unrelated layout pass happened to
-            // recompute it. That is the "large gap that fixes itself after a few seconds".
-            needsBottomInsetOnSettle = true
-            needsRefreshOnSettle = true
-            return
-        }
+        // NOTHING IS DEFERRED HERE ANY MORE. This early-return used to park the whole update and
+        // `settleFlush` paid it back the instant the finger lifted — an inset write AND an offset write
+        // in one runloop at exactly the moment the user let go. That is the split-second jump at the end
+        // of every scroll, and it fired constantly because `scrollViewDidScroll` writes the isAtBottom
+        // binding → SwiftUI body → setComposerBarHeight → here.
+        //
+        // Signal's rule 3, quoted in this function's own header, is "while the user is dragging, touch
+        // NOTHING" — and what it protects is the OFFSET, not the inset. Writing `contentInset.bottom`
+        // mid-drag does not move a scroll view that is somewhere in the middle of its content; it only
+        // changes the scrollable range, which is what UIKit is already handling for the finger. It is the
+        // stash/restore and the follow-down pin below that must never run under a moving list.
+        //
+        // So the inset lands immediately, always, and the offset compensation is what stands down.
+        let listIsMoving = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
@@ -1863,7 +1866,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // before the pad has been learned (first keyboard open of the screen).
         let barH: CGFloat = {
             guard kbCloseLink != nil else { return composerBarH }
+            // The pad reconstructs the full resting height from the LIVE one, so it already tracks a
+            // composer whose contents changed.
             if composerSafeAreaPad > 0 { return composerBarH + composerSafeAreaPad }
+            // Fallback, before the pad has been learned. It used to clamp UP to a remembered absolute
+            // height, and that is the reply-gap: send a reply, the reply bar is removed so the composer
+            // is genuinely SHORTER, the keyboard starts closing, and this held the OLD taller value for
+            // the whole close — reserving space for a bar that no longer exists. That is the gap. It
+            // "fixed itself after a second" because the close drive ended and the real value finally
+            // landed, which is the snap.
+            //
+            // Clamping up is only ever right when the live value is short because the SAFE AREA is
+            // mid-flight, never when the composer itself lost a row. A drop larger than a safe-area
+            // inset can only be content, so trust the live value there.
+            let drop = restingComposerBarH - composerBarH
+            let safeAreaBottom = view.safeAreaInsets.bottom
+            if drop > safeAreaBottom + 8 { return composerBarH }
             return max(composerBarH, restingComposerBarH)
         }()
         let newBottom: CGFloat = barH + 12
@@ -1875,14 +1893,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // animation (the keyboard fold owns the offset then); every other case keeps the stash/restore that
         // preserves a history reader's position.
         let followDown = newBottom < collectionView.contentInset.bottom
-            && !keyboardAnimating && didReveal && computeAtBottom()
+            && !keyboardAnimating && didReveal && computeAtBottom() && !listIsMoving
         UIView.performWithoutAnimation {
             let stash = collectionView.contentOffset
             collectionView.contentInset.bottom = newBottom
+            if listIsMoving {
+                // The finger (or the fling) owns the offset. UIKit is already compensating for the range
+                // change; a write from us here would fight it, and a write from us LATER — which is what
+                // the old defer did — lands as a visible jump the moment the user lets go. Do neither.
+                return
+            }
             if followDown {
                 pinBottom()   // move to the new bottom → fills the vacated reply-bar space
-            } else {
-                collectionView.setContentOffset(stash, animated: false)   // never moves content: stash + restore
+            } else if collectionView.contentOffset != stash {
+                // Only correct when UIKit actually moved us. The unconditional write was a second offset
+                // write per call for no reason, and at the end of a drag it kills residual velocity.
+                collectionView.setContentOffset(stash, animated: false)
             }
         }
     }
@@ -2077,9 +2103,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         case .ended, .cancelled, .failed:
             layout.frozen = false   // swipe over → layout may respond again
-            let stash = collectionView.contentOffset   // re-enabling scroll also re-clamps → hold position
-            collectionView.isScrollEnabled = true      // swipe over → vertical scrolling allowed again
-            collectionView.setContentOffset(stash, animated: false)
+            // REMOVED: `isScrollEnabled = true` plus a stash/restore around it. `isScrollEnabled` is never
+            // set to false anywhere — `.began` disables the scroll view's PAN RECOGNISER instead — so that
+            // write was assigning true to something already true. It therefore never triggered the
+            // re-clamp its own comment was compensating for, which left the compensation itself as a bare
+            // `setContentOffset` firing at the end of every reply swipe: an offset write at the exact
+            // moment a finger lifts, which is the jump the user feels. The recogniser is restored where it
+            // has to be, in resetSwipe, the single choke point every teardown path runs through.
             let fire = swipeTriggered ? swipingId : nil
             resetSwipe(animated: true, velocity: g.velocity(in: collectionView).x)
             if let id = fire { onSwipeReply(id) }
