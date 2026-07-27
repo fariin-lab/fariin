@@ -1,9 +1,10 @@
 import SwiftUI
 import UIKit
+import FirebaseFirestore
 
-// Settings subviews. Real where the backend exists (Blocked Users, push toggle);
-// honest placeholders where it doesn't yet (Devices sessions, Phone Number) — no
-// fabricated data, built so they can be wired up when the infra lands.
+// Settings subviews. Real where the backend exists (Blocked Users, push toggle, Devices);
+// honest placeholders where it doesn't yet (Phone Number) — no fabricated data, built so
+// they can be wired up when the infra lands.
 
 private var appVersion: String {
     (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
@@ -106,7 +107,9 @@ struct NotificationsSettingsView: View {
 // lock-screen push (server reads users.notifSound) and the in-app banner tone.
 struct NotificationSoundView: View {
     @AppStorage("notif.sound") private var soundName = "rebound"
-    private let sounds = ["default", "rebound", "chime", "pop", "pulse", "marimba"]
+    // Our own tones only. "default" was Apple's Note (iMessage's sound) and is gone; a stored
+    // "default" from before now resolves to Rebound wherever it is read.
+    private let sounds = ["rebound", "chime", "pop", "pulse", "marimba"]
 
     var body: some View {
         List {
@@ -118,9 +121,10 @@ struct NotificationSoundView: View {
                         Task { try? await ProfileStore.shared.setNotifPrefs(sound: s) }
                     } label: {
                         HStack {
-                            Text(s == "default" ? "Default" : s.capitalized).foregroundStyle(.primary)
+                            Text(s == "rebound" ? "Rebound (default)" : s.capitalized)
+                                .foregroundStyle(.primary)
                             Spacer()
-                            if soundName == s {
+                            if soundName == s || (soundName == "default" && s == "rebound") {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
                                     .foregroundStyle(Color.accentColor)
                             }
@@ -137,61 +141,154 @@ struct NotificationSoundView: View {
     }
 }
 
-// MARK: - Devices (restored 2026-07-24 on user request)
+// MARK: - Devices
+//
+// Rewritten 2026-07-27. It used to be a "Linked Devices" page whose hero was a Link a New
+// Device button for a desktop app that does not exist — the user's word for it was "ghost".
+// It is now what Discord's Devices screen is: every phone signed in to this account, which
+// one you are holding, and a way to throw the others off. Every field on it is real.
 
 struct DevicesView: View {
-    @State private var showAddInfo = false
+    @State private var sessions: [DeviceSession] = []
+    @State private var listener: ListenerRegistration?
+    @State private var loaded = false
+    @State private var confirmSignOutAll = false
+    @State private var pendingSignOut: DeviceSession?
+    @State private var error: String?
+    @State private var working = false
+
+    private var others: [DeviceSession] { sessions.filter { !$0.isThisDevice } }
 
     var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 26) {
-                    // Hero card: illustration + caption + Link button.
-                    VStack(spacing: 16) {
-                        Image(systemName: "laptopcomputer.and.iphone")
-                            .font(.system(size: 60))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.blue)
-                            .padding(.top, 10)
-                        (Text("Use Kulan on desktop or iPad. ").foregroundStyle(.secondary)
-                            + Text("Learn More").foregroundStyle(.blue))
-                            .font(.subheadline).multilineTextAlignment(.center)
-                        Button { showAddInfo = true } label: {
-                            Text("Link a New Device").font(.headline).foregroundStyle(.white)
-                                .frame(maxWidth: .infinity).frame(height: 50)
-                                .background(.blue, in: Capsule())
-                        }
-                    }
-                    .padding(20)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                    // Linked devices list (none — single-device today).
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Linked Devices").font(.title3.weight(.bold)).padding(.horizontal, 4)
-                        Text("No linked devices")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity).frame(height: 84)
-                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    }
-
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "lock.fill").font(.caption)
-                        Text("Messages and chat info are protected by end-to-end encryption on all devices")
-                    }
-                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+        List {
+            Section {
+                if let this = sessions.first(where: { $0.isThisDevice }) {
+                    row(this)
+                } else if loaded {
+                    // Registration failed or has not landed yet: say so rather than draw a
+                    // device card out of thin air.
+                    Text("This device is not registered yet. Check your connection.")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                .padding(16)
+            } header: {
+                Text("This device")
+            }
+
+            Section {
+                if others.isEmpty {
+                    Text(loaded ? "No other devices are signed in." : "Loading…")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(others) { s in
+                        row(s)
+                            .swipeActions(edge: .trailing) {
+                                Button("Sign out", role: .destructive) { pendingSignOut = s }
+                            }
+                    }
+                }
+            } header: {
+                Text("Other devices")
+            } footer: {
+                Text("If you do not recognise a device, sign it out. A device that is switched off is signed out the next time it opens, but it stops receiving messages and calls straight away.")
+            }
+
+            if !others.isEmpty {
+                Section {
+                    Button("Sign out all other devices", role: .destructive) {
+                        confirmSignOutAll = true
+                    }
+                    .disabled(working)
+                }
+            }
+
+            if let error {
+                Section { Text(error).font(.footnote).foregroundStyle(.red) }
+            }
+
+            Section {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "lock.fill").font(.caption)
+                    Text("Messages are end-to-end encrypted and stored on each device. Signing a device out stops it receiving anything new, but the messages already on it stay there.")
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+                .listRowBackground(Color.clear)
             }
         }
-        .navigationTitle("Linked Devices")
+        .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
-        // Honest: there's no companion app to link yet, so the button explains instead of faking.
-        .alert("Coming soon", isPresented: $showAddInfo) {
-            Button("OK", role: .cancel) {}
+        .onAppear {
+            guard listener == nil else { return }
+            listener = DeviceRegistry.shared.listen { list in
+                sessions = list
+                loaded = true
+            }
+            if listener == nil { loaded = true }   // signed out; nothing to watch
+        }
+        .onDisappear { listener?.remove(); listener = nil }
+        .confirmationDialog("Sign out this device?",
+                            isPresented: Binding(get: { pendingSignOut != nil },
+                                                 set: { if !$0 { pendingSignOut = nil } }),
+                            titleVisibility: .visible) {
+            Button("Sign out", role: .destructive) {
+                if let s = pendingSignOut { run { try await DeviceRegistry.shared.signOut(deviceId: s.id) } }
+                pendingSignOut = nil
+            }
+            Button("Cancel", role: .cancel) { pendingSignOut = nil }
         } message: {
-            Text("Kulan on desktop and iPad is coming soon. Right now each account runs on a single device.")
+            Text("It will stop receiving messages and calls, and will be signed out the next time it is opened.")
+        }
+        .confirmationDialog("Sign out all other devices?", isPresented: $confirmSignOutAll,
+                            titleVisibility: .visible) {
+            Button("Sign out all", role: .destructive) {
+                let list = others
+                run { try await DeviceRegistry.shared.signOutAllOthers(list) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This device stays signed in.")
+        }
+    }
+
+    private func row(_ s: DeviceSession) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: "iphone")
+                .font(.system(size: 26))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 34)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(s.model).font(.body.weight(.semibold))
+                    if s.isThisDevice {
+                        Text("This device")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+                Text([s.os, s.appVersion.isEmpty ? nil : "Kulan \(s.appVersion)"]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(subtitle(s)).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// "Active now" for this phone (it is, you are looking at it), a relative time for the rest.
+    private func subtitle(_ s: DeviceSession) -> String {
+        if s.isThisDevice { return "Active now" }
+        let last = s.lastSeenAt.formatted(.relative(presentation: .named))
+        guard let created = s.createdAt else { return "Last active \(last)" }
+        return "Last active \(last) · signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
+    }
+
+    private func run(_ op: @escaping () async throws -> Void) {
+        working = true; error = nil
+        Task {
+            do { try await op() }
+            catch { let m = error.localizedDescription; await MainActor.run { self.error = m } }
+            await MainActor.run { working = false }
         }
     }
 }

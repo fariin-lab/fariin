@@ -54,7 +54,7 @@ struct SettingsView: View {
                         SettingsRowLabel("Account", "ic_account")
                     }
                     NavigationLink { DevicesView() } label: {
-                        SettingsRowLabel("Linked Devices", "ic_linked_devices")
+                        SettingsRowLabel("Devices", "ic_linked_devices")
                     }
                 }
 
@@ -281,6 +281,9 @@ struct AccountSettingsView: View {
             Button("Sign Out", role: .destructive) {
                 Task {
                     await Push.unregister()   // AWAITED before signOut (needs auth): stop message + CallKit ring pushes to this phone
+                    // Same reason it is awaited: dropping our own row in Settings › Devices needs
+                    // auth, and leaving it behind would show this phone as still signed in.
+                    await DeviceRegistry.shared.removeThisDevice()
                     try? Auth.auth().signOut()
                     SessionWipe.wipeAccountData()   // this account's on-device state must not leak into the next sign-up
                     dismiss(); onSignOut()

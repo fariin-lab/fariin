@@ -85,6 +85,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         guard let token = fcmToken, let uid = Auth.auth().currentUser?.uid else { return }
         Firestore.firestore().collection("users").document(uid)
             .setData(["fcmTokens": FieldValue.arrayUnion([token])], merge: true)
+        // Also on this device's own row, so signing it out from another phone can strip
+        // exactly this token and leave the other devices' tokens alone.
+        Task { @MainActor in DeviceRegistry.shared.recordFCMToken(token) }
     }
 
     // Foreground banner — but NOT for the chat you're already looking at.
@@ -158,6 +161,8 @@ enum Push {
         guard let token = latestVoipToken, let uid = Auth.auth().currentUser?.uid else { return }
         Firestore.firestore().collection("users").document(uid)
             .setData(["voipTokens": FieldValue.arrayUnion([token])], merge: true)
+        // And on this device's row, so a remote sign-out can pull this device's ring token.
+        Task { @MainActor in DeviceRegistry.shared.recordVoipToken(token) }
     }
 
     /// Ask for permission, then register with APNs (FCM token follows via the delegate).
