@@ -828,15 +828,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // (.lastOnly) and flush from settleFlush. Jumps (scrollTarget) are exempt: they TAKE OVER the scroll.
     private var pendingIdsApply: [String]?
 
-    /// Signal's retry loop, same 1ms interval and same reasoning: `asyncAfter` takes longer than `async`
+    /// Signal's retry loop, same reasoning for the tight interval: `asyncAfter` takes longer than `async`
     /// under load, which is what you want here — it backs off exactly when the CPU is busy. The load lands
-    /// the instant the blocking animation ends, without waiting for the user to stop scrolling.
+    /// the instant the block clears, without waiting for the user to stop scrolling.
+    ///
+    /// One refinement over Signal's flat 1ms. The only thing we ever wait on a FINGER for is a prepend,
+    /// and a finger can rest on the glass for seconds — at 1ms that is thousands of main-queue hops for a
+    /// condition that cannot change more than once per frame. Blocked by an animation: 1ms, as Signal.
+    /// Blocked by a finger: one frame.
     private func scheduleLandRetry() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { [weak self] in
+        let interval = canLandLoad ? 1.0 / 60.0 : 0.001
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval) { [weak self] in
             guard let self, let pending = self.pendingIdsApply else { return }
-            guard self.canLandLoad else { self.scheduleLandRetry(); return }
             self.pendingIdsApply = nil
-            self.apply(rowIds: pending, scrollTarget: nil)
+            self.apply(rowIds: pending, scrollTarget: nil)   // re-parks itself if it still cannot land
         }
     }
 
