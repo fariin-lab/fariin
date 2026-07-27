@@ -109,6 +109,12 @@ final class CallService: NSObject {
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
     var remoteMuted = false         // is THEIR mic muted (from the `muted` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
+    /// Whatever is on the BIG screen right now — which is what the floating PiP window must show when you
+    /// leave the app. The PiP was hard-wired to the remote feed, so after tapping the tile to swap
+    /// yourself fullscreen, leaving the app put the OTHER person in the floating window: the big screen
+    /// showed one feed and the PiP the other. `isLocalExpanded` is the same state the layout uses, so the
+    /// two can never disagree again.
+    var bigScreenTrack: RTCVideoTrack? { isLocalExpanded ? localVideoTrack : remoteVideoTrack }
     private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
     var usingFrontCamera = true
     // Video layout state — owned HERE so minimize/restore keeps the user's big/small choice and PiP

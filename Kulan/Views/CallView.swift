@@ -76,7 +76,8 @@ struct CallView: View {
             ZStack {
                 background(geo)
                 if call.isVideo {
-                    CallPiPHost(track: call.remoteVideoTrack).allowsHitTesting(false)   // native PiP source
+                    // The BIG-SCREEN feed, not always the remote one — see CallService.bigScreenTrack.
+                    CallPiPHost(track: call.bigScreenTrack).allowsHitTesting(false)   // native PiP source
                     pipLayer(geo)
                 }
 
@@ -442,7 +443,7 @@ struct CallContainer<Content: View>: View {
                     // avatar. Apple wants a real on-screen view here, and the bar is exactly that.
                     .overlay {
                         if call.isVideo {
-                            CallView.CallPiPHost(track: call.remoteVideoTrack)
+                            CallView.CallPiPHost(track: call.bigScreenTrack)
                                 .allowsHitTesting(false)
                         }
                     }
