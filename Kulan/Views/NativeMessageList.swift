@@ -160,7 +160,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var stickBottom = false           // keep the bottom pinned across keyboard / composer resizes
     private var sendAnimating = false         // an animated send/receive glide is in flight — do NOT snap over it
     private var needsRefreshOnSettle = false  // a content refresh arrived mid-motion → coalesced, lands on settle
-    private var needsPinOnSettle = false      // a bottom-append landed mid-scroll → pin at settle, never mid-drag
+    // (needsPinOnSettle is gone: a pin owed to a settle is a yank that arrives just after the user
+    // stopped, which is the worst moment. Signal drops the auto-scroll instead — see apply().)
     private var needsReconcileOnSettle = false // a reconcile deferred mid-motion whose heights were pre-adopted
     var initialScrollId: String?              // first-unread rowId → the FIRST open lands here (reference)
 
@@ -329,7 +330,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.addGestureRecognizer(doubleTapGesture)
 
         // PASSIVE long-press observer (never consumes touches, recognizes alongside everything): marks
-        // the context-menu lift window so isInMotion defers content lands during it — a reconfigure
+        // the context-menu lift window so canLandLoad blocks content lands during it — a reconfigure
         // landing mid-lift replaced the menu's source view (flickering / vanishing long-press menu).
         holdPress = UILongPressGestureRecognizer(target: self, action: #selector(handleHoldWindow(_:)))
         holdPress.minimumPressDuration = 0.25
@@ -550,7 +551,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Land-when-safe: a rendered-height signal that arrives mid-scroll/animation is coalesced and
         // handled on settle — reconciling now would invalidate the layout under a live scroll (overlap).
         // Remember WHICH row changed so the settle flush re-measures just it (not every visible cell).
-        if isInMotion { needsRefreshOnSettle = true; pendingSettleHeights.insert(id); return }
+        guard canLandLoad else { needsRefreshOnSettle = true; pendingSettleHeights.insert(id); return }
         // The rendered report is only a SIGNAL that something changed — the SIZER is the single height
         // authority. (Adopting the rendered value here while the same-ids path adopts the sizer value
         // made two authorities fight: any row where they disagreed >2pt reconciled back and forth
@@ -563,55 +564,139 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // cannot see). Record it once so the loop above never re-arms for this row again.
         if abs(sized - hh) > 2 { sizerRefused.insert(id) }
         guard let cached = heights[id], abs(cached - sized) > 2 else { return }
+        // Capture the frame map BEFORE adopting the new height: that map is what makes the offset
+        // correction ride the same invalidation as the frame change instead of trailing it by a frame.
+        let beforeY = frameMinY(for: currentIds)
         heights[id] = sized
-        DispatchQueue.main.async { [weak self] in self?.reconcile() }
+        DispatchQueue.main.async { [weak self] in self?.reconcile(beforeY: beforeY) }
     }
 
-    // Re-lay-out after a late height change, keeping the viewport stable (the late-media re-layout).
-    private func reconcile() {
+    // Re-lay-out after a late height change, keeping the viewport stable.
+    //
+    // `beforeY` is the frame map captured BEFORE the caller mutated `heights`. With it, the offset
+    // correction rides the same invalidation as the frame change — Signal's
+    // `applyContentOffsetAdjustmentIfNecessary`, which sets `contentOffsetAdjustment` on a
+    // `UICollectionViewLayoutInvalidationContext`. Without it we fall back to the old capture/restore,
+    // which fixes the offset a frame LATE and can only run at rest.
+    //
+    // This matters far more now that height changes can land mid-scroll: `setContentOffset` during a
+    // fling KILLS the deceleration dead, while an invalidation adjustment does not disturb it at all.
+    private func reconcile(beforeY: [String: CGFloat]? = nil) {
         guard collectionView.bounds.height > 0 else { return }
-        // Never invalidate the layout under a live scroll (this runs a runloop after its trigger, so the
-        // user may have STARTED dragging since the motion check) — defer to settle like everything else.
-        // needsReconcileOnSettle specifically: the heights cache may ALREADY hold the new value, so the
-        // settle signature/height diff can come up empty — without this flag the relayout was dropped and
-        // the cache and on-screen frames diverged permanently (overlap + a wrong continuity delta later).
-        if isInMotion { needsRefreshOnSettle = true; needsReconcileOnSettle = true; return }
-        // EXACT bottom, not computeAtBottom()'s 44pt tolerance. This is the small jump when scrolling
-        // fast up and down: a fast flick settles anywhere from 5 to 40pt short of the bottom (bounce
-        // settle), computeAtBottom() called that "at the bottom", and pinBottom() then TELEPORTED the
-        // reader the remaining distance with a non-animated setContentOffset - once per stop, and a fast
-        // up-down scroll produces several stops a second. 44pt is the right tolerance for deciding
-        // INTENT ("should a new message pull me down?"), and completely wrong for deciding whether to
-        // move someone who has already stopped. Signal's equivalent at-bottom test is 5pt.
+        // Only the four things Signal actually blocks on (see canLandLoad). needsReconcileOnSettle
+        // specifically: the heights cache may ALREADY hold the new value, so the settle's signature/height
+        // diff can come up empty — without this flag the relayout was dropped and the cache and the
+        // on-screen frames diverged permanently (overlap, and a wrong continuity delta later).
+        guard canLandLoad else { needsRefreshOnSettle = true; needsReconcileOnSettle = true; return }
+        // EXACT bottom, not computeAtBottom()'s 44pt tolerance. 44pt is right for deciding INTENT
+        // ("should a new message pull me down?") and completely wrong for deciding whether to move
+        // someone who has already stopped: a fast flick settles 5 to 40pt short of the bottom, which
+        // computeAtBottom() called "at the bottom", and the pin then teleported the reader the rest of
+        // the way. Signal's at-bottom test is 5pt.
         let wasBottom = safeDistanceFromBottom <= 5
-        let anchor = captureTopAnchor()
         layout.generation += 1
+
+        // At the bottom AND at rest: re-pin, which is what the reader expects when a row below them grows.
+        // At the bottom but still moving: fall through to the adjustment path. pinBottom() is a
+        // setContentOffset, and one of those during a fling stops it dead under the user's hand — a bug
+        // this code could not previously have, because height changes were refused during motion.
+        if wasBottom, !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating {
+            layout.invalidateLayout()
+            collectionView.layoutIfNeeded()
+            pinBottom()
+            return
+        }
+
+        if let beforeY {
+            let afterY = frameMinY(for: currentIds)
+            // Signal's anchor preference: the rows the reader can actually see, top-most first when
+            // holding position from the top. A row that vanished in the meantime falls through to the
+            // next candidate rather than giving up.
+            let visible = viewportIndexPaths().compactMap { dataSource.itemIdentifier(for: $0) }
+            var delta: CGFloat = 0
+            var anchorId: String?
+            for id in visible + currentIds {
+                if let b = beforeY[id], let a = afterY[id] { delta = a - b; anchorId = id; break }
+            }
+            // Where the anchor sits on screen right now, measured BEFORE the invalidation so it can be
+            // checked against afterwards.
+            let anchorTop: CGFloat? = anchorId.flatMap { id in
+                guard let ip = dataSource.indexPath(for: id),
+                      let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
+                return attr.frame.minY - collectionView.contentOffset.y
+            }
+            let ctx = UICollectionViewLayoutInvalidationContext()
+            ctx.contentOffsetAdjustment = CGPoint(x: 0, y: delta)
+            layout.invalidateLayout(with: ctx)
+            collectionView.layoutIfNeeded()
+            // Last-resort net, and never while a finger or a fling owns the offset: those re-derive the
+            // offset from their own baseline every tick and would visibly fight a correction.
+            if delta != 0, !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating {
+                verifyAnchor(id: anchorId, expectedTop: anchorTop)
+            }
+            return
+        }
+
+        let anchor = captureTopAnchor()
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
-        if wasBottom { pinBottom() }
-        else if let anchor { restore(anchor) }
+        if let anchor, !collectionView.isDragging, !collectionView.isTracking, !collectionView.isDecelerating {
+            restore(anchor)
+        }
+    }
+
+    // Cheap assertion that the anchor row did not move. Only called at rest.
+    private func verifyAnchor(id: String?, expectedTop: CGFloat?) {
+        guard let id, let expectedTop,
+              let ip = dataSource.indexPath(for: id),
+              let attr = layout.layoutAttributesForItem(at: ip) else { return }
+        let want = min(max(minContentOffsetY, attr.frame.minY - expectedTop), maxContentOffsetY)
+        if abs(collectionView.contentOffset.y - want) > 2 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+            lastStableOffset = want
+            lastKnownDistanceFromBottom = safeDistanceFromBottom
+        }
     }
 
     // MARK: - Land-when-safe (the land-when-safe gate)
 
-    // The list is "in motion" while the user scrolls or an insert animation runs — content updates must
-    // never land during this (they invalidate the layout mid-scroll → overlap/jumps). The system's
-    // full-page screenshot capture also counts: it scrolls the list PROGRAMMATICALLY (no drag flags), so
-    // without the freeze window every gate would be open while the capture flies through the list —
-    // landings mid-capture mixed two layout generations = the overlapping-elements-on-screenshot bug.
-    private var isInMotion: Bool {
-        collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-            || sendAnimating || swipingCell != nil || keyboardAnimating || programmaticScrollAnimating
-            || selectionAnimationState == .animating || Date() < captureFreezeUntil
-            || Date() < interactionHoldUntil
-        // interactionHoldUntil: a finger is (or just was) held down long on a row — the context-menu
-        // lift window. A reconfigure landing mid-lift replaced the menu's source view under it
-        // (flicker / dismissed menu). Passive hold recognizer below; lands defer to settle like
-        // every other motion.
-        // keyboardAnimating: the reference's canLandLoad blocks lands during the keyboard animation —
-        // a reconfigure landing mid-keyboard fights the animated inset track (visible fight/jump).
-        // programmaticScrollAnimating: same rule for OUR animated scrolls (jumps, pin-to-bottom glides).
+    // SIGNAL'S ACTUAL GATE (CVLoadCoordinator.loadLandWhenSafe → canLandLoad, read from their source
+    // 2026-07-27). Note what is NOT in it: `isDragging`, `isTracking`, `isDecelerating`. Signal lands
+    // loads WHILE your finger is down and keeps the reader still with the layout's contentOffsetAdjustment
+    // instead of refusing the work.
+    //
+    // Ours used to include all three, so every update was held back and paid out at the next settle —
+    // and a fast up-down scroll settles several times a second, each settle dumping a queued load plus a
+    // batch of reconfigures plus a reconcile plus a pin in one frame. That was not a bug on top of the
+    // architecture, it WAS the architecture, and it is the "conversation jumps after I stop scrolling"
+    // report. Deferral is now reserved for the four things Signal actually defers for.
+    private var canLandLoad: Bool {
+        // Keyboard mid-animation: a land fights the animated inset track (Signal: lastKeyboardAnimationDate,
+        // with the same exception for the selection animation that is about to start).
+        if keyboardAnimating, selectionAnimationState != .willAnimate { return false }
+        // Signal: selectionAnimationState == .animating.
+        if selectionAnimationState == .animating { return false }
+        // Signal: collectionViewActiveContextMenuInteraction.contextMenuVisible. A reconfigure mid-lift
+        // replaces the menu's source view underneath it.
+        if Date() < interactionHoldUntil { return false }
+        // Signal: !delegate.areCellsAnimating — our send glide and any programmatic animated scroll.
+        if sendAnimating || programmaticScrollAnimating { return false }
+        // A reply swipe owns its cell's transform; a relayout under it moves the thing being dragged.
+        if swipingCell != nil { return false }
+        // The system's full-page screenshot capture scrolls the list programmatically with no drag flags.
+        if Date() < captureFreezeUntil { return false }
+        return true
     }
+
+    // Signal's `viewState.isUserScrolling`: FINGER DOWN ONLY. They set it in scrollViewWillBeginDragging
+    // and clear it in scrollViewDidEndDragging; deceleration is tracked separately as
+    // isWaitingForDeceleration and deliberately does NOT count as user scrolling.
+    //
+    // It exists for ONE decision, the same one Signal uses it for: may an auto-scroll happen at all.
+    // Signal's rule is DROP, not defer — `if scrollAction.action == .none, !self.isUserScrolling` simply
+    // never decides to scroll while you are holding the list. A pin that is postponed to settle is a pin
+    // that yanks you somewhere a second after you let go, which is worse than never pinning.
+    private var isUserScrolling: Bool { collectionView.isDragging || collectionView.isTracking }
 
     // Register a programmatic animated scroll (the reference's collectionViewWillAnimate): lands defer
     // until scrollViewDidEndScrollingAnimation, with a 5s watchdog against cancelled animations.
@@ -632,32 +717,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                  // scroll (status-bar tap, jump) can land near the top and still needs paging
     }
 
-    // Flush the coalesced work once the list settles — landing ONLY what actually changed while in
-    // motion. The old flush reconfigured EVERY visible cell unconditionally, re-rendering all bubbles
-    // the instant scrolling stopped = the flash/flicker at scroll end.
+    // Flush whatever was blocked by a genuine animation (see canLandLoad) once that animation ends.
+    //
+    // This used to be the funnel for EVERYTHING deferred during a scroll, which meant a fast up-and-down
+    // scroll fired a full flush several times a second, each one landing a load plus a batch of
+    // reconfigures plus a reconcile plus a pin in a single frame. Loads no longer come through here at
+    // all — they retry on their own 1ms loop — so what is left is the tail of work that a keyboard,
+    // selection, context-menu or send animation legitimately held back.
     private func settleFlush() {
-        guard !isInMotion else { return }
-        // A load that arrived mid-motion lands FIRST, now that the list is at rest (Signal's model:
-        // loads land only when scrolling settles, so continuity math always runs against a resting
-        // list). Its own completion handles pinning/continuity; the flush work below then proceeds.
+        guard canLandLoad else { return }
+        // A load blocked by an animation may still be sitting in the box if its retry has not fired yet.
+        // Landing it here is a millisecond earlier than the retry would; harmless, and it keeps the
+        // ordering (content before reconfigures) that the work below assumes.
         if let pending = pendingIdsApply {
             pendingIdsApply = nil
             apply(rowIds: pending, scrollTarget: nil)
             // The land may have STARTED an animation (send glide) — continuing into the reconfigure
             // work below would land content mid-animation, the exact violation the gate exists to
             // prevent (audit S3). The pending flags survive; the animation's completion re-settles.
-            guard !isInMotion else { return }
+            guard canLandLoad else { return }
         }
-        // A message arrived at the bottom mid-scroll: pin now (only if the reader is still at the bottom).
-        // Pay back any inset update refused while the finger was down, BEFORE the pin decision below
+        // Pay back an inset update that was refused while the finger was down, BEFORE anything below
         // reads distances that depend on it.
         if needsBottomInsetOnSettle {
             needsBottomInsetOnSettle = false
             updateBottomInset()
-        }
-        if needsPinOnSettle {
-            needsPinOnSettle = false
-            if safeDistanceFromBottom <= 5 { pinBottom() }   // exact, not 44pt - see reconcile()
         }
         guard needsRefreshOnSettle else { return }
         needsRefreshOnSettle = false
@@ -703,6 +787,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // default (settle flush) = all visible.
         let target = (subset.map { s in s.filter(Set(visible).contains) }) ?? visible
         guard !target.isEmpty else { return }
+        // Before-map first: any of these measurements may change a height, and the correction has to be
+        // computed against the frames as they stand right now.
+        let beforeY = frameMinY(for: currentIds)
         var heightChanged = false
         if width > 0 {
             for id in target {
@@ -717,7 +804,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
         if !split.reload.isEmpty { snapshot.reloadItems(split.reload) }
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-            if heightChanged { self?.reconcile() }
+            if heightChanged { self?.reconcile(beforeY: beforeY) }
         }
     }
 
@@ -729,11 +816,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // (.lastOnly) and flush from settleFlush. Jumps (scrollTarget) are exempt: they TAKE OVER the scroll.
     private var pendingIdsApply: [String]?
 
+    /// Signal's retry loop, same 1ms interval and same reasoning: `asyncAfter` takes longer than `async`
+    /// under load, which is what you want here — it backs off exactly when the CPU is busy. The load lands
+    /// the instant the blocking animation ends, without waiting for the user to stop scrolling.
+    private func scheduleLandRetry() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { [weak self] in
+            guard let self, let pending = self.pendingIdsApply else { return }
+            guard self.canLandLoad else { self.scheduleLandRetry(); return }
+            self.pendingIdsApply = nil
+            self.apply(rowIds: pending, scrollTarget: nil)
+        }
+    }
+
     func apply(rowIds ids: [String], scrollTarget: String? = nil) {
         let width = collectionView.bounds.width
 
-        if didInitialScroll, ids != currentIds, scrollTarget == nil, isInMotion {
-            pendingIdsApply = ids   // latest wins; flushed on settle
+        // Signal's loadLandWhenSafe: a load that cannot land RIGHT NOW is retried on a tight 1ms loop
+        // until it can — it is never parked until the list settles. Their comment on the interval is
+        // deliberate: "We wait in a pretty tight loop to ensure loads land in a timely way."
+        // `pendingIdsApply` still coalesces (latest ids win) so a burst of Firestore emissions collapses
+        // into one land, but the flush no longer depends on the user stopping.
+        if didInitialScroll, ids != currentIds, scrollTarget == nil, !canLandLoad {
+            let wasWaiting = pendingIdsApply != nil
+            pendingIdsApply = ids
+            if !wasWaiting { scheduleLandRetry() }
             return
         }
         pendingIdsApply = nil       // an immediate land supersedes anything deferred (ids are the latest)
@@ -762,7 +868,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // send animation. Landing an update mid-motion positions cells from two layout generations =
             // the overlapping-bubbles-while-scrolling bug. The request is coalesced (.lastOnly — the ids
             // are unchanged, only content) and flushed once the list settles (scroll end / animation end).
-            if isInMotion {
+            guard canLandLoad else {
                 needsRefreshOnSettle = true
                 return
             }
@@ -792,6 +898,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             && Array(ids.suffix(currentIds.count)) == currentIds
         let appendedCount = ids.count - currentIds.count
         let appendedIds = isAppend ? Array(ids.suffix(max(0, appendedCount))) : []
+
+        // THE ONE PLACE WE DELIBERATELY DIVERGE FROM SIGNAL, AND WHY.
+        //
+        // Every other load now lands mid-scroll. A PREPEND does not, while a finger is literally on the
+        // glass. Inserting older messages above the viewport shifts all content down by the height of
+        // what was inserted, and the only thing holding the reader still is the layout's
+        // contentOffsetAdjustment. Signal owns its own performBatchUpdates and applies that adjustment in
+        // willPerformBatchUpdates; we go through a diffable data source, so our adjustment rides
+        // targetContentOffset(forProposedContentOffset:) instead. At rest those are equivalent. Under an
+        // ACTIVE PAN they may not be: UIScrollView re-derives contentOffset from the pan's own baseline
+        // every tick, and if it does not rebase after an external shift it will undo the adjustment and
+        // throw the reader a full page.
+        //
+        // I could not prove which way UIKit behaves here without a device, and the instruction was
+        // stability over speed. So a prepend waits for the finger to lift — milliseconds, via the same
+        // 1ms retry loop, not until the list settles — and paging fires three screens from the top, so in
+        // practice nobody is looking at the join. If a device test shows the adjustment survives a live
+        // pan, delete this block and the divergence is gone.
+        if isPrepend, isUserScrolling, scrollTarget == nil {
+            let wasWaiting = pendingIdsApply != nil
+            pendingIdsApply = ids
+            if !wasWaiting { scheduleLandRetry() }
+            return
+        }
 
         // SCROLL-CONTINUITY TOKEN (the reference model): before the update, snapshot every current row's
         // frame-minY (frames are exactly y-accumulated heights) plus the visible ids. After the new
@@ -946,26 +1076,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                     self.collectionView.scrollToItem(at: ip, at: .centeredVertically, animated: false)
                     self.lastStableOffset = self.collectionView.contentOffset.y
                 } else if wasAtBottom && !isPrepend {
-                    // Stay pinned — but NEVER yank while the user is actively scrolling (a message arriving
-                    // while the finger is down within the bottom zone used to snap the list = the random
-                    // mid-scroll jump). Defer the pin to settle; if they've scrolled away by then, no pin.
-                    let userScrolling = self.collectionView.isDragging || self.collectionView.isTracking
-                        || self.collectionView.isDecelerating
-                    if userScrolling { self.needsPinOnSettle = true }
-                    else { self.pinBottom() }
+                    // SIGNAL'S RULE, AND IT IS *DROP*, NOT DEFER:
+                    //
+                    //     if scrollAction.action == .none, !self.isUserScrolling { ...decide to scroll... }
+                    //
+                    // While your finger is down the auto-scroll decision is never made at all. It is not
+                    // queued for when you let go. We used to set needsPinOnSettle here, and that is a yank
+                    // arriving a moment AFTER the user stopped — the worst possible timing, because by then
+                    // they have committed to a reading position. The content still lands; only the scroll
+                    // is skipped, and continuity keeps the reader exactly where they are.
+                    //
+                    // Deceleration is deliberately not part of isUserScrolling (Signal tracks it separately):
+                    // a fling that is still coasting toward the bottom should absolutely end up pinned.
+                    if !self.isUserScrolling { self.pinBottom() }
                     if let target = scrollTarget, target == "BOTTOM" { self.pinBottom(animated: true) }
                 } else if let target = scrollTarget {
                     self.scrollTo(id: target)
-                } else if !wasAtBottom, !continuityAnchors.isEmpty, !self.collectionView.isTracking {
+                } else if !wasAtBottom, !continuityAnchors.isEmpty,
+                          !self.collectionView.isTracking, !self.collectionView.isDragging,
+                          !self.collectionView.isDecelerating {
                     // ENFORCE the continuity invariant: the reader's top row must sit exactly where it
                     // sat before the land. The atomic contentOffsetAdjustment above is the primary
                     // mechanism; this catches ANY case it missed (dropped adjustment on a prepend →
                     // every page-in of history knocked the reader a full page toward the newest =
                     // "the conversation scrolls back while I read"; a window-trim deleting the anchor;
                     // any future mechanism failure). First surviving anchor wins; correction is exact
-                    // and non-animated, in the same runloop as the land. NOT while the finger is down:
-                    // the live pan re-derives the offset from its own baseline every tick and would
-                    // overwrite the correction — the two would visibly fight. (Deceleration is fine.)
+                    // and non-animated, in the same runloop as the land.
+                    //
+                    // AT REST ONLY, and `isDecelerating` is now part of that. It used to say deceleration
+                    // was fine, which was true only because loads could not land during deceleration at
+                    // all — the old motion gate refused them. Now that they land mid-scroll, a
+                    // setContentOffset here would stop a fling dead under the user's hand. The layout's
+                    // adjustment is the mechanism during motion; this is only the net at rest.
                     self.collectionView.layoutIfNeeded()
                     for a in continuityAnchors {
                         guard let ip = self.dataSource.indexPath(for: a.id),
@@ -1000,9 +1142,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private func reflowAppended(_ ids: [String]) {
         // Dispatched one runloop after apply — squarely inside the send glide (audit M10): a reconfigure
-        // + heights mutation mid-animation renders new-height content in old frames. Defer to settle;
-        // pendingSettleHeights re-measures exactly these rows there.
-        if isInMotion {
+        // + heights mutation mid-animation renders new-height content in old frames. Defer;
+        // pendingSettleHeights re-measures exactly these rows when the glide ends.
+        guard canLandLoad else {
             ids.forEach { pendingSettleHeights.insert($0) }
             needsRefreshOnSettle = true
             return
@@ -1492,7 +1634,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // the inset, and if the keyboard session STARTED at the bottom, end it pinned at the bottom.
     // ONE owned close animation (the keyboard's exact duration + curve): pins to the FINAL resting
     // offset in a single transaction. keyboardAnimating gates the per-pass pins (viewDidLayoutSubviews)
-    // and the land gate (isInMotion) for the whole ride; the completion settles exactly and flushes.
+    // and the land gate (canLandLoad) for the whole ride; the completion settles exactly and flushes.
     @objc private func keyboardWillHide(_ note: Notification) {
         guard shouldAnimateKeyboardChanges, didInitialScroll, !isDisappearing else { return }
         // Never fight an interactive pop (its own rule set) or an active user drag.
@@ -1827,7 +1969,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         case .began:
             interactionHoldUntil = .distantFuture
             // Capture the resting position at press-start. A menu long-press has ZERO scroll intent, but the
-            // hold folds the whole press into isInMotion, so the post-open settle burst (late height reports,
+            // hold closes canLandLoad for the whole press, so the post-open settle burst (late height reports,
             // decrypt appends, read/delivery updates — only present on FIRST entry) is DEFERRED and then
             // released all at once by the scheduled settleFlush below, whose pinBottom/reconcile move the
             // offset = the "all bubbles auto-scroll on the first long-press" report. We restore this offset
@@ -2173,7 +2315,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // iOS 26 full-page screenshots scroll the view PROGRAMMATICALLY (no drag flags) right after the
     // notification to capture every page. Two defenses:
-    //  1. FREEZE all landings for the capture window (captureFreezeUntil folds into isInMotion) and mute
+    //  1. FREEZE all landings for the capture window (captureFreezeUntil closes canLandLoad) and mute
     //     scrollViewDidScroll side-effects — landings mid-capture mixed layout generations = overlap.
     //  2. Snap back to the last stable offset AFTER the capture has finished (the old immediate snap-back
     //     ran BEFORE the capture scroll and restored nothing).
