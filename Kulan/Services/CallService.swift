@@ -76,7 +76,7 @@ final class CallService: NSObject {
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
-                usingFrontCamera = true; startedAsVideo = false
+                usingFrontCamera = true; startedAsVideo = false; everVideo = false
                 isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
@@ -109,6 +109,11 @@ final class CallService: NSObject {
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
     var remoteMuted = false         // is THEIR mic muted (from the `muted` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
+    /// STICKY: true from the first moment a camera came on, and it stays true for the rest of the call
+    /// even if both cameras go off again. It drives the auto-hiding controls: a call that has been a
+    /// video call keeps behaving like one, so the controls do not start reappearing permanently just
+    /// because someone closed their camera for a minute. Cleared only when the call ends.
+    private(set) var everVideo = false
     /// Whatever is on the BIG screen right now — which is what the floating PiP window must show when you
     /// leave the app. The PiP was hard-wired to the remote feed, so after tapping the tile to swap
     /// yourself fullscreen, leaving the app put the OTHER person in the floating window: the big screen
@@ -460,6 +465,9 @@ final class CallService: NSObject {
     private func applyVideoAudioPolicy() {
         let session = AVAudioSession.sharedInstance()
         let videoShowing = cameraOn || remoteCameraOn
+        // This is already the one place BOTH camera paths (mine and theirs) meet, so it is the only
+        // honest place to latch "this call has been a video call".
+        if videoShowing { everVideo = true }
         // Echo cancellation follows what the audio is actually DOING, not who owns the camera:
         // .videoChat is tuned for the loudspeaker, .voiceChat for the earpiece. The wrong one is the
         // hear-your-own-voice bug.

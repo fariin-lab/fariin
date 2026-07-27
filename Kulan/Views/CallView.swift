@@ -22,10 +22,55 @@ struct CallView: View {
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var flippingCamera = false   // brief blur mask over the front/back capture restart
 
+    // MARK: - Auto-hiding controls (the standard video-call behaviour)
+
+    // On a video call the buttons get out of the way: they show when the call connects, fade out on
+    // their own a few seconds later, and come back on a tap anywhere. Tap again to send them away.
+    // Gated on CallService.everVideo, which is STICKY — a call that has been a video call keeps
+    // behaving like one even after both cameras go off, so the controls do not start living on top of
+    // the screen again the moment someone closes their camera.
+    @State private var controlsVisible = true
+    @State private var hideTask: DispatchWorkItem?
+    private static let autoHideAfter: TimeInterval = 5
+
+    private var autoHideEnabled: Bool { call.everVideo && connectedCall }
+
+    private func armAutoHide() {
+        hideTask?.cancel()
+        guard autoHideEnabled else {
+            // Voice call, or not connected yet: the controls simply stay.
+            if !controlsVisible { withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = true } }
+            return
+        }
+        let work = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.28)) { controlsVisible = false }
+        }
+        hideTask = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.autoHideAfter, execute: work)
+    }
+
+    // Bring the controls back and restart the clock. Used by the tap and by every button press, so
+    // hitting mute never leaves you two seconds from losing the rest of the buttons.
+    private func showControls() {
+        withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = true }
+        armAutoHide()
+    }
+
+    private func toggleControls() {
+        guard autoHideEnabled else { return }
+        if controlsVisible {
+            hideTask?.cancel()
+            withAnimation(.easeInOut(duration: 0.28)) { controlsVisible = false }
+        } else {
+            showControls()
+        }
+    }
+
     // Smooth camera flip: blur the local feed, restart the capturer (mirror already flipped), clear the
     // blur after the new camera is running — so the ~200ms restart reads as a transition, not a freeze.
     private func flipCamera() {
         guard !flippingCamera else { return }
+        showControls()
         withAnimation(.easeOut(duration: 0.12)) { flippingCamera = true }
         call.switchCamera()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
@@ -78,12 +123,20 @@ struct CallView: View {
                 if call.isVideo {
                     // The whole layout, not one feed — see CallService.pipFeeds.
                     CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
-                    pipLayer(geo)
                 }
+                // Tap anywhere that is not a button or the tile to show/hide the controls. It sits
+                // ABOVE the video and BELOW everything interactive, so the buttons and the corner tile
+                // keep their own taps.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleControls() }
+                if call.isVideo { pipLayer(geo) }
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
                         .frame(maxWidth: .infinity)        // full-width header (centered name/status)
+                        .opacity(controlsVisible ? 1 : 0)
+                        .allowsHitTesting(controlsVisible) // hidden buttons must not eat the tap
                     Spacer()
                     if showAvatar {
                         AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 180)
@@ -93,15 +146,24 @@ struct CallView: View {
                             .background { if call.state == .outgoing { PulsingRings(diameter: 180) } }
                             .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
                             .frame(maxWidth: .infinity)    // guarantee horizontal centering
+                            .allowsHitTesting(false)       // decoration: let the show/hide tap through
                         Spacer()
                     }
                     controlBar
                         .frame(maxWidth: .infinity)        // centered control pill
                         .padding(.bottom, winInsets.bottom + 22)
+                        .opacity(controlsVisible ? 1 : 0)
+                        .allowsHitTesting(controlsVisible)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the screen (never collapse/offset)
             }
             .onReceive(ticker) { now = $0 }
+            .onAppear { armAutoHide() }
+            .onDisappear { hideTask?.cancel() }
+            // Connecting, and a voice call turning into a video call, both restart the clock: show the
+            // controls for the moment something changes, then get out of the way again.
+            .onChange(of: call.state) { _, _ in showControls() }
+            .onChange(of: call.isVideo) { _, _ in showControls() }
             .animation(.easeInOut(duration: 0.25), value: call.state)
             .animation(.easeInOut(duration: 0.2), value: call.cameraOn)
             .animation(.easeInOut(duration: 0.2), value: call.isMuted)
@@ -310,7 +372,10 @@ struct CallView: View {
                 // directions, and it is how tapping once stranded the user full screen on their own
                 // face with the other person gone and no way back.
                 .onTapGesture {
-                    guard feeds.big != nil, feeds.tile != nil else { return }
+                    // A photo tile cannot be swapped to, but the tap should not feel dead either:
+                    // it does what a tap on the rest of the screen does.
+                    guard feeds.big != nil, feeds.tile != nil else { toggleControls(); return }
+                    showControls()
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }
                 }
                 .padding(.top, winInsets.top + 70)
@@ -393,6 +458,7 @@ struct CallView: View {
     private func callCircle(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            showControls()          // using a button restarts the clock, never cuts it short
             action()
         } label: {
             Image(systemName: icon)
