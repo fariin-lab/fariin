@@ -847,7 +847,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    func apply(rowIds ids: [String], scrollTarget: String? = nil) {
+    func apply(rowIds rawIds: [String], scrollTarget: String? = nil) {
+        // LAST LINE OF DEFENCE, AND IT IS NOT OPTIONAL. `appendItemsWithIdentifiers:` throws on a repeated
+        // identifier and the throw is an abort — the app is gone, mid-scroll, with no recovery. The repo
+        // now guarantees uniqueness upstream, but this is a boundary into UIKit and a crash is far worse
+        // than a dropped row, so the invariant is enforced here too rather than trusted.
+        var seen = Set<String>()
+        seen.reserveCapacity(rawIds.count)
+        let ids = rawIds.filter { seen.insert($0).inserted }
+        #if DEBUG
+        if ids.count != rawIds.count {
+            let dupes = Set(rawIds).filter { id in rawIds.filter { $0 == id }.count > 1 }
+            assertionFailure("Duplicate rowIds reached the list: \(dupes.sorted())")
+        }
+        #endif
         let width = collectionView.bounds.width
 
         // Signal's loadLandWhenSafe: a load that cannot land RIGHT NOW is retried on a tight 1ms loop

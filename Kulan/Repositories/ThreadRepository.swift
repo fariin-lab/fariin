@@ -104,9 +104,27 @@ final class ThreadRepository {
         let echoed = Set(messages.compactMap { $0.clientId })
         // Pending sends are MERGED by send time, not appended: an uploading photo stays exactly where
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
-        items = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+        var merged = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
             .sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
             .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
+
+        // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
+        // diffable snapshot — `appendItemsWithIdentifiers:` throws an NSInternalInconsistencyException on
+        // a repeat, which is an instant abort, not a glitch. Three crash reports from the user's phone
+        // (builds 380, 381 and 384, 2026-07-27) are exactly that stack.
+        //
+        // Every individual path that can produce a collision is already defended: the listener drops a
+        // double echo sharing a clientId, retry removes the old pending before adding the new one, and
+        // `indexById` two lines down has always used `uniquingKeysWith` — which is the tell. Someone knew
+        // duplicates could reach here and protected the dictionary while leaving `items` itself, the thing
+        // that actually crashes, unprotected. Rather than hunt for one more path, this makes the invariant
+        // true at the funnel where `items` is produced. First occurrence wins, matching the double-echo
+        // rule that the EARLIER message is the real one.
+        var seenRowIds = Set<String>()
+        seenRowIds.reserveCapacity(merged.count)
+        merged.removeAll { !seenRowIds.insert($0.rowId).inserted }
+        items = merged
+
         indexById = Dictionary(items.enumerated().map { ($0.element.rowId, $0.offset) },
                                uniquingKeysWith: { a, _ in a })
         itemsVersion += 1
