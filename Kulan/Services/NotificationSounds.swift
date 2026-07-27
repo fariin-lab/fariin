@@ -50,7 +50,8 @@ struct NotificationSound: Identifiable, Equatable {
         NotificationSound(id: "update",   name: "Update",     systemID: 1036),
     ]
 
-    static let `default` = builtIn[0]
+    // No app-wide `default` any more: message and call have their own, below. A single shared
+    // default is what made a call and a message play the same Apple blip.
 
     // RINGTONES — a separate list from the message tones above, which is the actual bug the user hit:
     // both pickers were fed `builtIn`, so a call and a message played the identical short alert blip.
@@ -74,9 +75,14 @@ struct NotificationSound: Identifiable, Equatable {
     // in the APNs payload), while the per-chat picker offered Apple's system alert tones. So a per-chat
     // choice could never match what a notification actually played, and the two lists shared no names.
     // The user asked for the Settings list everywhere, which is also the correct one: it is what pushes use.
+    ///
+    /// EVERY ENTRY IS OURS. The list used to open with a "Default" that was Apple's Note
+    /// (systemID 1007) — iMessage's tone. Kulan then sounded like iMessage in the foreground
+    /// while the server's push played our Rebound, so one message made two different noises
+    /// depending on whether the app happened to be open. A messenger's alert is how people
+    /// know which app buzzed without looking, so it has to be ours and it has to be one sound.
     static let messageTones: [NotificationSound] = [
-        NotificationSound(id: "default", name: "Default", systemID: 1007),
-        NotificationSound(id: "rebound", name: "Rebound", bundleFile: "rebound.wav"),
+        NotificationSound(id: "rebound", name: "Rebound (default)", bundleFile: "rebound.wav"),
         NotificationSound(id: "chime",   name: "Chime",   bundleFile: "chime.wav"),
         NotificationSound(id: "pop",     name: "Pop",     bundleFile: "pop.wav"),
         NotificationSound(id: "pulse",   name: "Pulse",   bundleFile: "pulse.wav"),
@@ -85,10 +91,11 @@ struct NotificationSound: Identifiable, Equatable {
 
     static let defaultMessageTone = messageTones[0]
 
-    /// Resolve a stored id against the MESSAGE tone list. Falls back through `builtIn` so a choice made
-    /// before this list existed still resolves to the tone it named instead of silently becoming Default.
+    /// Resolve a stored id against the MESSAGE tone list — ours FIRST, which matters because
+    /// "pulse" exists in both lists and the Apple one used to win. `builtIn` stays as a fallback
+    /// for a choice made before this list existed. A legacy "default" lands on Rebound.
     static func resolveMessageTone(_ id: String?) -> NotificationSound {
-        guard let id else { return .defaultMessageTone }
+        guard let id, id != "default" else { return .defaultMessageTone }
         if id == "none" { return .none }
         return messageTones.first { $0.id == id }
             ?? builtIn.first { $0.id == id }
@@ -106,16 +113,9 @@ struct NotificationSound: Identifiable, Equatable {
         return ringtones.first { $0.id == id } ?? .defaultRingtone
     }
 
-    // Resolve a stored id (built-in or "custom:<path>") back to a sound.
-    static func resolve(_ id: String?) -> NotificationSound {
-        guard let id, id != "none" else { return id == "none" ? .none : .default }
-        if id.hasPrefix("custom:") {
-            let path = String(id.dropFirst("custom:".count))
-            let name = (path as NSString).lastPathComponent
-            return NotificationSound(id: id, name: name, customPath: path)
-        }
-        return builtIn.first { $0.id == id } ?? .default
-    }
+    // NOTE: the old generic `resolve(_:)` is gone. It searched Apple's system tones for a
+    // message-tone id and was the bug above; custom imported sounds were removed earlier, so
+    // it had no honest caller left. Use `resolveMessageTone` or `resolveRingtone`.
 }
 
 // Per-chat sound preferences, stored locally (UserDefaults). Keyed by cid + kind (message/call).
@@ -133,7 +133,11 @@ enum SoundStore {
     }
     static func sound(_ cid: String, _ kind: Kind) -> NotificationSound {
         let id = soundId(cid, kind)
-        return kind == .call ? NotificationSound.resolveRingtone(id) : NotificationSound.resolve(id)
+        // `resolveMessageTone`, NOT `resolve`: the generic one searches Apple's system tones,
+        // so a per-chat choice of Chime returned Note, and Pulse returned Apple's Sherwood
+        // (that id exists in both lists). The picker previewed the right tone and playback used
+        // a different one — the preview was already calling resolveMessageTone; this was not.
+        return kind == .call ? NotificationSound.resolveRingtone(id) : NotificationSound.resolveMessageTone(id)
     }
     /// The bundle filename CallKit should ring for this chat (nil → the app default).
     static func ringtoneFile(_ cid: String?) -> String? {

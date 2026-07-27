@@ -8,8 +8,10 @@ struct SoundsNotificationsView: View {
     let cid: String
     @Environment(\.colorScheme) private var scheme
 
-    @State private var messageSound = NotificationSound.default
-    @State private var callSound = NotificationSound.default
+    // Each kind has its OWN default: a message tone is a short blip, a ringtone is a looping
+    // phrase. Both used to start as `.default`, which is an Apple alert tone and wrong for both.
+    @State private var messageSound = NotificationSound.defaultMessageTone
+    @State private var callSound = NotificationSound.defaultRingtone
     @State private var muted = false
     @State private var picker: SoundStore.Kind?
 
@@ -101,9 +103,12 @@ struct SoundPickerView: View {
 
     init(cid: String, kind: SoundStore.Kind, title: String, onDone: @escaping () -> Void) {
         self.cid = cid; self.kind = kind; self.title = title; self.onDone = onDone
-        let id = SoundStore.soundId(cid, kind)
-        _selectedId = State(initialValue: id)
-        _ = SoundStore.defaultSound(kind)   // per-kind default (call = ringtone, message = alert)
+        // Resolve the STORED id to one this list actually contains, or an old value (a "default"
+        // from when Apple's Note was offered) ticks nothing and the screen looks unset.
+        let stored = SoundStore.soundId(cid, kind)
+        _selectedId = State(initialValue: stored == "none" ? "none"
+            : (kind == .call ? NotificationSound.resolveRingtone(stored).id
+                             : NotificationSound.resolveMessageTone(stored).id))
     }
 
     var body: some View {

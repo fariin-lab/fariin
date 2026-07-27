@@ -84,9 +84,12 @@ import FirebaseAuth
     /// Play the user's chosen notification tone (Settings > Notifications > Sound).
     /// Also used by the sound picker to preview a tone before choosing it.
     func playTone(_ override: String? = nil) {
-        let name = override ?? (UserDefaults.standard.string(forKey: "notif.sound") ?? "rebound")
-        guard name != "default", let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
-            AudioServicesPlaySystemSound(1007)   // the classic system alert
+        var name = override ?? (UserDefaults.standard.string(forKey: "notif.sound") ?? "rebound")
+        // A "default" stored before the Apple-tone option was removed. It used to fall through to
+        // system sound 1007, which is Note — iMessage's tone coming out of Kulan.
+        if name == "default" { name = "rebound" }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
+            AudioServicesPlaySystemSound(1007)   // last resort: a missing file must still make a noise
             return
         }
         player = try? AVAudioPlayer(contentsOf: url)
