@@ -118,21 +118,44 @@ final class CallService: NSObject {
 
     /// The WHOLE call layout for a floating window — big feed plus corner tile, like FaceTime — so the
     /// floating window is the call screen in miniature instead of one lone feed. Both follow the same
-    /// `isLocalExpanded` swap the call screen uses, and a feed is offered only while its camera is
-    /// actually sending (the track object lingers after someone turns their camera off).
+    /// `isLocalExpanded` swap the call screen uses. A track is offered only while that camera is
+    /// actually SENDING (the track object lingers after someone turns their camera off); when it is
+    /// not, the slot carries that person's name and photo instead, so a switched-off camera shows who
+    /// it is rather than a black rectangle or an empty corner.
     struct PiPFeeds {
         var big: RTCVideoTrack?
         var tile: RTCVideoTrack?
         var mirrorBig = false
         var mirrorTile = false
+        var bigName = ""
+        var bigPhotoUrl: String?
+        var tileName = ""
+        var tilePhotoUrl: String?
+        var showsTile = false
     }
+    /// My own name and photo, for whichever slot is showing MY switched-off camera.
+    var myName: String { ProfileStore.shared.me?.name ?? "You" }
+    var myPhotoUrl: String? { ProfileStore.shared.me?.photoUrl }
+
     var pipFeeds: PiPFeeds {
-        let remoteLive = remoteCameraOn ? remoteVideoTrack : nil
-        let localLive = cameraOn ? localVideoTrack : nil
+        var f = PiPFeeds()
         if isLocalExpanded {
-            return PiPFeeds(big: localLive, tile: remoteLive, mirrorBig: usingFrontCamera)
+            f.big = cameraOn ? localVideoTrack : nil
+            f.mirrorBig = usingFrontCamera
+            f.bigName = myName; f.bigPhotoUrl = myPhotoUrl
+            f.tile = remoteCameraOn ? remoteVideoTrack : nil
+            f.tileName = otherName; f.tilePhotoUrl = otherPhotoUrl
+        } else {
+            f.big = remoteCameraOn ? remoteVideoTrack : nil
+            f.bigName = otherName; f.bigPhotoUrl = otherPhotoUrl
+            f.tile = cameraOn ? localVideoTrack : nil
+            f.mirrorTile = usingFrontCamera
+            f.tileName = myName; f.tilePhotoUrl = myPhotoUrl
         }
-        return PiPFeeds(big: remoteLive, tile: localLive, mirrorTile: usingFrontCamera)
+        // The tile belongs to the connected video call, not to a live camera: it stays put with a photo
+        // in it when that camera is off. Before the call connects there is only the self-preview.
+        f.showsTile = isVideo && (state == .active || state == .reconnecting)
+        return f
     }
 
     private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
@@ -404,6 +427,10 @@ final class CallService: NSObject {
     private func setMyCamera(on: Bool) {
         guard state == .active || state == .reconnecting else { return }
         cameraOn = on
+        // Turning my own camera off while I am the one FULL SCREEN would leave the big view showing my
+        // switched-off camera and push the other person into the corner. Go back to the normal layout.
+        // Mirror of the same rule for their camera in handleRemoteCallState.
+        if !on, isLocalExpanded { isLocalExpanded = false }
         // An explicit toggle overrides any pause. Without this, a camera turned off and on again while
         // paused left the flag set, and its `!cameraPausedByBackground` guard then swallowed the NEXT
         // real interruption — so the other side would have been left on a frozen frame.

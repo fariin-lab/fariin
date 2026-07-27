@@ -251,27 +251,25 @@ struct CallView: View {
     private func pipLayer(_ geo: GeometryProxy) -> some View {
         let safeBottom = winInsets.bottom
         let pipIsLocal = !isLocalExpanded                                   // small window = the OTHER feed
-        let pipTrack = isLocalExpanded ? call.remoteVideoTrack : call.localVideoTrack
-        // The LOCAL PiP shows whenever my camera is on and my feed isn't fullscreen — including when
-        // the remote camera is OFF (their avatar owns the big view, I stay in the corner tile; their
-        // video simply replaces the avatar when they turn it on). A remote PiP still needs their video.
-        // `!showLocalFull` applies ONLY to a LOCAL pip ("my feed is not already fullscreen"). It used to
-        // gate BOTH cases, and showLocalFull is true precisely when isLocalExpanded is - i.e. exactly
-        // when the pip should be showing the REMOTE feed. So tapping to swap promoted me to fullscreen
-        // and then hid the tile instead of putting the other person in it: they vanished from the call.
-        let visible = pipTrack != nil
-            && (pipIsLocal ? (!showLocalFull && call.cameraOn && connectedCall) : hasRemote)
+        let feeds = call.pipFeeds
+        let pipTrack = feeds.tile
+        // THE TILE BELONGS TO THE CALL, NOT TO A LIVE CAMERA. It used to vanish the moment that camera
+        // went off, which left an empty corner and — because the tile is also the tap target for the
+        // swap — took the only way back with it. Now it stays, holding that person's photo instead of
+        // their video, exactly like FaceTime.
+        let visible = feeds.showsTile
         return Group {
-            if visible, let track = pipTrack {
+            if visible {
                 ZStack(alignment: .topTrailing) {
-                    VideoRendererView(track: track, mirror: pipIsLocal && call.usingFrontCamera)
+                    tileContent(track: pipTrack, isLocal: pipIsLocal, feeds: feeds)
                         .frame(width: 104, height: 150)
                         // Blur the local feed briefly during a camera flip so the ~200ms capture restart
                         // (a frozen last frame) is masked into a smooth transition instead of a hard cut.
                         .blur(radius: (pipIsLocal && flippingCamera) ? 14 : 0)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.25), lineWidth: 1))
-                    if pipIsLocal {
+                    // The flip glyph belongs to a LIVE local camera only.
+                    if pipIsLocal, pipTrack != nil {
                         Button { flipCamera() } label: {
                             Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
@@ -307,17 +305,38 @@ struct CallView: View {
                             pipBase = CGSize(width: targetX, height: targetY)
                         }
                 )
-                // Swap only when there is actually a remote feed to swap TO. Without this guard, tapping
-                // while their camera is off put me fullscreen on my own face, left the tile hidden
-                // (a remote pip needs hasRemote), and took the tap target away with it - so the other
-                // person vanished AND there was no way back short of ending the call.
+                // SWAP ONLY BETWEEN TWO LIVE FEEDS. A photo tile is not tappable: blowing a still photo
+                // up to full screen while a live feed shrinks into the corner is worse in both
+                // directions, and it is how tapping once stranded the user full screen on their own
+                // face with the other person gone and no way back.
                 .onTapGesture {
-                    guard hasRemote else { return }
+                    guard feeds.big != nil, feeds.tile != nil else { return }
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }
                 }
                 .padding(.top, winInsets.top + 70)
                 .padding(.trailing, 14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+        }
+    }
+
+    // The corner tile's inside: that person's video while their camera is sending, their photo on a
+    // dark card when it is not.
+    @ViewBuilder
+    private func tileContent(track: RTCVideoTrack?, isLocal: Bool, feeds: CallService.PiPFeeds) -> some View {
+        if let track {
+            VideoRendererView(track: track, mirror: isLocal && call.usingFrontCamera)
+        } else {
+            ZStack {
+                Color.black
+                AvatarView(name: feeds.tileName, photoUrl: feeds.tilePhotoUrl, size: 54)
+                VStack {
+                    Spacer()
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.bottom, 8)
+                }
             }
         }
     }
@@ -560,21 +579,30 @@ struct FloatingCallWindow: View {
                     .frame(width: w, height: h)
                     .clipped()
             } else {
-                // Their camera is off (or the call hasn't connected): the avatar owns the big view,
+                // That camera is off (or the call hasn't connected): the photo owns the big view,
                 // exactly like the call screen.
-                AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56)
+                AvatarView(name: feeds.bigName, photoUrl: feeds.bigPhotoUrl, size: 56)
                     .frame(width: w, height: h)
             }
-            if let tile = feeds.tile {
+            if feeds.showsTile {
                 let tw = w * 0.34
-                VideoRendererView(track: tile, mirror: feeds.mirrorTile)
-                    .frame(width: tw, height: tw * 16 / 9)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(.white.opacity(0.35), lineWidth: 0.5)
-                    )
-                    .padding(5)
+                Group {
+                    if let tile = feeds.tile {
+                        VideoRendererView(track: tile, mirror: feeds.mirrorTile)
+                    } else {
+                        ZStack {
+                            Color.black
+                            AvatarView(name: feeds.tileName, photoUrl: feeds.tilePhotoUrl, size: 22)
+                        }
+                    }
+                }
+                .frame(width: tw, height: tw * 16 / 9)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(.white.opacity(0.35), lineWidth: 0.5)
+                )
+                .padding(5)
             }
             // KEEP A PiP SOURCE VIEW ALIVE WHILE MINIMIZED. The only other CallPiPHost lives inside
             // CallView, which the cover DESTROYS on minimize — so minimizing silently turned off
