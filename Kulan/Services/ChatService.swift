@@ -1127,9 +1127,28 @@ enum ChatService {
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 
-    static func deleteMessage(cid: String, messageId: String) async {
-        try? await db.collection("conversations").document(cid)
-            .collection("messages").document(messageId).delete()
+    /// Delete for Everyone. Returns false when the server refused, so the caller can say so.
+    ///
+    /// THIS WAS `try?`, AND THAT WAS THE BUG. A swallowed error on a user-initiated destructive action
+    /// is indistinguishable from a dead button: the message stayed, no alert appeared, and there was
+    /// nothing anywhere to say why. The tell was that "Delete for Me" worked from the SAME alert — same
+    /// wiring, same dismissal, different one line — which rules out the UI and points at this call.
+    ///
+    /// The refusal itself is almost certainly the Firestore rules (the rules are not in this repo; fetch
+    /// them with the Rules REST API before assuming otherwise). Surfacing the error is what makes that
+    /// diagnosable at all, and a destructive action must never fail silently either way.
+    @discardableResult
+    static func deleteMessage(cid: String, messageId: String) async -> Bool {
+        do {
+            try await db.collection("conversations").document(cid)
+                .collection("messages").document(messageId).delete()
+            return true
+        } catch {
+            #if DEBUG
+            print("[deleteMessage] refused for \(cid)/\(messageId): \(error)")
+            #endif
+            return false
+        }
     }
 
     /// Edit a text message in place: re-encrypt the new text and flag it edited.

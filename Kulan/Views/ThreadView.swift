@@ -5221,9 +5221,15 @@ private struct MessageActionDialogs: ViewModifier {
     let me: String
     @Binding var pendingDelete: Message?
     var onDeleteForMe: (Message) -> Void = { _ in }
+    @State private var deleteFailed = false
 
     func body(content: Content) -> some View {
         content
+            .alert("Couldn't delete for everyone", isPresented: $deleteFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("The server refused the delete. The message is still there for both of you.")
+            }
             // Native alert (the confirmationDialog rendered as an anchored popover on iOS 26). My own
             // message → "Delete for Everyone" (removes the doc) + "Delete for Me" (local hide);
             // someone else's → "Delete for Me" only.
@@ -5233,7 +5239,13 @@ private struct MessageActionDialogs: ViewModifier {
                 if let m = pendingDelete {
                     if m.authorId == me {
                         Button("Delete for Everyone", role: .destructive) {
-                            Task { await ChatService.deleteMessage(cid: cid, messageId: m.id) }
+                            Task {
+                                // Say so when the server refuses. Silence here is what made this read as
+                                // a dead button rather than a failed delete.
+                                if await !ChatService.deleteMessage(cid: cid, messageId: m.id) {
+                                    deleteFailed = true
+                                }
+                            }
                             pendingDelete = nil
                         }
                     }
