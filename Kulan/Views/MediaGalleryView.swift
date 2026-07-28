@@ -56,8 +56,14 @@ struct MediaGalleryView: View {
 
     // MARK: - Derived lists (gifs get their own tab, so they're excluded from Media)
 
+    // Albums expanded into their individual photos/videos (user report: a single photo showed in All
+    // Media, a multi-photo album never did — `isAlbum` messages fell through the image/video filter).
+    // The synthetic "<messageId>-<index>" ids match the chat's album tile registry, so the fly-open and
+    // the drag-close landing resolve real geometry.
+    private var expandedAll: [Message] { all.flatMap { $0.expandedGalleryItems(cid: cid) } }
+
     private var mediaItems: [Message] {
-        all.filter { ($0.isImage || $0.isVideo) && !$0.isGif }.filter { m in
+        expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif }.filter { m in
             switch mediaFilter {
             case .all:    return true
             case .photos: return m.isImage
@@ -72,8 +78,8 @@ struct MediaGalleryView: View {
         all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile && Self.firstURL(in: $0.text) != nil }
     }
 
-    private var photoCount: Int { all.filter { $0.isImage && !$0.isGif }.count }
-    private var videoCount: Int { all.filter { $0.isVideo }.count }
+    private var photoCount: Int { expandedAll.filter { $0.isImage && !$0.isGif }.count }
+    private var videoCount: Int { expandedAll.filter { $0.isVideo }.count }
 
     // The count line under "All Media" reflects the visible tab.
     private var subtitle: String {
@@ -517,12 +523,18 @@ struct MediaGalleryView: View {
 
     // MARK: - Item context menu (media + gifs + voice)
 
+    // A synthetic album child carries "<messageId>-<index>"; its real message is the ALBUM. Firestore
+    // ids never contain "-", so the first segment is always the parent.
+    private func parentMessageId(_ id: String) -> String { id.split(separator: "-").first.map(String.init) ?? id }
+
     @ViewBuilder private func itemMenu(_ m: Message) -> some View {
         Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
         Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
         // Delete-for-everyone is only for MY OWN media — received media can't be deleted from the server.
-        if m.authorId == AuthService.shared.uid {
+        // Not offered on album CHILDREN: the server only knows the album message, and a per-item delete
+        // by synthetic id would silently do nothing (deleteSelected already filters them out).
+        if m.authorId == AuthService.shared.uid, m.id == parentMessageId(m.id) {
             Button(role: .destructive) { selection = [m.id]; confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
         }
     }
@@ -562,7 +574,9 @@ struct MediaGalleryView: View {
     // to drop its ENTIRE profile→gallery branch at once (showContactInfo = false pops both in one
     // animation), then it scrolls to + briefly flashes the message.
     private func goToChat(_ m: Message) {
-        NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: m.id))
+        // An album child jumps to its ALBUM message — the chat has one row per album, keyed by the
+        // parent id; the synthetic per-item id matches no row.
+        NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: parentMessageId(m.id)))
     }
 
     private func deleteSelected() {

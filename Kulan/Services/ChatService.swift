@@ -999,9 +999,13 @@ enum ChatService {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true)
                 .limit(to: 60).getDocuments()
+            // Albums COUNT as media (user report: a single photo showed here, a multi-photo album never
+            // did — this filter dropped album messages before any view could see them) and are expanded
+            // into their individual photos/videos.
             let out = snap.documents
                 .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
-                .filter { $0.isImage || $0.isVideo }
+                .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                .flatMap { $0.expandedGalleryItems(cid: cid) }
             await MainActor.run { sharedMediaCache[cid] = out }
             return out
         } catch {
@@ -1395,6 +1399,31 @@ enum ChatService {
         } catch {
             print("searchUsers failed:", error)
             return []
+        }
+    }
+}
+
+/// An album is ONE message holding N media items. Anywhere media is listed ITEM BY ITEM (the All Media
+/// grid, the profile strip) an album must be EXPANDED into per-item synthetic Messages - with the SAME
+/// "<messageId>-<index>" ids the chat's album tiles register in MediaOpenRects, so tapping an item
+/// flies from its tile and a drag-close lands back on it. Mirrors ThreadView.openAlbumItem's synthetic
+/// construction exactly; do not let the two drift. Non-album messages pass through unchanged, so
+/// callers can flatMap unconditionally.
+extension Message {
+    func expandedGalleryItems(cid: String) -> [Message] {
+        guard isAlbum else { return [self] }
+        return album.enumerated().compactMap { i, it in
+            if it.isVideo {
+                guard let vurl = it.videoUrl, let venc = it.videoEnc else { return nil }
+                let d: [String: Any] = ["type": "video", "videoUrl": vurl, "enc": venc.asDict,
+                                        "thumbUrl": it.imageUrl, "thumbEnc": it.enc.asDict,
+                                        "authorId": authorId, "width": it.width, "height": it.height,
+                                        "duration": it.duration]
+                return Message(id: "\(id)-\(i)", data: d, cid: cid, crypto: Crypto.shared)
+            }
+            let d: [String: Any] = ["type": "image", "imageUrl": it.imageUrl, "enc": it.enc.asDict,
+                                    "authorId": authorId, "width": it.width, "height": it.height]
+            return Message(id: "\(id)-\(i)", data: d, cid: cid, crypto: Crypto.shared)
         }
     }
 }
