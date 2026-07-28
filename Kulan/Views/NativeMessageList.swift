@@ -1338,7 +1338,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let delta = after - before
         guard abs(delta) > 1 else { return }
         rodeKeyboard = true
-        let target = clampOffset(collectionView.contentOffset.y - delta)   // flipped: more clearance = smaller offset
+        // DO NOT CLAMP THE NEAR END HERE. This is the bug the 15-vs-16-bubble report pinned down.
+        //
+        // The ride only runs when the reader is AT the newest message (guard above), which means
+        // contentOffset.y already EQUALS minContentOffsetY. Opening the keyboard needs the content to
+        // move a further `kb` in that same direction — but `clampOffset` floors the result at
+        // minContentOffsetY, and at notification time that is still the PRE-keyboard value:
+        // keyboardWillShow fires before the safe area changes, and updateInsets only runs from
+        // viewSafeAreaInsetsDidChange or a layout pass, neither of which has happened yet. So
+        // max(min, min - kb) returned min, the target equalled the current offset, and the animation
+        // below moved the content to exactly where it already was. The keyboard then covered it.
+        //
+        // Why it looked like a 16-bubble bug: while the content is shorter than the screen,
+        // maxContentOffsetY == minContentOffsetY (see its definition), so the scrollable range is a
+        // single point and no offset write can land anywhere else — the inset growth alone repositions
+        // everything and it looks correct. The 16th bubble is simply where content height crosses screen
+        // height, the range opens, and a no-op target becomes visible.
+        //
+        // The destination does not need guessing: the keyboard's exact height change is in the
+        // notification. Only the FAR end is still clamped, because that bound does not move with the
+        // keyboard — the near one is about to, which is the whole point.
+        let target = min(collectionView.contentOffset.y - delta, maxContentOffsetY)
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         guard duration > 0 else {
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
