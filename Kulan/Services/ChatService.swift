@@ -1145,6 +1145,18 @@ enum ChatService {
     /// diagnosable at all, and a destructive action must never fail silently either way.
     @discardableResult
     static func deleteMessage(cid: String, messageId: String) async -> Bool {
+        // A "<parentId>-<index>" id is a synthetic ALBUM CHILD (the viewer's album pages, the gallery's
+        // expanded items). There is no such doc on the server — the whole album is ONE message — and
+        // the delete rule's resource.data lookup on a nonexistent doc reads as a refusal, which is the
+        // user's "couldn't delete for everyone" on an album photo. Deleting an album item means EDITING
+        // the album: rewrite the parent's raw album array without that item; deleting the LAST item
+        // deletes the message itself. Firestore auto-ids never contain "-". A pending message's id is a
+        // UUID (which does contain dashes) — the Int() parse of everything after the FIRST dash rejects
+        // those, since a UUID tail is never pure digits.
+        if let dash = messageId.firstIndex(of: "-"),
+           let index = Int(messageId[messageId.index(after: dash)...]) {
+            return await deleteAlbumItem(cid: cid, parentId: String(messageId[..<dash]), index: index)
+        }
         do {
             try await db.collection("conversations").document(cid)
                 .collection("messages").document(messageId).delete()
@@ -1152,6 +1164,32 @@ enum ChatService {
         } catch {
             #if DEBUG
             print("[deleteMessage] refused for \(cid)/\(messageId): \(error)")
+            #endif
+            return false
+        }
+    }
+
+    /// Remove ONE item from an album message, for everyone. Reads the RAW stored album array and
+    /// writes it back minus the item — never re-serialized through the client model, so the per-item
+    /// encryption dicts survive byte-for-byte. An album emptied by its last deletion deletes the whole
+    /// message (the author may; same rule as any own-message delete).
+    private static func deleteAlbumItem(cid: String, parentId: String, index: Int) async -> Bool {
+        let ref = db.collection("conversations").document(cid).collection("messages").document(parentId)
+        do {
+            let snap = try await ref.getDocument()
+            guard var album = snap.data()?["album"] as? [[String: Any]], album.indices.contains(index) else {
+                return false
+            }
+            album.remove(at: index)
+            if album.isEmpty {
+                try await ref.delete()
+            } else {
+                try await ref.updateData(["album": album])
+            }
+            return true
+        } catch {
+            #if DEBUG
+            print("[deleteAlbumItem] refused for \(cid)/\(parentId)[\(index)]: \(error)")
             #endif
             return false
         }

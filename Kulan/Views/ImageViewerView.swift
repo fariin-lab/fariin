@@ -110,6 +110,7 @@ struct ImageViewerView: View {
     @State private var saved = false
     @State private var saveError = false
     @State private var confirmDelete = false
+    @State private var deleteFailed = false     // the server refused — say so, like the bubble delete does
     @State private var shareItems: [Any]?
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
@@ -196,12 +197,26 @@ struct ImageViewerView: View {
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
+        .alert("Couldn't delete for everyone", isPresented: $deleteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The server refused the delete. The photo is still there for both of you.")
+        }
         .alert("Delete this photo?", isPresented: $confirmDelete) {
             // Same options as the message bubble's delete (user report: the photo delete offered only
             // one option). Own photo → Everyone + Me; Delete for Me hides locally via the conversation.
             if isMine {
                 Button("Delete for Everyone", role: .destructive) {
-                    Task { await ChatService.deleteMessage(cid: cid, messageId: message.id); await MainActor.run { dismiss() } }
+                    // deleteMessage routes album pages (synthetic "<parentId>-<i>" ids) to a real
+                    // album-item removal — the raw id used to target a nonexistent doc, which the
+                    // server refused, so an album photo could never be deleted for everyone.
+                    Task {
+                        if await ChatService.deleteMessage(cid: cid, messageId: message.id) {
+                            await MainActor.run { dismiss() }
+                        } else {
+                            await MainActor.run { deleteFailed = true }
+                        }
+                    }
                 }
             }
             if let onDeleteForMe {
