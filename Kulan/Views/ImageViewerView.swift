@@ -59,7 +59,6 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
 struct ImageViewerView: View {
     let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
-    let suppressDismissPan: Bool        // true when a native zoom transition owns the drag-down close
     // REMOVED: `telegramSourceRect` + `TGOpenState`, a SECOND open animation that lived alongside
     // SignalMediaOpen.fly. Every call site passed nil, so it never ran — but it was a whole parallel
     // pipeline with a different spring (0.38 vs Signal's 0.25), a hardcoded 16pt radius, and
@@ -84,25 +83,23 @@ struct ImageViewerView: View {
     @State private var penEdit: PenEditWrap?
 
     // Single-image entry (existing call sites): a one-page gallery.
-    init(message: Message, cid: String, suppressDismissPan: Bool = false,
+    init(message: Message, cid: String,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
          onDeleteForMe: ((Message) -> Void)? = nil,
          clipProvider: @escaping () -> CGRect? = { nil }) {
         self.gallery = [message]; self.cid = cid
-        self.suppressDismissPan = suppressDismissPan
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
         self.clipProvider = clipProvider
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
-    init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false,
+    init(message: Message, in gallery: [Message], cid: String,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
          onDeleteForMe: ((Message) -> Void)? = nil,
          clipProvider: @escaping () -> CGRect? = { nil }) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
-        self.suppressDismissPan = suppressDismissPan
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
         self.clipProvider = clipProvider
@@ -162,25 +159,22 @@ struct ImageViewerView: View {
             chromeLayer
         }
         .overlay {
-            // When a native .zoom transition owns the drag-down close (suppressDismissPan) the photo
-            // shrinks back into its source bubble via matched geometry — no custom pan, exactly like the
-            // story close. Otherwise the in-viewer SignalDismissHost drag is used.
-            if !suppressDismissPan {
-                SignalDismissHost(
-                    canBegin: { pageZoom <= 1.02 },
-                    media: {
-                        guard let img = loaded[current] else { return nil }
-                        return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
-                    },
-                    onHideContent: { dismissing = $0 },
-                    // Land on the thumbnail this photo came from. Reported live by MediaRectReporter,
-                    // keyed by the CURRENT page's id, so paging to another photo and closing lands on
-                    // that one's tile rather than the one we opened with.
-                    targetRect: { MediaOpenRects.rect(current) },
-                    targetId: { current },
-                    clipRect: clipProvider,
-                    onDismiss: { instantDismiss() })
-            }
+            // The interactive drag-down close. Unconditional: the system .zoom transition this used to
+            // be suppressed for is gone from every chat-media entry point.
+            SignalDismissHost(
+                canBegin: { pageZoom <= 1.02 },
+                media: {
+                    guard let img = loaded[current] else { return nil }
+                    return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
+                },
+                onHideContent: { dismissing = $0 },
+                // Land on the thumbnail this photo came from. Reported live by MediaRectReporter,
+                // keyed by the CURRENT page's id, so paging to another photo and closing lands on
+                // that one's tile rather than the one we opened with.
+                targetRect: { MediaOpenRects.rect(current) },
+                targetId: { current },
+                clipRect: clipProvider,
+                onDismiss: { instantDismiss() })
         }
         // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.
         .presentationBackground(.clear)
@@ -277,8 +271,6 @@ struct ImageViewerView: View {
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
                           onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
-                          onDim: { _ in }, onDismiss: {},
-                          allowsDismissPan: false,
                           onZoom: { pageZoom = $0 },
                           zoomOutToken: zoomOutToken)
         } else {
@@ -460,13 +452,14 @@ struct ImageViewerView: View {
     }
 }
 
-// Host VC that drives ZoomableMediaView + a drag-down-to-dismiss pan (only at min zoom).
+// Host VC that drives ZoomableMediaView (pinch/double-tap zoom for one page).
+// DELETED HERE: the per-page drag-down-to-dismiss pan (`allowsDismissPan` + `handleDismiss`, a
+// YBImageBrowser-derived interaction with its own thresholds and spring). Every caller disabled it —
+// the drag-to-close is driven at the CONTAINER level by SignalDismissHost so it can never fight the
+// TabView pager — so it was a third, unreachable dismiss implementation with different numbers.
 struct ZoomImageView: UIViewControllerRepresentable {
     let image: UIImage
     var onSingleTap: () -> Void = {}
-    var onDim: (Double) -> Void
-    var onDismiss: () -> Void
-    var allowsDismissPan: Bool = true   // false in the media editor: zoom only, no drag-to-close
     var onZoom: (CGFloat) -> Void = { _ in }   // reports live zoom scale so the container can gate drag-dismiss
     var cornerRadius: CGFloat = 0       // >0 rounds the IMAGE itself (tall media), scaled to stay visually constant
     // false in the single-image EDITOR: the zoomed photo may overflow its letterboxed canvas and cover
@@ -484,9 +477,6 @@ struct ZoomImageView: UIViewControllerRepresentable {
         let vc = ZoomImageController()
         vc.image = image
         vc.onSingleTap = onSingleTap
-        vc.onDim = onDim
-        vc.onDismiss = onDismiss
-        vc.allowsDismissPan = allowsDismissPan
         vc.onZoom = onZoom
         vc.mediaCornerRadius = cornerRadius
         vc.clipsZoomOverflow = clipsZoomOverflow
@@ -509,12 +499,9 @@ struct ZoomImageView: UIViewControllerRepresentable {
     }
 }
 
-final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+final class ZoomImageController: UIViewController, UIScrollViewDelegate {
     var image: UIImage!
     var onSingleTap: (() -> Void)?
-    var onDim: ((Double) -> Void)?
-    var onDismiss: (() -> Void)?
-    var allowsDismissPan = true
     var onZoom: ((CGFloat) -> Void)?
     var clipsZoomOverflow = true   // editor sets false → zoom grows past the canvas like the video editor
 
@@ -571,21 +558,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         scrollView.frame = view.bounds
         scrollView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-        if allowsDismissPan {
-            let dismissPan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
-            dismissPan.delegate = self
-            scrollView.addGestureRecognizer(dismissPan)
-            // NO require(toFail:) — DirectionalPan never explicitly FAILS on a non-downward move (it just
-            // stays .possible), so the scroll pan waiting for its failure deadlocked and the drag-to-close
-            // (and scrolling) died. Instead both run SIMULTANEOUSLY (delegate below); handleDismiss ignores
-            // anything that isn't an at-rest downward drag.
-        }
     }
-
-    // Coexist with the zoom scroll pan and the horizontal page-swipe: recognize together, act only
-    // when the drag is downward at minimum zoom.
-    func gestureRecognizer(_ g: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -601,49 +574,6 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate, UIGestu
         onZoom?(scrollView.zoomScale / scrollView.minimumZoomScale)   // 1.0 == fit (not zoomed)
     }
 
-    // MARK: drag-down dismiss (only when not zoomed)
-    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
-    }
-    // Flick-to-dismiss copied from YBImageBrowser (indulgeIn/YBImageBrowser, YBIBImageCell +
-    // YBIBInteractionProfile). Only the interaction is copied: the image follows the finger and
-    // shrinks toward center over height*1.2 (floor 0.35), the backdrop fades over height*0.7, and
-    // release dismisses on a flick (|v.y| > 800) OR a drag past height*0.22 — else it snaps back
-    // in 0.15s. Down-locked here (DirectionalPan) since Kulan only closes downward.
-    @objc private func handleDismiss(_ g: UIPanGestureRecognizer) {
-        guard scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01 else { return }
-        let t = g.translation(in: view)
-        let h = max(1, view.bounds.height)
-        switch g.state {
-        case .changed:
-            // PURE 1:1 translation — the image is locked to the finger (the media dismiss moves the
-            // media by raw translation). The scale shrinks GENTLY with vertical progress but is folded
-            // into the SAME transform (translate THEN scale about the top so the touched point stays put),
-            // never a separate UIView.animate — the old animated 0.2s "lift" overrode the presentation
-            // layer for the first 0.2s and swallowed the finger movement (the "doesn't follow" bug).
-            let progress = min(1.0, max(0, t.y) / h)
-            let scale = 1.0 - progress * 0.12                 // barely shrinks; keeps the finger locked
-            // Scale about the CENTER but add the drift-correction so the point under the finger stays
-            // exactly under it: translate by t, then compensate the center-anchored scale.
-            var tf = CGAffineTransform(translationX: t.x, y: t.y)
-            tf = tf.scaledBy(x: scale, y: scale)
-            scrollView.transform = tf
-            // Background fades against the vertical drag distance.
-            onDim?(1.0 - Double(progress) * 0.85)
-        case .ended, .cancelled:
-            // Commit on a flick or once dragged ~18% of the height; otherwise a critically-damped
-            // spring back (response ~0.25, damping 1 — no overshoot).
-            if g.velocity(in: view).y > 700 || t.y > h * 0.18 {
-                onDismiss?()
-            } else {
-                UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0) {
-                    self.scrollView.transform = .identity
-                }
-                onDim?(1)
-            }
-        default: break
-        }
-    }
 }
 
 // Zoomable media view backed by a UIScrollView. min zoom = fit, max = fit*8, double-tap to 2x at the

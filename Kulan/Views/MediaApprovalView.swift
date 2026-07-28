@@ -135,7 +135,6 @@ struct MediaApprovalView: View {
             // screen-centered pinch zoom; tall (9:16+) images get rounded corners on the image itself via
             // cornerRadius. Normal ratios: cornerRadius 0 → unchanged full-screen.
             ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
-                          onDim: { _ in }, onDismiss: {}, allowsDismissPan: false,
                           cornerRadius: isTall(ui.size) ? 22 : 0)
                 .ignoresSafeArea()
         case .video(let id, let url, let thumb, let duration):

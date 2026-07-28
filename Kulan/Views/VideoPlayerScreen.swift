@@ -14,7 +14,6 @@ import FirebaseStorage
 struct VideoPlayerScreen: View {
     let message: Message
     let cid: String
-    var suppressDismissPan: Bool = false   // true when a native .zoom transition owns the drag-down close
     // The visible viewport of the screen the video came from (window coords) — the drag-close's landing
     // is clipped through it, same as the image viewer. Nil = no clipping (gallery/profile).
     var clipProvider: () -> CGRect? = { nil }
@@ -71,9 +70,7 @@ struct VideoPlayerScreen: View {
         // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight poster copy locked 1:1 to
         // the finger, constant 0.8 scale, root-alpha scrub, 0.25s spring.
         .overlay {
-            // Native .zoom owns the close (suppressDismissPan) → the player shrinks back into its bubble
-            // via matched geometry; the custom pan is off so it can't fight it.
-            if !suppressDismissPan {
+            // Unconditional: the system .zoom this used to be suppressed for is gone from chat media.
             SignalDismissHost(
                 canBegin: { !zoomed && !scrubbing },
                 media: {
@@ -100,7 +97,6 @@ struct VideoPlayerScreen: View {
                 targetId: { message.id },
                 clipRect: clipProvider,
                 onDismiss: { instantDismiss() })
-            }
         }
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
         .statusBarHidden(true)

@@ -221,7 +221,7 @@ struct ContactInfoView: View {
                 // No system .zoom: SignalMediaOpen flies the tapped thumb (see the strip's tap),
                 // the same pipeline as the conversation and the gallery. The story cover below still
                 // uses .zoom - stories deliberately keep the system hero transition.
-                ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
+                ImageViewerView(message: msg, cid: cid)
             }
             // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
             // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and

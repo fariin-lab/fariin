@@ -81,17 +81,7 @@ struct MediaRectReporter: ViewModifier {
     withTransaction(t, body)
 }
 
-// Apply the native zoom transition only when the Telegram-open test is OFF (a transition modifier
-// can't be conditionally chained inline without splitting the view tree — this keeps identity stable).
-struct ConditionalZoomTransition: ViewModifier {
-    let enabled: Bool
-    let sourceID: String
-    let ns: Namespace.ID
-    func body(content: Content) -> some View {
-        if enabled {
-            content.navigationTransition(.zoom(sourceID: sourceID, in: ns))
-        } else {
-            content
-        }
-    }
-}
+// DELETED HERE: `ConditionalZoomTransition` — the switch that used to choose between the system
+// `.zoom` transition and the fly pipeline. Every chat-media call site had it hard-coded to
+// `enabled: false`, and the namespaces and matchedTransitionSource anchors that fed it are gone with
+// it. Stories still use the system zoom, via their own namespaces, applied directly.

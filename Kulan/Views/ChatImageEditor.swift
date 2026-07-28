@@ -189,7 +189,6 @@ struct ChatImageEditor: View {
                 // screen); tall (9:16+) images get rounded corners on the IMAGE itself via cornerRadius
                 // (kept visually constant across zoom). Normal ratios: cornerRadius 0 → unchanged.
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
-                              onDim: { _ in }, onDismiss: {}, allowsDismissPan: false,
                               cornerRadius: isTallMedia ? 22 : 0,
                               // Video-editor parity: the zoomed photo overflows the letterboxed canvas and
                               // covers the full screen at high zoom (no top/bottom borders); chrome floats.

@@ -117,10 +117,10 @@ struct MediaGalleryView: View {
             // the same pipeline as the conversation. Leaving the zoom on ran both animations at once
             // and left the zoom's own dismiss pan fighting SignalDismissHost's.
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
-                            cid: cid, suppressDismissPan: false)
+                            cid: cid)
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
+            VideoPlayerScreen(message: msg, cid: cid)
         }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
             if let items = shareItems { ActivityView(items: items) }

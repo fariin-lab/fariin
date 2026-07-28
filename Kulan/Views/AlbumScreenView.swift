@@ -78,11 +78,11 @@ struct AlbumScreenView: View {
         .presentationDragIndicator(.hidden)
         // Presented FROM this screen, which is what makes "back" land on the album again.
         .fullScreenCover(item: $viewerImage) { m in
-            ImageViewerView(message: m, in: imageGallery, cid: cid, suppressDismissPan: false,
+            ImageViewerView(message: m, in: imageGallery, cid: cid,
                             onDeleteForMe: { _ in })
         }
         .fullScreenCover(item: $viewerVideo) { m in
-            VideoPlayerScreen(message: m, cid: cid, suppressDismissPan: false)
+            VideoPlayerScreen(message: m, cid: cid)
         }
     }
 
