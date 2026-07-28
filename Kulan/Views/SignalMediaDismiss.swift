@@ -10,7 +10,8 @@ import UIKit
 //     shadow are a 0.2s "cock" scrubbed inside the 0.25s interactive timeline → they complete at
 //     progress 0.8 and are NOT recomputed as functions of position.
 //   • progress = clamp01(hypot(dx, dy) / 88)  (distanceToCompletion = 88pt).
-//   • Backdrop alpha driven DIRECTLY from progress. Zero per-frame SwiftUI work.
+//   • The presented root's alpha (black bg + chrome, media hidden) driven DIRECTLY from progress —
+//     Signal's fromView.alpha scrub. Zero per-frame SwiftUI work.
 //   • Release: FINISH on any progress (percentComplete > 0 — no velocity gate) with the 0.25s
 //     critically-damped spring toward a no-destination fallback frame (fromFrame shifted
 //     down by its height); gesture-cancel springs everything back.
@@ -56,7 +57,6 @@ struct SignalDismissHost: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: SignalDismissHost
         private weak var root: UIView?
-        private var backdrop: UIView?
         private var container: UIView?
         private var clipWrap: UIView?      // landing-only clipping view (the chat viewport), see finish()
         private var fromFrame: CGRect = .zero
@@ -108,18 +108,13 @@ struct SignalDismissHost: UIViewRepresentable {
             guard let root else { return }
             switch g.state {
             case .began:
-                guard !active, parent.canBegin(), let m = parent.media() else { return }
+                guard !active, parent.canBegin(), let m = parent.media(), let win = root.window else { return }
                 active = true
                 // ONE geometry base for both directions. The open fits the media into the WINDOW's
                 // bounds; the viewers' closures were fitting into `UIScreen.main.bounds`. Identical on a
                 // full-screen iPhone cover, but recomputing against this root keeps the promise by
                 // construction — the copy starts exactly where the open would land it.
                 fromFrame = m.image.map { mediaFitRect($0.size, in: root.bounds) } ?? m.frame
-
-                // Backdrop the interaction owns (alpha driven directly from progress).
-                let bd = UIView(frame: root.bounds)
-                bd.backgroundColor = .black
-                bd.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
                 // The lightweight copy: the image itself when loaded (a media transition image view),
                 // else a live snapshot of the media's region (videos).
@@ -143,9 +138,14 @@ struct SignalDismissHost: UIViewRepresentable {
                 content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 c.addSubview(content)
 
-                root.addSubview(bd)
-                root.addSubview(c)
-                backdrop = bd
+                // The copy lives in the WINDOW, above the presented root, so the root itself can be
+                // faded as one unit. There is no separate backdrop any more: the viewer's own black
+                // background and chrome ARE the thing that fades — Signal's `fromView.alpha` scrub,
+                // verbatim. The chat shows through the clear presentation behind it, so fading the root
+                // is what melts black-and-chrome into the conversation. One UIKit write per frame, the
+                // same zero-per-frame-SwiftUI property the old backdrop had — the viewer only hides its
+                // MEDIA (the copy replaces it); background and chrome stay live and ride this alpha.
+                win.addSubview(c)
                 container = c
                 // Signal zeroes the translation on .began (MediaInteractiveDismiss). Without it the
                 // first .changed already carries the recogniser's pre-recognition slop, so the copy
@@ -168,7 +168,10 @@ struct SignalDismissHost: UIViewRepresentable {
                 let t = min(1, progress / 0.8)
                 c.transform = CGAffineTransform(scaleX: 1 - 0.2 * t, y: 1 - 0.2 * t)
                 c.layer.shadowOpacity = Float(t)
-                backdrop?.alpha = 1 - t   // background alpha driven directly from the drag progress
+                // Background AND chrome melt together with the drag: the presented root (black bg +
+                // header + toolbar, media already hidden) is faded as one unit over the live chat —
+                // Signal's fromView.alpha scrub. Chrome used to vanish instantly here instead.
+                root.alpha = 1 - t
 
             case .ended:
                 guard active else { return }
@@ -218,7 +221,7 @@ struct SignalDismissHost: UIViewRepresentable {
             return CGVector(dx: abs(dx) > 1 ? v.x / dx : 0, dy: abs(dy) > 1 ? v.y / dy : 0)
         }
 
-        // Dismiss (damping 1): the backdrop is already clear past the threshold (the chat shows behind),
+        // Dismiss (damping 1): the root is already melted past the threshold (the chat shows behind),
         // so the copy fades out from RIGHT WHERE IT WAS RELEASED with a small continued drift + shrink —
         // seeded with the release velocity so it carries the finger's motion. Then dismiss.
         private func finish(offset o: CGPoint, velocity: CGPoint = .zero) {
@@ -277,7 +280,9 @@ struct SignalDismissHost: UIViewRepresentable {
                     // radius visibly changed shape at the moment the copy took over.
                     c.layer.cornerRadius = landingRadius
                     c.layer.shadowOpacity = 0
-                    self.backdrop?.alpha = 0
+                    // The rest of the viewer (black + chrome) finishes melting over the land —
+                    // Signal's final spring does exactly this to fromView.
+                    self.root?.alpha = 0
                 }
                 c.layer.masksToBounds = true   // without this the corner radius was invisible
                 // NO alpha fade: Signal lands the copy opaque and swaps it for the real thumbnail.
@@ -287,6 +292,13 @@ struct SignalDismissHost: UIViewRepresentable {
                     // is invisible. Revealing after would flash the empty tile.
                     MediaSourceVisibility.shared.reveal()
                     self.parent.onDismiss()
+                    // The copy lives in the WINDOW now, so the cover's teardown no longer removes it.
+                    // Drop it a tick later, once the dismissal has the real content underneath.
+                    DispatchQueue.main.async {
+                        (self.clipWrap ?? self.container)?.removeFromSuperview()
+                        self.clipWrap = nil
+                        self.container = nil
+                    }
                 }
                 animator.startAnimation()
                 return
@@ -305,11 +317,15 @@ struct SignalDismissHost: UIViewRepresentable {
                 c.center = target
                 c.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
                 c.layer.shadowOpacity = 0
-                self.backdrop?.alpha = 0
+                self.root?.alpha = 0
             }
             animator.addCompletion { _ in
                 self.parent.onDismiss()
-                // The presentation tears everything down with the cover.
+                // The copy is in the window, not the cover — remove it ourselves.
+                DispatchQueue.main.async {
+                    self.container?.removeFromSuperview()
+                    self.container = nil
+                }
             }
             animator.startAnimation()
         }
@@ -329,14 +345,17 @@ struct SignalDismissHost: UIViewRepresentable {
                 c.center = home
                 c.transform = .identity
                 c.layer.shadowOpacity = 0
-                self.backdrop?.alpha = 1
+                // Background and chrome fade back in together, the reverse of the drag's scrub.
+                self.root?.alpha = 1
             }
             animator.addCompletion { _ in
                 self.parent.onHideContent(false)
+                // Un-hide the source bubble. The drag's .began hid it, and only finish() ever revealed
+                // it — a CANCELLED drag left the bubble invisible in the chat, which showed the moment
+                // the viewer was later closed with the X instead of another drag.
+                MediaSourceVisibility.shared.reveal()
                 c.removeFromSuperview()
-                self.backdrop?.removeFromSuperview()
                 self.container = nil
-                self.backdrop = nil
             }
             animator.startAnimation()
         }

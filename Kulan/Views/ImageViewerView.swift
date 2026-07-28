@@ -129,7 +129,9 @@ struct ImageViewerView: View {
         return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? ""
     }
     private var dateLine: String { message.createdAt.formatted(date: .numeric, time: .shortened) }
-    private var chromeVisible: Bool { !chromeHidden && !dismissing }
+    // NOT gated on `dismissing` any more: during a drag-close the chrome must stay in the tree so the
+    // root-alpha scrub can fade it with the finger. Its 0.25s ease here would fight that scrub.
+    private var chromeVisible: Bool { !chromeHidden }
 
     private func closeViewer() {
         // ZOOM OUT FIRST, like Signal. Closing while zoomed swapped a zoomed live view for an unzoomed
@@ -151,14 +153,14 @@ struct ImageViewerView: View {
         // Split into pagerLayer/chromeLayer — the inline body blew the type-checker budget.
         ZStack {
             Color.black.ignoresSafeArea()
+            // ONLY the media hides when a drag-close begins — the flying copy replaces it 1:1. The
+            // black background and the chrome stay LIVE: the coordinator fades the whole presented
+            // root with the finger (Signal's fromView.alpha scrub), so chrome melts into the chat
+            // with the drag instead of vanishing on its first frame, and fades back if you cancel.
             pagerLayer
+                .opacity(dismissing ? 0 : 1)
             chromeLayer
         }
-        // The interactive dismiss (SignalMediaDismiss.swift): one UIKit vertical pan on the
-        // presented root; on begin this live content hides ONCE and a lightweight image copy moves 1:1
-        // with the finger (constant 0.8 scale cock, direct backdrop alpha, finish-on-any-progress,
-        // 0.25s critically-damped spring). Replaces the old per-frame SwiftUI drag entirely.
-        .opacity(dismissing ? 0 : 1)
         .overlay {
             // When a native .zoom transition owns the drag-down close (suppressDismissPan) the photo
             // shrinks back into its source bubble via matched geometry — no custom pan, exactly like the

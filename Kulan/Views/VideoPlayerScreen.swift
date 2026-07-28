@@ -49,53 +49,11 @@ struct VideoPlayerScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let player {
-                PlayerLayerView(player: player)
-                    .scaleEffect(max(1, zoom * pinch))
-                    .offset(x: pan.width + panDrag.width, y: pan.height + panDrag.height)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .gesture(
-                        MagnificationGesture()
-                            .updating($pinch) { v, s, _ in s = v }
-                            .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
-                    )
-                    // Double-tap the LEFT half → back 10s, RIGHT half → forward 10s (YouTube/native).
-                    .onTapGesture(count: 2, coordinateSpace: .global) { loc in
-                        if loc.x < UIScreen.main.bounds.width / 2 { skip(-10) } else { skip(10) }
-                    }
-                    // Single tap on the video → play/pause (user request), and reveal the controls.
-                    .onTapGesture { togglePlay(); showChromeBriefly() }
-                if !isPlaying && !zoomed {   // center play button (glass) when paused / at end
-                    Button { togglePlay() } label: {
-                        Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.primary)
-                            .frame(width: 74, height: 74)
-                            .liquidGlass(Circle(), interactive: true)
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.opacity)
-                }
-                // ±10s skip flash (double-tap side) — a glass pill on the tapped half.
-                if skipFlashShown {
-                    HStack {
-                        if skipFlash < 0 { skipBadge("gobackward.10"); Spacer() }
-                        else { Spacer(); skipBadge("goforward.10") }
-                    }
-                    .padding(.horizontal, 40)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                }
-            } else if unavailable {
-                VStack(spacing: 10) {
-                    Image(systemName: "video.slash").font(.system(size: 34))
-                    Text("Video no longer available").font(.system(size: 15, weight: .medium))
-                    Text("It was delivered and removed from the server.")
-                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
-                }
-                .foregroundStyle(.white)
-            } else {
-                ProgressView().tint(.white).scaleEffect(1.4)
-            }
+            // ONLY the player content hides when a drag-close begins — the flying poster copy replaces
+            // it. Background and chrome stay live so the coordinator's root-alpha scrub (Signal's
+            // fromView.alpha) can melt them into the chat with the finger, and back on cancel.
+            playerContent
+                .opacity(dismissing ? 0 : 1)
         }
         .overlay(alignment: .top) { if showChrome { topBar } }
         .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
@@ -110,9 +68,8 @@ struct VideoPlayerScreen: View {
                 }
         )
         // The interactive dismiss — the SAME code path as the image viewer
-        // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight snapshot copy locked 1:1 to
-        // the finger, constant 0.8 scale, direct backdrop alpha, finish-on-any-progress, 0.25s spring.
-        .opacity(dismissing ? 0 : 1)
+        // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight poster copy locked 1:1 to
+        // the finger, constant 0.8 scale, root-alpha scrub, 0.25s spring.
         .overlay {
             // Native .zoom owns the close (suppressDismissPan) → the player shrinks back into its bubble
             // via matched geometry; the custom pan is off so it can't fight it.
@@ -154,6 +111,58 @@ struct VideoPlayerScreen: View {
     /// The still the transition flies. Signal flies a poster frame for video too — never a player
     /// layer, never a snapshot of the live region — which is what makes video and photo behave alike.
     private var poster: UIImage? { message.thumbUrl.flatMap { DiskImageCache.shared.memoryImage($0) } }
+
+    // The playing surface + its overlays, split out of `body` so the drag-close can hide EXACTLY this
+    // (the copy's pixels) while background and chrome ride the root-alpha scrub.
+    @ViewBuilder private var playerContent: some View {
+        if let player {
+            PlayerLayerView(player: player)
+                .scaleEffect(max(1, zoom * pinch))
+                .offset(x: pan.width + panDrag.width, y: pan.height + panDrag.height)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .gesture(
+                    MagnificationGesture()
+                        .updating($pinch) { v, s, _ in s = v }
+                        .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
+                )
+                // Double-tap the LEFT half → back 10s, RIGHT half → forward 10s (YouTube/native).
+                .onTapGesture(count: 2, coordinateSpace: .global) { loc in
+                    if loc.x < UIScreen.main.bounds.width / 2 { skip(-10) } else { skip(10) }
+                }
+                // Single tap on the video → play/pause (user request), and reveal the controls.
+                .onTapGesture { togglePlay(); showChromeBriefly() }
+            if !isPlaying && !zoomed {   // center play button (glass) when paused / at end
+                Button { togglePlay() } label: {
+                    Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.primary)
+                        .frame(width: 74, height: 74)
+                        .liquidGlass(Circle(), interactive: true)
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+            }
+            // ±10s skip flash (double-tap side) — a glass pill on the tapped half.
+            if skipFlashShown {
+                HStack {
+                    if skipFlash < 0 { skipBadge("gobackward.10"); Spacer() }
+                    else { Spacer(); skipBadge("goforward.10") }
+                }
+                .padding(.horizontal, 40)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        } else if unavailable {
+            VStack(spacing: 10) {
+                Image(systemName: "video.slash").font(.system(size: 34))
+                Text("Video no longer available").font(.system(size: 15, weight: .medium))
+                Text("It was delivered and removed from the server.")
+                    .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+            }
+            .foregroundStyle(.white)
+        } else {
+            ProgressView().tint(.white).scaleEffect(1.4)
+        }
+    }
 
     // Video closes exactly like a photo: one pipeline, the UIKit animator pair. The second
     // (SwiftUI) implementation that used to live here is gone — see the note in ImageViewerView.
