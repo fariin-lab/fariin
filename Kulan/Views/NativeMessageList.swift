@@ -212,6 +212,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window)
     private var keyboardAnimating = false                // a keyboard-synced offset animation is in flight
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
+    private var keyboardWasAtNewest = false              // latched at willHide: reader was at the newest message
+    private var keyboardSettlePending = false            // didHide fired mid-drag; settle at drag/decel end
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
@@ -1347,20 +1349,66 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // pass while the bar moves; the smoothness comes from the BAR animating, not from us animating
         // alongside it. So the private-curve ride, the notification frames, the begin/end delta and the
         // close-ownership flag are all gone.
+        //
+        // LATCH "was at the newest message" for the CLOSE (Signal's `wasScrolledToBottom` — theirs is
+        // captured before the bar moves too). The live test cannot answer this later: a close can leave
+        // the reader displaced (see keyboardDidHide), and once displaced they look like a reader in
+        // history, whom nothing may move. So the question is asked NOW, while it is still answerable:
+        //   * non-interactive close (send bar, Done): geometry has not moved yet at willHide — exact test.
+        //   * interactive close (dragging the list down over the keyboard): the finger has already moved
+        //     the offset, so the exact test is noise. But a dismiss drag at the newest message only pulls
+        //     INTO the bottom bounce (below the minimum), never far above it — while a reader who
+        //     genuinely scrolled up sits far beyond the 44pt neighbourhood. The loose test is the
+        //     readable signal there.
+        if note.name == UIResponder.keyboardWillHideNotification {
+            keyboardWasAtNewest = collectionView.isTracking || collectionView.isDecelerating
+                ? collectionView.contentOffset.y <= minContentOffsetY + 44
+                : isAtNewest
+        }
         updateInsets()
     }
 
 
     // The keyboard is fully gone and the safe area has finished shrinking. Settle onto the exact newest
-    // position, but ONLY for a session this controller actually rode â€” never as a blanket re-pin, which is
-    // how the old close path could yank a reader who had scrolled up mid-session.
+    // position, but ONLY for a session that latched "was at newest" at willHide â€” never as a blanket
+    // re-pin, which is how the old close path could yank a reader who had scrolled up mid-session.
     @objc private func keyboardDidHide() {
-        // One more recompute once the safe area has stopped moving — the same call every other keyboard
-        // event makes. Signal recomputes on every pass rather than owning a final settle, and with the
-        // delta arithmetic gone there is nothing here that needs owning: updateInsets reads the clearance
-        // as it now is and, if the reader was at the newest message, leaves them there.
+        // One more recompute once the safe area has stopped moving.
         updateInsets()
+        // THE SETTLE THE CLOSE WAS MISSING (build 8069d37, user screenshot: the newest bubble at rest
+        // under the composer after open-then-close). Two holes conspired:
+        //   * updateInsets' change-detection guard protects the OFFSET work too â€” once the insets are
+        //     already correct, no later call can ever fix a wrong offset. And a displaced reader fails
+        //     the live at-newest test, so the at-newest branch cannot rescue them either.
+        //   * during an INTERACTIVE close (list dragged down over the keyboard) every offset write
+        //     stands down while the finger owns the list â€” correctly â€” but nothing was left to run
+        //     AFTER. The displacement survived at rest.
+        // The latch from willHide is the answer to "may I move this reader": it was captured while the
+        // question was still answerable. Consume it here if the list is at rest; if the dismiss drag is
+        // still live, hand it to the scroll-end callbacks â€” never fight the finger.
+        if keyboardWasAtNewest, didFirstLand, !isDisappearing {
+            if collectionView.isTracking || collectionView.isDragging || collectionView.isDecelerating {
+                keyboardSettlePending = true
+            } else if !isAtNewest {
+                collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
+            }
+        }
+        keyboardWasAtNewest = false
         settleFlush()
+    }
+
+    // The deferred half of keyboardDidHide's settle: the keyboard finished hiding while the dismiss drag
+    // still owned the list. Runs from the scroll-end callbacks, when the offset is finally at rest.
+    private func consumeKeyboardSettleIfPending() {
+        guard keyboardSettlePending else { return }
+        keyboardSettlePending = false
+        guard didFirstLand, !isDisappearing, !isAtNewest else { return }
+        // Neighbourhood rule, sized to the failure it fixes: the close's displacement can reach the
+        // keyboard-minus-home-indicator inset delta (~300pt), so the gate is half a screen — big enough
+        // to always catch the bug, small enough that a reader who deliberately carried the dismiss drag
+        // far into history is respected.
+        guard collectionView.contentOffset.y <= minContentOffsetY + collectionView.bounds.height * 0.5 else { return }
+        collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
     }
 
     // MARK: - Lifecycle
@@ -1761,9 +1809,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollingAnimationDidComplete()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { settleFlush() }
+        if !decelerate { consumeKeyboardSettleIfPending(); settleFlush() }
     }
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleFlush() }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { consumeKeyboardSettleIfPending(); settleFlush() }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
