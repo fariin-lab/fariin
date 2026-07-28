@@ -114,6 +114,7 @@ struct ImageViewerView: View {
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
     @State private var zoomOutToken = 0                  // bump to ask the current page to return to fit
+    @State private var closeToken = 0                    // bump → the button close flies home like the drag
     @State private var dismissing = false                 // dismiss in flight → live content hidden ONCE
 
     private var message: Message { gallery.first { $0.id == current } ?? gallery[0] }
@@ -140,9 +141,12 @@ struct ImageViewerView: View {
         if pageZoom > 1.02 {
             zoomOutToken += 1
             // Let the zoom settle so the closing state matches the screen — then close no matter what.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { dismiss() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeToken += 1 }
         } else {
-            dismiss()
+            // ONE exit for every way out (user report: the arrow cut away while the drag flew home).
+            // The token routes the button close through SignalDismissHost's fly-home; its no-geometry
+            // fallback calls onDismiss, so closing can never be blocked.
+            closeToken += 1
         }
     }
     /// The drag-close's exit. The flying copy IS the animation, so the presentation itself must go
@@ -184,6 +188,7 @@ struct ImageViewerView: View {
                 targetRect: { MediaOpenRects.rect(current) },
                 targetId: { current },
                 clipRect: clipProvider,
+                closeToken: closeToken,
                 onDismiss: { instantDismiss() })
         }
         // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.

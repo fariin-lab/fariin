@@ -33,6 +33,7 @@ struct VideoPlayerScreen: View {
     @State private var endObserver: NSObjectProtocol?
     @State private var hideWork: DispatchWorkItem?
     @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
+    @State private var closeToken = 0              // bump → the button close flies home like the drag
     // Pinch-zoom + pan (video hosted in the same zoomable view as photos).
     @State private var zoom: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
@@ -96,6 +97,7 @@ struct VideoPlayerScreen: View {
                 targetRect: { MediaOpenRects.rect(message.id) },
                 targetId: { message.id },
                 clipRect: clipProvider,
+                closeToken: closeToken,
                 onDismiss: { instantDismiss() })
         }
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
@@ -160,9 +162,10 @@ struct VideoPlayerScreen: View {
         }
     }
 
-    // Video closes exactly like a photo: one pipeline, the UIKit animator pair. The second
-    // (SwiftUI) implementation that used to live here is gone — see the note in ImageViewerView.
-    private func closeViewer() { dismiss() }
+    // Video closes exactly like a photo: one pipeline, the UIKit animator pair. The button close
+    // flies the poster home through SignalDismissHost, same as the drag (its no-geometry fallback
+    // dismisses plainly, so closing is never blocked).
+    private func closeViewer() { closeToken += 1 }
     /// The drag-close's exit: the flying poster IS the animation, so the presentation goes without one.
     private func instantDismiss() { dismiss() }
 

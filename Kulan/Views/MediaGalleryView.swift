@@ -43,6 +43,10 @@ struct MediaGalleryView: View {
     @State private var selection = Set<String>()
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
+    // The grid's visible region (global coords) — the drag-close lands CLIPPED through it, so a copy
+    // flying home to a tile near the top slides behind the All Media header exactly like the chat's
+    // close slides behind the chat header (user report: the gallery close felt different).
+    @State private var gridFrame: CGRect = .zero
     @State private var shareItems: [Any]?
     @State private var confirmDelete = false
 
@@ -98,6 +102,9 @@ struct MediaGalleryView: View {
             if !selecting { tabBar }
             content
                 .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
+                .background(GeometryReader { g in
+                    Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
+                })
         }
         // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
         // subtitle, the standard circular back button, and a "..." menu on the right — instead of
@@ -123,10 +130,12 @@ struct MediaGalleryView: View {
             // the same pipeline as the conversation. Leaving the zoom on ran both animations at once
             // and left the zoom's own dismiss pan fighting SignalDismissHost's.
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
-                            cid: cid)
+                            cid: cid,
+                            clipProvider: { gridFrame == .zero ? nil : gridFrame })
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid)
+            VideoPlayerScreen(message: msg, cid: cid,
+                              clipProvider: { gridFrame == .zero ? nil : gridFrame })
         }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
             if let items = shareItems { ActivityView(items: items) }

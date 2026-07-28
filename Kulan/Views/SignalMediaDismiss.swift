@@ -33,6 +33,10 @@ struct SignalDismissHost: UIViewRepresentable {
     /// a copy flying home to a bubble half-scrolled under the header disappears BEHIND the bar instead
     /// of landing on top of it. The open (SignalMediaOpen.fly) takes the same rect as `clip:`.
     var clipRect: () -> CGRect? = { nil }
+    /// Bump to run the BUTTON close through the same pipeline as the drag close: the copy flies home
+    /// into its tile with the same landing spring (user report: the arrow used a different exit than
+    /// the drag). Signal's model too — their X runs the same dismiss animator the pan drives.
+    var closeToken: Int = 0
     var onDismiss: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -44,7 +48,10 @@ struct SignalDismissHost: UIViewRepresentable {
         v.coordinator = context.coordinator
         return v
     }
-    func updateUIView(_ v: UIView, context: Context) { context.coordinator.parent = self }
+    func updateUIView(_ v: UIView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.noteCloseToken(closeToken)
+    }
 
     final class Marker: UIView {
         weak var coordinator: Coordinator?
@@ -104,49 +111,76 @@ struct SignalDismissHost: UIViewRepresentable {
         func gestureRecognizer(_ g: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
+        // The shared copy builder: the drag's .began and the button close construct the IDENTICAL
+        // flying copy, so the two exits cannot drift apart.
+        //
+        // ONE geometry base for both directions: the open fits the media into the WINDOW's bounds; the
+        // viewers' closures were fitting into `UIScreen.main.bounds`. Identical on a full-screen iPhone
+        // cover, but recomputing against this root keeps the promise by construction.
+        //
+        // The copy lives in the WINDOW, above the presented root, so the root itself can be faded as
+        // one unit — the viewer's own black background and chrome ARE the thing that fades (Signal's
+        // `fromView.alpha` scrub). The viewer only hides its MEDIA; the copy replaces those pixels.
+        @discardableResult
+        private func buildCopy(_ m: (frame: CGRect, image: UIImage?)) -> UIView? {
+            guard let root, let win = root.window else { return nil }
+            fromFrame = m.image.map { mediaFitRect($0.size, in: root.bounds) } ?? m.frame
+
+            // The lightweight copy: the image itself when loaded (a media transition image view),
+            // else a live snapshot of the media's region (videos without a poster).
+            let content: UIView
+            if let img = m.image {
+                let iv = UIImageView(image: img)
+                iv.contentMode = .scaleAspectFill
+                iv.clipsToBounds = true
+                content = iv
+            } else {
+                content = root.resizableSnapshotView(from: m.frame, afterScreenUpdates: false,
+                                                     withCapInsets: .zero) ?? UIView()
+            }
+            // Shadow container (plain UIView so it can carry both corners and shadow).
+            let c = UIView(frame: fromFrame)
+            c.layer.shadowColor = UIColor.black.withAlphaComponent(0.2).cgColor   // ows_blackAlpha20
+            c.layer.shadowOffset = CGSize(width: 0, height: 32)
+            c.layer.shadowRadius = 48
+            c.layer.shadowOpacity = 0
+            content.frame = c.bounds
+            content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            c.addSubview(content)
+            win.addSubview(c)
+            container = c
+            return c
+        }
+
+        // The BUTTON close, through the drag's pipeline (user report: the arrow used a different
+        // exit). Builds the same copy, hides the same things, runs the same landing spring — one
+        // pipeline for every way out. Falls back to a plain dismiss when there is no geometry to fly,
+        // so the close is never hostage to a missing rect or image.
+        private var lastCloseToken = 0
+        func noteCloseToken(_ t: Int) {
+            guard t != lastCloseToken else { return }
+            let adoptingMidLife = lastCloseToken == 0 && t > 1   // (re)attach to a viewer that closed before
+            lastCloseToken = t
+            guard t > 0, !adoptingMidLife else { return }
+            closeNow()
+        }
+        private func closeNow() {
+            guard !active, parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else {
+                parent.onDismiss()
+                return
+            }
+            active = true
+            parent.onHideContent(true)
+            MediaSourceVisibility.shared.hide(parent.targetId())
+            finish(offset: .zero)
+        }
+
         @objc private func handle(_ g: UIPanGestureRecognizer) {
             guard let root else { return }
             switch g.state {
             case .began:
-                guard !active, parent.canBegin(), let m = parent.media(), let win = root.window else { return }
+                guard !active, parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else { return }
                 active = true
-                // ONE geometry base for both directions. The open fits the media into the WINDOW's
-                // bounds; the viewers' closures were fitting into `UIScreen.main.bounds`. Identical on a
-                // full-screen iPhone cover, but recomputing against this root keeps the promise by
-                // construction — the copy starts exactly where the open would land it.
-                fromFrame = m.image.map { mediaFitRect($0.size, in: root.bounds) } ?? m.frame
-
-                // The lightweight copy: the image itself when loaded (a media transition image view),
-                // else a live snapshot of the media's region (videos).
-                let content: UIView
-                if let img = m.image {
-                    let iv = UIImageView(image: img)
-                    iv.contentMode = .scaleAspectFill
-                    iv.clipsToBounds = true
-                    content = iv
-                } else {
-                    content = root.resizableSnapshotView(from: m.frame, afterScreenUpdates: false,
-                                                         withCapInsets: .zero) ?? UIView()
-                }
-                // Shadow container (plain UIView so it can carry both corners and shadow).
-                let c = UIView(frame: m.frame)
-                c.layer.shadowColor = UIColor.black.withAlphaComponent(0.2).cgColor   // ows_blackAlpha20
-                c.layer.shadowOffset = CGSize(width: 0, height: 32)
-                c.layer.shadowRadius = 48
-                c.layer.shadowOpacity = 0
-                content.frame = c.bounds
-                content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                c.addSubview(content)
-
-                // The copy lives in the WINDOW, above the presented root, so the root itself can be
-                // faded as one unit. There is no separate backdrop any more: the viewer's own black
-                // background and chrome ARE the thing that fades — Signal's `fromView.alpha` scrub,
-                // verbatim. The chat shows through the clear presentation behind it, so fading the root
-                // is what melts black-and-chrome into the conversation. One UIKit write per frame, the
-                // same zero-per-frame-SwiftUI property the old backdrop had — the viewer only hides its
-                // MEDIA (the copy replaces it); background and chrome stay live and ride this alpha.
-                win.addSubview(c)
-                container = c
                 // Signal zeroes the translation on .began (MediaInteractiveDismiss). Without it the
                 // first .changed already carries the recogniser's pre-recognition slop, so the copy
                 // JUMPS by ~10pt the instant the drag is picked up instead of starting under the finger.
