@@ -65,8 +65,8 @@ struct SignalDismissHost: UIViewRepresentable {
         // to drag down, change your mind and have it spring back is behaviour the user asked for and
         // liked. Instead the threshold is small enough that a deliberate short drag closes, which is
         // what "it must work like Signal" actually means in feel.
-        private static let completionDistance: CGFloat = 40      // drag past this ↓ → dismiss (else recover)
-        private static let completionVelocity: CGFloat = 320     // ...or a downward flick faster than this
+        // (The 40pt / 320pt-per-second commit thresholds are gone — see `.ended`. Signal commits on any
+        // real movement, and so does this app's own profile photo viewer, the one that already feels right.)
 
         init(_ p: SignalDismissHost) { parent = p }
 
@@ -83,24 +83,15 @@ struct SignalDismissHost: UIViewRepresentable {
             // drag: only the media copy moves, the page behind never does. The zoom OPEN animation and
             // the programmatic shrink-into-bubble close are untouched — they're the animator, not the
             // gesture. Run again after the presentation settles: the system can attach its gestures late.
-            neutralizeSystemDismissGestures()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-                self?.neutralizeSystemDismissGestures()
-            }
+            // The blanket gesture-disabling that used to run here is GONE. It existed only to fight the
+            // system `.zoom` transition's own interactive dismiss, and that transition is no longer used
+            // for chat media anywhere — the album viewer was the last holdout and it now flies through
+            // SignalMediaOpen like everything else. What it actually did was walk the whole presentation
+            // chain and switch off EVERY pan and pinch that was not ours, twice, one of them 0.7s late.
+            // Disabling gestures wholesale to protect one gesture is how a viewer ends up feeling dead in
+            // ways nobody can trace, and there is nothing left for it to protect against.
         }
 
-        // Walk from the presented root up through the presentation container views and disable every
-        // pan/pinch that isn't ours. Scroll views (zoom, pager, thumb strip) keep their pans — those
-        // live on the scroll views themselves, deeper in the hierarchy, never on this chain.
-        private func neutralizeSystemDismissGestures() {
-            var v: UIView? = root
-            while let cur = v {
-                for g in cur.gestureRecognizers ?? [] where !(g is DirectionalPanGestureRecognizer) {
-                    if g is UIPanGestureRecognizer || g is UIPinchGestureRecognizer { g.isEnabled = false }
-                }
-                v = cur.superview
-            }
-        }
 
         // Coexist with the pager + zoom scroll views (coordinated via delegation the same way);
         // the directional recognizer self-cancels on horizontal intent, and we gate on canBegin.
@@ -183,8 +174,20 @@ struct SignalDismissHost: UIViewRepresentable {
                 // the commit test used o.y alone, so a diagonal drag could scrub the photo most of the way
                 // out and then snap all the way back. The 40pt / 320 thresholds themselves are the user's
                 // deliberate choice (Signal commits on ANY movement) and are unchanged.
-                let travelled = hypot(o.x, o.y)
-                if travelled > Self.completionDistance || v.y > Self.completionVelocity {
+                // SIGNAL'S RULE, ADOPTED. Their `.ended` is `percentComplete > 0` — any real movement
+                // commits. Ours demanded 40pt of travel OR a 320pt/s flick, and that gap is the "still
+                // doesn't feel like Signal" the user has reported for days: a short, deliberate drag
+                // scrubbed the photo partway out and then snapped all the way back, which reads as the
+                // gesture refusing you.
+                //
+                // The proof it is the threshold and not the maths: this app's OTHER media viewer, the
+                // profile photo one the user says works correctly, is plain SwiftUI with none of this
+                // machinery — and it commits on `dist > 0`. Same gesture, same app, one rule apart.
+                //
+                // Cancel stays reachable, which is the one thing the user liked and Signal does not
+                // really offer: drag back UP past where you started and the net offset goes negative, so
+                // it springs home. Anything with real downward intent closes.
+                if o.y > 0 {
                     finish(offset: o, velocity: v)
                 } else {
                     cancel(velocity: v)
