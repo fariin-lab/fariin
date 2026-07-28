@@ -615,7 +615,8 @@ struct ThreadView: View {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid, suppressDismissPan: false,
-                                    onDeleteForMe: { m in repo.hideForMe(m.id) })
+                                    onDeleteForMe: { m in repo.hideForMe(m.id) },
+                                    clipProvider: { MediaOpenRects.clipRect })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
@@ -624,7 +625,8 @@ struct ThreadView: View {
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     },
-                                    onDeleteForMe: { m in repo.hideForMe(m.id) })
+                                    onDeleteForMe: { m in repo.hideForMe(m.id) },
+                                    clipProvider: { MediaOpenRects.clipRect })
                 }
             }
             // Zoom transition = the hero OPEN (photo grows from its bubble) and the button-close shrink
@@ -668,7 +670,8 @@ struct ThreadView: View {
                             onSendEdited: { data, caption, viewOnce in
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                             },
-                            onDeleteForMe: { m in repo.hideForMe(m.id) })
+                            onDeleteForMe: { m in repo.hideForMe(m.id) },
+                            clipProvider: { MediaOpenRects.clipRect })
             // NO `.navigationTransition(.zoom)` here any more. The album viewer was the last place the
             // SYSTEM zoom transition still ran for chat media, and it is a third pipeline: it scales the
             // entire presented cover — backdrop, header, thumb strip, toolbar — out of the tapped tile,
@@ -676,7 +679,8 @@ struct ThreadView: View {
             // tiles fly too, leaving this on would run both animations over each other.
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false,
+                              clipProvider: { MediaOpenRects.clipRect })
                 // Zoom = hero open + button-close shrink into the bubble. The drag-down close is the
                 // media-only pan (same as photos): chrome hides instantly, only the video moves, the
                 // page behind stays fixed. The zoom transition's own pan is disabled in SignalDismissHost.
@@ -1279,7 +1283,8 @@ struct ThreadView: View {
                     if let rect = MediaOpenRects.rect(m.id),
                        let url = m.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
                         SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id)) {
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id),
+                                            clip: MediaOpenRects.clipRect) {
                             viewerImage = m
                         }
                     } else {
@@ -1299,6 +1304,7 @@ struct ThreadView: View {
                        let url = tapped.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
                         SignalMediaOpen.fly(image: img, from: rect,
                                             sourceCornerRadius: MediaOpenRects.cornerRadius(startId),
+                                            clip: MediaOpenRects.clipRect,
                                             present: present)
                     } else {
                         present()
@@ -1311,7 +1317,8 @@ struct ThreadView: View {
                     if let rect = MediaOpenRects.rect(m.id),
                        let url = m.thumbUrl, let img = DiskImageCache.shared.memoryImage(url) {
                         SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id)) {
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id),
+                                            clip: MediaOpenRects.clipRect) {
                             viewerVideo = m
                         }
                     } else {

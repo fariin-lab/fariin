@@ -27,6 +27,11 @@ struct SignalDismissHost: UIViewRepresentable {
     /// The message id behind `targetRect`. Needed for two things the rect alone cannot give: the tile's
     /// REAL corner radius, and the ability to hide that tile while the copy is flying onto it.
     var targetId: () -> String? = { nil }
+    /// The region the copy may draw in at the BUBBLE end of the flight (the visible message viewport,
+    /// window coords) — Signal's `clippingAreaInsets`. Given one, the landing is clipped through it, so
+    /// a copy flying home to a bubble half-scrolled under the header disappears BEHIND the bar instead
+    /// of landing on top of it. The open (SignalMediaOpen.fly) takes the same rect as `clip:`.
+    var clipRect: () -> CGRect? = { nil }
     var onDismiss: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -53,6 +58,7 @@ struct SignalDismissHost: UIViewRepresentable {
         private weak var root: UIView?
         private var backdrop: UIView?
         private var container: UIView?
+        private var clipWrap: UIView?      // landing-only clipping view (the chat viewport), see finish()
         private var fromFrame: CGRect = .zero
         private var active = false
         private static let distanceToCompletion: CGFloat = 88    // visual scrub (scale/alpha) reference
@@ -104,7 +110,11 @@ struct SignalDismissHost: UIViewRepresentable {
             case .began:
                 guard !active, parent.canBegin(), let m = parent.media() else { return }
                 active = true
-                fromFrame = m.frame
+                // ONE geometry base for both directions. The open fits the media into the WINDOW's
+                // bounds; the viewers' closures were fitting into `UIScreen.main.bounds`. Identical on a
+                // full-screen iPhone cover, but recomputing against this root keeps the promise by
+                // construction — the copy starts exactly where the open would land it.
+                fromFrame = m.image.map { mediaFitRect($0.size, in: root.bounds) } ?? m.frame
 
                 // Backdrop the interaction owns (alpha driven directly from progress).
                 let bd = UIView(frame: root.bounds)
@@ -222,9 +232,29 @@ struct SignalDismissHost: UIViewRepresentable {
             // stale offscreen position. Signal detects the missing context and falls back to dropping
             // straight down by one media height — do the same.
             let reported = parent.targetRect()
-            let onScreen = reported.map { $0.intersects(c.superview?.bounds ?? .zero) } ?? false
+            let rootBounds = c.superview?.bounds ?? .zero
+            let onScreen = reported.map { $0.intersects(rootBounds) } ?? false
             if let home = reported, onScreen, home.width > 1, home.height > 1 {
-                let center = CGPoint(x: home.midX, y: home.midY)
+                // THE LANDING IS CLIPPED THROUGH THE CHAT VIEWPORT, exactly Signal's clipping view
+                // (MediaDismissAnimationController: `clippingView.frame = containerView.bounds.inset(by:
+                // toContext.clippingAreaInsets)` inside the spring). The wrap starts as the full root —
+                // no visual change at reparent time — and shrinks to the viewport while the copy flies,
+                // so a copy landing on a bubble half under the header slides BEHIND the bar. Both frames
+                // animate in the same block, which is what makes the child's coordinates interpolate
+                // through the moving clip the way Signal's do.
+                var clipTarget: CGRect?
+                if let clip = parent.clipRect(), let rootView = c.superview,
+                   clip.width > 1, clip.height > 1, clip != rootView.bounds {
+                    let wrap = UIView(frame: rootView.bounds)
+                    wrap.clipsToBounds = true
+                    rootView.addSubview(wrap)
+                    wrap.addSubview(c)         // wrap sits at the root's origin → same on-screen frame
+                    clipWrap = wrap
+                    clipTarget = clip
+                }
+                // Destination expressed in the wrap's END-of-animation coordinates when clipped.
+                let homeInWrap = clipTarget.map { home.offsetBy(dx: -$0.minX, dy: -$0.minY) } ?? home
+                let center = CGPoint(x: homeInWrap.midX, y: homeInWrap.midY)
                 // Resolved OUTSIDE the animation closure: reading `parent` inside it needs an explicit
                 // self capture, and the value cannot change mid-flight anyway.
                 let landingRadius = parent.targetId().map { MediaOpenRects.cornerRadius($0) } ?? 14
@@ -232,15 +262,17 @@ struct SignalDismissHost: UIViewRepresentable {
                     dampingRatio: 1,     // Signal: springDamping 1, no overshoot on a landing
                     initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
                 let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
+                let wrapTarget = clipTarget
                 animator.addAnimations {
                     // FRAME match with transform identity, the way Signal lands
                     // (MediaDismissAnimationController: `frame = destinationFrame`, `transform =
                     // .identity`). The old version kept a transform SCALE derived from min(w,h) ratios,
                     // which cannot match a tile of a different aspect — the copy arrived the wrong
                     // shape. cornerRadius also did nothing without masksToBounds.
+                    if let wrapTarget { self.clipWrap?.frame = wrapTarget }
                     c.transform = .identity
-                    c.frame = CGRect(x: center.x - home.width / 2, y: center.y - home.height / 2,
-                                     width: home.width, height: home.height)
+                    c.frame = CGRect(x: center.x - homeInWrap.width / 2, y: center.y - homeInWrap.height / 2,
+                                     width: homeInWrap.width, height: homeInWrap.height)
                     // The tile's OWN radius, not a hardcoded 14 - media whose bubble uses a different
                     // radius visibly changed shape at the moment the copy took over.
                     c.layer.cornerRadius = landingRadius

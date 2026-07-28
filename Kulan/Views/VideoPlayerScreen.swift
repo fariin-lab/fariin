@@ -15,6 +15,9 @@ struct VideoPlayerScreen: View {
     let message: Message
     let cid: String
     var suppressDismissPan: Bool = false   // true when a native .zoom transition owns the drag-down close
+    // The visible viewport of the screen the video came from (window coords) — the drag-close's landing
+    // is clipped through it, same as the image viewer. Nil = no clipping (gallery/profile).
+    var clipProvider: () -> CGRect? = { nil }
     // (A second, SwiftUI open/close animation used to live here alongside the UIKit one. It is gone —
     // see the note in ImageViewerView. One pipeline owns both directions for photo and video alike.)
 
@@ -138,6 +141,7 @@ struct VideoPlayerScreen: View {
                 // most visible difference between the two media types.
                 targetRect: { MediaOpenRects.rect(message.id) },
                 targetId: { message.id },
+                clipRect: clipProvider,
                 onDismiss: { instantDismiss() })
             }
         }

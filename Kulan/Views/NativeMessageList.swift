@@ -1450,6 +1450,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
         // returns immediately unless a value actually moved.
         updateInsets()
+        // The visible message viewport in window coordinates, for the media transitions' clipping view
+        // (Signal passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this is the same
+        // region expressed as a rect). Remember the flip: adjusted .bottom is the VISUAL TOP inset (nav
+        // bar) and adjusted .top is the visual bottom (composer). The controller's view is untransformed,
+        // so its window frame is the plain screen region the list occupies.
+        let winFrame = view.convert(view.bounds, to: nil)
+        let inset = collectionView.adjustedContentInset
+        MediaOpenRects.clipRect = CGRect(x: winFrame.minX,
+                                         y: winFrame.minY + inset.bottom,
+                                         width: winFrame.width,
+                                         height: max(0, winFrame.height - inset.bottom - inset.top))
         // Report the GEOMETRIC nav-bar overlap (view.safeAreaInsets.top â€” this controller's view is NOT
         // transformed, so this is the plain, reliable value). Async so the SwiftUI state write never lands
         // mid-layout.

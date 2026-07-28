@@ -21,6 +21,14 @@ import UIKit
     /// hardcoded guess. The close used a flat 14 and the open had no radius at all, so media with a
     /// different bubble radius visibly changed shape at the moment the copy took over.
     static func cornerRadius(_ id: String) -> CGFloat { radii[id] ?? 14 }
+
+    /// The visible message viewport in window coordinates — Signal's `clippingAreaInsets`, as a rect.
+    /// Published by the message list controller on every layout pass. The transition's flying copy is
+    /// clipped to this region at the bubble end of BOTH directions, so a bubble half-scrolled under the
+    /// header is revealed from behind the bar instead of flying over it. Written only by the chat list;
+    /// read only through the closures the chat wires up, so other screens (gallery, profile) are
+    /// unaffected by a stale value.
+    static var clipRect: CGRect?
 }
 
 /// Whether a media bubble should render itself, so a transition can HIDE the tile it is flying to or

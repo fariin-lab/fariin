@@ -76,28 +76,36 @@ struct ImageViewerView: View {
     // trash offers only Delete for Everyone (own media). When present, the viewer offers BOTH options
     // like the message bubble's delete.
     var onDeleteForMe: ((Message) -> Void)? = nil
+    // The visible viewport of the screen the media came from (window coords) — the drag-close's landing
+    // is clipped through it (Signal's clippingAreaInsets). The conversation wires this to the message
+    // list's live viewport; profile/gallery leave it nil (no clipping, same as before).
+    var clipProvider: () -> CGRect? = { nil }
     private struct PenEditWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var penEdit: PenEditWrap?
 
     // Single-image entry (existing call sites): a one-page gallery.
     init(message: Message, cid: String, suppressDismissPan: Bool = false,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
-         onDeleteForMe: ((Message) -> Void)? = nil) {
+         onDeleteForMe: ((Message) -> Void)? = nil,
+         clipProvider: @escaping () -> CGRect? = { nil }) {
         self.gallery = [message]; self.cid = cid
         self.suppressDismissPan = suppressDismissPan
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
+        self.clipProvider = clipProvider
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
     init(message: Message, in gallery: [Message], cid: String, suppressDismissPan: Bool = false,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
-         onDeleteForMe: ((Message) -> Void)? = nil) {
+         onDeleteForMe: ((Message) -> Void)? = nil,
+         clipProvider: @escaping () -> CGRect? = { nil }) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
         self.suppressDismissPan = suppressDismissPan
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
+        self.clipProvider = clipProvider
         _current = State(initialValue: message.id)
     }
 
@@ -168,6 +176,7 @@ struct ImageViewerView: View {
                     // that one's tile rather than the one we opened with.
                     targetRect: { MediaOpenRects.rect(current) },
                     targetId: { current },
+                    clipRect: clipProvider,
                     onDismiss: { instantDismiss() })
             }
         }
