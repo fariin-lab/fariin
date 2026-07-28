@@ -5031,10 +5031,16 @@ struct MessageBubble: View, Equatable {
         // photo had no destination: the copy drifted off into nothing instead of flying back
         // to its tile, which is what single photos have done all along.
         .modifier(MediaRectReporter(id: "\(message.id)-\(i)"))
-        // Was openAlbumItem(i) — straight into the full-screen pager, which gave no way to see what
-        // else was in the group or choose from it. Now the group opens as a list first (user's
-        // WhatsApp reference); picking an item there is what opens the viewer.
-        .onTapGesture { if message.sendState == nil { onOpenAlbum(message) } }
+        // Tapping a tile opens THAT item straight in the viewer (user rule, 2026-07-28): with 10 or
+        // fewer items every photo is already visible in the mosaic, so a list screen in between is a
+        // second tap for nothing. The album list sheet earns its place only when there is more than
+        // the mosaic shows — an album of 11+ (old messages; new sends cap at 10) — or via a "+N"
+        // overflow tile, whose whole meaning is "there is more to see than this grid".
+        .onTapGesture {
+            guard message.sendState == nil else { return }
+            if message.album.count > 10 || extra > 0 { onOpenAlbum(message) }
+            else { openAlbumItem(i) }
+        }
     }
 
     private func albumVideoDuration(_ s: Double) -> String {
