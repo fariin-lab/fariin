@@ -288,21 +288,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.alpha = 0   // invisible until the first render is final — never shows a mid-measure frame
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
-        // .always so the real geometry (nav bar, home indicator, keyboard) becomes adjustedContentInset —
-        // the mechanism that already works in this app, kept deliberately rather than replaced with
-        // hand-computed insets, which desynced the last time it was tried.
+        // .never — WE own both insets. This was `.always` for one build and it was wrong, in the exact way
+        // the comment here predicted: UIKit does NOT map the safe area through the flip. It kept adding
+        // `safeAreaInsets.top` (the status bar and nav bar, about 103pt) to `contentInset.top`, which under
+        // the flip is the VISUAL BOTTOM — so roughly 80pt of dead space opened between the last bubble and
+        // the composer, while the visual top got the home indicator's 34pt instead of the nav bar's 103.
+        // The two contributions were simply swapped, and swapping our own two writes could not fix that
+        // because the safe-area half was not ours to swap.
         //
-        // THE ONE THING THE INVERSION ASSUMES AND A DEVICE TEST SHOULD CONFIRM: UIKit derives a subview's
-        // safe area by converting the superview's through its coordinate space, which honours transforms —
-        // so under the flip the collection view's own `top` inset is the VISUAL BOTTOM, the edge the
-        // composer and keyboard sit on. That is why updateInsets() writes the composer clearance to
-        // contentInset.top and the pinned-bar space to contentInset.bottom.
-        //
-        // If that mapping does NOT happen, the symptom is unmistakable and cosmetic: the last bubble sits
-        // under the keyboard while a gap opens under the nav bar. The fix is to swap the two writes in
-        // updateInsets(). It cannot cause a jump — scroll correctness no longer passes through inset
-        // arithmetic at all; the reader is held still by the layout.
-        collectionView.contentInsetAdjustmentBehavior = .always
+        // So the safe area is read from THIS CONTROLLER'S VIEW instead, which carries no transform and is
+        // the same value the old top-down list called reliable and un-desyncable. updateInsets() adds it on
+        // the correct side by hand. The totals are identical to what `.always` produced before the
+        // inversion (safe.bottom + composerBar + 12 at the composer edge, safe.top + pinned bar at the nav
+        // edge) — only the side changed.
+        collectionView.contentInsetAdjustmentBehavior = .never
         // BOTTOM edge-effect OFF: the user wants the messages fully clear/raw under the composer.
         if #available(iOS 26.0, *) {
             collectionView.bottomEdgeEffect.isHidden = true
@@ -1091,6 +1090,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !didFirstLand,
               collectionView.bounds.width > 0, collectionView.bounds.height > 0,
               !currentIds.isEmpty else { return }
+        // The landing offset is -contentInset.top, so the insets must be current BEFORE we land. Now that
+        // we own them outright (contentInsetAdjustmentBehavior = .never) nothing else will have set them
+        // for us, and the composer height and safe area can both arrive after the first apply.
+        updateInsets()
         measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
         layout.invalidateLayout()
@@ -1157,8 +1160,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // MARK: - Insets
 
     // Under the flip, contentInset.top is the VISUAL BOTTOM (where the composer is) and contentInset.bottom
-    // is the VISUAL TOP (where the pinned-message bar is). The nav bar, home indicator and keyboard arrive
-    // on their own through the safe area, so this only adds the two things UIKit cannot know.
+    // is the VISUAL TOP (where the nav bar and any pinned-message bar are).
+    //
+    // Both totals are assembled here, from this controller's own untransformed `view.safeAreaInsets` plus
+    // the one thing UIKit cannot know (the SwiftUI composer bar's height). They come to exactly what the
+    // top-down list produced when UIKit folded the safe area for us:
+    //
+    //   visual bottom = safe.bottom + composerBar + 12   home indicator, or the keyboard when it is up,
+    //                                                    then the bar riding on top of it, then Signal's
+    //                                                    small gap so the last bubble clears the pills
+    //   visual top    = safe.top + pinned bar            status bar + nav bar, plus the pin bar if shown
+    //
+    // The list is full-bleed under both bars (ThreadView ignores the container safe area), which is why the
+    // composer's height has to be added by hand — its own safe-area inset is not folded in for us.
     //
     // In the top-down list an inset write MOVED THE DESTINATION: "the bottom" was derived from the total
     // content height plus both insets, so growing the composer changed where the newest message belonged
@@ -1171,8 +1185,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        let visualBottom = composerBarH + 12   // Signal's small gap so the last bubble clears the composer
-        let visualTop = topOverlayHeight
+        let safe = view.safeAreaInsets
+        let visualBottom = safe.bottom + composerBarH + 12
+        let visualTop = safe.top + topOverlayHeight
         guard abs(collectionView.contentInset.top - visualBottom) > 0.5
                 || abs(collectionView.contentInset.bottom - visualTop) > 0.5 else { return }
         let wasAtNewest = isAtNewest
@@ -1377,6 +1392,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
+        // returns immediately unless a value actually moved.
+        updateInsets()
         // Report the GEOMETRIC nav-bar overlap (view.safeAreaInsets.top — this controller's view is NOT
         // transformed, so this is the plain, reliable value). Async so the SwiftUI state write never lands
         // mid-layout.

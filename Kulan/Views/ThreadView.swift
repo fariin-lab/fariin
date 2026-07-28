@@ -4719,7 +4719,14 @@ struct MessageBubble: View, Equatable {
             .accessibilityHidden(true)
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
-                    replyQuote.frame(maxWidth: .infinity, alignment: .leading)   // FILL the hugged width
+                    // FILL the hugged width — and it has to be the quote's OWN fillWidth knob, not a
+                    // .frame() from out here. replyQuoteBox applies its tint with .background() at the end
+                    // of its own chain, so a frame added by the caller lands AFTER the background is
+                    // already sized: the box stayed content-sized and merely sat leading-aligned in a wider
+                    // slot, leaving bare bubble to its right whenever the BODY was the wider part (user
+                    // report: "when I reply short text the reply quote looks half, right side"). Same trap
+                    // the voice bubble hit, which is why fillWidth exists.
+                    replyQuoteBox(fillWidth: true)
                     // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
                     if let link = firstLinkURL {
                         LinkPreviewCard(url: link, isMe: isMe, dark: dark)
