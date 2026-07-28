@@ -667,10 +667,23 @@ struct ChatsView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSelection(conv.id) }
             } else {
-                NavigationLink(value: ChatTarget(id: conv.id, name: conv.displayName(me),
-                                                 photo: conv.displayPhoto(me))) {
+                // A Button that pushes onto the same path, NOT a NavigationLink — because a
+                // NavigationLink row draws the disclosure chevron and there is no API to turn it off
+                // (user: "remove the arrow in chat list"). This is what the row originally did; it was
+                // changed to a NavigationLink to chase the stuck grey row, and the note on the List below
+                // records what that actually was: the link ALSO sets the List's selection, and SwiftUI
+                // never clears it on the way back. That is fixed where it belongs, in the two onChange
+                // handlers on the List, so the reason to keep a link here is gone.
+                //
+                // Same destination, same ChatTarget value, same navigationDestination — only the accessory
+                // and the row's selection side-effect disappear.
+                Button {
+                    path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
+                                           photo: conv.displayPhoto(me)))
+                } label: {
                     chatListRowLabel(conv)
                 }
+                .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
             }
         }
         .tag(conv.id)

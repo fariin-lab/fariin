@@ -1586,6 +1586,9 @@ struct ThreadView: View {
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
         guard !text.isEmpty else { return nil }
+        // Jumbomoji rows render borderless at up to 3.5x the body size — a shape the UIKit bubble path
+        // does not draw and does not measure. They stay in SwiftUI.
+        guard text.jumbomojiCount == 0 else { return nil }
         // Links (OG preview card + tappable ranges) stay in SwiftUI for now; '@' may be a username/mention.
         let lower = text.lowercased()
         guard !lower.contains("http"), !lower.contains("www."), !text.contains("@") else { return nil }
@@ -3918,6 +3921,23 @@ struct MessageBubble: View, Equatable {
         return Text(str)
     }
 
+    // How many emoji this message qualifies as "jumbomoji" with — 0 when it is an ordinary message.
+    private var jumbomojiCount: Int { message.text.jumbomojiCount }
+
+    /// Signal's `CVComponentBodyText.textMessageFont`, verbatim: multipliers on the body point size.
+    /// Their base is `UIFont.dynamicTypeBodyClamped.pointSize`; ours is the fixed 17pt every other bubble
+    /// uses, which is the same number at the default Dynamic Type setting.
+    static func jumbomojiPointSize(_ count: Int) -> CGFloat {
+        let base: CGFloat = 17
+        switch count {
+        case 1: return base * 3.5
+        case 2: return base * 3.0
+        case 3: return base * 2.75
+        case 4: return base * 2.5
+        default: return base * 2.25   // 5, the maximum that still counts as jumbomoji
+        }
+    }
+
     // The message text + trailing time as one line (short) or wrapped (long) — shared by the plain and
     // the reply-quote layouts so the two stay identical.
     private var bodyLine: some View {
@@ -4691,6 +4711,40 @@ struct MessageBubble: View, Equatable {
             .frame(width: maxBubbleWidth)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+        } else if jumbomojiCount > 0, message.replyTo == nil, firstLinkURL == nil {
+            // JUMBOMOJI — Signal's behaviour, read from their source (2026-07-28) rather than eyeballed.
+            //
+            //   DisplayableText.swift:
+            //     public static let kMaxJumbomojiCount: Int = 5
+            //     guard string.containsOnlyEmojiIgnoringWhitespace else { return 0 }
+            //     let emojiCount = string.removeCharacters(characterSet: .whitespacesAndNewlines).count
+            //     if emojiCount > kMaxJumbomojiCount { return 0 }
+            //
+            //   CVComponentBodyText.swift, textMessageFont — multipliers on the body point size:
+            //     1 → 3.5   2 → 3.0   3 → 2.75   4 → 2.5   5 → 2.25
+            //
+            //   CVComponentState.swift:
+            //     var isBorderlessJumbomojiMessage: Bool {
+            //         isTextOnlyMessage && (bodyText?.isJumbomojiMessage == true)
+            //     }
+            //
+            // Three things that fall out of those and are easy to get wrong: SIX or more emoji is a
+            // completely ordinary message with a bubble (not "capped at 5"); whitespace is ignored for
+            // the emoji-only test AND stripped before counting, so "🙂 🙂" is two; and borderless applies
+            // only to a TEXT-ONLY message, so an emoji-only REPLY keeps its bubble — which is why the
+            // quote and link-preview cases are excluded here rather than inside the count.
+            //
+            // Signal's borderless message keeps the bubble VIEW and makes it transparent
+            // (isBubbleTransparent), so the text insets and the footer position are unchanged. Same here:
+            // only the fill is dropped, so spacing and alignment match an ordinary bubble exactly.
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(message.text)
+                    .font(.system(size: Self.jumbomojiPointSize(jumbomojiCount)))
+                    .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                metaRow
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 10)
         } else {
             // Single-column Grid (the reference structure, ONE layout pass): the column hugs the WIDEST
             // row (usually the body text), and the reply quote's maxWidth:.infinity fills that column —
@@ -5265,4 +5319,43 @@ func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.pinMarker) { return "📌 Pinned a message" }
     if t.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Message" }
     return t
+}
+
+// MARK: - Jumbomoji detection (Signal's rules, read from Signal-iOS source 2026-07-28)
+
+// Signal keeps a hand-maintained table of emoji scalar ranges and binary-searches it
+// (`UnicodeScalar.isEmoji` in String+SSK.swift). Swift exposes the same information through Unicode
+// properties, so this asks the Unicode tables directly instead of shipping a table that goes stale every
+// time Unicode adds emoji. The one correction their table also makes: ASCII digits, '#' and '*' report
+// `isEmoji == true` but are not emoji on their own — they only become one inside a keycap sequence.
+private extension Unicode.Scalar {
+    var isEmojiScalar: Bool {
+        if properties.isEmojiPresentation { return true }
+        if value == 0xFE0F { return true }                        // variation selector-16 (emoji presentation)
+        if value == 0x20E3 { return true }                        // combining enclosing keycap
+        if (0x1F3FB...0x1F3FF).contains(value) { return true }     // skin-tone modifiers
+        if (0x1F1E6...0x1F1FF).contains(value) { return true }     // regional indicators (flags)
+        if (0xE0020...0xE007F).contains(value) { return true }     // tag characters (subdivision flags)
+        return properties.isEmoji && value > 0x238C
+    }
+    var isZeroWidthJoiner: Bool { value == 0x200D }
+}
+
+extension String {
+    /// Signal's `containsOnlyEmojiIgnoringWhitespace`:
+    ///     return self.allSatisfy { $0.isEmoji || $0.isZeroWidthJoiner || $0.properties.isWhitespace }
+    var containsOnlyEmojiIgnoringWhitespace: Bool {
+        guard !unicodeScalars.isEmpty else { return false }
+        return unicodeScalars.allSatisfy { $0.isEmojiScalar || $0.isZeroWidthJoiner || $0.properties.isWhitespace }
+    }
+
+    /// Signal's `DisplayableText.jumbomojiCount(in:)`, including its two easily-missed details: whitespace
+    /// is ignored for the emoji-only test AND stripped before counting (so "X Y" is two, not three), and
+    /// SIX or more returns 0 — an ordinary message with a bubble, not a count capped at five.
+    var jumbomojiCount: Int {
+        guard containsOnlyEmojiIgnoringWhitespace else { return 0 }
+        let count = filter { !$0.isWhitespace }.count   // grapheme clusters, so a ZWJ family is one
+        guard count > 0, count <= 5 else { return 0 }   // Signal: kMaxJumbomojiCount = 5
+        return count
+    }
 }
