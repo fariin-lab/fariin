@@ -51,6 +51,7 @@ struct MediaGalleryView: View {
     // Same zoom hero as the profile photo / chat bubbles: the viewer grows out of the tapped
     // tile and the drag-down close shrinks back into it.
     @Namespace private var mediaNS
+    @Namespace private var tabGlassNS   // lets the selected tab's glass MORPH across, not cross-fade
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -135,9 +136,51 @@ struct MediaGalleryView: View {
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
+    /// The selected segment's glass. Split into a modifier because `glassEffectID` is iOS 26 only and a
+    /// `@ViewBuilder` if/else inside the row would give the two branches different view identities,
+    /// which is what breaks the morph it exists to produce.
+    private struct SelectedTabGlass: ViewModifier {
+        let selected: Bool
+        let ns: Namespace.ID
+        func body(content: Content) -> some View {
+            if #available(iOS 26.0, *), selected {
+                content
+                    .glassEffect(.regular.interactive(), in: Capsule(style: .continuous))
+                    .glassEffectID("selectedTab", in: ns)
+            } else {
+                content
+            }
+        }
+    }
+
     // Liquid-glass segmented tab bar (user spec): the 5 tabs live inside one glass capsule and the
     // selected tab rides in its own raised pill — not a flat underline.
     private var tabBar: some View {
+        // NATIVE iOS 26 GLASS, USED THE WAY APPLE INTENDS. `liquidGlass` was already the real
+        // `.glassEffect` API, so the problem was never a custom material — it was that two glass surfaces
+        // were stacked with nothing telling the system they belong together. Glass inside glass, with no
+        // `GlassEffectContainer`, does not blend: each surface samples independently and the inner pill
+        // reads as a grey blob on top of the outer bar, which is exactly how it looked.
+        //
+        // A container makes them ONE glass system, and `glassEffectID` makes the selected pill MORPH
+        // across to the tapped segment instead of cross-fading — the iOS 26 segmented-control behaviour,
+        // and the same pattern the composer already uses.
+        tabRow
+            .padding(5)
+            .liquidGlass(Capsule(style: .continuous), interactive: true)
+            .padding(.horizontal, 16)
+            .padding(.top, 2)
+    }
+
+    @ViewBuilder private var tabRow: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 4) { tabButtons }
+        } else {
+            tabButtons
+        }
+    }
+
+    @ViewBuilder private var tabButtons: some View {
         HStack(spacing: 4) {
             ForEach(Tab.allCases, id: \.self) { t in
                 Button { withAnimation(.easeInOut(duration: 0.22)) { tab = t } } label: {
@@ -146,26 +189,12 @@ struct MediaGalleryView: View {
                         .foregroundStyle(tab == t ? Color.primary : Color.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
-                        .background {
-                            // Selected segment: a raised glass pill inside the bar.
-                            if tab == t {
-                                // Real glass, not a flat tint. The bar itself is liquidGlass; the selected
-                                // segment was a plain 14% primary fill, so it read as a grey blob sitting
-                                // on glass instead of a raised glass pill.
-                                Capsule(style: .continuous)
-                                    .fill(.clear)
-                                    .liquidGlass(Capsule(style: .continuous), interactive: true)
-                            }
-                        }
                         .contentShape(Capsule(style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .modifier(SelectedTabGlass(selected: tab == t, ns: tabGlassNS))
             }
         }
-        .padding(5)
-        .liquidGlass(Capsule(style: .continuous), interactive: true)
-        .padding(.horizontal, 16)
-        .padding(.top, 2)
     }
 
     // Swipe left/right to move between tabs, using the NATIVE paging TabView rather than a hand-rolled
