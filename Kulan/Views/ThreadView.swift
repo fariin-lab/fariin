@@ -1321,7 +1321,24 @@ struct ThreadView: View {
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
-                onSelect: { m in withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] } },
+                // THE OTHER HALF OF THE SELECTION BLUR. Entering selection mode empties `uikitModels`,
+                // so every row changes render route and every visible cell RELOADS. A context menu
+                // dismisses by animating its lifted preview back INTO the source cell; destroy that cell
+                // mid-flight and the system's full-screen blurred backdrop is stranded with no menu on it.
+                //
+                // The UIKit menu is gated properly now (willEndContextMenuInteraction's animator
+                // completion). But rows with a reply, media or reactions use SwiftUI's `.contextMenu`,
+                // which fires its action as the menu STARTS dismissing and offers no completion to wait
+                // on — so those rows still tore the cell out from under the animation, which is why the
+                // blur survived the first fix.
+                //
+                // Waiting out the dismissal is the only handle SwiftUI gives. It is the same wait the
+                // UIKit path gets from its animator, just measured rather than observed.
+                onSelect: { m in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+                    }
+                },
                 onInfo: { infoTarget = $0 },
                 onEdit: { m in
                     withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
@@ -2385,9 +2402,25 @@ struct ThreadView: View {
 
     // Send a photo with an instant optimistic bubble, then reconcile on the echo.
     // Send 2+ photos as ONE album (grid + one caption). Optimistic album bubble shows immediately.
+    /// TEN PER ALBUM, THEN A NEW ALBUM. Picking twelve photos used to make ONE message of twelve, which
+    /// the bubble could only show as ten tiles and a "+2" badge — a message you cannot actually see the
+    /// contents of. Every messenger caps the group and starts another; twelve becomes 10 + 2.
+    ///
+    /// Chunked at the SEND, not in the bubble, so the cap is a property of the message rather than of one
+    /// view: the album screen, the pager, the media gallery and the chat-list preview all count the same
+    /// ten without each needing their own clamp. The caption rides the FIRST chunk only, the way a
+    /// caption belongs to one message.
     private func sendAlbum(_ images: [UIImage], caption: String, hd: Bool) async {
         let datas = images.compactMap { $0.jpegData(compressionQuality: hd ? 0.95 : 0.85) }
         guard !datas.isEmpty else { return }
+        for (i, chunk) in stride(from: 0, to: datas.count, by: Limits.albumMaxItems)
+            .map({ Array(datas[$0 ..< min($0 + Limits.albumMaxItems, datas.count)]) })
+            .enumerated() {
+            await sendOneAlbum(chunk, caption: i == 0 ? caption : "")
+        }
+    }
+
+    private func sendOneAlbum(_ datas: [Data], caption: String) async {
         let previews = datas.map { ChatService.downscaledJPEG($0) }
         let clientId = UUID().uuidString
         await MainActor.run {

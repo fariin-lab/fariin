@@ -7,6 +7,10 @@ import Foundation
 enum Limits {
     // Chat
     static let pinnedMessagesPerChat = 3
+    /// Photos or videos in one album message. Picking more starts another album rather than hiding the
+    /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout
+    /// draws, so a sent album is always fully visible.
+    static let albumMaxItems = 10
     static let pinnedChats = 3
     static let forwardChatsAtOnce = 5
     static let mediaPerMessage = 32   // raised for parity with standard messengers (user request; was 30)
