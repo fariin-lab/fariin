@@ -246,6 +246,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var doubleTapGesture: UITapGestureRecognizer!
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
+    private var contextMenuVisible = false                   // UIKit says a context menu is on screen
     private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
@@ -688,7 +689,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var canLandLoad: Bool {
         if keyboardAnimating, selectionAnimationState != .willAnimate { return false }
         if selectionAnimationState == .animating { return false }
-        // A reconfigure mid-lift replaces the context menu's source view underneath it.
+        // Signal's `contextMenuVisible`, from UIKit's own callbacks. NO selection exception here: the land
+        // that opens selection mode is exactly the one that must wait, because it reloads the cell the
+        // menu is animating back into.
+        if contextMenuVisible { return false }
+        // Belt to the same braces, covering the press before UIKit decides a menu is happening.
         if Date() < interactionHoldUntil { return false }
         // Our send glide and any programmatic animated scroll.
         if sendAnimating || programmaticScrollAnimating { return false }
@@ -858,23 +863,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard ids != currentIds else {
             // A jump with no data change (target already in the loaded window).
             if let target = scrollTarget { performScrollTarget(target) }
-            // Selection land: the update that carries the checkbox change passes even mid-motion, then
-            // opens the animation window that defers everything else.
+            // THE GATE COMES FIRST, INCLUDING FOR THE SELECTION LAND. It used to sit below the selection
+            // branch, so entering selection mode was the one update that bypassed every block — and it is
+            // the single most destructive one to let through, because selection routes every row to the
+            // SwiftUI cell and therefore RELOADS every visible cell. Landing that while a context menu is
+            // dismissing destroys the cell the menu is animating back into. (Motion is not a reason to
+            // defer anything any more, so the exception it was written for no longer exists.)
+            guard canLandLoad else {
+                needsRefreshOnSettle = true
+                return
+            }
+            // Selection flip: refresh EVERY live cell, not the signature-diffed subset. Entering or
+            // leaving selection changes the render route of every row at once, so a per-row diff is just a
+            // slower way of reaching the same answer — and any row the diff misses keeps its checkbox
+            // after you have left selection mode.
             if selectionAnimationState == .willAnimate {
                 beginSelectionAnimationWindow()
-                let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-                let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }
                 lastRowSigs = rowSignatures
-                if !changed.isEmpty { refreshVisible(changed) }
+                let live = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+                if !live.isEmpty { refreshVisible(live) }
                 return
             }
             // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick).
             // A read tick arriving while you scroll reconfigures its row there and then; any height change
             // it causes goes through the layout, so it cannot move the reader.
-            guard canLandLoad else {
-                needsRefreshOnSettle = true
-                return
-            }
             // Reconfigure ONLY the visible rows whose CONTENT signature changed since the last apply —
             // NOT every visible cell on every SwiftUI re-render. ThreadView's body re-runs constantly on
             // presence/typing/read churn with the SAME row content; reconfiguring all visible cells each
@@ -1467,7 +1479,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
         switch g.state {
         case .began:
-            interactionHoldUntil = .distantFuture
+            // A CEILING, never .distantFuture. This flag closes canLandLoad, so a press that somehow never
+            // delivers .ended or .cancelled used to freeze every content update in the conversation for the
+            // rest of the session with no way back — the same wedged-flag shape the programmatic-scroll
+            // watchdog already exists to prevent. Nobody holds a finger down for eight seconds on purpose,
+            // and the real menu lifetime is tracked below by UIKit itself.
+            interactionHoldUntil = Date().addingTimeInterval(8)
         case .ended, .cancelled, .failed:
             // Keep the gate up briefly past the lift-off: the menu presentation is still settling.
             interactionHoldUntil = Date().addingTimeInterval(1.0)
@@ -1652,6 +1669,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                         contextMenuConfiguration configuration: UIContextMenuConfiguration,
                         dismissalPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
         bubbleTargetedPreview(at: indexPath)
+    }
+
+    // THE REAL MENU LIFETIME, from UIKit, replacing a long-press proxy that could not see it.
+    //
+    // Signal's land gate blocks on `collectionViewActiveContextMenuInteraction.contextMenuVisible`. Ours
+    // approximated that with the passive long-press recogniser, whose window closes one second after the
+    // finger lifts — but a menu ACTION is tapped seconds later, while the user reads the menu. So when
+    // "Select" was chosen, the gate was already wide open and the route flip it triggers (selection mode
+    // routes every row to the SwiftUI cell, so every visible row RELOADS) landed in the middle of the
+    // menu's dismissal.
+    //
+    // A context menu dismisses by animating its lifted preview back INTO the source cell. Destroy that
+    // cell mid-flight and the animation has nowhere to land: it strands the system's full-screen blurred
+    // backdrop on screen with no menu on it, which is the user's "when I select, all screen is going
+    // blur". Waiting for the animator's completion is the whole fix.
+    func collectionView(_ collectionView: UICollectionView,
+                        willDisplayContextMenu configuration: UIContextMenuConfiguration,
+                        animator: UIContextMenuInteractionAnimating?) {
+        contextMenuVisible = true
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        willEndContextMenuInteraction configuration: UIContextMenuConfiguration,
+                        animator: UIContextMenuInteractionAnimating?) {
+        guard let animator else { contextMenuVisible = false; settleFlush(); return }
+        animator.addCompletion { [weak self] in
+            self?.contextMenuVisible = false
+            self?.settleFlush()   // land everything the menu held back, now that the cell is free
+        }
     }
 
     // MARK: - Scroll observation
