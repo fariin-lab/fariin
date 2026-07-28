@@ -176,7 +176,19 @@ struct AuthMethodView: View {
                         break   // user cancelled the sheet — not an error worth showing
                     }
                 }
-                .signInWithAppleButtonStyle(.whiteOutline)
+                // SOLID BLACK, NOT `.whiteOutline`. The outline style draws a 1pt border on the button's
+                // own bounds, and the `.clipShape(Capsule())` below slices that border off at the corners
+                // — the broken-looking Apple button the user reported, while Google and Email were fine
+                // because their outline is a capsule stroke we draw ourselves and there is nothing to cut.
+                //
+                // SwiftUI's SignInWithAppleButton exposes no corner radius, so a true capsule WITH the
+                // outline intact would mean rebuilding the button by hand out of ASAuthorizationAppleIDButton
+                // and wiring the authorization controller ourselves. Not worth hand-rolling Apple's own
+                // sign-in button for a stroke. A solid fill clips to a capsule perfectly, and black on a
+                // light background is one of Apple's three approved styles, so this is compliant and
+                // cannot break. The set is slightly less uniform than the reference screens; an Apple
+                // button that looks damaged is worse.
+                .signInWithAppleButtonStyle(.black)
                 .frame(height: 50)              // matches authDoorPill exactly
                 .clipShape(Capsule())
 
