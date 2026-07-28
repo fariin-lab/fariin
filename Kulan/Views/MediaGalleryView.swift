@@ -50,7 +50,6 @@ struct MediaGalleryView: View {
     @Environment(\.dismiss) private var dismiss
     // Same zoom hero as the profile photo / chat bubbles: the viewer grows out of the tapped
     // tile and the drag-down close shrinks back into it.
-    @Namespace private var mediaNS
     @Namespace private var tabGlassNS   // lets the selected tab's glass MORPH across, not cross-fade
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
@@ -114,13 +113,14 @@ struct MediaGalleryView: View {
             loaded = true
         }
         .fullScreenCover(item: $viewerImage) { msg in
+            // No system .zoom any more: SignalMediaOpen flies the tapped tile's media (see flyOpen),
+            // the same pipeline as the conversation. Leaving the zoom on ran both animations at once
+            // and left the zoom's own dismiss pan fighting SignalDismissHost's.
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
                             cid: cid, suppressDismissPan: false)
-                .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
-                .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
         }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
             if let items = shareItems { ActivityView(items: items) }
@@ -377,8 +377,7 @@ struct MediaGalleryView: View {
                 }
             }
             .contentShape(Rectangle())
-            .matchedTransitionSource(id: m.id, in: mediaNS)   // hero anchor for the viewer
-            .modifier(MediaRectReporter(id: m.id))            // landing target for the drag-down close
+            .modifier(MediaRectReporter(id: m.id))   // fly-open source AND drag-close landing target
             .onTapGesture { tap(m) }
             .contextMenu { if !selecting { itemMenu(m) } }
     }
@@ -532,9 +531,25 @@ struct MediaGalleryView: View {
 
     private func tap(_ m: Message) {
         if selecting { toggle(m) }
-        else if m.isVideo { viewerVideo = m }
+        else if m.isVideo { flyOpen(m, poster: m.thumbUrl) { viewerVideo = m } }
         else if m.isGif { goToChat(m) }
-        else if m.isImage { viewerImage = m }
+        else if m.isImage { flyOpen(m, poster: m.imageUrl) { viewerImage = m } }
+    }
+
+    // OPEN LIKE THE CHAT: fly only the media out of its tile (SignalMediaOpen), then reveal the viewer.
+    // This screen used the system .zoom while the conversation flew - the SAME viewer opened with two
+    // different animations depending on where you tapped, and the zoom transition's own interactive
+    // dismiss pan ran ALONGSIDE SignalDismissHost's, two gestures fighting over one close. The tile's
+    // rect is already registered (MediaRectReporter, the drag-close's landing target), so the open now
+    // reads the same registry the close lands on - one pipeline, both directions, every entry point.
+    private func flyOpen(_ m: Message, poster: String?, present: @escaping () -> Void) {
+        if let rect = MediaOpenRects.rect(m.id),
+           let url = poster, let img = DiskImageCache.shared.memoryImage(url) {
+            SignalMediaOpen.fly(image: img, from: rect,
+                                sourceCornerRadius: MediaOpenRects.cornerRadius(m.id), present: present)
+        } else {
+            present()   // no live rect or undecoded thumb - plain presentation, never blocked
+        }
     }
     private func toggle(_ m: Message) {
         if selection.contains(m.id) { selection.remove(m.id) } else { selection.insert(m.id) }

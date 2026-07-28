@@ -218,8 +218,10 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in
+                // No system .zoom: SignalMediaOpen flies the tapped thumb (see the strip's tap),
+                // the same pipeline as the conversation and the gallery. The story cover below still
+                // uses .zoom - stories deliberately keep the system hero transition.
                 ImageViewerView(message: msg, cid: cid, suppressDismissPan: false)
-                    .navigationTransition(.zoom(sourceID: msg.id, in: mediaNS))
             }
             // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
             // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and
@@ -627,9 +629,22 @@ struct ContactInfoView: View {
                                 .frame(width: 84, height: 84)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .matchedTransitionSource(id: m.id, in: mediaNS)   // hero anchor
-                                .modifier(MediaRectReporter(id: m.id))            // drag-close landing target
-                                .onTapGesture { viewerImage = m }   // tap a THUMBNAIL → just that image
+                                .modifier(MediaRectReporter(id: m.id))   // fly-open source + drag-close landing
+                                // OPEN LIKE THE CHAT: fly the thumb's media out of its tile (one
+                                // pipeline, every entry point), falling back to a plain presentation.
+                                // The system .zoom here scaled the whole cover AND ran its own dismiss
+                                // pan alongside SignalDismissHost's.
+                                .onTapGesture {
+                                    if let rect = MediaOpenRects.rect(m.id),
+                                       let img = DiskImageCache.shared.memoryImage(url) {
+                                        SignalMediaOpen.fly(image: img, from: rect,
+                                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id)) {
+                                            viewerImage = m
+                                        }
+                                    } else {
+                                        viewerImage = m
+                                    }
+                                }
                         }
                     }
                 }
