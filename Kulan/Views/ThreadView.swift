@@ -4572,7 +4572,12 @@ struct MessageBubble: View, Equatable {
                     .padding(.horizontal, 12).padding(.vertical, 8)
                 }
             }
-            .frame(width: albumWidth)
+            // HUG THE MOSAIC, don't force the full album width. The solver returns the exact block the
+            // photos make, and for shapes that do not fill the width that block is narrower — pinning the
+            // bubble to `albumWidth` left bare bubble down one side (user: "left and right empty
+            // bubbles"). The caption row still stretches to whatever the mosaic decided, so the timestamp
+            // stays on the bubble's trailing edge.
+            .fixedSize(horizontal: true, vertical: false)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             .overlay {
@@ -4868,6 +4873,18 @@ struct MessageBubble: View, Equatable {
     private func albumAspect(_ i: Int) -> CGFloat {
         if message.album.indices.contains(i), message.album[i].height > 0 {
             return CGFloat(message.album[i].width / message.album[i].height)
+        }
+        // THE OPTIMISTIC ALBUM HAS NO `album` YET — it only has `localAlbum`, the preview JPEGs. Falling
+        // through to 1 here meant every pending photo measured as a SQUARE, so the mosaic solved one
+        // arrangement while sending and a completely different one the moment the server echo arrived
+        // with real dimensions. That is the user's "pending uses one design, after sending uses another".
+        //
+        // The previews are the same pictures, so their proportions are already correct — read them
+        // instead of guessing. Decoding just the header is enough for a size, and the result is cached by
+        // the row's measured height, so this does not run per frame.
+        if message.localAlbum.indices.contains(i),
+           let ui = UIImage(data: message.localAlbum[i]), ui.size.height > 0 {
+            return ui.size.width / ui.size.height
         }
         return 1
     }
