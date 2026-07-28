@@ -21,6 +21,12 @@ struct CallView: View {
     private var pipBase: CGSize { get { call.pipBase } nonmutating set { call.pipBase = newValue } }
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var flippingCamera = false   // brief blur mask over the front/back capture restart
+    // The ACCEPT hand-off (user report: "you feel your face left on big screen, [then] a moment when
+    // it drops [to the] small one" — a hard cut). While true, the corner tile renders FULL SCREEN over
+    // everything, holding the same local feed the big view just gave up; releasing it with a spring
+    // shrinks your preview continuously into the corner, revealing the other person underneath —
+    // FaceTime's connect transition. Live video the whole way; no snapshot, no branch swap.
+    @State private var tileEntering = false
 
     // MARK: - Auto-hiding controls (the standard video-call behaviour)
 
@@ -329,14 +335,20 @@ struct CallView: View {
             if visible {
                 ZStack(alignment: .topTrailing) {
                     tileContent(track: pipTrack, isLocal: pipIsLocal, feeds: feeds)
-                        .frame(width: 104, height: 150)
+                        // THE ACCEPT HAND-OFF: while entering, the tile IS the full screen — the same
+                        // local feed the big view showed during ringing — and the spring release
+                        // shrinks it into the corner (see tileEntering). One view, one live renderer,
+                        // every property below interpolates: size, corner radius, offset, padding.
+                        .frame(width: tileEntering ? geo.size.width : 104,
+                               height: tileEntering ? geo.size.height : 150)
                         // Blur the local feed briefly during a camera flip so the ~200ms capture restart
                         // (a frozen last frame) is masked into a smooth transition instead of a hard cut.
                         .blur(radius: (pipIsLocal && flippingCamera) ? 14 : 0)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.25), lineWidth: 1))
-                    // The flip glyph belongs to a LIVE local camera only.
-                    if pipIsLocal, pipTrack != nil {
+                        .clipShape(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous)
+                            .stroke(.white.opacity(tileEntering ? 0 : 0.25), lineWidth: 1))
+                    // The flip glyph belongs to a LIVE local camera only — and never to the hand-off.
+                    if pipIsLocal, pipTrack != nil, !tileEntering {
                         Button { flipCamera() } label: {
                             Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
@@ -345,8 +357,8 @@ struct CallView: View {
                         .padding(6)
                     }
                 }
-                .shadow(color: .black.opacity(0.45), radius: 14, y: 5)
-                .offset(pipOffset)
+                .shadow(color: .black.opacity(tileEntering ? 0 : 0.45), radius: 14, y: 5)
+                .offset(tileEntering ? .zero : pipOffset)
                 // Drag (min 10pt) repositions the window; a tap (no move) swaps the feeds.
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 10)
@@ -385,9 +397,24 @@ struct CallView: View {
                     showControls()
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }
                 }
-                .padding(.top, winInsets.top + 70)
-                .padding(.trailing, 14)
+                .padding(.top, tileEntering ? 0 : winInsets.top + 70)
+                .padding(.trailing, tileEntering ? 0 : 14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+        }
+        // The trigger: the tile appearing on a VIDEO call is the accept moment — my preview owned the
+        // big view a frame ago. Mount the tile at FULL SCREEN without animation (covering the big
+        // view's under-the-hood swap to the other person), then release it with a spring on the next
+        // runloop tick — two phases, or SwiftUI collapses both writes into one transaction and nothing
+        // animates. Voice calls and re-appearances (minimize/restore) don't qualify: the guard keys on
+        // the tile NEWLY appearing while the call is video and the local feed is not user-expanded.
+        .onChange(of: visible) { was, shows in
+            guard shows, !was, call.isVideo, !isLocalExpanded else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { tileEntering = true }
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { tileEntering = false }
             }
         }
     }
