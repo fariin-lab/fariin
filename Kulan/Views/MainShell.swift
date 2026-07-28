@@ -18,6 +18,25 @@ struct MainShell: View {
         callsRepo.calls.filter { $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt }.count
     }
 
+    // CONVERSATIONS WAITING, NOT MESSAGES WAITING — how Signal and WhatsApp both badge it. One person
+    // sending five messages moves this by ONE, not five: the badge answers "how many chats do I need to
+    // open", which is the question a chat list badge is actually for.
+    //
+    // The filter is deliberately the same one `markAllRead` uses, so the badge and the action that
+    // clears it can never disagree about what counts: not cleared, not archived, and not a chat we have
+    // silently blocked (a blocked contact's messages never badge a row either).
+    //
+    // It is computed, not stored, so it needs no invalidation: opening a chat, marking one read, or a
+    // new message arriving all change `repo.conversations`, and @Observable re-reads this on the spot.
+    private var chatsRepo = ConversationsRepository.shared
+    private var unreadChatsBadge: Int {
+        let me = AuthService.shared.uid ?? ""
+        guard !me.isEmpty else { return 0 }
+        return chatsRepo.conversations.filter {
+            !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me) && $0.unread(me) > 0
+        }.count
+    }
+
     init(onSignOut: @escaping () -> Void) { self.onSignOut = onSignOut }
 
     var body: some View {
@@ -114,6 +133,7 @@ struct MainShell: View {
             Tab("Chats", image: "ic_chat", value: 0) {
                 ChatsView(onSignOut: onSignOut)
             }
+            .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
             Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
                 CallsView()
             }
@@ -135,6 +155,7 @@ struct MainShell: View {
         TabView(selection: $tab) {
             ChatsView(onSignOut: onSignOut)
                 .tabItem { Label("Chats", image: "ic_chat") }
+                .badge(unreadChatsBadge)
                 .tag(0)
             CallsView()
                 .tabItem { Label("Calls", systemImage: tab == 1 ? "phone.fill" : "phone") }
