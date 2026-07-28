@@ -124,6 +124,10 @@ struct ThreadView: View {
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
+    // Bumped inside SWIFTUI context-menu actions that reload cells (Select). The UIKit list defers its
+    // reloads through the menu's dismissal animation — UIKit's own callbacks can't see SwiftUI menus,
+    // which is how Select kept stranding the system's blur backdrop over the whole chat.
+    @State private var menuActionTick = 0
     @State private var bulkForward: [Message]?
     @State private var showBulkDeleteConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
@@ -1314,23 +1318,23 @@ struct ThreadView: View {
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
-                // THE OTHER HALF OF THE SELECTION BLUR. Entering selection mode empties `uikitModels`,
-                // so every row changes render route and every visible cell RELOADS. A context menu
-                // dismisses by animating its lifted preview back INTO the source cell; destroy that cell
-                // mid-flight and the system's full-screen blurred backdrop is stranded with no menu on it.
+                // THE SELECTION BLUR, THIRD PASS — the first two were real but incomplete. Entering
+                // selection reloads every visible cell; a context menu dismisses by animating its lifted
+                // preview back INTO the source cell; reload that cell mid-flight and the system's
+                // full-screen blur backdrop is stranded (user screenshot: sharp preview at top, blur
+                // everywhere, selection chrome up). The UIKit-menu path waits on its animator. SwiftUI
+                // menus give no animator, and the previous fix here — a blind 0.35s delay before the
+                // flip — was both too short for a big album preview's dismissal spring AND ungated: at
+                // 0.35s the reload landed no matter what was still animating.
                 //
-                // The UIKit menu is gated properly now (willEndContextMenuInteraction's animator
-                // completion). But rows with a reply, media or reactions use SwiftUI's `.contextMenu`,
-                // which fires its action as the menu STARTS dismissing and offers no completion to wait
-                // on — so those rows still tore the cell out from under the animation, which is why the
-                // blur survived the first fix.
-                //
-                // Waiting out the dismissal is the only handle SwiftUI gives. It is the same wait the
-                // UIKit path gets from its animator, just measured rather than observed.
+                // Now the action ARMS A GATE instead of guessing a delay: menuActionTick tells the list
+                // controller "a SwiftUI menu is dismissing right now", canLandLoad holds every reload
+                // inside that window, and the deferred selection flip lands through settleFlush the
+                // moment it closes. The state flip itself is immediate again, so the selection toolbar
+                // appears instantly — only the CELL reload waits, which is exactly the UIKit path's order.
                 onSelect: { m in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
-                    }
+                    menuActionTick += 1
+                    withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
                 },
                 onInfo: { infoTarget = $0 },
                 onEdit: { m in
@@ -1704,6 +1708,7 @@ struct ThreadView: View {
             },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
+            menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,

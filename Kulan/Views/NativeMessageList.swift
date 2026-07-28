@@ -78,6 +78,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // clears the bar: the list is full-bleed UNDER the composer, so the composer's own safe-area inset is
     // not folded for us. Under the flip the visual bottom is contentInset.top â€” see updateInsets().
     var composerBarHeight: CGFloat = 0
+    // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
+    // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
+    // "a menu is dismissing right now" and holds cell reloads until the animation is over.
+    var menuActionTick: Int = 0
     // Height of the top overlay (pinned-message bar) the list runs UNDER. The floating date pill drops below
     // it so it isn't hidden behind the pin (Signal behavior). 0 â†’ pill sits at its normal top position.
     var topOverlayHeight: CGFloat = 0
@@ -108,6 +112,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onUikitDoubleTap = onUikitDoubleTap
         vc.setComposerBarHeight(composerBarHeight)
         vc.setTopOverlayHeight(topOverlayHeight)
+        vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
@@ -227,6 +232,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard s != isSelecting else { return }
         isSelecting = s
         selectionAnimationState = .willAnimate   // the next land carries the checkboxes â€” let it through
+    }
+
+    // THE SWIFTUI CONTEXT MENU IS INVISIBLE TO UIKIT'S CALLBACKS â€” the third and, read from the user's
+    // screenshot, the ACTUAL cause of the stranded selection blur. `contextMenuVisible` is fed by the
+    // collection view delegate (willDisplay/willEnd ContextMenu), which only fires for menus the
+    // COLLECTION VIEW presents â€” the UIKit text cells. Media, album, voice and reply bubbles are
+    // SwiftUI cells whose `.contextMenu` presents through its own interaction on the hosted view: those
+    // callbacks never fire, `contextMenuVisible` stays false, and the Select action's every-cell reload
+    // landed exactly mid-dismissal â€” destroying the cell the lifted preview was animating back into,
+    // stranding the system's full-screen blur (the sharp album strip at the top of the screenshot IS
+    // the orphaned preview). The two earlier fixes were real but only covered the UIKit-menu path.
+    //
+    // SwiftUI cannot tell us when its menu's dismissal ENDS, but the action closure tells us exactly
+    // when it BEGINS â€” actions run as the menu starts to dismiss. So the action marks a grace window
+    // sized to UIKit's dismissal animation, canLandLoad holds every land inside it, and a scheduled
+    // settleFlush lands the deferred work the moment it closes.
+    private var lastMenuActionTick = 0
+    private var menuDismissGraceUntil = Date.distantPast
+    func noteMenuActionTick(_ t: Int) {
+        guard t != lastMenuActionTick else { return }
+        let isFirstObservation = lastMenuActionTick == 0 && t != 0
+        lastMenuActionTick = t
+        guard !isFirstObservation || t == 1 else { return }   // adopting a mid-flight tick on (re)attach is not an action
+        // 0.6s: UIKit's dismissal spring runs ~0.4-0.5s and a LARGE lifted preview (an album mosaic)
+        // rides the long end of that. The previous blind 0.35s delay sat inside the tail, which is why
+        // the blur survived it. This window is a GATE, not a schedule — if anything else lands first it
+        // still gets held — and the scheduled flush right after it closes is what lands the deferred work.
+        menuDismissGraceUntil = Date().addingTimeInterval(0.6)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in self?.settleFlush() }
     }
 
     var rowSignatures: [String: String] = [:] // set before each apply â€” per-row content signature
@@ -704,6 +738,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // that opens selection mode is exactly the one that must wait, because it reloads the cell the
         // menu is animating back into.
         if contextMenuVisible { return false }
+        // The same rule for SWIFTUI-presented menus, which UIKit's callbacks cannot see â€” the action
+        // closure marks this window as its menu starts dismissing (see noteMenuActionTick).
+        if Date() < menuDismissGraceUntil { return false }
         // Belt to the same braces, covering the press before UIKit decides a menu is happening.
         if Date() < interactionHoldUntil { return false }
         // Our send glide and any programmatic animated scroll.
@@ -749,6 +786,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         guard needsRefreshOnSettle else { return }
         needsRefreshOnSettle = false
+        // A DEFERRED SELECTION FLIP MUST FLUSH AS A SELECTION FLIP. This path used to run only the
+        // signature diff â€” and entering selection changes no row's CONTENT signature, so the deferred
+        // every-cell reload silently became a no-op: the gate correctly held the land back and the flush
+        // then dropped it, leaving `.willAnimate` stuck and the checkboxes missing until the next
+        // unrelated land. Mirror apply()'s selection branch here.
+        if selectionAnimationState == .willAnimate {
+            beginSelectionAnimationWindow()
+            lastRowSigs = rowSignatures
+            pendingSettleHeights.removeAll()
+            let live = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+            if !live.isEmpty { refreshVisible(live) }
+            return
+        }
         let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
         let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }   // content changes
         lastRowSigs = rowSignatures
