@@ -1285,7 +1285,24 @@ struct ThreadView: View {
                         viewerImage = m
                     }
                 },
-                onTapAlbum: { gallery, startId in albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) },
+                // ALBUM IMAGES FLY TOO — this was the last media kind opening with no transition at all
+                // (user: "make it sure image video multiple swipe swipe images"). It was never a broken
+                // animation, it was a missing one: single photos and videos already called `fly`, and
+                // album VIDEO tiles reach it through onTapVideo, but album IMAGE tiles went straight to
+                // the pager. The geometry was already there and unused — a tile's rect is registered under
+                // `"<messageId>-<index>"`, which is exactly the `startId` handed to us here.
+                onTapAlbum: { gallery, startId in
+                    let present = { albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) }
+                    if let rect = MediaOpenRects.rect(startId),
+                       let tapped = gallery.first(where: { $0.id == startId }),
+                       let url = tapped.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
+                        SignalMediaOpen.fly(image: img, from: rect,
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(startId),
+                                            present: present)
+                    } else {
+                        present()
+                    }
+                },
                 onOpenAlbum: { m in albumScreen = m },
                 // Video takes the SAME path with its poster - one pipeline for all media, which is also
                 // how Signal does it (they fly a still frame for video, never a layer).
