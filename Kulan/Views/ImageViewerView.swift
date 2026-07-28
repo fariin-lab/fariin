@@ -277,7 +277,18 @@ struct ImageViewerView: View {
         if abs(idx - currentIndex) > 1 {
             Color.clear
         } else {
-            realPagerPage(m)
+            // PIN THE PAGE TO THE WINDOW, by measurement instead of guesswork. The paging TabView has
+            // been placing its page slots below the window origin (the "image is cut at the status
+            // bar" and "image jumps down after opening" reports — the fly-open lands the copy centered
+            // in the WINDOW, then the real page rendered lower and the photo visibly hopped). Container
+            // and TabView both ignore the safe area already and the offset still survived, so stop
+            // arguing with the slot: measure where this page actually sits and cancel it. On a
+            // correctly placed page the measured offset is zero and this is a no-op.
+            GeometryReader { pg in
+                realPagerPage(m)
+                    .frame(width: pg.size.width, height: pg.size.height)
+                    .offset(y: -pg.frame(in: .global).minY)
+            }
         }
     }
 
