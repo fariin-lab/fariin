@@ -8,6 +8,10 @@ import UIKit
 //
 // Usage: `.background(NavTitleView(onTap: { ... }) { avatarNameView })` in the pushed view.
 struct NavTitleView<Content: View>: UIViewRepresentable {
+    /// False while some other owner should have the title area — selection mode, which puts its own
+    /// centred `.principal` item there. We then hand the title back instead of fighting for it; see
+    /// `suspend()` for why that matters beyond tidiness.
+    var isActive: Bool = true
     var onTap: () -> Void
     @ViewBuilder var content: () -> Content
 
@@ -23,6 +27,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
     func updateUIView(_ marker: UIView, context: Context) {
         context.coordinator.onTap = onTap
         context.coordinator.host.rootView = AnyView(content())
+        guard isActive else { context.coordinator.suspend(); return }
         context.coordinator.install(from: marker)          // synchronous — install as early as possible
         DispatchQueue.main.async { context.coordinator.install(from: marker) }   // retry once laid out
     }
@@ -123,6 +128,28 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         private func assertTitleView() {
             guard let item = target?.navigationItem, item.titleView !== container else { return }
             item.titleView = container
+            // Ask for a fresh bar layout with the CURRENT leading items. The container declares a
+            // 10,000pt intrinsic width so the bar hands it the whole title area and the avatar can
+            // left-align in it — which means its frame depends entirely on where that area starts, and
+            // that moves when the back button appears or disappears. Selection mode hides the back
+            // button; on the way out the bar restored it but kept the title frame it had computed while
+            // the leading area was empty, so the avatar and name sat UNDERNEATH the back chevron (user
+            // report, screenshot). Only a flag is set here, never a synchronous layout — this can be
+            // reached from the KVO path, and a synchronous re-layout there is what once span the bar
+            // into a watchdog kill.
+            target?.navigationController?.navigationBar.setNeedsLayout()
+        }
+
+        /// Hand the title area back to whoever else wants it (selection mode's `.principal` item).
+        /// Without this the KVO below simply re-asserted our container over SwiftUI's centred title, so
+        /// the two took turns owning `titleView` for the whole of selection mode. Releasing it also means
+        /// the re-install on the way out is a REAL assignment rather than an early return, which is what
+        /// forces the bar to recompute the title frame now that the back button is back.
+        func suspend() {
+            observation?.invalidate(); observation = nil
+            guard let item = target?.navigationItem, item.titleView === container else { return }
+            item.titleView = nil
+            target?.navigationController?.navigationBar.setNeedsLayout()
         }
 
         func remove() {

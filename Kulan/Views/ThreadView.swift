@@ -500,7 +500,7 @@ struct ThreadView: View {
         // repeated user request ("completely go back build 341"). Known risk: setting titleView directly
         // fights SwiftUI's NavigationStack reconciler and can spin a CPU redisplay loop (0x8BADF00D hang);
         // the coalesced async re-assert in NavTitleView is the mitigation.
-        .background(NavTitleView(onTap: {
+        .background(NavTitleView(isActive: !selecting, onTap: {
             // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
             // and is still there when you swipe back (the reported bug).
             inputFocused = false
@@ -1868,7 +1868,18 @@ struct ThreadView: View {
                 Text(title).font(.headline)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
+                // Sized and shaped like the call glyphs next door, not left as a bare SF Symbol: an
+                // icon-only button's hit area is the GLYPH ITSELF, so the X was only tappable on the two
+                // thin strokes (user report: "the x button touch area is so small"). The explicit frame
+                // plus .contentShape makes the whole square live. Same lesson as the video-call minimise
+                // chevron in build 381, which was dead for exactly this reason.
+                Button { exitSelection() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .tint(.primary)
             }
         } else {
         // Avatar + name are the native UINavigationItem.titleView (see NavTitleView, installed in
@@ -5022,6 +5033,21 @@ struct MessageBubble: View, Equatable {
                 .frame(minWidth: 150, alignment: .leading)
             }
             .frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
+            // ONE HEIGHT, ALWAYS — only the width varies (explicit user request 2026-07-28, with a
+            // screenshot of one quote rendering three times taller than its neighbour).
+            //
+            // The cause was that this box could be STRETCHED by its parent. The accent line is a
+            // RoundedRectangle with only a width, and a Shape accepts any height it is offered, so the
+            // whole HStack was vertically flexible. In the text bubble the quote sits in a VStack that is
+            // laid out inside the bubble's measured template height, and a VStack hands leftover height to
+            // whichever child will take it — this one. So the quote silently grew to absorb whatever slack
+            // the body text left behind, which is why the tall example was the bubble with the long body.
+            //
+            // A definite height ends that: a fixed frame cannot be stretched, no matter what proposes to
+            // it, and it also guarantees the invisible measurement template and the visible copy are the
+            // same height by construction. 38 is the tallest thing the box ever holds (the status
+            // thumbnail), so nothing clips.
+            .frame(height: 38)
             .padding(.horizontal, 8).padding(.vertical, 5)
             // In the text bubble the Grid stretches this to the bubble's content width (fill); elsewhere it
             // hugs content with the minWidth floor above. Long snippets truncate at the bubble width.
