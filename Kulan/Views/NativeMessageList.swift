@@ -302,7 +302,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the correct side by hand. The totals are identical to what `.always` produced before the
         // inversion (safe.bottom + composerBar + 12 at the composer edge, safe.top + pinned bar at the nav
         // edge) — only the side changed.
-        collectionView.contentInsetAdjustmentBehavior = .never
+        // REVERTED TO .always (2026-07-28, build 388 regression). I switched this to .never and computed
+        // both insets from `view.safeAreaInsets`, on the theory that the controller's own view carries
+        // the real safe area. On device it does not — the values came out near zero, so the list lost
+        // BOTH its clearances at once: bubbles ran under the nav bar and under the composer, and because
+        // minContentOffsetY is derived from the same inset, the keyboard and scroll positions went with
+        // them. The user asked for one spacing fix and got a change of inset OWNERSHIP; that was my
+        // mistake, not a tuning error.
+        //
+        // UIKit computes the collection view's safe area from the WINDOW, which is why .always worked
+        // here for months. Do not take these insets over again without device proof.
+        collectionView.contentInsetAdjustmentBehavior = .always
         // BOTTOM edge-effect OFF: the user wants the messages fully clear/raw under the composer.
         if #available(iOS 26.0, *) {
             collectionView.bottomEdgeEffect.isHidden = true
@@ -1197,9 +1207,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        let safe = view.safeAreaInsets
-        let visualBottom = safe.bottom + composerBarH + 12
-        let visualTop = safe.top + topOverlayHeight
+        // Back to build 387's values exactly: UIKit contributes the real geometry through .always and we
+        // add only the two things it cannot know. The composer gap the user actually reported is still
+        // open — it will be fixed by changing THIS number and nothing else.
+        let visualBottom = composerBarH + 12
+        let visualTop = topOverlayHeight
         guard abs(collectionView.contentInset.top - visualBottom) > 0.5
                 || abs(collectionView.contentInset.bottom - visualTop) > 0.5 else { return }
         let wasAtNewest = isAtNewest
