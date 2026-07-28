@@ -38,16 +38,20 @@ struct MainShell: View {
         .onChange(of: AppRouter.shared.pendingChatId) { _, id in
             if id != nil { tab = 0 }
         }
-        // In-app notifications: every conversations emission runs the delta detector; a new
-        // unread in a chat that isn't on screen fires the banner/sound/haptic per settings.
-        .onChange(of: ConversationsRepository.shared.conversations) { _, new in
-            InAppNotify.shared.process(new)
-        }
-        .overlay(alignment: .top) {
-            if let b = InAppNotify.shared.banner {
-                InAppBannerView(banner: b)
-            }
-        }
+        // REMOVED: the conversations delta-detector banner. It was the SECOND in-app banner system.
+        // `InAppBannerCenter`, added in build 383 and mounted on RootView, is driven by the push actually
+        // arriving while the app is foregrounded — so one incoming message tripped both: the push fired
+        // that one, and the Firestore listener updating the conversation fired this one. Two banners for
+        // one message (user report).
+        //
+        // The push-driven one is the keeper: it rides above every screen rather than only MainShell, it
+        // shows nothing for the chat you are already looking at, and it plays the chosen tone itself.
+        // `InAppNotify` stays as a type because the Settings sound picker uses its `playTone` preview —
+        // it just no longer presents anything.
+        //
+        // Known trade-off, stated rather than hidden: with notification permission denied there is no
+        // push, so there is no in-app banner either. The delta detector used to cover that case. Showing
+        // everyone two banners to serve a user who has switched notifications off is the wrong trade.
         // Keep Media (Settings > Storage): age out old re-downloadable photo cache on launch.
         .task {
             let d = UserDefaults.standard.integer(forKey: "keepMediaDays")
