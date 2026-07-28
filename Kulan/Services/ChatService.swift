@@ -901,7 +901,7 @@ enum ChatService {
     }
 
     /// Send a GIF (a public Giphy URL — public content, so NOT E2EE; we store the url directly).
-    static func sendGif(cid: String, url: String, width: Double, height: Double, group: [String]? = nil) async throws {
+    static func sendGif(cid: String, url: String, width: Double, height: Double, clientId: String? = nil, group: [String]? = nil) async throws {
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -914,11 +914,13 @@ enum ChatService {
         }
         let msgRef = convRef.collection("messages").document()
         let batch = db.batch()
-        batch.setData([
+        var msg: [String: Any] = [
             "type": "gif", "imageUrl": url, "width": width, "height": height,
             "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": Date().timeIntervalSince1970 * 1000,
-        ], forDocument: msgRef)
+        ]
+        if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
+        batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "GIF", "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
         ]

@@ -747,10 +747,17 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
+                // OPTIMISTIC, exactly like a text send (user: "make it like how it works when I send a
+                // new message"). The bubble lands locally the moment you pick — and that local insert
+                // is what fires the send glide to the newest message. GIF was the one send type without
+                // an optimistic bubble: it only appeared on the server echo, which never scrolled.
+                let clientId = UUID().uuidString
+                repo.addPending(Message(localGifUrl: gif.url, width: gif.width, height: gif.height,
+                                        authorId: me, clientId: clientId, sendState: .sending))
                 Task {
                     // Surface failures — the old try? made a failed send look like a dead tap.
-                    do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, group: isGroup ? groupMembers : nil) }
-                    catch { await MainActor.run { sendError = "Couldn't send the GIF. Check your connection and try again." } }
+                    do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, clientId: clientId, group: isGroup ? groupMembers : nil) }
+                    catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the GIF. Check your connection and try again." } }
                 }
             }
         }

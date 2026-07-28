@@ -182,6 +182,24 @@ struct Message: Identifiable, Equatable {
         self.fileSize = fileSize
     }
 
+    /// Local optimistic GIF — renders instantly from its public CDN url (nothing to upload), so
+    /// sending a GIF glides the chat to the newest message exactly like a text send. GIF was the one
+    /// send type with no optimistic bubble: it only appeared on the server echo, which is why it never
+    /// scrolled (user report).
+    init(localGifUrl: String, width: Double, height: Double, authorId: String, clientId: String, sendState: MessageSendState) {
+        self.id = clientId
+        self.authorId = authorId
+        self.text = ""
+        self.type = "gif"
+        self.clientId = clientId
+        self.reactions = [:]
+        self.createdAt = Date()
+        self.sendState = sendState
+        self.imageUrl = localGifUrl
+        self.width = width
+        self.height = height
+    }
+
     /// Local optimistic message shown instantly before the server confirms it.
     /// `id` = clientId until the server echo (matched by clientId) replaces it.
     init(localText: String, authorId: String, clientId: String, replyTo: ReplyRef?, sendState: MessageSendState) {
