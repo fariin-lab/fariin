@@ -15,10 +15,8 @@ struct VideoPlayerScreen: View {
     let message: Message
     let cid: String
     var suppressDismissPan: Bool = false   // true when a native .zoom transition owns the drag-down close
-    // Telegram-style open/close TEST (Settings > Privacy): non-nil = the tapped bubble's screen rect;
-    // the player presents with NO system transition and the poster springs from/back into the bubble.
-    var telegramSourceRect: CGRect? = nil
-    @StateObject private var tg = TGOpenState()
+    // (A second, SwiftUI open/close animation used to live here alongside the UIKit one. It is gone —
+    // see the note in ImageViewerView. One pipeline owns both directions for photo and video alike.)
 
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
@@ -111,13 +109,13 @@ struct VideoPlayerScreen: View {
         // The interactive dismiss — the SAME code path as the image viewer
         // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight snapshot copy locked 1:1 to
         // the finger, constant 0.8 scale, direct backdrop alpha, finish-on-any-progress, 0.25s spring.
-        .opacity(dismissing || tgHidden ? 0 : 1)
+        .opacity(dismissing ? 0 : 1)
         .overlay {
             // Native .zoom owns the close (suppressDismissPan) → the player shrinks back into its bubble
             // via matched geometry; the custom pan is off so it can't fight it.
             if !suppressDismissPan {
             SignalDismissHost(
-                canBegin: { !zoomed && !scrubbing && !tgHidden },
+                canBegin: { !zoomed && !scrubbing },
                 media: {
                     // The video's fitted rect from its stored dimensions (fallback: full screen).
                     let bounds = UIScreen.main.bounds
@@ -129,7 +127,7 @@ struct VideoPlayerScreen: View {
                     // resizableSnapshotView branch, which captures whatever chrome has not finished
                     // hiding yet - Signal always flies a still frame for video, never a layer or a
                     // snapshot of the screen.
-                    return (mediaFitRect(size, in: bounds), tgPoster)
+                    return (mediaFitRect(size, in: bounds), poster)
                 },
                 onHideContent: { hidden in
                     if hidden { player?.pause() }   // freeze playback the moment the copy takes over
@@ -143,31 +141,21 @@ struct VideoPlayerScreen: View {
                 onDismiss: { instantDismiss() })
             }
         }
-        // Telegram-mode open/close copy: the poster springs from the bubble rect and back into it.
-        .overlay {
-            if let src = telegramSourceRect, !tg.live, let img = tgPoster {
-                TGMediaZoomLayer(image: img, source: src, expanded: tg.expanded)
-            }
-        }
-        .onAppear { if telegramSourceRect != nil { tg.open() } }
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
         .statusBarHidden(true)
         .task { await load() }
         .onDisappear { cleanup() }
     }
 
-    // ── Telegram-style open/close (test toggle) ──
-    private var tgHidden: Bool { telegramSourceRect != nil && !tg.live }
-    private var tgPoster: UIImage? { message.thumbUrl.flatMap { DiskImageCache.shared.memoryImage($0) } }
-    private func closeViewer() {
-        if telegramSourceRect != nil {
-            player?.pause()
-            tg.close { withoutPresentationAnimation { dismiss() } }
-        } else { dismiss() }
-    }
-    private func instantDismiss() {
-        if telegramSourceRect != nil { withoutPresentationAnimation { dismiss() } } else { dismiss() }
-    }
+    /// The still the transition flies. Signal flies a poster frame for video too — never a player
+    /// layer, never a snapshot of the live region — which is what makes video and photo behave alike.
+    private var poster: UIImage? { message.thumbUrl.flatMap { DiskImageCache.shared.memoryImage($0) } }
+
+    // Video closes exactly like a photo: one pipeline, the UIKit animator pair. The second
+    // (SwiftUI) implementation that used to live here is gone — see the note in ImageViewerView.
+    private func closeViewer() { dismiss() }
+    /// The drag-close's exit: the flying poster IS the animation, so the presentation goes without one.
+    private func instantDismiss() { dismiss() }
 
     private func skipBadge(_ icon: String) -> some View {
         Image(systemName: icon).font(.system(size: 26, weight: .medium)).foregroundStyle(.primary)

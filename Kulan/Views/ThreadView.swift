@@ -615,14 +615,12 @@ struct ThreadView: View {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid, suppressDismissPan: false,
-                                    telegramSourceRect: nil,
                                     onDeleteForMe: { m in repo.hideForMe(m.id) })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // Pass every photo in the chat so you can swipe between them (system-style paging).
                     ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
                                     cid: cid, suppressDismissPan: false,
-                                    telegramSourceRect: nil,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     },
@@ -671,11 +669,14 @@ struct ThreadView: View {
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                             },
                             onDeleteForMe: { m in repo.hideForMe(m.id) })
-            .navigationTransition(.zoom(sourceID: wrap.startId, in: imageViewerNS))
+            // NO `.navigationTransition(.zoom)` here any more. The album viewer was the last place the
+            // SYSTEM zoom transition still ran for chat media, and it is a third pipeline: it scales the
+            // entire presented cover — backdrop, header, thumb strip, toolbar — out of the tapped tile,
+            // while single photos and videos fly only the media through SignalMediaOpen. Now that album
+            // tiles fly too, leaving this on would run both animations over each other.
         }
         .fullScreenCover(item: $viewerVideo) { msg in
-            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false,
-                              telegramSourceRect: nil)
+            VideoPlayerScreen(message: msg, cid: cid, suppressDismissPan: false)
                 // Zoom = hero open + button-close shrink into the bubble. The drag-down close is the
                 // media-only pan (same as photos): chrome hides instantly, only the video moves, the
                 // page behind stays fixed. The zoom transition's own pan is disabled in SignalDismissHost.

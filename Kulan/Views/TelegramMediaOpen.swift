@@ -56,54 +56,17 @@ struct MediaRectReporter: ViewModifier {
     }
 }
 
-// The animating copy: at `expanded == false` the image sits exactly in the bubble rect (rounded like a
-// bubble); at `true` it fills the screen's fitted rect. Drive `expanded` inside withAnimation(spring)
-// and SwiftUI interpolates frame + corner radius — the Telegram open/close in one view.
-struct TGMediaZoomLayer: View {
-    let image: UIImage
-    let source: CGRect
-    let expanded: Bool
+// DELETED HERE: `TGMediaZoomLayer` and `TGOpenState` — a complete second open/close animation, in
+// SwiftUI, that ran alongside the UIKit pair in SignalMediaDismiss.swift. Every call site passed nil so
+// it never fired, but it disagreed with the real pipeline on every number that matters: spring response
+// 0.38 with 0.86 damping against Signal's 0.25 critically damped, a hardcoded 16pt corner radius against
+// the bubble's real one, `UIScreen.main.bounds` against the transition container's geometry, and
+// `aspectRatio(.fill)` on a view with no clipping view around it.
+//
+// Keeping a dormant second animator "in case" is how an area ends up with two sources of truth, and this
+// one had already outlived the toggle that used to switch it on.
 
-    var body: some View {
-        let screen = UIScreen.main.bounds
-        let fit = mediaFitRect(image.size, in: screen)
-        let r = expanded ? fit : source
-        ZStack {
-            Color.black.opacity(expanded ? 1 : 0)
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: r.width, height: r.height)
-                .clipShape(RoundedRectangle(cornerRadius: expanded ? 0 : 16, style: .continuous))
-                .position(x: r.midX, y: r.midY)
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-    }
-}
-
-// Shared open/close driver so the photo viewer and the video player behave identically.
-@MainActor final class TGOpenState: ObservableObject {
-    @Published var expanded = false   // copy at bubble (false) / fullscreen (true)
-    @Published var live = false       // animation finished → real content shown, copy gone
-    private static let springDuration = 0.42
-
-    func open() {
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { expanded = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.springDuration) { [weak self] in
-            self?.live = true
-        }
-    }
-
-    // Fly back into the bubble, then run `then` (an instant, non-animated dismiss).
-    func close(then: @escaping () -> Void) {
-        live = false
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { expanded = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.springDuration, execute: then)
-    }
-}
-
-// Present/dismiss without the system animation (the copy IS the animation in Telegram mode).
+// Present/dismiss without the system animation (the flying copy IS the animation).
 @MainActor func withoutPresentationAnimation(_ body: () -> Void) {
     var t = Transaction()
     t.disablesAnimations = true
