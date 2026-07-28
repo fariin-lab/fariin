@@ -4378,10 +4378,19 @@ struct MessageBubble: View, Equatable {
                 // voice card still swipes to reply normally.
                 guard !VoiceScrubState.touchOnWaveform else { return }
                 guard abs(v.translation.width) > abs(v.translation.height) else { return }   // horizontal only
-                if v.translation.width < 0 {
-                    let t = v.translation.width
-                    dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
-                }
+                // CLAMP THE VALUE, DO NOT GATE THE ASSIGNMENT. This was `if translation.width < 0 { ... }`,
+                // so dragX was only ever written while the finger was still left of where it started.
+                // Dragging BACK makes the translation rise toward zero, the condition fails, the
+                // assignment never runs, and the bubble keeps its last offset — it could swipe out but
+                // never return. That is the user's report: reply, image, GIF, voice and file bubbles
+                // swipe but will not swipe back, while plain text is fine.
+                //
+                // Plain text is fine because it takes the UIKit path, which does this same arithmetic on
+                // `min(0, translation.x)` — clamped at zero but ALWAYS assigned. Same gesture, same app,
+                // one `if` apart. Matching it here makes the two paths behave identically, which is what
+                // they were always meant to do.
+                let t = min(0, v.translation.width)
+                dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
                 // Buzz the INSTANT the swipe crosses the commit point, so the finger feels that a
                 // reply is armed — and again (once) if you pull back under it. This is what the plain
                 // text cells (the UIKit swipe path) already did; media/voice/reply bubbles only
