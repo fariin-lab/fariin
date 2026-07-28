@@ -4887,49 +4887,33 @@ struct MessageBubble: View, Equatable {
         .onTapGesture { if message.sendState == nil { openAlbumItem(0) } }
     }
 
+    // THE MOSAIC, driven by the photos' real shapes (MediaGroupLayout, which is Telegram's algorithm
+    // written as our own code — see that file's header).
+    //
+    // What this replaces: a switch on the COUNT with hardcoded fractions (W * 0.56, c * 1.2, 2x2 squares)
+    // and a single `wide = albumAspect(0) > 1.15` test on the FIRST photo only. Every album therefore came
+    // out roughly square whatever was in it, and nine tall photos and nine wide photos produced the same
+    // grid (user: "Dont use always square, it must use the size of the picture").
+    //
+    // Now every item's aspect goes in, the solver returns exact frames, and they are placed absolutely.
+    // Stacks cannot express this: a row's height depends on the ratios of the items IN it, so the
+    // arrangement is solved first and laid out second.
     @ViewBuilder private var albumGrid: some View {
-        let n = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
-        let W = albumWidth
-        let g: CGFloat = 2
-        let wide = albumAspect(0) > 1.15
-        switch max(n, 2) {
-        case 2:
-            if wide {
-                VStack(spacing: g) { albumTile(0, W, W * 0.56); albumTile(1, W, W * 0.56) }
-            } else {
-                let c = (W - g) / 2
-                HStack(spacing: g) { albumTile(0, c, c * 1.2); albumTile(1, c, c * 1.2) }
-            }
-        case 3:
-            if wide {
-                let bh = (W - g) / 2
-                VStack(spacing: g) {
-                    albumTile(0, W, W * 0.5)
-                    HStack(spacing: g) { albumTile(1, bh, bh); albumTile(2, bh, bh) }
-                }
-            } else {
-                let H = W * 0.8
-                let leftW = (W - g) * 0.62
-                let rightW = W - g - leftW
-                let rc = (H - g) / 2
-                HStack(spacing: g) {
-                    albumTile(0, leftW, H)
-                    VStack(spacing: g) { albumTile(1, rightW, rc); albumTile(2, rightW, rc) }
-                }
-            }
-        case 4:
-            let c = (W - g) / 2
-            VStack(spacing: g) {
-                HStack(spacing: g) { albumTile(0, c, c); albumTile(1, c, c) }
-                HStack(spacing: g) { albumTile(2, c, c); albumTile(3, c, c) }
-            }
-        default:
-            let c = (W - g) / 2
-            VStack(spacing: g) {
-                HStack(spacing: g) { albumTile(0, c, c); albumTile(1, c, c) }
-                HStack(spacing: g) { albumTile(2, c, c); albumTile(3, c, c, extra: n - 4) }
+        let n = max(message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count, 2)
+        let shown = min(n, 10)   // Telegram's album ceiling; anything beyond rides a "+N" on the last tile
+        let sizes = (0 ..< shown).map { CGSize(width: albumAspect($0), height: 1) }
+        // A square box: the width is the bubble's, and the height only bounds the hand-tuned 2/3/4
+        // arrangements, exactly as Telegram bounds them.
+        let solved = MediaGroupLayout.solve(itemSizes: sizes,
+                                            maxSize: CGSize(width: albumWidth, height: albumWidth))
+        ZStack(alignment: .topLeading) {
+            ForEach(solved.tiles, id: \.index) { tile in
+                albumTile(tile.index, tile.rect.width, tile.rect.height,
+                          extra: tile.index == shown - 1 ? n - shown : 0)
+                    .offset(x: tile.rect.minX, y: tile.rect.minY)
             }
         }
+        .frame(width: solved.size.width, height: solved.size.height, alignment: .topLeading)
     }
 
     // Is album item `i` a video? (works for both the optimistic bubble and the delivered message)
