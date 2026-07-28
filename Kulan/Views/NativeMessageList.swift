@@ -1373,8 +1373,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                  .beginFromCurrentState, .allowUserInteraction]) {
             self.collectionView.contentOffset.y = target
         } completion: { _ in
-            self.keyboardAnimating = false
-            self.settleFlush()
+            // OPENING: the transition is over, hand the offset back.
+            //
+            // CLOSING: it is NOT over. The safe area keeps shrinking after this animation ends, and every
+            // shrink re-runs updateInsets — whose at-newest branch writes an offset derived from
+            // minContentOffsetY, a value still in motion. That is the second symptom: the content is
+            // pulled past where it belongs, under the composer, and a later pass drags it back. Three
+            // writers, each sampling a moving number at a different instant.
+            //
+            // So `keyboardAnimating` stays raised until keyboardDidHide, which makes it mean what it
+            // should — a keyboard transition owns the offset — and leaves ONE settle at the end, when the
+            // safe area has actually stopped moving. The watchdog exists because a flag that gates every
+            // offset write must never be able to stick: if didHide somehow never arrives, this releases it.
+            guard delta < 0 else {
+                self.keyboardAnimating = false
+                self.settleFlush()
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.keyboardAnimating else { return }
+                self.keyboardAnimating = false
+                self.settleFlush()
+            }
         }
     }
 
@@ -1382,6 +1402,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // position, but ONLY for a session this controller actually rode — never as a blanket re-pin, which is
     // how the old close path could yank a reader who had scrolled up mid-session.
     @objc private func keyboardDidHide() {
+        // The safe area has finished moving, so the transition genuinely ends HERE, not when the ride's
+        // animation completed. Releasing the flag first makes this the single settle that owns the final
+        // position — everything else stood down for the whole close.
+        keyboardAnimating = false
         defer { rodeKeyboard = false }
         guard rodeKeyboard, didFirstLand, !isDisappearing,
               !isUserScrolling, !collectionView.isDecelerating else { settleFlush(); return }
