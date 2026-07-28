@@ -348,8 +348,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // UIKit computes the collection view's safe area from the WINDOW, which is why .always worked
         // here for months. Do not take these insets over again without device proof.
         collectionView.contentInsetAdjustmentBehavior = .always
-        // BOTTOM edge-effect OFF: the user wants the messages fully clear/raw under the composer.
+        // ALL scroll edge-effects OFF. The bottom one was already off (messages fully clear/raw under
+        // the composer). The TOP one was left on — and on iOS 26 it washed out the ENTIRE chat for
+        // some users (report: "all chat page is blur", iOS 26 only, iOS 27 fine): the effect sizes its
+        // soft region from scroll geometry that our FLIPPED list bends (the same class of bug as the
+        // `.always` safe-area fold — a system feature reading untransformed geometry through the flip).
+        // A chat list wants no system edge wash on any edge, on any OS version.
         if #available(iOS 26.0, *) {
+            collectionView.topEdgeEffect.isHidden = true
             collectionView.bottomEdgeEffect.isHidden = true
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -1567,9 +1573,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // Keep the bottom edge-effect OFF (UIKit can reset it) â€” content stays fully clear under the composer.
-        if #available(iOS 26.0, *), !collectionView.bottomEdgeEffect.isHidden {
-            collectionView.bottomEdgeEffect.isHidden = true
+        // Keep ALL edge-effects OFF (UIKit can reset them) â€” no system wash over the messages, either
+        // edge. The top one left on was the iOS-26 "whole chat is blurred" wash.
+        if #available(iOS 26.0, *) {
+            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
+            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
         // swipe-to-reply and resetSwipe is the single choke point that restores it â€” so ANY path that ends
