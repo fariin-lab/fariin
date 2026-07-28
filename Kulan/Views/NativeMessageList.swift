@@ -219,6 +219,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
     private var keyboardWasAtNewest = false              // latched at willHide: reader was at the newest message
     private var keyboardSettlePending = false            // didHide fired mid-drag; settle at drag/decel end
+    private var keyboardClosing = false                  // willHide → didHide: the per-layout glue window
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
@@ -1427,6 +1428,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             keyboardWasAtNewest = collectionView.isTracking || collectionView.isDecelerating
                 ? collectionView.contentOffset.y <= minContentOffsetY + 44
                 : isAtNewest
+            keyboardClosing = true   // the glue in viewDidLayoutSubviews runs until didHide
+        } else {
+            keyboardClosing = false  // reopened mid-close — stop gluing, the open owns it now
         }
         updateInsets()
     }
@@ -1457,6 +1461,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
         keyboardWasAtNewest = false
+        keyboardClosing = false   // the glue window ends where the settle takes over
         settleFlush()
     }
 
@@ -1561,6 +1566,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
         // returns immediately unless a value actually moved.
         updateInsets()
+        // THE CLOSE GLUE (larger-iPhone report: the last bubble visibly sat under the composer for the
+        // beat between the close and the didHide settle — a taller keyboard displaces more, so big
+        // screens made the transient obvious). One settle at the END means every frame before it can be
+        // wrong. Signal recomputes on every layout pass while the bar moves; this is that: for the whole
+        // willHide→didHide window, a reader the latch says was at the newest message is HELD there on
+        // every pass — updateInsets can't do it, its change-detection guard stops running once the
+        // insets have landed. Never while a finger or fling owns the list.
+        if keyboardClosing, keyboardWasAtNewest, didFirstLand, !isDisappearing,
+           !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+           abs(collectionView.contentOffset.y - minContentOffsetY) > 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
+        }
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (Signal passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this is the same
         // region expressed as a rect). Remember the flip: adjusted .bottom is the VISUAL TOP inset (nav
