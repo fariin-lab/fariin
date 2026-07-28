@@ -365,20 +365,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // UIKit computes the collection view's safe area from the WINDOW, which is why .always worked
         // here for months. Do not take these insets over again without device proof.
         collectionView.contentInsetAdjustmentBehavior = .always
-        // SCROLL EDGE EFFECTS, split by OS version (2026-07-28, two user reports pulling opposite ways):
-        //   * iOS 27+: BOTH ON — the user asked for the native progressive blur at the top AND bottom
-        //     while scrolling (screenshot: raw emoji bubbles colliding with the header/composer). Both
-        //     are enabled so the flip's edge mapping is irrelevant: whichever flag serves which visual
-        //     edge, both edges are served.
-        //   * iOS 26: BOTH OFF — its effect washed out ENTIRE chats (report: "all chat page is blur",
-        //     iOS 26 only): the soft region reads scroll geometry that our FLIPPED list bends, the same
-        //     class of bug as the `.always` safe-area fold. Raw beats washed there.
-        // DEVICE-CHECK on 27 after enabling: the band above the composer with the KEYBOARD UP — if the
-        // effect keys off contentInset (which grows by the keyboard), that band could grow with it.
-        if #available(iOS 27.0, *) {
-            collectionView.topEdgeEffect.isHidden = false
-            collectionView.bottomEdgeEffect.isHidden = false
-        } else if #available(iOS 26.0, *) {
+        // SYSTEM SCROLL EDGE EFFECTS: OFF, permanently, every OS. Third strike for system geometry
+        // features against the inverted list: on iOS 26 the effect washed out ENTIRE chats; enabled on
+        // iOS 27 it drew NOTHING at all (user screenshots, both). The progressive edge blur the user
+        // wants is now OURS — gradient-masked material bands in ThreadView (edgeBlurBand), identical
+        // on every OS, sized by us, incapable of washing anything.
+        if #available(iOS 26.0, *) {
             collectionView.topEdgeEffect.isHidden = true
             collectionView.bottomEdgeEffect.isHidden = true
         }
@@ -1617,12 +1609,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // Re-assert the per-version edge-effect policy (UIKit can reset these): iOS 27+ keeps the
-        // native progressive blur on both edges; iOS 26 keeps both OFF (the whole-chat wash).
-        if #available(iOS 27.0, *) {
-            if collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = false }
-            if collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = false }
-        } else if #available(iOS 26.0, *) {
+        // Keep the system edge effects OFF (UIKit can reset them) — the edge blur is ours now, in
+        // ThreadView's edgeBlurBand overlays.
+        if #available(iOS 26.0, *) {
             if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
             if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
         }
