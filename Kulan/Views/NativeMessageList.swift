@@ -251,17 +251,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // settleFlush lands the deferred work the moment it closes.
     private var lastMenuActionTick = 0
     private var menuDismissGraceUntil = Date.distantPast
+    private var menuDismissArmedAt = Date.distantPast
     func noteMenuActionTick(_ t: Int) {
         guard t != lastMenuActionTick else { return }
         let isFirstObservation = lastMenuActionTick == 0 && t != 0
         lastMenuActionTick = t
         guard !isFirstObservation || t == 1 else { return }   // adopting a mid-flight tick on (re)attach is not an action
-        // 0.6s: UIKit's dismissal spring runs ~0.4-0.5s and a LARGE lifted preview (an album mosaic)
-        // rides the long end of that. The previous blind 0.35s delay sat inside the tail, which is why
-        // the blur survived it. This window is a GATE, not a schedule — if anything else lands first it
-        // still gets held — and the scheduled flush right after it closes is what lands the deferred work.
+        // 0.6s BACKSTOP: UIKit's dismissal spring runs ~0.4-0.5s and a LARGE lifted preview (an album
+        // mosaic) rides the long end. This window is a GATE, not a schedule — and it normally ends
+        // EARLY, the moment the menu's own window hides (menuWindowDidHide), which is the same instant
+        // Signal's animator completion fires. The timer only covers the case that notification never
+        // comes. (User report on the timer-only version: "the checkmark is coming late" — checkboxes
+        // sat on the full 0.65s even though the menu was gone at ~0.4.)
+        menuDismissArmedAt = Date()
         menuDismissGraceUntil = Date().addingTimeInterval(0.6)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in self?.settleFlush() }
+    }
+
+    // The moment a SwiftUI context menu's dismissal actually ENDS: its menu lives in its own UIWindow,
+    // and that window becoming hidden is the completion callback SwiftUI never gives us. Ends the grace
+    // and lands the deferred selection reload immediately. The 0.25s floor shields against an unrelated
+    // window hiding right after the action; our own window never counts.
+    @objc private func menuWindowDidHide(_ note: Notification) {
+        guard Date() < menuDismissGraceUntil else { return }
+        guard Date().timeIntervalSince(menuDismissArmedAt) > 0.25 else { return }
+        guard (note.object as? UIWindow) !== view.window else { return }
+        menuDismissGraceUntil = .distantPast
+        settleFlush()
     }
 
     var rowSignatures: [String: String] = [:] // set before each apply â€” per-row content signature
@@ -450,6 +466,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
                                                name: UIResponder.keyboardDidHideNotification, object: nil)
+        // Context-menu dismissal end detector — see menuWindowDidHide. Registered permanently; the
+        // handler is inert outside an armed menu-dismissal grace window.
+        NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
+                                               name: UIWindow.didBecomeHiddenNotification, object: nil)
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
