@@ -243,6 +243,12 @@ struct ImageViewerView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            // The TabView must ignore the safe area ITSELF, not just live inside a full-bleed
+            // GeometryReader: a paging TabView offsets its pages down by the top safe area otherwise.
+            // Every letterboxed photo hid that offset inside its own bars; a photo with the screen's
+            // exact aspect (a screenshot) has no bars, so the offset showed as a black strip at the
+            // top - "the image looks cut at the status bar" (user report).
+            .ignoresSafeArea()
         }
         .ignoresSafeArea()
         // Gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
