@@ -811,7 +811,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
         var snapshot = dataSource.snapshot()
-        let split = splitByRouteFlip(target)
+        // Filter against the SNAPSHOT, not against `currentIds`. Both reconfigureItems and reloadItems
+        // abort the app on an identifier the snapshot does not hold, and `currentIds` is our own array —
+        // it is assigned before the data source's async apply completes, so the two disagree for a
+        // window. The snapshot in hand is the only thing that can answer this without a race. Same guard
+        // reflowInserted already uses; the crash on delete proved the apply path needed it too.
+        let present = Set(snapshot.itemIdentifiers)
+        let split = splitByRouteFlip(target.filter(present.contains))
         if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
         if !split.reload.isEmpty { snapshot.reloadItems(split.reload) }
         var delta: CGFloat = 0
@@ -927,8 +933,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Content changes that BATCH with an ids change (a reaction or read-tick arriving in the same repo
         // emission as a new message — constant with Firestore listener batches) must still reconfigure:
         // diffable apply does NOT touch rows present in both snapshots, and they would be left stale.
+        // CRASH FIX (.ips 2026-07-28-181456, SIGABRT on deleting a message). UIKit named it with no
+        // symbolication needed: `-[__UIDiffableDataSourceSnapshot reconfigureItemsWithIdentifiers:]` →
+        // `_validateReloadUpdateThrowingIfNeeded:` → `objc_exception_throw` → abort.
+        //
+        // reconfigureItems THROWS if an identifier is not in the snapshot, and the snapshot being built
+        // below holds the NEW ids. This filtered against `oldSet` — the ids as they were BEFORE the
+        // update — so a deleted message passed the filter, was handed to reconfigureItems, and was not
+        // there. My regression, introduced when the list was inverted: the original filtered on `ids`,
+        // and I swapped it to `oldSet` while rewriting around it.
+        //
+        // It must be BOTH: present in the new snapshot (or the reconfigure aborts the app) and changed
+        // since the last apply (or every visible bubble re-renders on every emission — the flashing).
+        let newSet = Set(ids)
         let liveIds = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-        let contentChanged = liveIds.filter { oldSet.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
+        let contentChanged = liveIds.filter { newSet.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
         lastRowSigs = rowSignatures
 
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids — a
@@ -950,7 +969,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // so a stale height there cannot move anyone. It is re-measured purely so the row RENDERS
         // correctly. (Modelling the separator as its own list item, the way Signal does, would remove even
         // this; it is no longer urgent.)
-        let keep = Set(ids)
+        let keep = newSet
         if currentIds.last != ids.last {   // the oldest loaded row changed → the join moved
             for id in currentIds.suffix(3) where keep.contains(id) {
                 heights[id] = measure(id, width: width)
