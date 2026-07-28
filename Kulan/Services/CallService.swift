@@ -25,6 +25,14 @@ final class CallService: NSObject {
                                                object: nil, queue: .main) { [weak self] _ in
             self?.appWillEnterForeground()
         }
+        // SECOND SHOT at taking the system PiP down, once the app is fully ACTIVE. AVKit can ignore a
+        // stop request fired at willEnterForeground (the scene is not active yet), which left Apple's
+        // window up next to our own FloatingCallWindow — the two-PiP report, again. Idempotent no-op
+        // when nothing is up.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { _ in
+            CallPiPController.shared.stopSystemPiP()
+        }
         // The camera is driven by what the CAPTURE SESSION actually does, not by the app lifecycle.
         // See the "Background camera" section below for why.
         NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification,

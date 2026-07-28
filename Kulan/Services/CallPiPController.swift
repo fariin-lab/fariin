@@ -45,6 +45,13 @@ final class CallPiPController: NSObject {
     }
 
     private func buildController(sourceView: UIView) {
+        // NEVER replace the controller while its Apple-owned window is up. Returning to the app can
+        // hand configure() a RECREATED source view (SwiftUI rebuilds its views freely), and this used
+        // to drop the old controller with its PiP still active — orphaning a system window nothing
+        // could ever close: stopSystemPiP talks to the NEW controller, whose PiP is not active, and
+        // no-ops forever. That is the half of the two-PiP report the foreground stop call cannot fix,
+        // and the exact hazard teardown() already documents. Stop the OLD window first, then rebuild.
+        stopSystemPiP()
         let vc = PiPCallViewController(bigView: bigView, tileView: tileView)
         vc.preferredContentSize = CGSize(width: 9, height: 16)
         callVC = vc
