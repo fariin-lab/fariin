@@ -1133,8 +1133,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 } else if let target = scrollTarget {
                     self.scrollTo(id: target)
                 } else if !wasAtBottom, !continuityAnchors.isEmpty,
-                          !self.collectionView.isTracking, !self.collectionView.isDragging,
-                          !self.collectionView.isDecelerating {
+                          !self.collectionView.isTracking, !self.collectionView.isDragging {
                     // ENFORCE the continuity invariant: the reader's top row must sit exactly where it
                     // sat before the land. The atomic contentOffsetAdjustment above is the primary
                     // mechanism; this catches ANY case it missed (dropped adjustment on a prepend →
@@ -1143,11 +1142,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                     // any future mechanism failure). First surviving anchor wins; correction is exact
                     // and non-animated, in the same runloop as the land.
                     //
-                    // AT REST ONLY, and `isDecelerating` is now part of that. It used to say deceleration
-                    // was fine, which was true only because loads could not land during deceleration at
-                    // all — the old motion gate refused them. Now that they land mid-scroll, a
-                    // setContentOffset here would stop a fling dead under the user's hand. The layout's
-                    // adjustment is the mechanism during motion; this is only the net at rest.
+                    // DECELERATION IS ALLOWED AGAIN, and excluding it was my regression (2026-07-27).
+                    //
+                    // I removed deceleration from this net so a correction could not cut a fling short.
+                    // But I had ALSO changed prepends to defer only while a FINGER is down — which means
+                    // they now land during deceleration, where they never could before. Those two changes
+                    // together left one hole and it is the worst one: a prepend landing mid-deceleration
+                    // with the layout adjustment as the only mechanism and nothing verifying it. When that
+                    // adjustment is dropped the reader is thrown a full page toward the newest messages —
+                    // the user's "it jumps and goes to another message" while reading, firing every couple
+                    // of seconds because that is the pagination throttle.
+                    //
+                    // A shortened fling is a cosmetic annoyance. Losing your place in a conversation is
+                    // the bug we have been chasing for days. And this only fires when the anchor has
+                    // ALREADY moved more than 2pt, i.e. only when something has genuinely gone wrong —
+                    // during a healthy fling it never runs at all. Only a live finger is excluded now,
+                    // because a pan re-derives the offset from its own baseline every tick and would
+                    // visibly fight the correction.
                     self.collectionView.layoutIfNeeded()
                     for a in continuityAnchors {
                         guard let ip = self.dataSource.indexPath(for: a.id),
