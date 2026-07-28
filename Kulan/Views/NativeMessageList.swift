@@ -1207,11 +1207,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        // Back to build 387's values exactly: UIKit contributes the real geometry through .always and we
-        // add only the two things it cannot know. The composer gap the user actually reported is still
-        // open — it will be fixed by changing THIS number and nothing else.
-        let visualBottom = composerBarH + 12
-        let visualTop = topOverlayHeight
+        // UNDO UIKIT'S SWAP, WITHOUT TAKING THE INSETS OVER.
+        //
+        // `.always` folds the collection view's safe area into adjustedContentInset, and that safe area
+        // is NOT mapped through the flip — `safeAreaInsets.top` is still the nav bar even though, under
+        // the transform, contentInset.top is the VISUAL BOTTOM. So UIKit reliably puts the nav bar's
+        // clearance where the composer is and the home indicator's where the nav bar is. Both halves of
+        // what the user sees: content running up under the header, and a gap above the composer.
+        //
+        // Two failed attempts are worth recording, because the obvious ones are both wrong:
+        //   * Changing only OUR number cannot fix it. The wrong part is the safe-area half, which is
+        //     UIKit's, and shrinking our own contribution to compensate breaks the moment the keyboard
+        //     changes the safe area.
+        //   * Taking the insets over with `.never` and computing from `view.safeAreaInsets` is what
+        //     regressed build 388 — that view does not carry the real safe area, so both clearances
+        //     collapsed at once.
+        //
+        // What does work is to keep UIKit's values, which ARE right, and cancel the swap: add the far
+        // edge's inset and subtract the near one, so each side ends up with the total it should have.
+        // `collectionView.safeAreaInsets` (window-derived, the same value `.always` is folding) is the
+        // reliable source here — not the controller's view.
+        let safe = collectionView.safeAreaInsets
+        let visualBottom = composerBarH + 12 + safe.bottom - safe.top
+        let visualTop = topOverlayHeight + safe.top - safe.bottom
         guard abs(collectionView.contentInset.top - visualBottom) > 0.5
                 || abs(collectionView.contentInset.bottom - visualTop) > 0.5 else { return }
         let wasAtNewest = isAtNewest
