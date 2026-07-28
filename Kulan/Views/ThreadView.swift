@@ -1269,10 +1269,18 @@ struct ThreadView: View {
                 // strip, toolbar - out of the bubble, which is the one thing that never matched Signal
                 // no matter how the timing was tuned. Falls straight through to the plain presentation
                 // when there is no live rect or no decoded image to fly, so opening can never be blocked.
+                // THE OPEN AND THE CLOSE MUST READ THE SAME GEOMETRY. The close already lands on the
+                // bubble's REAL corner radius (SignalMediaDismiss reads MediaOpenRects.cornerRadius);
+                // the open was leaving `sourceCornerRadius` at its 14pt default, so media whose bubble
+                // has a different radius started the flight at one shape and finished at another. Two
+                // directions, two radii, from one registry that already had the right number in it.
                 onTapImage: { m in
                     if let rect = MediaOpenRects.rect(m.id),
                        let url = m.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
-                        SignalMediaOpen.fly(image: img, from: rect) { viewerImage = m }
+                        SignalMediaOpen.fly(image: img, from: rect,
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id)) {
+                            viewerImage = m
+                        }
                     } else {
                         viewerImage = m
                     }
@@ -1284,7 +1292,10 @@ struct ThreadView: View {
                 onTapVideo: { m in
                     if let rect = MediaOpenRects.rect(m.id),
                        let url = m.thumbUrl, let img = DiskImageCache.shared.memoryImage(url) {
-                        SignalMediaOpen.fly(image: img, from: rect) { viewerVideo = m }
+                        SignalMediaOpen.fly(image: img, from: rect,
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id)) {
+                            viewerVideo = m
+                        }
                     } else {
                         viewerVideo = m
                     }
