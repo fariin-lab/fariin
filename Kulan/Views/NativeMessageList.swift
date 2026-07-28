@@ -288,14 +288,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.alpha = 0   // invisible until the first render is final — never shows a mid-measure frame
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
-        // .always so the real geometry (nav bar, home indicator, keyboard) becomes adjustedContentInset.
-        // Under the flip UIKit maps the safe area through the transform, so the collection view's own
-        // `top` inset is the VISUAL BOTTOM. That is the edge the composer sits on, which is why the
-        // composer clearance is written to contentInset.top in updateInsets().
+        // .always so the real geometry (nav bar, home indicator, keyboard) becomes adjustedContentInset —
+        // the mechanism that already works in this app, kept deliberately rather than replaced with
+        // hand-computed insets, which desynced the last time it was tried.
         //
-        // Note this is now only a COSMETIC dependency. Scroll correctness no longer relies on it: the
-        // reader is held still by the layout, not by inset arithmetic. If the safe area ever failed to
-        // map through the transform the symptom would be a wrong gap, not a jump.
+        // THE ONE THING THE INVERSION ASSUMES AND A DEVICE TEST SHOULD CONFIRM: UIKit derives a subview's
+        // safe area by converting the superview's through its coordinate space, which honours transforms —
+        // so under the flip the collection view's own `top` inset is the VISUAL BOTTOM, the edge the
+        // composer and keyboard sit on. That is why updateInsets() writes the composer clearance to
+        // contentInset.top and the pinned-bar space to contentInset.bottom.
+        //
+        // If that mapping does NOT happen, the symptom is unmistakable and cosmetic: the last bubble sits
+        // under the keyboard while a gap opens under the nav bar. The fix is to swap the two writes in
+        // updateInsets(). It cannot cause a jump — scroll correctness no longer passes through inset
+        // arithmetic at all; the reader is held still by the layout.
         collectionView.contentInsetAdjustmentBehavior = .always
         // BOTTOM edge-effect OFF: the user wants the messages fully clear/raw under the composer.
         if #available(iOS 26.0, *) {
