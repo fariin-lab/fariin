@@ -3874,6 +3874,7 @@ struct MessageBubble: View, Equatable {
     @AppStorage("readReceipts") private var readReceiptsPref = true
     @State private var dragX: CGFloat = 0   // swipe-to-reply offset (SwiftUI bubbles move INSIDE the cell)
     @State private var swipeArmed = false   // past the commit point → the threshold haptic already fired
+    @State private var swipeFollowing = false   // axis decided for THIS touch → follow every frame
 
     private var myUid: String { AuthService.shared.uid ?? "" }
     private var myReaction: String? { message.reactions[myUid] }
@@ -4357,19 +4358,23 @@ struct MessageBubble: View, Equatable {
                 // gestures are both simultaneous, so racing them is what kept failing. The rest of the
                 // voice card still swipes to reply normally.
                 guard !VoiceScrubState.touchOnWaveform else { return }
-                guard abs(v.translation.width) > abs(v.translation.height) else { return }   // horizontal only
-                // CLAMP THE VALUE, DO NOT GATE THE ASSIGNMENT. This was `if translation.width < 0 { ... }`,
-                // so dragX was only ever written while the finger was still left of where it started.
-                // Dragging BACK makes the translation rise toward zero, the condition fails, the
-                // assignment never runs, and the bubble keeps its last offset — it could swipe out but
-                // never return. That is the user's report: reply, image, GIF, voice and file bubbles
-                // swipe but will not swipe back, while plain text is fine.
+                // AXIS DECIDED ONCE PER TOUCH, THEN FOLLOW EVERY FRAME. The old per-frame
+                // `abs(w) > abs(h)` guard froze the bubble on any frame where the finger drifted more
+                // vertically than horizontally mid-swipe — stale offset for a frame, then a catch-up
+                // jump, which is the "not smooth, not following my finger" report. A UIKit pan decides
+                // its axis at recognition and then never re-litigates it; this now does the same.
+                if !swipeFollowing {
+                    guard abs(v.translation.width) > abs(v.translation.height) else { return }
+                    swipeFollowing = true
+                }
+                // CLAMP THE VALUE, DO NOT GATE THE ASSIGNMENT (the swipe-back fix, kept).
                 //
-                // Plain text is fine because it takes the UIKit path, which does this same arithmetic on
-                // `min(0, translation.x)` — clamped at zero but ALWAYS assigned. Same gesture, same app,
-                // one `if` apart. Matching it here makes the two paths behave identically, which is what
-                // they were always meant to do.
-                let t = min(0, v.translation.width)
+                // REBASE BY THE ACTIVATION DISTANCE: `translation` counts from TOUCH-DOWN, but this
+                // gesture only begins after 18pt of travel — so the bubble's first rendered frame
+                // teleported 18pt to catch up with the finger. The UIKit pan's translation starts at
+                // zero at recognition, which is why plain text felt right and media bubbles did not.
+                // Same gesture, same app, one coordinate base apart.
+                let t = min(0, v.translation.width + 18)
                 dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
                 // Buzz the INSTANT the swipe crosses the commit point, so the finger feels that a
                 // reply is armed — and again (once) if you pull back under it. This is what the plain
@@ -4392,6 +4397,7 @@ struct MessageBubble: View, Equatable {
                 VoiceScrubState.touchOnWaveform = false   // belt: a stuck flag would kill reply everywhere
                 let fire = !VoiceScrubState.active && dragX <= -50
                 swipeArmed = false
+                swipeFollowing = false
                 if fire { onReply(message) }   // haptic already fired at the threshold, don't double-buzz
                 // Snappier, more physical return than the old 0.4/0.8 spring: it leaves the finger
                 // quickly and settles without a floaty tail.

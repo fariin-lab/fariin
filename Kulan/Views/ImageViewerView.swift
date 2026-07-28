@@ -131,16 +131,19 @@ struct ImageViewerView: View {
     private var chromeVisible: Bool { !chromeHidden }
 
     private func closeViewer() {
-        // ZOOM OUT FIRST, like Signal. Closing while zoomed swapped a zoomed live view for an unzoomed
-        // transition copy, and that swap is visible as a jump - Signal's own comment calls it
-        // "perceptible". The drag path already refuses to start while zoomed; the X button did not.
-        guard pageZoom <= 1.02 else {
+        // ZOOM OUT FIRST, like Signal — but the close must NEVER be hostage to the zoom-out. The old
+        // version re-called itself until the zoom read ≤ 1.02, and with a STALE pageZoom (reported high
+        // while the scroll view is actually at fit) zoomOutToFit no-ops, no zoom callback fires, and the
+        // retry loop spun forever with the back arrow dead (user report: after a drag, the arrow stopped
+        // working; screenshot showed the viewer stuck with chrome up). One zoom-out attempt, then close
+        // regardless.
+        if pageZoom > 1.02 {
             zoomOutToken += 1
-            // Let the zoom settle before the copy is taken, so the copy matches what is on screen.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeViewer() }
-            return
+            // Let the zoom settle so the closing state matches the screen — then close no matter what.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { dismiss() }
+        } else {
+            dismiss()
         }
-        dismiss()
     }
     /// The drag-close's exit. The flying copy IS the animation, so the presentation itself must go
     /// without one — SignalDismissHost calls this with its copy still covering the same pixels.
@@ -164,7 +167,14 @@ struct ImageViewerView: View {
             SignalDismissHost(
                 canBegin: { pageZoom <= 1.02 },
                 media: {
-                    guard let img = loaded[current] else { return nil }
+                    // The SAME warm-cache chain the page itself renders from. `loaded` only fills from
+                    // the async load, so a page drawn straight from the memory cache could report nil
+                    // here — and a nil media means the drag NEVER BEGINS. That was "drag-to-close
+                    // sometimes doesn't work" for photos, while video always worked (its closure never
+                    // returns nil, it falls back to a snapshot).
+                    let m = message
+                    guard let img = loaded[current] ?? m.localImageData.flatMap(UIImage.init(data:))
+                        ?? m.imageUrl.flatMap({ DiskImageCache.shared.memoryImage($0) }) else { return nil }
                     return (mediaFitRect(img.size, in: UIScreen.main.bounds), img)
                 },
                 onHideContent: { dismissing = $0 },
@@ -564,6 +574,14 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate {
         super.viewDidLayoutSubviews()
         scrollView.frame = view.bounds
         scrollView.updateZoomScaleForLayout()
+        // HEAL STALE ZOOM REPORTS. scrollViewDidZoom only fires on CHANGES, so a ratio computed against
+        // a not-yet-final minimumZoomScale can stick — the container then believes the page is zoomed
+        // while the screen shows it at fit, which silently blocked BOTH the drag-to-close (canBegin)
+        // and the back arrow (its zoom-out-first loop waited for a callback that could never come).
+        // Re-report the true ratio after every layout; async so the SwiftUI state write never lands
+        // mid-layout, and a same-value write is free.
+        let ratio = scrollView.zoomScale / max(scrollView.minimumZoomScale, 0.0001)
+        DispatchQueue.main.async { [weak self] in self?.onZoom?(ratio) }
     }
 
     // MARK: UIScrollViewDelegate
