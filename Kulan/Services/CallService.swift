@@ -616,6 +616,15 @@ final class CallService: NSObject {
     // session correctly does nothing here rather than announcing video that does not exist.
     func appWillEnterForeground() {
         resumeCameraIfReallyBack()
+        // TAKE THE SYSTEM PiP DOWN OURSELVES. Nothing here ever did, and iOS only dismisses a PiP window
+        // on return by itself when that window is in its NORMAL state. Fling it to the screen edge and
+        // iOS STASHES it instead — parked, not dismissed, and it survives the app coming forward. Our own
+        // FloatingCallWindow then appears because the call is minimised, and the user is looking at two
+        // floating windows, one of which is Apple's and outside our control (user report 2026-07-27).
+        //
+        // Unconditional and idempotent: stopSystemPiP no-ops when nothing is up, so there is no state to
+        // get wrong here. Exactly one floating window can exist from this point.
+        CallPiPController.shared.stopSystemPiP()
     }
 
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just

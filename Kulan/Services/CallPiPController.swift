@@ -75,7 +75,32 @@ final class CallPiPController: NSObject {
         renderer = r
     }
 
+    /// TRUE while the system PiP window exists in ANY state, INCLUDING stashed at the screen edge.
+    /// `isPictureInPictureActive` stays true for a stashed window — that is the whole bug below.
+    var isSystemPiPActive: Bool { controller?.isPictureInPictureActive ?? false }
+
+    /// Take the system PiP down. Call this when the app returns to the foreground with a call still up.
+    ///
+    /// THE TWO-PiP BUG (user report 2026-07-27): background a video call so the system PiP appears, fling
+    /// it to the screen edge so iOS STASHES it, then return to the app — and there are two floating
+    /// windows, one of them Apple's.
+    ///
+    /// Cause: nothing in this app ever stopped the system PiP. The whole design leaned on iOS ending it
+    /// by itself when the app came forward, which it does for a NORMAL PiP window. A stashed window is a
+    /// different lifecycle: it is parked, not dismissed, and iOS keeps it alive. Our own
+    /// `FloatingCallWindow` then appears because the call is minimised, and now both exist.
+    ///
+    /// Idempotent, and safe to call when no PiP is up.
+    func stopSystemPiP() {
+        guard let controller, controller.isPictureInPictureActive else { return }
+        controller.stopPictureInPicture()
+    }
+
     func teardown() {
+        // Stop BEFORE dropping the controller. Releasing it while its window is still up (stashed or not)
+        // orphans an Apple-owned window with nothing left to close it — the same two-window state, only
+        // now with no way back because our reference is gone.
+        stopSystemPiP()
         if let t = bigTrack, let r = bigRenderer { t.remove(r) }
         if let t = tileTrack, let r = tileRenderer { t.remove(r) }
         bigRenderer = nil; tileRenderer = nil
@@ -211,6 +236,28 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     failedToStartPictureInPictureWithError error: Error) {
         print("[PiP] failed to start: \(error.localizedDescription)")
+    }
+
+    /// Apple's designated hook for "the user is coming back to your app". It was never implemented, which
+    /// is half of why a stashed PiP survived the return: iOS asks whether to restore our UI, gets no
+    /// answer, and leaves its window where it is.
+    ///
+    /// The contract is strict — the completion handler MUST be called, exactly once, and iOS only takes
+    /// its window down after it fires. `true` means we restored successfully.
+    func pictureInPictureController(_ controller: AVPictureInPictureController,
+                                    restoreUserInterfaceForPictureInPictureStopWithCompletionHandler
+                                    completionHandler: @escaping (Bool) -> Void) {
+        // The call UI is a root-level container that never went anywhere, so there is nothing to rebuild:
+        // returning to the app IS the restore. Answer immediately rather than deferring to an animation —
+        // a late or missed completion is what leaves Apple's window on screen.
+        completionHandler(true)
+    }
+
+    /// Only now is the system window genuinely gone. Ours is the single floating window from here.
+    func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        // Nothing to tear down: the renderers stay bound for the life of the call so a re-background can
+        // start PiP again instantly. This exists so the state is observable and the lifecycle is closed
+        // rather than assumed.
     }
 }
 
