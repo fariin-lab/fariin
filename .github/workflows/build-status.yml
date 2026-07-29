@@ -58,11 +58,21 @@ jobs:
           print("\nPer build: install state, groups, testers")
           for b in r.get("data", []):
               bid, ver = b["id"], b["attributes"]["version"]
+              # SAY WHEN THE REQUEST FAILED. This used to swallow any non-200 into an empty dict, so a
+              # rate-limited or errored call was reported as "internal=None" — indistinguishable from a
+              # build genuinely not set up for testing. That is not a small nicety: it produced a
+              # confident wrong diagnosis twice, and the giveaway was build 399 reading IN_BETA_TESTING
+              # in one run and None in the next, which no real build state can do.
               def rel(path, params=None):
                   try:
-                      return requests.get(f"{BASE}/builds/{bid}/{path}", headers=H, params=params or {}).json()
+                      resp = requests.get(f"{BASE}/builds/{bid}/{path}", headers=H, params=params or {})
+                      if resp.status_code != 200:
+                          print(f"      ! {path} HTTP {resp.status_code}: {resp.text[:200]}")
+                          return {}
+                      return resp.json()
                   except Exception as e:
-                      return {"error": str(e)}
+                      print(f"      ! {path} EXCEPTION: {e}")
+                      return {}
               detail = (rel("buildBetaDetail").get("data") or {}).get("attributes", {})
               groups = rel("betaGroups", {"fields[betaGroups]": "name,isInternalGroup"}).get("data", [])
               testers = rel("individualTesters", {"limit": 5}).get("data", [])
