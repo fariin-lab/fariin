@@ -523,7 +523,18 @@ struct AttachRecentsStrip: View {
         let ids = selectedIds
         let onceWanted = viewOnce && ids.count == 1
         let byId = resolveSelected(ids)   // global store, NOT the visible album (cross-album selection)
-        loadingPick = true
+        let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // CLOSE FIRST, RESOLVE AFTER — Telegram's model (user: "it must send direct, no loading in the
+        // media sheet"). This used to raise a spinner over the sheet and decode EVERY selected asset at
+        // full quality first — nine photos, possibly pulled from iCloud — and only THEN hand them over,
+        // which is why the sheet sat there loading. Nothing about that work needs the sheet on screen:
+        // the send is already optimistic, so the bubbles are the progress indicator. Selection state is
+        // cleared and the sheet dismissed on this very tap; the decode continues in a task that is not
+        // tied to this view's lifetime, and delivers when it is ready.
+        selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
+        onClose()
+
         Task {
             // Build the ORDERED mixed list (selection order) so photos + videos ship as ONE group.
             var ordered: [ApprovalMedia] = []
@@ -543,10 +554,7 @@ struct AttachRecentsStrip: View {
                     ordered.append(.image(UUID(), ui))
                 }
             }
-            let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
             await MainActor.run {
-                loadingPick = false
-                selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
                 guard !ordered.isEmpty else { return }
                 // A single view-once photo keeps its dedicated view-once send (view-once can't be an album).
                 if onceWanted, ordered.count == 1, case .image(_, let ui) = ordered[0] {
