@@ -1,8 +1,8 @@
 import SwiftUI
 
-// "Set nickname" — the local, device-only contact card (Edit on a profile), rebuilt 2026-07-29 to the
-// user's reference: avatar, First/Last in one grouped card, a private Note in its own card with the
-// honest footer, and a red Delete that clears BOTH. X cancels, checkmark saves.
+// "Set nickname" — the local, device-only contact card (Edit on a profile): avatar, First/Last, a
+// private Note with its footer, and a red Delete that clears BOTH. X cancels, checkmark saves.
+// Built on the same grouped `Form` as Settings > Edit Profile, deliberately — see body.
 //
 // Everything here is stored by ContactNames on this device and never sent, which is what lets the
 // footer promise "Notes are only visible to you" without an asterisk.
@@ -36,45 +36,58 @@ struct SetNicknameView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color(.systemGroupedBackground).ignoresSafeArea()
-                ScrollView {
-                    VStack(spacing: 18) {
-                        AvatarView(name: profileName, photoUrl: photoUrl, size: 96)
-                            .padding(.top, 12)
+            // A REAL GROUPED FORM, the same one Settings > Edit Profile uses (user 2026-07-29, with a
+            // screenshot circling the cards: "that section is not looks native… make it like when i go
+            // setting then i click edit name").
+            //
+            // What was here before drew the look by hand: a ScrollView of VStacks with their own
+            // 16pt-radius backgrounds, own padding and a hand-placed Divider. It could only ever
+            // approximate the real thing, and it was wrong in exactly the places the eye checks — the
+            // card inset and radius, the separator's inset, the row height, and the footer, which was a
+            // floating caption under a card rather than a section footer. None of that is worth owning:
+            // `Form` renders all of it, matches whatever iOS does next, and keeps the two name screens
+            // identical for free.
+            Form {
+                Section {
+                    AvatarView(name: profileName, photoUrl: photoUrl, size: 96)
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)   // sits on the grouped background, no card
+                }
 
-                        // First + Last share one card, divided — the reference grouping.
-                        VStack(spacing: 0) {
-                            field("First name", text: $first, field: .first, submit: .next)
-                            Divider().padding(.leading, 16)
-                            field("Last name", text: $last, field: .last, submit: .next)
-                        }
-                        .background(Color(.secondarySystemGroupedBackground),
-                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                Section {
+                    TextField("First name", text: $first)
+                        .textInputAutocapitalization(.words)
+                        .focused($focus, equals: .first)
+                        .submitLabel(.next)
+                        .onSubmit { focus = .last }
+                        .onChange(of: first) { _, v in if v.count > 40 { first = String(v.prefix(40)) } }
+                    TextField("Last name", text: $last)
+                        .textInputAutocapitalization(.words)
+                        .focused($focus, equals: .last)
+                        .submitLabel(.next)
+                        .onSubmit { focus = .note }
+                        .onChange(of: last) { _, v in if v.count > 40 { last = String(v.prefix(40)) } }
+                }
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            field("Note", text: $note, field: .note, submit: .done)
-                                .background(Color(.secondarySystemGroupedBackground),
-                                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            Text("Notes are only visible to you.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                                .padding(.horizontal, 16)
-                        }
+                Section {
+                    // GROWS INSTEAD OF SCROLLING SIDEWAYS. A one-line field pushed a long note off to
+                    // the left as you typed, so you could not read back what you had written — the same
+                    // shape the Bio field in Settings already solved with a vertical axis.
+                    TextField("Note", text: $note, axis: .vertical)
+                        .lineLimit(1...5)
+                        .focused($focus, equals: .note)
+                } footer: {
+                    // A real section footer, so it takes the system's own inset and spacing rather than
+                    // sitting under the card at a guessed padding.
+                    Text("Notes are only visible to you.")
+                }
 
-                        if hasSomethingToDelete {
-                            Button(role: .destructive) { confirmDelete = true } label: {
-                                Text("Delete")
-                                    .font(.body)
-                                    .foregroundStyle(.red)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 16).padding(.vertical, 15)
-                            }
-                            .background(Color(.secondarySystemGroupedBackground),
-                                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                if hasSomethingToDelete {
+                    Section {
+                        Button(role: .destructive) { confirmDelete = true } label: {
+                            Text("Delete").frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        Spacer(minLength: 8)
                     }
-                    .padding(.horizontal, 16)
                 }
             }
             .navigationTitle("Set nickname")
@@ -102,22 +115,6 @@ struct SetNicknameView: View {
             }
             .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focus = .first } }
         }
-    }
-
-    private func field(_ placeholder: String, text: Binding<String>, field: Field,
-                       submit: SubmitLabel) -> some View {
-        TextField("", text: text, prompt: Text(placeholder).foregroundStyle(.tertiary))
-            .font(.body)
-            .focused($focus, equals: field)
-            .submitLabel(submit)
-            .onSubmit {
-                switch field {
-                case .first: focus = .last
-                case .last:  focus = .note
-                case .note:  save()
-                }
-            }
-            .padding(.horizontal, 16).padding(.vertical, 15)
     }
 
     private func save() {
