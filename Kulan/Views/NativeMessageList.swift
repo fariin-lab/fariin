@@ -1274,6 +1274,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // bottom", which then yanked them down. Here the newest message is at a fixed coordinate and the
     // question is just "are we there". It cannot be wrong. 5pt is Signal's tolerance.
     private var isAtNewest: Bool { collectionView.contentOffset.y <= minContentOffsetY + 5 }
+
+    /// AT REST, THE READER CAN NEVER BE BEYOND THE NEWEST MESSAGE. This is the invariant the keyboard
+    /// close kept violating (Pro Max / iOS 27 report, and it was never really about the screen size).
+    ///
+    /// `minContentOffsetY` is `-adjustedContentInset.top`, and under the flip that inset CONTAINS the
+    /// bottom safe area — which is the keyboard while it is up. A reader sitting exactly at the newest
+    /// message with the keyboard up is at offset `-(composer + 12 + keyboardHeight)`. When the keyboard
+    /// leaves, that inset shrinks by the keyboard's height, so the SAME offset is now ~250-300pt BELOW
+    /// the new bound: the list is parked in its bottom bounce region and the last bubble sits under the
+    /// composer. Nothing pulls it back on its own, because the finger is not there to end a drag.
+    ///
+    /// Why the existing corrections missed it: `updateInsets()` deliberately stands down while the list
+    /// is moving ("never fight the finger") — and `keyboardDismissMode = .interactive` means dismissing
+    /// the keyboard by dragging IS a live drag, for the whole time the inset is shrinking. The
+    /// keyboardDidHide settle then fixed it a beat later, which is exactly the "jumps back after about a
+    /// second" the user sees. On the smaller device the timings happened to line up so a layout pass
+    /// landed the correction first; that is luck, not correctness.
+    ///
+    /// So instead of another timing-shaped patch, state the invariant and enforce it wherever the list
+    /// comes to rest. Being beyond the newest bound at rest is never a legitimate state: it is the
+    /// bounce region, which only exists while a finger or a fling owns the list.
+    private func clampToNewestIfBeyond() {
+        guard didFirstLand, !isDisappearing,
+              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+              !sendAnimating, !programmaticScrollAnimating else { return }
+        let bound = minContentOffsetY
+        guard collectionView.contentOffset.y < bound - 0.5 else { return }
+        UIView.performWithoutAnimation {
+            collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+        }
+    }
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
     // someone. Deliberately separate so the two can never be confused again.
     private var isNearNewest: Bool { collectionView.contentOffset.y <= minContentOffsetY + 44 }
@@ -1457,6 +1488,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     @objc private func keyboardDidHide() {
         // One more recompute once the safe area has stopped moving.
         updateInsets()
+        clampToNewestIfBeyond()   // the invariant, before the latch logic below
         // THE SETTLE THE CLOSE WAS MISSING (build 8069d37, user screenshot: the newest bubble at rest
         // under the composer after open-then-close). Two holes conspired:
         //   * updateInsets' change-detection guard protects the OFFSET work too â€” once the insets are
@@ -1593,6 +1625,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
            abs(collectionView.contentOffset.y - minContentOffsetY) > 0.5 {
             collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
         }
+        // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
+        // bound. Catches the interactive keyboard dismissal, where every keyboard-aware correction
+        // above correctly stands down because a finger owns the list while the inset shrinks.
+        clampToNewestIfBeyond()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (Signal passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this is the same
         // region expressed as a rect). Remember the flip: adjusted .bottom is the VISUAL TOP inset (nav
@@ -1905,9 +1941,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollingAnimationDidComplete()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { consumeKeyboardSettleIfPending(); settleFlush() }
+        // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
+        // newest message (interactive dismissal), this is the first honest moment to put them back.
+        if !decelerate { consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush() }
     }
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { consumeKeyboardSettleIfPending(); settleFlush() }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush()
+    }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
