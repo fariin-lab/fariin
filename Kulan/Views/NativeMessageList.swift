@@ -1866,8 +1866,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // No row means this tick is stale — stop, but do NOT take a bar down that belongs to a UIKit row.
         guard let id = swiftUIBarRowId else { stopSwiftUIMenuWatch(hideBar: false); return }
         guard !isDisappearing else { stopSwiftUIMenuWatch(hideBar: true); return }
-        // Excluding our own window is what keeps this affordable at 20Hz — see liftedPreviewFrame.
-        let lifted = ReactionBarPresenter.liftedPreviewFrame(excluding: view.window)
+        let lifted = ReactionBarPresenter.liftedPreviewFrame()
         guard swiftUIBarShown else {
             guard let lifted else {
                 if CACurrentMediaTime() > swiftUIBarDeadline { stopSwiftUIMenuWatch(hideBar: false) }
@@ -1887,7 +1886,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swiftUIBarShown = true
         ReactionBarPresenter.shared.show(
             in: scene,
-            hostWindow: view.window,
             bubbleFrame: frame,
             alignTrailing: info.isMe,
             selected: onReactionSelected(rowId)
@@ -2134,27 +2132,56 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // preview goes where we say, and UIKit then lays its menu out around the preview's NEW position.
         // So the bar's space is reserved by moving the message, not by fighting the menu afterwards.
         //
-        // Only ever pushed DOWN, and only when the bubble sits too close to the top for the bar to fit
-        // above it. Everything lower is left exactly where it is: UIKit already lifts a low message up
-        // and puts the menu underneath, which leaves the space above free, and moving a message that is
-        // already in a good place would be motion for nothing.
-        guard reservingBarSpace, let container = bubble.superview else {
+        // MOVED UP AS WELL AS DOWN, and this is the correction to the first attempt. That version only
+        // ever pushed a message DOWN, on the reasoning that a low message is already fine because UIKit
+        // lifts it and puts the menu beneath. That reasoning was wrong, and the user's screenshot shows
+        // why: with a TALL bubble left where it sits, there is no room under it for the menu, so UIKit
+        // lays the menu straight over the message and the bar ends up beneath the whole pile. The fix
+        // for that case is to move the message UP, which the old rule could never do.
+        //
+        // So the target is stated positively instead: the message's TOP goes just under the bar's
+        // space, which is the highest it can sit while leaving the bar room, and therefore the position
+        // that leaves the MOST room underneath for the menu. Applied only when the current position
+        // actually fails — either the bar has no room above, or the menu has no room below. A message
+        // that already satisfies both is not touched, because moving it would be motion for nothing.
+        guard reservingBarSpace, let container = bubble.superview,
+              let window = view.window else {
             return UITargetedPreview(view: bubble, parameters: params)
         }
-        var center = bubble.center
-        let inWindow = container.convert(center, to: nil)
-        let safeTop = view.window?.safeAreaInsets.top ?? 47
         let barSpace = ReactionBarView.size(emojiCount: min(6, QuickReaction.choices.count)).height + 12
-        let lowestTop = safeTop + barSpace + 8                      // the highest the bubble may start
-        let wantedCenterY = lowestTop + bubble.bounds.height / 2
-        if inWindow.y < wantedCenterY {
-            // Never so far that the bubble's own bottom leaves the screen — a shove that big would push
-            // the menu off instead, trading one collision for another.
-            let room = max(0, collectionView.bounds.height * 0.35)
-            center.y += min(wantedCenterY - inWindow.y, room)
+        let safeTop = window.safeAreaInsets.top
+        let safeBottom = window.safeAreaInsets.bottom
+        let height = bubble.bounds.height
+
+        let topLimit = safeTop + barSpace + 8                    // highest the bubble may start
+        let bottomLimit = window.bounds.height - safeBottom - 8  // lowest anything may reach
+        let menuRoom = estimatedMenuHeight(at: indexPath) + 12
+
+        let centerInWindow = container.convert(bubble.center, to: nil)
+        let currentTop = centerInWindow.y - height / 2
+        let currentBottom = centerInWindow.y + height / 2
+
+        let barFits = currentTop >= topLimit
+        let menuFits = currentBottom + menuRoom <= bottomLimit
+        guard !(barFits && menuFits) else {
+            return UITargetedPreview(view: bubble, parameters: params)   // already well placed
         }
+
+        var center = bubble.center
+        center.y += (topLimit + height / 2) - centerInWindow.y
         return UITargetedPreview(view: bubble, parameters: params,
                                  target: UIPreviewTarget(container: container, center: center))
+    }
+
+    /// Roughly how tall UIKit's menu will be, so the preview can be placed with room for it underneath.
+    /// Counting the actions we ourselves put in the menu is the only estimate available before it is
+    /// laid out — an over-estimate simply moves the message a little higher than it strictly needed.
+    private func estimatedMenuHeight(at indexPath: IndexPath) -> CGFloat {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let menu = uikitMenu(id) else { return 300 }
+        func leaves(_ elements: [UIMenuElement]) -> Int {
+            elements.reduce(0) { $0 + (($1 as? UIMenu).map { leaves($0.children) } ?? 1) }
+        }
+        return CGFloat(leaves(menu.children)) * 44 + 24
     }
 
     func collectionView(_ collectionView: UICollectionView,
@@ -2203,8 +2230,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let frame = bubble.convert(bubble.bounds, to: nil)
             ReactionBarPresenter.shared.show(
                 in: scene,
-                hostWindow: view.window,
-                bubbleFrame: frame,
+                    bubbleFrame: frame,
                 alignTrailing: model.isMe,       // Signal aligns the bar to the bubble's own edge
                 selected: onReactionSelected(id)
             ) { [weak self] emoji in

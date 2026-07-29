@@ -198,7 +198,6 @@ final class ReactionBarPresenter {
     private var bar: ReactionBarView?
     private var follow: CADisplayLink?
     private var anchor: (() -> CGRect?)?
-    private weak var hostWindow: UIWindow?   // the list's window — excluded from both searches
     private var alignTrailing = true
     private var followUntil: CFTimeInterval = 0
 
@@ -228,13 +227,18 @@ final class ReactionBarPresenter {
     /// String allocations and view visits per second, on the main thread, during the menu's own
     /// animation. Three things fix it, all of them about not doing pointless work:
     ///
-    ///  1. SKIP THE HOST WINDOW. The context menu is presented in its own UIWindow — the same fact
-    ///     `menuWindowDidHide` already relies on — so the one window that costs the most to search is
-    ///     the one window that can never contain the answer.
-    ///  2. Compare against a resolved class OBJECT, looked up once, instead of building a String per
+    ///  1. Compare against a resolved class OBJECT, looked up once, instead of building a String per
     ///     view. `NSClassFromString` is a public lookup; nothing private is called on the result.
-    ///  3. Cap the depth. The platter sits a handful of levels below its window; nothing legitimate is
+    ///  2. Cap the depth. The platter sits a handful of levels below its window; nothing legitimate is
     ///     thousands deep, so a cap turns a pathological walk into a bounded one.
+    ///
+    /// EVERY WINDOW IS SEARCHED, INCLUDING THE APP'S OWN. An earlier version skipped the host window on
+    /// the grounds that a context menu always gets one of its own — true of the menu the collection
+    /// view presents, but the bar then never appeared for photos, replies, files, GIFs or videos, whose
+    /// menus SwiftUI presents. Excluding a window to save work is only safe if you are certain the
+    /// answer is not in it, and that certainty was not there. The two changes above are what make the
+    /// search affordable; the exclusion was never the part carrying that weight. (The frozen screen it
+    /// was written for turned out to be the window's hit test — see `PassthroughWindow`.)
     ///
     /// The result is also cached weakly: while a menu is open the platter view does not change, so
     /// following it costs one `convert` per tick instead of a search.
@@ -242,13 +246,13 @@ final class ReactionBarPresenter {
     private static weak var cachedPlatter: UIView?
     private static let maxSearchDepth = 12
 
-    static func liftedPreviewFrame(excluding host: UIWindow? = nil) -> CGRect? {
+    static func liftedPreviewFrame() -> CGRect? {
         if let v = cachedPlatter, v.window != nil, v.bounds.width > 1, v.bounds.height > 1 {
             return v.convert(v.bounds, to: nil)
         }
         cachedPlatter = nil
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for w in scene.windows where !w.isHidden && w !== host {
+            for w in scene.windows where !w.isHidden {
                 if let v = firstPlatter(in: w, depth: maxSearchDepth),
                    v.bounds.width > 1, v.bounds.height > 1 {
                     cachedPlatter = v
@@ -276,10 +280,7 @@ final class ReactionBarPresenter {
     /// - Parameters:
     ///   - alignTrailing: my messages align to the bubble's right edge, theirs to the left — Signal's
     ///     `horizontalEdgeAlignment`, which is what makes the bar feel attached to that bubble.
-    /// - Parameter hostWindow: the window the message list lives in. Excluded from the platter search,
-    ///   which is what keeps that search cheap — see liftedPreviewFrame.
     func show(in scene: UIWindowScene,
-              hostWindow: UIWindow?,
               bubbleFrame: CGRect,
               alignTrailing: Bool,
               selected: String?,
@@ -313,13 +314,10 @@ final class ReactionBarPresenter {
         root.addSubview(bar)
         self.window = w
         self.bar = bar
-        self.hostWindow = hostWindow
         self.alignTrailing = alignTrailing
         // Follow the lifted message while UIKit animates it into place; fall back to the bubble's own
         // frame whenever the lifted copy cannot be found.
-        self.anchor = { [weak hostWindow] in
-            ReactionBarPresenter.liftedPreviewFrame(excluding: hostWindow) ?? bubbleFrame
-        }
+        self.anchor = { ReactionBarPresenter.liftedPreviewFrame() ?? bubbleFrame }
         reposition()
         bar.playPresentation()
 
@@ -358,7 +356,7 @@ final class ReactionBarPresenter {
         let size = bar.bounds.size
         let bounds = w.bounds
         let safeTop = w.safeAreaInsets.top
-        let menu = ReactionBarPresenter.menuFrame(excluding: hostWindow)
+        let menu = ReactionBarPresenter.menuFrame()
 
         func collides(_ y: CGFloat) -> Bool {
             guard let menu else { return false }
@@ -388,13 +386,13 @@ final class ReactionBarPresenter {
     /// search as `liftedPreviewFrame`, looking for the menu's own container instead of the platter.
     private static weak var cachedMenu: UIView?
 
-    static func menuFrame(excluding host: UIWindow? = nil) -> CGRect? {
+    static func menuFrame() -> CGRect? {
         if let v = cachedMenu, v.window != nil, v.bounds.width > 1, v.bounds.height > 1 {
             return v.convert(v.bounds, to: nil)
         }
         cachedMenu = nil
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for w in scene.windows where !w.isHidden && w !== host {
+            for w in scene.windows where !w.isHidden {
                 if let v = firstNamed(in: w, "ContextMenuListView", depth: maxSearchDepth),
                    v.bounds.width > 1, v.bounds.height > 1 {
                     cachedMenu = v
@@ -424,7 +422,6 @@ final class ReactionBarPresenter {
     private func tearDown() {
         follow?.invalidate(); follow = nil
         anchor = nil
-        hostWindow = nil
         bar?.removeFromSuperview()
         bar = nil
         window?.isHidden = true
