@@ -2114,19 +2114,53 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // The bubble is inside a cell that carries the counter-flip, so its transform to the window has no net
     // scale and UIKit's snapshot of it is upright. This is exactly why the flip is applied per cell rather
     // than only to the collection view.
-    private func bubbleTargetedPreview(at indexPath: IndexPath) -> UITargetedPreview? {
+    /// - Parameter reservingBarSpace: on the LIFT, push the preview down far enough that the reactions
+    ///   bar has somewhere to live above it. On the DISMISSAL, never — the message has to fly back to
+    ///   where it actually sits in the list.
+    private func bubbleTargetedPreview(at indexPath: IndexPath,
+                                       reservingBarSpace: Bool = false) -> UITargetedPreview? {
         guard let cell = collectionView.cellForItem(at: indexPath) as? UIKitBubbleCell else { return nil }
         let bubble = cell.previewBubble
         let params = UIPreviewParameters()
         params.backgroundColor = .clear
         if let path = bubble.lastCornerPath { params.visiblePath = path }
-        return UITargetedPreview(view: bubble, parameters: params)
+
+        // TELLING UIKIT WHERE TO PUT ITS OWN PREVIEW — which is how iMessage keeps
+        // reactions · message · menu in that order without owning the menu (user's read of it,
+        // 2026-07-29, with nine screenshots: messages near the top open where they are, messages near
+        // the bottom get their preview nudged so everything fits, and it returns on dismissal).
+        //
+        // `UIPreviewTarget(container:center:)` is public API and is exactly that lever: the lifted
+        // preview goes where we say, and UIKit then lays its menu out around the preview's NEW position.
+        // So the bar's space is reserved by moving the message, not by fighting the menu afterwards.
+        //
+        // Only ever pushed DOWN, and only when the bubble sits too close to the top for the bar to fit
+        // above it. Everything lower is left exactly where it is: UIKit already lifts a low message up
+        // and puts the menu underneath, which leaves the space above free, and moving a message that is
+        // already in a good place would be motion for nothing.
+        guard reservingBarSpace, let container = bubble.superview else {
+            return UITargetedPreview(view: bubble, parameters: params)
+        }
+        var center = bubble.center
+        let inWindow = container.convert(center, to: nil)
+        let safeTop = view.window?.safeAreaInsets.top ?? 47
+        let barSpace = ReactionBarView.size(emojiCount: min(6, QuickReaction.choices.count)).height + 12
+        let lowestTop = safeTop + barSpace + 8                      // the highest the bubble may start
+        let wantedCenterY = lowestTop + bubble.bounds.height / 2
+        if inWindow.y < wantedCenterY {
+            // Never so far that the bubble's own bottom leaves the screen — a shove that big would push
+            // the menu off instead, trading one collision for another.
+            let room = max(0, collectionView.bounds.height * 0.35)
+            center.y += min(wantedCenterY - inWindow.y, room)
+        }
+        return UITargetedPreview(view: bubble, parameters: params,
+                                 target: UIPreviewTarget(container: container, center: center))
     }
 
     func collectionView(_ collectionView: UICollectionView,
                         contextMenuConfiguration configuration: UIContextMenuConfiguration,
                         highlightPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
-        bubbleTargetedPreview(at: indexPath)
+        bubbleTargetedPreview(at: indexPath, reservingBarSpace: true)
     }
 
     func collectionView(_ collectionView: UICollectionView,
