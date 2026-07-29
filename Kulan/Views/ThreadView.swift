@@ -122,9 +122,6 @@ struct ThreadView: View {
     @State private var reactionJumpEmoji = ""
     @State private var seenReactionSigs: [String: String] = [:]
     @State private var reactionSigsSeeded = false
-    /// The list's tap-to-dismiss-keyboard, held for one runloop turn so an inner tap that wants the
-    /// keyboard kept (a reply quote jump) can cancel it — see listBody.
-    @State private var pendingKeyboardDismiss = false
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
@@ -1485,28 +1482,10 @@ struct ThreadView: View {
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         nativeList
             .contentShape(Rectangle())
-            // Tap anywhere on the conversation → dismiss the keyboard. This gesture
-            // lived on the deleted SwiftUI fallback list; simultaneous so bubble taps still work.
-            //
-            // …but SIMULTANEOUS means it also fires when the tap was meant for something inside a
-            // bubble, which is why tapping a reply quote with the keyboard up both jumped AND closed
-            // the keyboard (user: it must work and not close the keyboard, like Signal). The dismissal
-            // is therefore DEFERRED by one runloop turn and cancellable: anything that handles a tap
-            // itself and wants the keyboard kept (the quote jump) clears the flag in the same event,
-            // and because the cancel and the dismissal cannot race — the dismissal runs strictly after
-            // both gestures have fired — the order SwiftUI happens to deliver them in does not matter.
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    pendingKeyboardDismiss = true
-                    DispatchQueue.main.async {
-                        guard pendingKeyboardDismiss else { return }
-                        pendingKeyboardDismiss = false
-                        inputFocused = false
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                        to: nil, from: nil, for: nil)
-                    }
-                }
-            )
+            // Tap anywhere on the conversation → dismiss the keyboard. The gesture itself lives in
+            // UIKit now (NativeMessageList's `backgroundTap`), because a SwiftUI tap here could not be
+            // reliably outvoted by a tap INSIDE a hosted cell — see KeyboardSafeRects for the full
+            // story. The list decides by hit test and calls back only when the tap was not claimed.
             // Scrolled back down to the newest message → the missed messages are now seen: clear the
             // away-counter and send the (throttled) read receipt.
             .onChange(of: isAtBottom) { _, atBottom in
@@ -1770,9 +1749,8 @@ struct ThreadView: View {
             row: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
-                    // This tap was FOR the quote — keep the keyboard (Signal keeps it too). Cancels
-                    // the list's deferred tap-to-dismiss before it can run.
-                    pendingKeyboardDismiss = false
+                    // The keyboard is kept here (Signal keeps it too) — the list's tap-to-dismiss
+                    // already refused to fire, because the quote publishes a KeyboardSafeRects rect.
                     Task {
                         await repo.ensureLoaded(jid)
                         await MainActor.run {
@@ -1793,6 +1771,12 @@ struct ThreadView: View {
             uikitModelsVersion: uikitModelCache.version,
             uikitMenu: { id in uikitMenu(for: id) },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
+            // The list already decided this tap was not claimed by anything inside a bubble.
+            onBackgroundTap: {
+                inputFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                to: nil, from: nil, for: nil)
+            },
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
             // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread
@@ -2138,7 +2122,7 @@ struct ThreadView: View {
                         }
                     }
                 },
-                onSendMixed: { items, caption in
+                onSendMixed: { items, caption, clientId in
                     // SELECT + Send with a mix (or 2+) → ONE grouped album message (photos + videos).
                     showAttachPanel = false
                     Task {
@@ -2150,9 +2134,18 @@ struct ThreadView: View {
                                 ordered.append(.video(url: url, thumb: thumb ?? UIImage(), duration: dur))
                             }
                         }
-                        await sendMixedGroup(ordered, caption: caption, hd: false)
+                        await sendMixedGroup(ordered, caption: caption, hd: false, clientId: clientId)
                     }
                 },
+                // The bubble the sheet posted on the Send tap, from its own grid thumbnails.
+                onOptimisticGroup: { thumbs, isVideo, caption, clientId in
+                    showAttachPanel = false
+                    let previews = thumbs.map { $0.jpegData(compressionQuality: 0.7) ?? Data() }
+                    repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
+                                            clientId: clientId, sendState: .sending,
+                                            localAlbumIsVideo: isVideo))
+                },
+                onOptimisticFailed: { clientId in repo.markFailed(clientId: clientId) },
                 onOpenMedia: { items in
                     // Tapping media while selecting → the mixed approval pager. A single item keeps its
                     // dedicated editor (image editor / video trim editor); 2+ open the pager. All open OVER
@@ -2554,9 +2547,15 @@ struct ThreadView: View {
     // Send a MIXED media group (photos + videos in order) as ONE album message. A single lone item
     // takes its dedicated fast path (photo editor / video approval already handled those); this is the
     // 2+ / mixed case. Videos are transcoded first, then everything ships in one sendMixedAlbum call.
-    private func sendMixedGroup(_ ordered: [SendMedia], caption: String, hd: Bool) async {
-        // A lone item → the normal single-media send (keeps the existing UX).
+    /// `clientId` non-nil means the attach sheet ALREADY posted the bubble (from its grid thumbnails,
+    /// on the Send tap) and this call must adopt it rather than post a second one.
+    private func sendMixedGroup(_ ordered: [SendMedia], caption: String, hd: Bool,
+                                clientId posted: String? = nil) async {
+        // A lone item → the normal single-media send (keeps the existing UX). That path posts its own
+        // bubble, so retire the group bubble first — otherwise it would sit "sending" forever (this
+        // happens when several were picked but only one survived the resolve).
         if ordered.count == 1 {
+            if let posted { await MainActor.run { repo.removePending(clientId: posted) } }
             switch ordered[0] {
             case .image(let ui):
                 if let d = ui.jpegData(compressionQuality: hd ? 0.95 : 0.85) { await sendPhoto(d, caption: caption) }
@@ -2569,24 +2568,30 @@ struct ThreadView: View {
         // Optimistic grouped bubble: thumbnails in order + which are videos (play badge). Build BOTH
         // arrays in ONE pass so their indices ALWAYS align (a compactMap'd previews vs a map'd flags
         // list drifted apart when a thumbnail failed to encode → play badges on the wrong tiles).
-        var previews: [Data] = []
-        var isVideoFlags: [Bool] = []
-        for item in ordered {
-            let (thumb, isVid): (UIImage, Bool) = {
-                switch item {
-                case .image(let ui): return (ui, false)
-                case .video(_, let t, _): return (t, true)
-                }
-            }()
-            let jpeg = thumb.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
-                ?? Data()   // keep a placeholder so the index stays in lockstep with the flags
-            previews.append(jpeg)
-            isVideoFlags.append(isVid)
-        }
-        let clientId = UUID().uuidString
-        await MainActor.run {
-            repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
-                                    clientId: clientId, sendState: .sending, localAlbumIsVideo: isVideoFlags))
+        //
+        // SKIPPED ENTIRELY when the sheet already posted the bubble: this loop is N full-resolution
+        // JPEG encodes plus N decode-resize-re-encodes on the main thread, and doing it before first
+        // paint was half of the delay the user timed. The sheet's grid thumbnails render the same grid.
+        let clientId = posted ?? UUID().uuidString
+        if posted == nil {
+            var previews: [Data] = []
+            var isVideoFlags: [Bool] = []
+            for item in ordered {
+                let (thumb, isVid): (UIImage, Bool) = {
+                    switch item {
+                    case .image(let ui): return (ui, false)
+                    case .video(_, let t, _): return (t, true)
+                    }
+                }()
+                let jpeg = thumb.jpegData(compressionQuality: 0.7).map { ChatService.downscaledJPEG($0) }
+                    ?? Data()   // keep a placeholder so the index stays in lockstep with the flags
+                previews.append(jpeg)
+                isVideoFlags.append(isVid)
+            }
+            await MainActor.run {
+                repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
+                                        clientId: clientId, sendState: .sending, localAlbumIsVideo: isVideoFlags))
+            }
         }
 
         // Build the send items: images as-is, videos transcoded (HD toggle) to the delivery codec. If
@@ -4808,7 +4813,20 @@ struct MessageBubble: View, Equatable {
             // fanned/tilted floating cards, which read as a messy scattered pile rather than the
             // clean grid every messenger uses.
             VStack(alignment: .leading, spacing: 0) {
+                // HUG THE MOSAIC, don't force the full album width. The solver returns the exact block the
+                // photos make, and for shapes that do not fill the width that block is narrower — pinning
+                // the bubble to `albumWidth` left bare bubble down one side (user: "left and right empty
+                // bubbles").
+                //
+                // The hug is on the GRID ALONE, and that is the fix for the overflowing caption
+                // (2026-07-29). It used to sit on the whole VStack, which meant the caption `Text` was
+                // asked for its IDEAL width too — and a Text's ideal width is the whole string on ONE
+                // line. So a long caption made the stack's ideal width hundreds of points wider than the
+                // screen; the outer `.frame(maxWidth: maxBubbleWidth)` could clamp the frame but not
+                // re-wrap content that had already refused the proposal, so the bubble ran off the right
+                // edge with its text cut (user: "if i add that caption image is using different width").
                 albumGrid
+                    .fixedSize(horizontal: true, vertical: false)
                 if !message.text.isEmpty {
                     HStack(alignment: .bottom, spacing: 6) {
                         Text(message.text).font(.system(size: 17))   // caption text is never shrunk
@@ -4819,14 +4837,11 @@ struct MessageBubble: View, Equatable {
                         metaRow.padding(.bottom, 1)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
+                    // The caption wraps at the album's own width — never wider, so the bubble keeps a
+                    // definite size, and never narrower, so the timestamp stays on the trailing edge.
+                    .frame(maxWidth: albumWidth, alignment: .leading)
                 }
             }
-            // HUG THE MOSAIC, don't force the full album width. The solver returns the exact block the
-            // photos make, and for shapes that do not fill the width that block is narrower — pinning the
-            // bubble to `albumWidth` left bare bubble down one side (user: "left and right empty
-            // bubbles"). The caption row still stretches to whatever the mosaic decided, so the timestamp
-            // stays on the bubble's trailing edge.
-            .fixedSize(horizontal: true, vertical: false)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             .overlay {
@@ -4882,8 +4897,11 @@ struct MessageBubble: View, Equatable {
                     return min(max(CGFloat(w / h), 0.35), 2.857)
                 }()
                 // Caption min-width floor: single-line caption width + 2×12pt text insets, capped at the box.
+                // MEASURED AT 17, the size the caption actually renders at below — it used to measure at
+                // 15, so every floor came out ~12% short and a caption that would have fitted on one line
+                // wrapped early, leaving the dead space at the end of the line the user photographed.
                 let minW: CGFloat = hasCaption
-                    ? min(boxMax, (message.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 15)]).width + 24)
+                    ? min(boxMax, (message.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24)
                     : 0
                 var w = boxMax * aspect, h = boxMax
                 w = max(w, minW)
@@ -5164,7 +5182,9 @@ struct MessageBubble: View, Equatable {
             // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
             // photo had no destination: the copy drifted off into nothing instead of flying back
             // to its tile, which is what single photos have done all along.
-            .modifier(MediaRectReporter(id: "\(message.id)-\(i)", scope: .chat))
+            // 22 = the tile's own clip radius above; the modifier's 14 default made the copy land on a
+            // rounder shape than the tile it was flying into.
+            .modifier(MediaRectReporter(id: "\(message.id)-\(i)", scope: .chat, cornerRadius: 22))
     }
 
     // The image/poster content of an album item (local optimistic bytes, else the decrypted remote photo).
@@ -5437,6 +5457,11 @@ struct MessageBubble: View, Equatable {
                 if reply.isStatus { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }   // open the status (or "no longer available")
                 else { onJumpTo(reply.id) }                                  // jump to the original message
             }
+            // Publishes this box's window rect so the list's tap-to-dismiss refuses to begin here: the
+            // quote jumps and the keyboard stays up, like Signal. The invisible measurement copy is
+            // excluded by its caller (it would register the same id at the same place, harmlessly, but
+            // the visible one must win) — see KeyboardSafeRects.
+            .modifier(KeyboardSafeTapArea(id: "quote-\(message.id)"))
         }
     }
 
