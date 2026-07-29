@@ -8,20 +8,40 @@ import Photos
 final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
     enum Dir { case up, down, left, right, vertical }   // .vertical = the dismiss config (up AND down engage)
     let dir: Dir
+    /// Where this touch started, so the direction test can look at the WHOLE gesture so far.
+    private var origin: CGPoint?
+    /// How far the finger must travel before the direction is considered known. Below this the vector
+    /// is noise — a fingertip rolls a point or two sideways at the start of any swipe.
+    private let decisionDistance: CGFloat = 12
+
     init(direction: Dir, target: AnyObject, action: Selector) {
         self.dir = direction
         super.init(target: target, action: action)
     }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        origin = touches.first?.location(in: view)
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func reset() {
+        origin = nil
+        super.reset()
+    }
+
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if state == .possible {
             guard let touch = touches.first else { return }
-            let prev = touch.previousLocation(in: view)
+            let start = origin ?? touch.previousLocation(in: view)
             let loc = touch.location(in: view)
-            // Movement deltas: positive dy = finger moving DOWN, positive dx = finger moving RIGHT.
-            // (The old prev-minus-loc form had every direction INVERTED — the .down dismiss pan only
-            // engaged on an UP drag, so drag-down-to-close never began.)
-            let dy = loc.y - prev.y
-            let dx = loc.x - prev.x
+            // CUMULATIVE from the touch's start, not the delta since the last sample. Per-sample was the
+            // bug behind "when I swipe left and right it does scroll down": one noisy frame in the
+            // middle of a horizontal swipe reads as vertical, and since `.vertical` deliberately never
+            // self-cancels once begun, that single frame handed the whole swipe to the dismiss. Judging
+            // the whole vector instead means a sideways swipe stays sideways however the finger wobbles.
+            let dx = loc.x - start.x
+            let dy = loc.y - start.y
+            guard hypot(dx, dy) >= decisionDistance else { return }   // too early to tell — keep waiting
             let ok: Bool = {
                 if abs(dy) > abs(dx) {
                     if dir == .vertical { return true }   // any predominantly-vertical move engages
@@ -33,7 +53,11 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
                 }
                 return false
             }()
-            guard ok else { return }
+            // FAIL, don't just wait. Staying `.possible` left the dismiss armed for the rest of the
+            // touch, so a horizontal swipe that drifted downward halfway through still triggered it —
+            // and while it stayed armed it was competing with the pager for the same finger, which is
+            // why paging did not track cleanly. Failing releases the touch to the pager for good.
+            guard ok else { state = .failed; return }
         }
         super.touchesMoved(touches, with: event)
         if state == .began {
