@@ -299,6 +299,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
     private var contextMenuVisible = false                   // UIKit says a context menu is on screen
+    private var contextMenuSourceId: String?                 // the row that menu lifted from
     private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
@@ -967,6 +968,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // defer anything any more, so the exception it was written for no longer exists.)
             guard canLandLoad else {
                 needsRefreshOnSettle = true
+                // THE CHECKBOXES DO NOT HAVE TO WAIT FOR THE WHOLE MENU (user: "checkbox is coming
+                // late", three times). Selection was blocked wholesale until the context menu had
+                // finished dismissing, because reloading the cell the menu is animating BACK INTO
+                // strands the system's blur. That is true of exactly ONE cell — the source. Every
+                // other visible row can take its checkbox right now, while the menu is still fading,
+                // which is what Signal looks like: their selection UI appears with the dismissal, not
+                // after it. The source row fills in a beat later when the animator completes.
+                if selectionAnimationState == .willAnimate { refreshSelectionExceptMenuSource() }
                 return
             }
             // Selection flip: refresh EVERY live cell, not the signature-diffed subset. Entering or
@@ -1142,6 +1151,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let inserted = Array(ids.prefix(newlyNewest))
             DispatchQueue.main.async { [weak self] in self?.reflowInserted(inserted) }
         }
+    }
+
+    /// Land the selection flip on every visible row EXCEPT the one the context menu lifted from, so the
+    /// checkboxes appear immediately instead of after the menu's dismissal. The source row is left
+    /// alone — destroying it mid-flight is what stranded the blur — and is refreshed by the normal
+    /// settle once the animator completes. `selectionAnimationState` deliberately stays `.willAnimate`
+    /// so that later pass still runs and picks the source row up.
+    private func refreshSelectionExceptMenuSource() {
+        let live = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        let target = live.filter { $0 != contextMenuSourceId }
+        guard !target.isEmpty else { return }
+        refreshVisible(target)
     }
 
     private func beginSelectionAnimationWindow() {
@@ -1922,14 +1943,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                         willDisplayContextMenu configuration: UIContextMenuConfiguration,
                         animator: UIContextMenuInteractionAnimating?) {
         contextMenuVisible = true
+        // WHICH row the menu belongs to. The configuration's identifier IS the row id (see
+        // contextMenuConfig). Only THIS cell must survive untouched until the dismissal ends — the
+        // stranded-blur bug was its destruction mid-flight, not any other cell's. Knowing which one
+        // lets the selection UI land on every OTHER row immediately (see refreshSelectionExceptMenuSource).
+        contextMenuSourceId = configuration.identifier as? String
     }
 
     func collectionView(_ collectionView: UICollectionView,
                         willEndContextMenuInteraction configuration: UIContextMenuConfiguration,
                         animator: UIContextMenuInteractionAnimating?) {
-        guard let animator else { contextMenuVisible = false; settleFlush(); return }
+        guard let animator else {
+            contextMenuVisible = false; contextMenuSourceId = nil; settleFlush(); return
+        }
         animator.addCompletion { [weak self] in
             self?.contextMenuVisible = false
+            self?.contextMenuSourceId = nil
             self?.settleFlush()   // land everything the menu held back, now that the cell is free
         }
     }
