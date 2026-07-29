@@ -2092,7 +2092,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let native = cell as? UIKitBubbleCell {
             bubble = native.previewBubble
             bubbleInWindow = native.previewBubble.convert(native.previewBubble.bounds, to: nil)
-            if let path = native.lastCornerPath { params.visiblePath = path }
+            if let path = native.previewBubble.lastCornerPath { params.visiblePath = path }
         } else {
             guard let id = dataSource.itemIdentifier(for: indexPath),
                   let inWindow = BubbleRects.rect(id) else { return nil }   // nil → UIKit lifts the cell
