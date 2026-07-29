@@ -26,8 +26,10 @@ struct LinkPreviewCard: View {
                         Rectangle().fill(fg.opacity(0.10))
                     }
                 }
+                // Taller hero image — the reference card leads with a big photo, and 140 read as a
+                // thin strip next to it (user side-by-side comparison).
                 .frame(maxWidth: .infinity)
-                .frame(height: 140)
+                .frame(height: 170)
                 .clipped()
             }
             VStack(alignment: .leading, spacing: 2) {

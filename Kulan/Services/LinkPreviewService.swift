@@ -54,8 +54,9 @@ actor LinkPreviewService {
     private static func fetch(_ url: URL) async -> LinkDraft? {
         guard url.scheme == "https" else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
-        req.setValue("Mozilla/5.0 (compatible; KulanBot/1.0)", forHTTPHeaderField: "User-Agent")
-        req.setValue("text/html", forHTTPHeaderField: "Accept")
+        req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
+        req.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               (http.mimeType ?? "").contains("html") else { return nil }
@@ -73,14 +74,24 @@ actor LinkPreviewService {
         var image: UIImage?
         if let raw = metaContent(html, property: "og:image") ?? metaContent(html, property: "twitter:image"),
            let imgUrl = URL(string: raw, relativeTo: url)?.absoluteURL, imgUrl.scheme == "https" {
-            image = await fetchImage(imgUrl)
+            image = await fetchImage(imgUrl, pageURL: url)
         }
         return LinkDraft(url: url, title: decodeEntities(title), desc: decodeEntities(desc), image: image)
     }
 
-    private static func fetchImage(_ url: URL) async -> UIImage? {
+    /// A real Safari UA. The old "KulanBot/1.0" was honest but got us treated as an unknown scraper:
+    /// the page came back (title/description parsed) while the og:image CDN — Facebook's scontent in
+    /// the user's screenshot — answered 403, so cards arrived TEXT-ONLY. Every link-preview fetcher
+    /// ships a browser UA for exactly this reason.
+    private static let browserUA =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+
+    private static func fetchImage(_ url: URL, pageURL: URL) async -> UIImage? {
         var req = URLRequest(url: url, timeoutInterval: 8)
-        req.setValue("Mozilla/5.0 (compatible; KulanBot/1.0)", forHTTPHeaderField: "User-Agent")
+        req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
+        req.setValue("image/*", forHTTPHeaderField: "Accept")
+        // Some CDNs only serve the image to a request that looks like it came from the page.
+        req.setValue(pageURL.absoluteString, forHTTPHeaderField: "Referer")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               data.count <= 3 * 1024 * 1024,
@@ -119,7 +130,30 @@ actor LinkPreviewService {
 
     private static func decodeEntities(_ s: String) -> String {
         var out = s
-        for (e, c) in ["&amp;": "&", "&quot;": "\"", "&#39;": "'", "&apos;": "'", "&lt;": "<", "&gt;": ">", "&nbsp;": " "] {
+        // NUMERIC entities first (&#xb7; / &#183;) — the named-only version printed raw "&#xb7;" in the
+        // middle of a real card on device (user screenshot: "22K views &#xb7; 988 reactions").
+        // Facebook and X title tags are full of them.
+        if out.contains("&#"), let re = try? NSRegularExpression(pattern: "&#(x[0-9a-fA-F]+|[0-9]+);") {
+            let ns = out as NSString
+            var result = ""
+            var last = 0
+            for m in re.matches(in: out, range: NSRange(location: 0, length: ns.length)) {
+                result += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+                let body = ns.substring(with: m.range(at: 1))
+                let value: UInt32? = body.lowercased().hasPrefix("x")
+                    ? UInt32(body.dropFirst(), radix: 16)
+                    : UInt32(body)
+                if let value, let scalar = Unicode.Scalar(value) {
+                    result.append(Character(scalar))
+                } else {
+                    result += ns.substring(with: m.range)   // leave anything unparseable as-is
+                }
+                last = m.range.location + m.range.length
+            }
+            result += ns.substring(from: last)
+            out = result
+        }
+        for (e, c) in ["&amp;": "&", "&quot;": "\"", "&apos;": "'", "&lt;": "<", "&gt;": ">", "&nbsp;": " "] {
             out = out.replacingOccurrences(of: e, with: c)
         }
         return out
