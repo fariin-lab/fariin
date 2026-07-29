@@ -184,10 +184,17 @@ struct MediaGalleryView: View {
         // and the glass goes where it used to be. Only the TRACK is cleared — the selected segment is
         // drawn separately by the system and is left exactly as it is, which is the part he said works.
         .background(ClearSegmentedTrack())
+        // 48pt tall (user spec 2026-07-29). The height is set on the BAR — the glass capsule — rather
+        // than on the segmented control, whose own height the system owns; the control centres inside
+        // it. So the bar is exactly 48 and the selected pill keeps the size iOS gives it, which is the
+        // part he asked not to touch.
+        .frame(height: Self.tabBarHeight)
         .background(Color.clear.liquidGlass(Capsule(style: .continuous)))
         .padding(.horizontal, 16)
         .padding(.top, 2)
     }
+
+    private static let tabBarHeight: CGFloat = 48
 
     /// Makes ONE segmented control's track transparent, by reaching that instance rather than through
     /// `UISegmentedControl.appearance()`. The app has three segmented pickers (here, Add Story, and the
@@ -209,7 +216,18 @@ struct MediaGalleryView: View {
             DispatchQueue.main.async {
                 guard let host = Self.enclosingHost(of: probe),
                       let seg = Self.firstSegmentedControl(in: host) else { return }
-                seg.backgroundColor = .clear   // the TRACK only; selectedSegmentTintColor untouched
+                // THE UNSELECTED TRACK ONLY. `backgroundColor` alone did not empty it — the control also
+                // draws a track image of its own, which sat over the glass and left the bar looking like
+                // a flat grey capsule. Clearing the `.normal` background and the dividers removes the
+                // track; the SELECTED segment is a separate state and is deliberately not touched, so
+                // the active pill keeps exactly the appearance iOS gives it.
+                let empty = UIImage()
+                seg.backgroundColor = .clear
+                seg.setBackgroundImage(empty, for: .normal, barMetrics: .default)
+                seg.setBackgroundImage(empty, for: .highlighted, barMetrics: .default)
+                seg.setDividerImage(empty,
+                                    forLeftSegmentState: .normal, rightSegmentState: .normal,
+                                    barMetrics: .default)
             }
         }
 
