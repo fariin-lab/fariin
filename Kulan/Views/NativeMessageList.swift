@@ -29,6 +29,41 @@ import UIKit
     static func rect(_ id: String) -> CGRect? { rects[id] }
 }
 
+/// Where each SwiftUI-hosted bubble sits, and what shape it is, so the context menu can lift the BUBBLE
+/// out of a row rather than the full-width transparent cell around it.
+///
+/// The native text cell needs none of this — it is a UIKit view and hands over its own corner path. But
+/// every other row is a SwiftUI tree inside a `UIHostingConfiguration`, and UIKit has no way to ask it
+/// where the bubble is. Publishing the rect is the same trick the media transition already uses to fly a
+/// photo out of its bubble; this is the second consumer of it.
+@MainActor enum BubbleRects {
+    private static var rects: [String: CGRect] = [:]
+    private static var radii: [String: CGFloat] = [:]
+
+    static func capture(_ id: String, _ rect: CGRect, radius: CGFloat) {
+        guard !rect.isEmpty, rect.intersects(UIScreen.main.bounds) else { return }   // off-screen sizer copies
+        rects[id] = rect
+        radii[id] = radius
+    }
+    static func rect(_ id: String) -> CGRect? { rects[id] }
+    static func radius(_ id: String) -> CGFloat { radii[id] ?? 18 }
+}
+
+/// Publishes a bubble's window rect + corner radius for the context-menu lift.
+struct BubbleRectReporter: ViewModifier {
+    let id: String
+    let radius: CGFloat
+    func body(content: Content) -> some View {
+        content.background(
+            GeometryReader { g in
+                Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
+                    BubbleRects.capture(id, f, radius: radius)
+                }
+            }
+        )
+    }
+}
+
 /// Publishes a view's window rect into `KeyboardSafeRects` for as long as it is on screen.
 struct KeyboardSafeTapArea: ViewModifier {
     let id: String
@@ -109,8 +144,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // Floating reactions bar (ReactionBar.swift): my current reaction on a row, and the tap handler.
     var onReactionSelected: (String) -> String? = { _ in nil }
     var onReactionPick: (String, String?) -> Void = { _, _ in }
-    /// Whose bubble it is (bar alignment) and whether it may be reacted to at all. Needed for rows the
-    /// UIKit menu callbacks never see — see watchForSwiftUIMenu.
+    /// Whose bubble it is (bar alignment) and whether it may be reacted to at all — asked for EVERY row
+    /// now that every row opens the same menu.
     var reactionBarRow: (String) -> (isMe: Bool, canReact: Bool)? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
     // Tap on the conversation BACKGROUND (never on a bubble) -> dismiss the keyboard. Lives in UIKit so a
@@ -350,11 +385,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var reactionBarRow: (String) -> (isMe: Bool, canReact: Bool)? = { _ in nil }
     var onBackgroundTap: () -> Void = {}
     private var backgroundTap: UITapGestureRecognizer!
-    // Reaction bar for SwiftUI-hosted rows — see watchForSwiftUIMenu.
-    private var swiftUIBarRowId: String?
-    private var swiftUIBarWatch: CADisplayLink?
-    private var swiftUIBarDeadline: CFTimeInterval = 0
-    private var swiftUIBarShown = false
     var onUikitDoubleTap: (String) -> Void = { _ in }
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
@@ -1624,8 +1654,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         isDisappearing = true
         shouldAnimateKeyboardChanges = false
         // Leaving the chat with a menu open must not strand the bar in its own window over the next
-        // screen. The display link is invalidated here too, so it cannot outlive the controller.
-        stopSwiftUIMenuWatch(hideBar: true)
+        // screen.
+        ReactionBarPresenter.shared.hide(animated: false)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -1821,105 +1851,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         onBackgroundTap()
     }
 
-    // MARK: - Reaction bar for SwiftUI-hosted rows
+    // DELETED HERE: the SwiftUI-menu watcher (watchForSwiftUIMenu / swiftUIMenuTick / showSwiftUIBar /
+    // stopSwiftUIMenuWatch) and its display link.
     //
-    // WHY THIS EXISTS INSTEAD OF MOVING THOSE ROWS TO THE UIKIT MENU.
-    //
-    // Photos, videos, albums, replies and any row carrying a reaction are SwiftUI cells, and they bring
-    // their own `.contextMenu`. That menu fires none of the collection view's context-menu callbacks, so
-    // `willDisplayContextMenu` never runs for them and the bar never appeared — the Phase 2 gap.
-    //
-    // The obvious fix is to give those rows the UIKit menu too. It is also the wrong one: the SwiftUI
-    // menu they use is not the flat list the text rows get. It branches on upload state, view-once,
-    // group vs 1:1, mute, the edit window, pin permission, media kind — a dozen conditions that decide
-    // Save Image, Info, Cancel Sending, Edit, Copy, Forward. Rebuilding all of that in UIKit means two
-    // copies of the same policy, and the second copy starts drifting the day someone edits one of them.
-    //
-    // So the bar becomes an OBSERVER instead. It already anchors to the lifted preview rather than to
-    // the cell (ReactionBarPresenter.liftedPreviewFrame walks for UIKit's platter view), and that works
-    // for ANY context menu, whoever presented it. All that was missing is knowing that a menu opened and
-    // which row it belongs to — and the passive long-press recogniser below already knows both. Nothing
-    // about the menus changes: same SwiftUI menu, same UIKit menu, same actions.
-    private func watchForSwiftUIMenu(at point: CGPoint) {
-        stopSwiftUIMenuWatch(hideBar: false)
-        guard !isSelecting,
-              let ip = collectionView.indexPathForItem(at: point),
-              let id = dataSource.itemIdentifier(for: ip),
-              uikitModels[id] == nil,                       // UIKit rows get the bar from the real callbacks
-              let info = reactionBarRow(id), info.canReact   // same rule the SwiftUI menu uses for "React…"
-        else { return }
-        swiftUIBarRowId = id
-        swiftUIBarShown = false
-        // If no menu materialises (the press turned into a drag, or the row has no menu at all) the
-        // watch simply expires. It must never outlive the gesture that started it.
-        swiftUIBarDeadline = CACurrentMediaTime() + 1.5
-        let link = CADisplayLink(target: self, selector: #selector(swiftUIMenuTick))
-        // 20Hz, not every frame: each tick walks the window hierarchy, and the menu's open animation
-        // takes ~0.4s, so 50ms of appearance latency is invisible while a menu the user leaves open
-        // costs a third as much to watch.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 20, preferred: 20)
-        link.add(to: .main, forMode: .common)
-        swiftUIBarWatch = link
-    }
+    // It existed for one reason: half the rows presented their own SwiftUI `.contextMenu`, which fires
+    // none of this collection view's context-menu callbacks, so the bar had to POLL the screen looking
+    // for a menu nobody had told it about. That second menu is gone - every row now opens the one
+    // UIKit menu this class presents - so `willDisplayContextMenu` fires for photos, replies, voice,
+    // files, GIFs and videos exactly as it always did for text. Knowing when a menu opens is a fact
+    // again instead of an observation, which is what the poller was standing in for.
 
-    @objc private func swiftUIMenuTick() {
-        // No row means this tick is stale — stop, but do NOT take a bar down that belongs to a UIKit row.
-        guard let id = swiftUIBarRowId else { stopSwiftUIMenuWatch(hideBar: false); return }
-        guard !isDisappearing else { stopSwiftUIMenuWatch(hideBar: true); return }
-        let lifted = ReactionBarPresenter.liftedPreviewFrame()
-        guard swiftUIBarShown else {
-            guard let lifted else {
-                if CACurrentMediaTime() > swiftUIBarDeadline { stopSwiftUIMenuWatch(hideBar: false) }
-                return
-            }
-            showSwiftUIBar(rowId: id, at: lifted)
-            return
-        }
-        // Shown: the preview going away IS the menu ending — the only end signal there is for a menu
-        // we did not present.
-        if lifted == nil { stopSwiftUIMenuWatch(hideBar: true) }
-    }
-
-    private func showSwiftUIBar(rowId: String, at frame: CGRect) {
-        guard let scene = view.window?.windowScene,
-              let info = reactionBarRow(rowId) else { return }
-        swiftUIBarShown = true
-        ReactionBarPresenter.shared.show(
-            in: scene,
-            bubbleFrame: frame,
-            alignTrailing: info.isMe,
-            selected: onReactionSelected(rowId)
-        ) { [weak self] emoji in
-            guard let self else { return }
-            // ARM THE DISMISSAL GRACE FIRST — before the reaction write, not after. Applying a reaction
-            // reloads that row, and a reload landing while a context menu is animating shut destroys the
-            // cell the menu is flying back into, which strands the system's full-screen blur with no
-            // menu on it. That is the exact bug `menuActionTick` exists for on the SwiftUI side; picking
-            // from the bar is the same event as tapping one of the menu's own actions, so it needs the
-            // same gate. Ordering matters: the gate must be up before anything can publish.
-            armSwiftUIMenuDismissGrace()
-            onReactionPick(rowId, emoji)
-            ReactionBarPresenter.shared.hide()
-            dismissOpenMenu()
-            stopSwiftUIMenuWatch(hideBar: false)
-        }
-    }
-
-    /// The same grace `noteMenuActionTick` arms, reached directly: the bar is inside the controller, so
-    /// it does not need to round-trip a counter through SwiftUI to say "a menu is closing now".
-    private func armSwiftUIMenuDismissGrace() {
-        menuDismissArmedAt = Date()
-        menuDismissGraceUntil = Date().addingTimeInterval(0.6)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in self?.settleFlush() }
-    }
-
-    private func stopSwiftUIMenuWatch(hideBar: Bool) {
-        swiftUIBarWatch?.invalidate()
-        swiftUIBarWatch = nil
-        swiftUIBarRowId = nil
-        swiftUIBarShown = false
-        if hideBar { ReactionBarPresenter.shared.hide() }
-    }
 
     /// Take the row's menu down the way tapping one of its own actions would — `interactions` and
     /// `dismissMenu()` are both public UIKit, the same front door either menu uses.
@@ -1940,6 +1881,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         Self.contextMenuInteractions(in: collectionView).forEach { $0.dismissMenu() }
     }
 
+    /// The bubble's rect in window coordinates, whichever kind of cell holds it. One accessor so the
+    /// bar's anchor and the lift's geometry can never disagree about where a message is.
+    private func bubbleFrameInWindow(at indexPath: IndexPath, id: String) -> CGRect? {
+        if let native = collectionView.cellForItem(at: indexPath) as? UIKitBubbleCell {
+            return native.previewBubble.convert(native.previewBubble.bounds, to: nil)
+        }
+        return BubbleRects.rect(id)
+    }
+
     private static func contextMenuInteractions(in root: UIView) -> [UIContextMenuInteraction] {
         var found = root.interactions.compactMap { $0 as? UIContextMenuInteraction }
         for sub in root.subviews { found += contextMenuInteractions(in: sub) }
@@ -1949,8 +1899,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
         switch g.state {
         case .began:
-            // A menu may be about to open on a SwiftUI row; if it does, the bar goes up with it.
-            watchForSwiftUIMenu(at: g.location(in: collectionView))
             // A CEILING, never .distantFuture. This flag closes canLandLoad, so a press that somehow never
             // delivers .ended or .cancelled used to freeze every content update in the conversation for the
             // rest of the session with no way back â€” the same wedged-flag shape the programmatic-scroll
@@ -2110,9 +2058,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         contextMenuConfig(at: indexPath)
     }
 
+    /// EVERY ROW, not just the native text ones. The `uikitModels[id] != nil` gate that used to be here
+    /// is what split long-press into two systems — this menu for plain text, SwiftUI's own `.contextMenu`
+    /// for everything else — and the reaction bar could only ever hook this one. One presenter for all
+    /// message types is what makes the bar's lifecycle a fact instead of a guess.
     private func contextMenuConfig(at indexPath: IndexPath) -> UIContextMenuConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), uikitModels[id] != nil,
-              let menu = uikitMenu(id) else { return nil }   // SwiftUI rows: their own .contextMenu owns it
+        guard let id = dataSource.itemIdentifier(for: indexPath),
+              let menu = uikitMenu(id) else { return nil }
         return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { _ in menu }
     }
 
@@ -2127,11 +2079,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     ///   where it actually sits in the list.
     private func bubbleTargetedPreview(at indexPath: IndexPath,
                                        reservingBarSpace: Bool = false) -> UITargetedPreview? {
-        guard let cell = collectionView.cellForItem(at: indexPath) as? UIKitBubbleCell else { return nil }
-        let bubble = cell.previewBubble
+        guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
+        // TWO KINDS OF CELL, ONE LIFT. The native text cell hands over its bubble view and that view's
+        // exact corner path. A SwiftUI-hosted cell cannot — UIKit has no way to ask a SwiftUI tree where
+        // its bubble is — so the bubble publishes its own rect and radius (BubbleRects) and we lift the
+        // cell's content view masked to that shape. Same visible result: the bubble rises, the
+        // full-width transparent row around it does not.
+        let bubble: UIView          // the view UIKit lifts
+        let bubbleInWindow: CGRect  // where the BUBBLE is — not the same thing for a hosted cell
         let params = UIPreviewParameters()
         params.backgroundColor = .clear
-        if let path = bubble.lastCornerPath { params.visiblePath = path }
+        if let native = cell as? UIKitBubbleCell {
+            bubble = native.previewBubble
+            bubbleInWindow = native.previewBubble.convert(native.previewBubble.bounds, to: nil)
+            if let path = native.lastCornerPath { params.visiblePath = path }
+        } else {
+            guard let id = dataSource.itemIdentifier(for: indexPath),
+                  let inWindow = BubbleRects.rect(id) else { return nil }   // nil → UIKit lifts the cell
+            bubble = cell.contentView
+            bubbleInWindow = inWindow
+            let local = bubble.convert(inWindow, from: nil)
+            params.visiblePath = UIBezierPath(roundedRect: local,
+                                              cornerRadius: BubbleRects.radius(id))
+        }
 
         // TELLING UIKIT WHERE TO PUT ITS OWN PREVIEW — which is how iMessage keeps
         // reactions · message · menu in that order without owning the menu (user's read of it,
@@ -2163,16 +2133,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return UITargetedPreview(view: bubble, parameters: params)
         }
         let barSpace = ReactionBarView.size(emojiCount: min(6, QuickReaction.choices.count)).height + 12
-        let height = bubble.bounds.height
         let topLimit = window.safeAreaInsets.top + barSpace + 8
         // The composer floats over the list, and UIKit knows nothing about it — without subtracting it
         // the menu is free to land underneath the input bar.
         let bottomLimit = window.bounds.height - window.safeAreaInsets.bottom - composerBarH - 8
         let menuRoom = estimatedMenuHeight(at: indexPath) + 12
 
-        let centerInWindow = container.convert(bubble.center, to: nil)
-        let currentTop = centerInWindow.y - height / 2
-        let currentBottom = centerInWindow.y + height / 2
+        // Measured from the BUBBLE, not from the view being lifted: on a hosted cell those are different
+        // — the lifted view is the full-width row and only the bubble is visible through the mask, so
+        // using the row's height would reserve space for emptiness.
+        let currentTop = bubbleInWindow.minY
+        let currentBottom = bubbleInWindow.maxY
 
         // Each direction is clamped by the OTHER constraint, so making room for one thing can never take
         // the room away from the other. Without the first of these, a tall message near the top was
@@ -2240,21 +2211,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // presented here and dismissed in willEndContextMenuInteraction, which are the only two facts
         // it needs from the system menu. It never modifies the menu, and the menu never knows it
         // exists: `UIContextMenuInteraction` is untouched, which was the whole requirement.
-        // `canReact` is checked here as well as on the SwiftUI path: plain text now routes to the UIKit
-        // cell while it is still SENDING, and a message that is not on the server yet has nothing for a
-        // reaction to attach to — the menu hides its own React… item for the same reason.
+        // EVERY MESSAGE TYPE reaches this now — photos, videos, albums, replies, voice, files, GIFs and
+        // text alike — because they all open this one menu. The bubble's frame comes from whichever
+        // source that row has: a native cell knows its own bubble view, a hosted cell publishes its rect
+        // (BubbleRects). `canReact` still gates: a message that is not on the server yet has nothing for
+        // a reaction to attach to, which is why the menu hides its own React… item for the same rows.
         if let id = configuration.identifier as? String,
            let scene = view.window?.windowScene,
            let ip = dataSource.indexPath(for: id),
-           let cell = collectionView.cellForItem(at: ip) as? UIKitBubbleCell,
-           let model = uikitModels[id],
-           reactionBarRow(id)?.canReact ?? true {
-            let bubble = cell.previewBubble
-            let frame = bubble.convert(bubble.bounds, to: nil)
+           let info = reactionBarRow(id), info.canReact,
+           let frame = bubbleFrameInWindow(at: ip, id: id) {
             ReactionBarPresenter.shared.show(
                 in: scene,
-                    bubbleFrame: frame,
-                alignTrailing: model.isMe,       // Signal aligns the bar to the bubble's own edge
+                bubbleFrame: frame,
+                alignTrailing: info.isMe,        // Signal aligns the bar to the bubble's own edge
                 selected: onReactionSelected(id)
             ) { [weak self] emoji in
                 guard let self else { return }

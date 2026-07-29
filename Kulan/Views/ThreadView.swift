@@ -1,4 +1,4 @@
-import SwiftUI
+﻿import SwiftUI
 import PhotosUI
 import Photos
 import CoreTransferable
@@ -42,22 +42,22 @@ struct ThreadView: View {
     @State private var replyingTo: Message?
     @State private var photoItem: PhotosPickerItem?
     @State private var photoItems: [PhotosPickerItem] = []
-    @State private var editImage: EditImageWrap?     // single picked/captured photo → chat editor
-    @State private var panelEditImage: EditImageWrap?   // picked FROM the attach sheet → editor OVER the sheet (X returns to it)
-    @State private var panelVideoApprove: VideoWrap?    // video picked FROM the sheet → trim editor OVER the sheet (X returns to it)
-    @State private var panelMediaApprove: MediaWrap?    // mixed picked FROM the sheet → pager OVER the sheet (X returns to it)
-    @State private var panelMultiVideo: MultiVideoWrap? // ALL-video multi FROM the sheet → multi-video editor over it
-    @State private var multiVideoApprove: MultiVideoWrap? // ALL-video multi (main picker) → multi-video editor
-    @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
+    @State private var editImage: EditImageWrap?     // single picked/captured photo â†’ chat editor
+    @State private var panelEditImage: EditImageWrap?   // picked FROM the attach sheet â†’ editor OVER the sheet (X returns to it)
+    @State private var panelVideoApprove: VideoWrap?    // video picked FROM the sheet â†’ trim editor OVER the sheet (X returns to it)
+    @State private var panelMediaApprove: MediaWrap?    // mixed picked FROM the sheet â†’ pager OVER the sheet (X returns to it)
+    @State private var panelMultiVideo: MultiVideoWrap? // ALL-video multi FROM the sheet â†’ multi-video editor over it
+    @State private var multiVideoApprove: MultiVideoWrap? // ALL-video multi (main picker) â†’ multi-video editor
+    @State private var videoToApprove: VideoWrap?    // picked video â†’ approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
-    @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
+    @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) â†’ mixed approval pager
     struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
-    struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video → approval page (caption)
-    struct MultiVideoWrap: Identifiable { let id = UUID(); let clips: [ApprovalClip] }   // ALL-video multi → single-editor chassis + rail
+    struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video â†’ approval page (caption)
+    struct MultiVideoWrap: Identifiable { let id = UUID(); let clips: [ApprovalClip] }   // ALL-video multi â†’ single-editor chassis + rail
 
     // A 2+ selection that is ENTIRELY videos routes to the multi-video editor (the single video editor's
-    // exact page + thumbnail rail — user spec); any mix keeps the pager.
+    // exact page + thumbnail rail â€” user spec); any mix keeps the pager.
     static func videoClips(from items: [ApprovalMedia]) -> [ApprovalClip]? {
         let clips = items.compactMap { item -> ApprovalClip? in
             if case .video(_, let url, let thumb, let dur) = item {
@@ -70,16 +70,16 @@ struct ThreadView: View {
     // A tapped album opens a swipeable gallery of its photos (synthetic image messages), starting on
     // the tapped one.
     struct AlbumViewerWrap: Identifiable { let id = UUID(); let gallery: [Message]; let startId: String }
-    @State private var viewedOnceTick = 0            // bump after consuming a view-once photo → bubbles refresh
-    @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
+    @State private var viewedOnceTick = 0            // bump after consuming a view-once photo â†’ bubbles refresh
+    @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer â†’ mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
-    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle → auto-stop typing (idle pause timer)
+    @State private var typingIdleStop: DispatchWorkItem?   // 3s idle â†’ auto-stop typing (idle pause timer)
     @State private var viewerImage: Message?
-    @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
-    @State private var albumScreen: Message?           // tapped a photo GROUP → the album list screen
-    @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
-    @State private var storyToOpen: StoryGroup?      // tapped a status reply → open that status
+    @State private var albumViewer: AlbumViewerWrap?   // tapped album photo â†’ swipeable album gallery
+    @State private var albumScreen: Message?           // tapped a photo GROUP â†’ the album list screen
+    @State private var viewerVideo: Message?   // tapped video bubble â†’ full-screen player
+    @State private var storyToOpen: StoryGroup?      // tapped a status reply â†’ open that status
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
     @State private var sendError: String?
     @State private var showCamera = false
@@ -87,75 +87,75 @@ struct ThreadView: View {
     // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
-    @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
+    @State private var recentsHasSelection = false   // attach sheet: â‰¥1 photo selected â†’ show caption+send, hide sources
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
-    @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
-    @State private var showLocationShare = false     // Location tile → Select Location map
-    @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
+    @State private var pendingCallBack: CallBackKind?   // tapped a call-history row â†’ confirm before dialing
+    @State private var showLocationShare = false     // Location tile â†’ Select Location map
+    @State private var showPollComposer = false      // Poll tile (groups) â†’ new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
     @State private var filePreview: PreviewFile?
-    @State private var pdfDoc: PDFDocWrap?           // received PDF → custom PDFKit reader (Liquid Glass)
+    @State private var pdfDoc: PDFDocWrap?           // received PDF â†’ custom PDFKit reader (Liquid Glass)
     @State private var showLibrary = false
     @State private var showVideoSoon = false
-    @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
+    @State private var showContactInfo = false   // tap avatar/name in header â†’ profile (or Group Info for groups)
     @State private var showWallpaper = false      // "Change Wallpaper" from the profile menu opens the picker here
     // Hold-to-record voice gesture state (standard hold-to-record).
     @State private var recordLocked = false        // recording continues after finger lifts
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
-    @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
-    @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
+    @State private var pinIndex = 0                  // which of the (â‰¤5) pinned messages the bar shows
+    @State private var showPinnedSheet = false       // "See All" â†’ full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
-    @State private var micDenied = false            // mic permission denied → "open Settings" alert
+    @State private var micDenied = false            // mic permission denied â†’ "open Settings" alert
     @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
     // NEW-REACTION BADGE (user request): someone reacts to one of my older messages while I am reading
-    // up the chat. The jump-to-bottom arrow cannot say that — it points at the newest message, not at
-    // the one that was reacted to — so this is its sibling: it shows the emoji, and tapping it scrolls
+    // up the chat. The jump-to-bottom arrow cannot say that â€” it points at the newest message, not at
+    // the one that was reacted to â€” so this is its sibling: it shows the emoji, and tapping it scrolls
     // to that exact message and flashes it.
     @State private var reactionJumpId: String?
     @State private var reactionJumpEmoji = ""
     @State private var seenReactionSigs: [String: String] = [:]
     @State private var reactionSigsSeeded = false
-    @State private var infoTarget: Message?        // group message → "read by" info sheet
+    @State private var infoTarget: Message?        // group message â†’ "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
-    // composer's own inset isn't folded — so we measure the bar height and feed it as extra bottom clearance
+    // composer's own inset isn't folded â€” so we measure the bar height and feed it as extra bottom clearance
     // (so the newest message clears the bar). Not a keyboard signal; the keyboard comes from .always.
     @State private var composerBarHeight: CGFloat = 0
-    @State private var pinBarHeight: CGFloat = 0   // pinned-message bar height → floating date pill drops below it
+    @State private var pinBarHeight: CGFloat = 0   // pinned-message bar height â†’ floating date pill drops below it
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
     // Bumped inside SWIFTUI context-menu actions that reload cells (Select). The UIKit list defers its
-    // reloads through the menu's dismissal animation — UIKit's own callbacks can't see SwiftUI menus,
+    // reloads through the menu's dismissal animation â€” UIKit's own callbacks can't see SwiftUI menus,
     // which is how Select kept stranding the system's blur backdrop over the whole chat.
     @State private var menuActionTick = 0
-    // Composer link-preview draft (sender-side fetch, Signal's model — see LinkPreviewService). The
+    // Composer link-preview draft (sender-side fetch, Signal's model â€” see LinkPreviewService). The
     // card shows above the input the moment a pasted/typed link resolves; X suppresses that URL.
     @State private var linkDraft: LinkPreviewService.LinkDraft?
     @State private var suppressedLinkUrl: String?
     @State private var linkDetectTask: Task<Void, Never>?
     @State private var bulkForward: [Message]?
     @State private var showBulkDeleteConfirm = false
-    // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
+    // In-chat search (opened from the profile's "search" tile) â€” a top bar + â†‘/â†“ through matches.
     @State private var searchActive = false
     @State private var searchQuery = ""
     @State private var searchCorpus: [InChatMessage] = []
-    @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
+    @State private var searchMatches: [InChatMessage] = []   // filtered, oldestâ†’newest
     @State private var searchIndex = 0
     @State private var lastSearchText: String?   // identical-query dedup: arrows/focus don't re-run the search
-    @State private var searchJumpSeq = 0         // coalesces rapid next/prev jumps — only the latest target lands
+    @State private var searchJumpSeq = 0         // coalesces rapid next/prev jumps â€” only the latest target lands
     @FocusState private var searchFocused: Bool
     // UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
-    // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
+    // Default ON now; the SwiftUI list stays as a fallback toggle in Settings â–¸ Privacy while it settles.
     @State private var isAtBottom = true
-    @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left
-    @State private var tappedLink: URL?                 // link tapped in a bubble → ONE screen-level confirm
+    @State private var visibleRows = VisibleRowsBox()   // ids currently on screen â†’ remember where I left
+    @State private var tappedLink: URL?                 // link tapped in a bubble â†’ ONE screen-level confirm
     @State private var tappedUserNotFound = false       // @username tapped but no such user (screen-level alert)
     // Telegram-style media open/close TEST (Settings > Privacy): the tapped photo/video springs from
     // the bubble rect instead of the system zoom transition.
@@ -164,7 +164,7 @@ struct ThreadView: View {
     @AppStorage("readReceipts") private var readReceiptsOn = true   // feeds the uikit tick + its cache key
 
     // Arrival high-water mark (audit S6): per-message arrival classification, not per-batch. A class
-    // box — mutating it never re-runs the body.
+    // box â€” mutating it never re-runs the body.
     private final class ArrivalState {
         var newestCreatedAt = Date.distantPast
         var seeded = false
@@ -172,13 +172,13 @@ struct ThreadView: View {
     @State private var arrivalState = ArrivalState()
 
     // One drain per chat OPEN, not per onAppear (audit S5): returning from an in-chat profile push
-    // re-fired the drain while the original send was still in flight → duplicate server doc + the
+    // re-fired the drain while the original send was still in flight â†’ duplicate server doc + the
     // recipient's unread badge over-counted by one, permanently.
     private final class DrainGate { var done = false }
     @State private var drainGate = DrainGate()
 
     // Typing hygiene (audit M6): onChange(of: input) can't tell a keystroke from a programmatic
-    // assignment, and independent setTyping Tasks could land out of order (remote "typing…" stuck
+    // assignment, and independent setTyping Tasks could land out of order (remote "typingâ€¦" stuck
     // for the 15s expiry). suppressNext skips one onChange; chain serializes the writes.
     private final class TypingBox { var suppressNext = false; var chain: Task<Void, Never>? }
     @State private var typingBox = TypingBox()
@@ -194,7 +194,7 @@ struct ThreadView: View {
         typingBox.chain = Task { await prev?.value; await ChatService.setTyping(c, v) }
     }
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
-    @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
+    @State private var revealed = false  // list hidden until the first chunk has laid out â€” the chunked build was visible mid-push (user video)
     @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
     @State private var replyStoryAnchorId = ""                // the tapped quote's anchor (per-message unique)
     @State private var newWhileAway = 0
@@ -204,7 +204,7 @@ struct ThreadView: View {
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
-    @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
+    @State private var editingMessage: Message?   // INLINE edit â€” no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
     @FocusState private var inputFocused: Bool
     @Environment(\.colorScheme) private var scheme
@@ -228,7 +228,7 @@ struct ThreadView: View {
         self.photoUrl = photoUrl
         let r = ThreadRepository(cid: cid)
         _repo = State(initialValue: r)
-        // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
+        // ALWAYS start hidden â€” even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
         // jumped to the bottom. Starting hidden + settling under the veil (revealAtOpenAnchor, run from
         // onAppear for the cache path / onChange for the cold path) means it's never seen mid-scroll.
@@ -241,10 +241,10 @@ struct ThreadView: View {
 
     // Extracted so the type-checker isn't overloaded (the inline `if` in the big chain broke the build).
     @ViewBuilder private var topPinArea: some View {
-        if !searchActive {   // search owns the top area — the pin bar hides while searching
+        if !searchActive {   // search owns the top area â€” the pin bar hides while searching
             pinnedBar
                 // Measure the pin bar's height and feed it to the list so the floating date pill drops BELOW
-                // it (Signal behavior). 0 when nothing is pinned (pinnedBar is empty) → the pill stays put.
+                // it (Signal behavior). 0 when nothing is pinned (pinnedBar is empty) â†’ the pill stays put.
                 .background {
                     GeometryReader { geo in
                         Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
@@ -260,24 +260,24 @@ struct ThreadView: View {
             // blur frosts the messages scrolling beneath it (seamless, no band). `.ignoresSafeArea(.top)`
             // lets the list extend under the header; the list's own inset logic (unchanged) still clears
             // the bars. The pinned-message bar floats as a top overlay, positioned below the header.
-            // NOTE: this only changes ThreadView's layout — NativeMessageList's scroll/send/inset code
+            // NOTE: this only changes ThreadView's layout â€” NativeMessageList's scroll/send/inset code
             // is untouched. The heavy modifier chain lives in messagesLayer() for the type-checker.
             messagesLayerErased(proxy)
             // Full-bleed under BOTH bars, SYMMETRICALLY. The top already ran under the nav (messages render
-            // behind it, frosted) — the bottom must do the SAME so messages + wallpaper render UNDER the
+            // behind it, frosted) â€” the bottom must do the SAME so messages + wallpaper render UNDER the
             // composer instead of stopping above it (that gap = the plain white app background showing = the
             // "white composer" bug). The UIKit view still sees the real bottom safe area (composer safeAreaBar
             // + keyboard) exactly like it sees the top nav inset, so `.always` folds it and the newest message
-            // still rests clear of the composer — same mechanism as the top, just mirrored.
+            // still rests clear of the composer â€” same mechanism as the top, just mirrored.
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             // NO custom edge blur. The hand-made gradient-masked bands (ef7b076) rendered as huge
             // frosted blocks through the MIDDLE of the chat on device (user screenshot, removed on
-            // demand the same night) — the overlay alignment did not pin to the screen edges the way
+            // demand the same night) â€” the overlay alignment did not pin to the screen edges the way
             // it reasoned on paper. The progressive edge blur, if it comes, must be Apple's native
-            // scroll edge effect, integrated properly — research first, prefer-native rule.
+            // scroll edge effect, integrated properly â€” research first, prefer-native rule.
             // Jump-to-bottom chevron as a FLOATING OVERLAY (not inside the bar). It MUST NOT live in the
             // composer safeAreaBar: the bar now feeds the content inset, so a button that appears/disappears
-            // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
+            // there changed the bar height â†’ changed the inset â†’ the bottom gap "grew in stages" as you
             // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
             .overlay(alignment: .bottomTrailing) {
@@ -290,13 +290,13 @@ struct ThreadView: View {
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
             .floatingBottomBar {
-                // THE REFERENCE MODEL — NO background at all. The iOS-26 input toolbar is a
+                // THE REFERENCE MODEL â€” NO background at all. The iOS-26 input toolbar is a
                 // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
                 // controls themselves are Liquid Glass, blurring what passes directly under THEM.
                 bottomBarContent
                     // Measure the composer bar's height and feed it to the list as extra bottom clearance.
                     // Because the list is full-bleed under the composer (.ignoresSafeArea(.container,.bottom)),
-                    // the composer's own safe-area inset is NO LONGER folded in — so without this the newest
+                    // the composer's own safe-area inset is NO LONGER folded in â€” so without this the newest
                     // message slides UNDER the bar. The keyboard still comes from the (un-ignored) keyboard
                     // safe area via .always, so this only adds the static bar height, no double-count.
                     .background {
@@ -324,11 +324,11 @@ struct ThreadView: View {
             // and the pinned-bottom re-layout read as the whole chat jumping/wiggling.
             // The UIKit list opens at the exact bottom on its own, so it needs no reveal veil.
             .opacity(1)   // the UIKit list manages its own reveal (alpha until the first frame is final)
-            // Reveal only once the FULL first page is loaded + laid out (didInitialLoad) — NOT on the
-            // first single message. Revealing on the first message showed the chat while cache→live
+            // Reveal only once the FULL first page is loaded + laid out (didInitialLoad) â€” NOT on the
+            // first single message. Revealing on the first message showed the chat while cacheâ†’live
             // chunks were still landing, so the pinned-bottom layout re-flowed DURING the push and the
             // chat visibly jumped. didInitialLoad means the initial page is decrypted and settled, so
-            // it fades in stable. Demo chats set didInitialLoad synchronously — hence their smoothness.
+            // it fades in stable. Demo chats set didInitialLoad synchronously â€” hence their smoothness.
             .onChange(of: repo.didInitialLoad) { _, done in
                 if done, !revealed { revealAtOpenAnchor(proxy) }
             }
@@ -339,7 +339,7 @@ struct ThreadView: View {
                 if !revealed { revealAtOpenAnchor(proxy) }
             }
             .onAppear {
-                // Cache-seeded chat: didInitialLoad is already true, so the reveal onChange never fires —
+                // Cache-seeded chat: didInitialLoad is already true, so the reveal onChange never fires â€”
                 // settle-under-veil here too (not a single scrollTo) so the cache path also never shows
                 // the chat mid-scroll during the push transition.
                 if repo.didInitialLoad { revealAtOpenAnchor(proxy, settlePasses: 3) }   // measured -> reveal fast (no blink)
@@ -351,7 +351,7 @@ struct ThreadView: View {
             // badges, and the own-send glide.
             .onChange(of: repo.itemsVersion) { _, _ in
                 // PER-MESSAGE classification (audit S6): the old handler classified the whole batch by
-                // its LAST author — their message + my echo in one Firestore commit read as "mine", so
+                // its LAST author â€” their message + my echo in one Firestore commit read as "mine", so
                 // the read receipt was skipped (a standing contributor to the tick complaints), and a
                 // 3-message burst counted as "1" on the jump button. Fresh = genuinely newer than the
                 // newest we'd seen (prepends of old history never count).
@@ -362,7 +362,7 @@ struct ThreadView: View {
                     arrivalState.newestCreatedAt = newest
                 }
                 if !settled {
-                    // INITIAL LOAD (clean): pin to the OPEN ANCHOR as cache→live chunks land — invisible
+                    // INITIAL LOAD (clean): pin to the OPEN ANCHOR as cacheâ†’live chunks land â€” invisible
                     // under the reveal veil. (proxy path retained from the pre-native list.)
                     let a = openAnchor
                     proxy.scrollTo(a.id, anchor: a.edge)
@@ -372,7 +372,7 @@ struct ThreadView: View {
                 let fresh = repo.items.filter { $0.createdAt > newestBefore }
                 guard !fresh.isEmpty else { return }
                 let incoming = fresh.filter { $0.authorId != me }
-                // My own send ALWAYS glides to the newest message — even when I was reading history.
+                // My own send ALWAYS glides to the newest message â€” even when I was reading history.
                 // sendState != nil = the OPTIMISTIC insert (the actual send action). The server echo
                 // arrives with a slightly different timestamp and must not re-trigger the glide if the
                 // user scrolled away in the meantime.
@@ -381,16 +381,16 @@ struct ThreadView: View {
                 } else if !incoming.isEmpty && !isAtBottom {
                     newWhileAway += incoming.count   // per message, not per batch
                 }
-                // Read receipts: only for INCOMING messages the user can actually see (at the bottom) —
+                // Read receipts: only for INCOMING messages the user can actually see (at the bottom) â€”
                 // never while scrolled up reading history. Own sends in the same batch no longer mask them.
                 if !incoming.isEmpty && isAtBottom && !repo.iBlocked {
                     ChatService.markReadThrottled(cid)
-                    // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
+                    // Keep the stored unread counter at 0 for live-read arrivals too â€” otherwise the
                     // badge goes stale if the app is killed while this chat is still open.
                     Task { await ChatService.resetUnread(cid) }
                 }
             }
-            // (chain continues in messagesLayer below — split at this erased boundary for the type-checker)
+            // (chain continues in messagesLayer below â€” split at this erased boundary for the type-checker)
     }
 
     // Second half of the messages chain. messagesLayer grew past the compiler's type-check budget as ONE
@@ -399,18 +399,18 @@ struct ThreadView: View {
         AnyView(messagesLayerCore(proxy))
             .onChange(of: repo.messages.count) { _, _ in anchorUnread(proxy) }
             // The window trim must never delete the rows the reader is currently viewing (that deletion
-            // yanked the viewport while reading history) — pause it whenever they're away from the bottom.
+            // yanked the viewport while reading history) â€” pause it whenever they're away from the bottom.
             .onChange(of: isAtBottom) { _, atB in repo.readerAwayFromBottom = !atB }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
             .onChange(of: repo.pinnedMessageIds) { _, ids in
                 pinIndex = max(0, ids.count - 1)
-                // The bar's height is reported by a GeometryReader ON the bar — when the last pin is
+                // The bar's height is reported by a GeometryReader ON the bar â€” when the last pin is
                 // removed the bar unmounts and nothing reports 0, so the floating date pill stayed at
                 // the lowered position forever (user report). Reset explicitly.
                 if ids.isEmpty { pinBarHeight = 0 }
             }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
-            // A reaction changes no message text, so it arrives as a content-only update — this is the
+            // A reaction changes no message text, so it arrives as a content-only update â€” this is the
             // one signal that sees it.
             .onChange(of: repo.itemsVersion) { _, _ in noteReactionChanges() }
             // Reaching the newest message means you have caught up; the badge has nothing left to say.
@@ -420,15 +420,15 @@ struct ThreadView: View {
                 }
             }
             .onChange(of: repo.otherTyping) { _, t in
-                // Typing indicator appears while at the bottom → reveal it (the reference auto-scrolls for
+                // Typing indicator appears while at the bottom â†’ reveal it (the reference auto-scrolls for
                 // a typing indicator only when the reader was at the bottom). proxy.scrollTo was a NO-OP
-                // on the native list — this intent never actually executed.
+                // on the native list â€” this intent never actually executed.
                 if t && isAtBottom { nativeScrollTarget = "BOTTOM" }
             }
             // Keyboard opening: if I was already at the bottom, keep the newest messages pinned right
             // above the keyboard. The list's inset pin covers this at the UIKit level; this explicit
-            // glide is the belt-and-suspenders for cases where focus lands before the keyboard frame —
-            // and it too was a proxy.scrollTo NO-OP that never executed (the "tap input → conversation
+            // glide is the belt-and-suspenders for cases where focus lands before the keyboard frame â€”
+            // and it too was a proxy.scrollTo NO-OP that never executed (the "tap input â†’ conversation
             // doesn't move" report).
             .onChange(of: inputFocused) { _, focused in
                 guard focused, isAtBottom else { return }
@@ -436,7 +436,7 @@ struct ThreadView: View {
                     nativeScrollTarget = "BOTTOM"
                 }
             }
-            // (Jump-to-bottom button moved: it's anchored ABOVE the composer bar in scrollStack — the list
+            // (Jump-to-bottom button moved: it's anchored ABOVE the composer bar in scrollStack â€” the list
             // is full-bleed now, so a list-anchored overlay landed at the raw screen bottom UNDER the bar.)
             // Float the composer OVER the messages (iOS 26 native via safeAreaBar):
             // the glass dims/blurs the messages scrolling under it like the native bars;
@@ -460,7 +460,7 @@ struct ThreadView: View {
             }
     }
 
-    // Floating jump-to-bottom button — appears when scrolled up, with a count of messages that arrived
+    // Floating jump-to-bottom button â€” appears when scrolled up, with a count of messages that arrived
     // while away. Anchored above the composer bar (see scrollStack).
     /// The new-reaction badge. Appears ONLY while there is an unseen reaction on one of my messages
     /// and I am not at the bottom; tapping scrolls to that message and flashes it, then it is gone.
@@ -482,7 +482,7 @@ struct ThreadView: View {
     }
 
     /// Watch my own messages for reactions that ARRIVED (not ones that were already there when the
-    /// chat opened). The first pass only seeds the baseline — otherwise every existing reaction in the
+    /// chat opened). The first pass only seeds the baseline â€” otherwise every existing reaction in the
     /// loaded window would fire the badge the moment you walk into a chat.
     private func noteReactionChanges() {
         var sigs: [String: String] = [:]
@@ -511,7 +511,7 @@ struct ThreadView: View {
                 // to the FIRST unread; otherwise glide to the newest message.
                 if let unread = firstUnreadId, repo.items.contains(where: { $0.id == unread }) {
                     nativeScrollTarget = unread
-                    firstUnreadId = nil   // consumed → next press goes to the bottom
+                    firstUnreadId = nil   // consumed â†’ next press goes to the bottom
                 } else {
                     nativeScrollTarget = "BOTTOM"
                     newWhileAway = 0
@@ -529,7 +529,7 @@ struct ThreadView: View {
                             Text("\(newWhileAway)").font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
-                                // Fixed brand blue — Color.accentColor is WHITE in dark mode, so a white
+                                // Fixed brand blue â€” Color.accentColor is WHITE in dark mode, so a white
                                 // number on it was invisible (the reported "can't see the count" bug).
                                 .background(Theme.defaultBubble(dark), in: Capsule())
                                 .offset(y: -9)
@@ -573,7 +573,7 @@ struct ThreadView: View {
         threadScroll
         // Avatar + name installed as the native UINavigationItem.titleView (left-aligned after the back
         // button, slides with the native swipe-back). NavTitleView clears the bar appearance overrides,
-        // so there's no border — same native bar as the Chats list. RESTORED build-341 header on explicit
+        // so there's no border â€” same native bar as the Chats list. RESTORED build-341 header on explicit
         // repeated user request ("completely go back build 341"). Known risk: setting titleView directly
         // fights SwiftUI's NavigationStack reconciler and can spin a CPU redisplay loop (0x8BADF00D hang);
         // the coalesced async re-assert in NavTitleView is the mitigation.
@@ -584,13 +584,13 @@ struct ThreadView: View {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             showContactInfo = true
         }) {
-            // Selection mode replaces the title with just the toolbar (Delete All / count / X) — hide the
+            // Selection mode replaces the title with just the toolbar (Delete All / count / X) â€” hide the
             // avatar + name so it reads as a clean selection bar.
             if !selecting { headerLabel }
         })
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back
+        .navigationBarBackButtonHidden(selecting)   // selection mode â†’ only Delete All / X, no back
         .toolbar { chatToolbar }
         // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
         // lingers over the chat list.
@@ -603,8 +603,8 @@ struct ThreadView: View {
                 if Flags.groupsEnabled { GroupInfoView(cid: cid) }
             } else {
                 ContactInfoView(cid: cid, name: title, photoUrl: photoUrl, onSearch: {
-                    showContactInfo = false   // pop back to the chat…
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
+                    showContactInfo = false   // pop back to the chatâ€¦
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // â€¦then open search
                 })
             }
         }
@@ -615,7 +615,7 @@ struct ThreadView: View {
                                                         set: { if !$0 { sendError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(sendError ?? "") }
-        // Hold-to-record with mic permission denied → deep-link to the app's Settings page.
+        // Hold-to-record with mic permission denied â†’ deep-link to the app's Settings page.
         .alert("Microphone access is off", isPresented: $micDenied) {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -630,7 +630,7 @@ struct ThreadView: View {
     // Split into two halves at an erased boundary: this modifier chain (~28 covers/sheets/alerts on one
     // expression) blew the compiler's type-check budget ("unable to type-check in reasonable time",
     // Release build) once the delete-option alerts were added. AnyView between the halves resets the
-    // opaque-type complexity — behavior unchanged.
+    // opaque-type complexity â€” behavior unchanged.
     private var threadPickers: some View {
         AnyView(threadPickersD)
         .fullScreenCover(isPresented: $showCamera) {
@@ -645,13 +645,13 @@ struct ThreadView: View {
         }
         .fullScreenCover(item: $mediaToApprove) { wrap in
             // Mixed approval pager (images + videos, per-item edit, one caption, one send). EVERYTHING
-            // selected — photos AND videos, in order — is delivered as ONE album message group,
+            // selected â€” photos AND videos, in order â€” is delivered as ONE album message group,
             // with one caption. A single lone image/video keeps its dedicated fast path.
             MediaApprovalView(items: wrap.items) { ordered, caption, hd in
                 Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
             }
         }
-        // ALL-video multi from the main picker → the multi-video editor (single-editor page + rail).
+        // ALL-video multi from the main picker â†’ the multi-video editor (single-editor page + rail).
         .fullScreenCover(item: $multiVideoApprove) { wrap in
             VideoApprovalView(clips: wrap.clips, onSendMulti: { urls, caption, hd in
                 Task {
@@ -668,7 +668,7 @@ struct ThreadView: View {
         .fullScreenCover(item: $storyToOpen) { g in
             // FULLY NATIVE (user's final call): the zoom hero anchors on the tapped reply-quote
             // thumbnail, so Apple's interactive scroll-down-to-close works here exactly like
-            // the main story flow — the custom pan is gone from this cover.
+            // the main story flow â€” the custom pan is gone from this cover.
             StoryViewer(group: g,
                         onClose: { storyToOpen = nil }, onProfile: { _ in storyToOpen = nil })
                 .navigationTransition(.zoom(sourceID: replyStoryAnchorId, in: replyStoryNS))
@@ -686,7 +686,7 @@ struct ThreadView: View {
         }) { msg in
             // CLOSE = only the PHOTO follows the finger and the black backdrop fades (system photo
             // viewer), NOT the whole page. The native .zoom transition's own drag moved the WHOLE card
-            // (and .interactiveDismissDisabled did NOT suppress it), so it's removed — the in-viewer
+            // (and .interactiveDismissDisabled did NOT suppress it), so it's removed â€” the in-viewer
             // image-only pan (suppressDismissPan: false) owns the drag-down close, like the album viewer.
             Group {
                 if msg.viewOnce {
@@ -697,11 +697,11 @@ struct ThreadView: View {
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
                     // A SINGLE PHOTO OPENS ALONE (user spec 2026-07-29: "when i send only one image then
-                    // i click i see multi image… bottom thumbnails is only group images, not single
+                    // i click i see multi imageâ€¦ bottom thumbnails is only group images, not single
                     // image"). This used to hand the viewer EVERY photo in the conversation so you could
                     // page between unrelated messages, which meant one photo arrived with a filmstrip of
                     // other people's pictures under it and swiped away to them. Albums still open as a
-                    // group — that gallery comes from the album's own items, further down.
+                    // group â€” that gallery comes from the album's own items, further down.
                     ImageViewerView(message: msg, cid: cid,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
@@ -747,7 +747,7 @@ struct ThreadView: View {
                             clipProvider: { MediaOpenRects.clipRect })
             // NO `.navigationTransition(.zoom)` here any more. The album viewer was the last place the
             // SYSTEM zoom transition still ran for chat media, and it is a third pipeline: it scales the
-            // entire presented cover — backdrop, header, thumb strip, toolbar — out of the tapped tile,
+            // entire presented cover â€” backdrop, header, thumb strip, toolbar â€” out of the tapped tile,
             // while single photos and videos fly only the media through SignalMediaOpen. Now that album
             // tiles fly too, leaving this on would run both animations over each other.
         }
@@ -757,7 +757,7 @@ struct ThreadView: View {
                 // No transition modifier: the poster flies via SignalMediaOpen before this presents,
                 // exactly like photos. One pipeline, both directions.
         }
-        // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
+        // Picked video â†’ approval page (caption) before sending, like the image editor (not auto-send).
         .fullScreenCover(item: $videoToApprove) { wrap in
             VideoApprovalView(url: wrap.url) { finalURL, caption, hd in
                 Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
@@ -766,11 +766,11 @@ struct ThreadView: View {
         .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
                 .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
-                // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
+                // SOLID system background (white in light / dark in dark mode) â€” the default iOS 26 glass
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
                 // TELEGRAM MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
-                // Telegram's attachment menu is a spring bottom sheet — it slides up from the bottom
+                // Telegram's attachment menu is a spring bottom sheet â€” it slides up from the bottom
                 // edge with a quick spring, drags between part/full height, and a downward drag or flick
                 // dismisses it. That is EXACTLY the native sheet-with-detents behavior, so the system
                 // presentation owns it: no transition override. (The zoom morph fought the detent snap.)
@@ -792,7 +792,7 @@ struct ThreadView: View {
     // Fourth slice of the picker chain (location onward), joined via an erased boundary.
     private var threadPickersC: some View {
         AnyView(threadPickersB)
-        // "Select Location" map (user design): permission → GPS/pan/search → Send Location outputs the
+        // "Select Location" map (user design): permission â†’ GPS/pan/search â†’ Send Location outputs the
         // coordinates, delivered as an encrypted location-card message.
         .sheet(isPresented: $showLocationShare) {
             LocationPickerSheet { lat, lon, label in
@@ -805,7 +805,7 @@ struct ThreadView: View {
             }
         }
         // DELETED HERE: the Share Contact picker sheet, with the attach tile that opened it. Contact
-        // cards already SENT still render — Message.contactMarkerText and the card bubble are
+        // cards already SENT still render â€” Message.contactMarkerText and the card bubble are
         // untouched, so nobody's history changes.
         // New-poll composer (groups): sends the poll as an encrypted "kulan-poll:" marker message.
         .sheet(isPresented: $showPollComposer) {
@@ -817,14 +817,14 @@ struct ThreadView: View {
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in
                 // OPTIMISTIC, exactly like a text send (user: "make it like how it works when I send a
-                // new message"). The bubble lands locally the moment you pick — and that local insert
+                // new message"). The bubble lands locally the moment you pick â€” and that local insert
                 // is what fires the send glide to the newest message. GIF was the one send type without
                 // an optimistic bubble: it only appeared on the server echo, which never scrolled.
                 let clientId = UUID().uuidString
                 repo.addPending(Message(localGifUrl: gif.url, width: gif.width, height: gif.height,
                                         authorId: me, clientId: clientId, sendState: .sending))
                 Task {
-                    // Surface failures — the old try? made a failed send look like a dead tap.
+                    // Surface failures â€” the old try? made a failed send look like a dead tap.
                     do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, clientId: clientId, group: isGroup ? groupMembers : nil) }
                     catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the GIF. Check your connection and try again." } }
                 }
@@ -834,7 +834,7 @@ struct ThreadView: View {
             handlePickedFile(result)
         }
         // Full SHEET page (user spec): rounded top + grabber + a real close button. The old
-        // .ignoresSafeArea stretched the preview edge-to-edge, hiding the grabber and any Done chrome —
+        // .ignoresSafeArea stretched the preview edge-to-edge, hiding the grabber and any Done chrome â€”
         // and since file content scrolls, swipe-down scrolled the text instead of dismissing ("can't
         // close it"). PDFs get the same sheet look instead of a bare full page.
         .sheet(item: $filePreview) { FilePreviewSheet(url: $0.url) }
@@ -907,11 +907,11 @@ struct ThreadView: View {
             Button("Cancel", role: .cancel) {}
         }
         // Pinned-message bar: docked at the top via safeAreaInset (the SAME reliable mechanism the search
-        // bar uses) so it ALWAYS sits right below the nav bar — never mid-screen. The old approach placed it
+        // bar uses) so it ALWAYS sits right below the nav bar â€” never mid-screen. The old approach placed it
         // as an overlay padded by a controller-reported navBarHeight, which repeatedly came back wrong and
         // dropped the bar into the middle of the conversation.
         .safeAreaInset(edge: .top) { topPinArea }
-        // In-chat search: a top bar replaces the nav bar; the ↑/↓ nav bar (searchNavBar) replaces the
+        // In-chat search: a top bar replaces the nav bar; the â†‘/â†“ nav bar (searchNavBar) replaces the
         // composer above the keyboard.
         .safeAreaInset(edge: .top) { if searchActive { searchBar } }
         // Media auto-download policies: prefetch this chat's videos/voice per setting +
@@ -925,9 +925,9 @@ struct ThreadView: View {
 
     var body: some View {
         // READ-RECEIPT LIVE FIX: read otherLastReadMillis DIRECTLY in the body so a live read update re-runs
-        // the view. It's otherwise only read inside the rowSignatures helper — and unlike pins/reactions
-        // (read directly in the body), that wasn't enough to refresh the tick, so my ✓ stayed single until a
-        // full reload. This body-level read makes the tick flip to ✓✓ the moment the other person reads.
+        // the view. It's otherwise only read inside the rowSignatures helper â€” and unlike pins/reactions
+        // (read directly in the body), that wasn't enough to refresh the tick, so my âœ“ stayed single until a
+        // full reload. This body-level read makes the tick flip to âœ“âœ“ the moment the other person reads.
         let _ = repo.otherLastReadMillis
         threadContent
         // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
@@ -952,9 +952,9 @@ struct ThreadView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { note in
             guard let p = note.object as? GoToMessage, p.cid == cid else { return }
-            // Collapse the whole profile→gallery branch with animations DISABLED. SwiftUI's nested
-            // boolean navigation pops one level at a time (gallery→profile→chat), so an animated pop
-            // FLASHES the profile. Disabling the animation cuts straight to the conversation — the
+            // Collapse the whole profileâ†’gallery branch with animations DISABLED. SwiftUI's nested
+            // boolean navigation pops one level at a time (galleryâ†’profileâ†’chat), so an animated pop
+            // FLASHES the profile. Disabling the animation cuts straight to the conversation â€” the
             // profile is never rendered. (ContactInfoView clears showAllMedia the same way.)
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { showContactInfo = false }
@@ -1010,25 +1010,25 @@ struct ThreadView: View {
             }
             // No recorder.prepare() here: it triggered the mic-permission prompt the moment ANY
             // chat opened. Permission is asked on the first real hold (requestAndStart), and the
-            // session re-warms itself after each record (AudioRecorder.reset → prepare).
-            // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) — flip to the
+            // session re-warms itself after each record (AudioRecorder.reset â†’ prepare).
+            // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) â€” flip to the
             // locked bar so the user can send or cancel the partial note (was: recording discarded).
             recorder.onInterrupt = {
                 recordDrag = .zero
-                holdStarted = false   // recordingHeld is computed (holdStarted && !recordLocked) → goes false
+                holdStarted = false   // recordingHeld is computed (holdStarted && !recordLocked) â†’ goes false
                 recordLocked = true
             }
             // Restore an unsent draft (local-only). Never clobber text already being typed.
-            // SILENTLY (audit M6): the programmatic set used to fire the typing broadcast — opening a
-            // chat with a parked draft showed "typing…" to the other person with zero keystrokes.
+            // SILENTLY (audit M6): the programmatic set used to fire the typing broadcast â€” opening a
+            // chat with a parked draft showed "typingâ€¦" to the other person with zero keystrokes.
             if input.isEmpty { setInputSilently(Drafts.shared.text(cid)) }
-            // Unread count from the cached conversation — only used to place the unread-divider
+            // Unread count from the cached conversation â€” only used to place the unread-divider
             // MARKER now (we always open at the bottom, so it no longer drives the scroll position).
             unreadOnOpen = cachedConv?.unread(me) ?? 0
             // Gate animated auto-scroll until the push transition + first chunked load settle,
             // so the conversation opens cleanly at the bottom with no jump (defaultScrollAnchor).
             // `settled` gates the message-row slide-in transition. It is flipped true AFTER the reveal
-            // (see the didInitialLoad/safety-net handlers), NOT on a fixed timer from here — a timer
+            // (see the didInitialLoad/safety-net handlers), NOT on a fixed timer from here â€” a timer
             // that expired before a slow chat finished loading let the WHOLE opening batch slide/fade in
             // ("the chat animates open"). Tied to the reveal, the opening batch always just appears.
             settled = false
@@ -1044,10 +1044,10 @@ struct ThreadView: View {
                 }
                 await ChatService.resetUnread(cid)
                 // Wait for the REAL block state before stamping a read receipt (audit M8): iBlocked
-                // defaults to false and the conv listener has only just attached — a blocked contact
+                // defaults to false and the conv listener has only just attached â€” a blocked contact
                 // received a receipt on open despite every other call site gating on iBlocked.
                 var waited = 0
-                while !repo.convLoaded, waited < 20 {   // ≤2s; then proceed on best-known state
+                while !repo.convLoaded, waited < 20 {   // â‰¤2s; then proceed on best-known state
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     waited += 1
                 }
@@ -1060,9 +1060,9 @@ struct ThreadView: View {
             AppRouter.shared.activeChatId = nil
             broadcastTyping(false)
             // Messages that arrived while the chat was OPEN were read live but only onAppear reset
-            // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
+            // the stored counter â€” leaving showed a stale unread badge. Reset on the way out too.
             Task { await ChatService.resetUnread(cid) }
-            // Don't leave a half-finished recording running when you leave the chat — unless it's
+            // Don't leave a half-finished recording running when you leave the chat â€” unless it's
             // LOCKED: an in-chat push (profile tap) also fires onDisappear, and cancelling there
             // destroyed a hands-free recording mid-take. A locked recording survives navigation.
             if recorder.isRecording && !recordLocked {
@@ -1074,7 +1074,7 @@ struct ThreadView: View {
         }
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
         // Draft follows every edit (so the chat list is correct the moment you leave), but
-        // NOT while inline-editing a sent message — that text is the message, not a draft.
+        // NOT while inline-editing a sent message â€” that text is the message, not a draft.
         .onChange(of: input) { _, v in
             if editingMessage == nil { Drafts.shared.set(cid, v) }
         }
@@ -1174,7 +1174,7 @@ struct ThreadView: View {
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                // Pin icon → context menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
+                // Pin icon â†’ context menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
                 Menu {
                     if !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false) {
                         Button {
@@ -1215,14 +1215,14 @@ struct ThreadView: View {
             // Show who's typing in the group; otherwise the member count.
             if typingPref, repo.otherTyping, !repo.typingNames.isEmpty {
                 let first = repo.typingNames.first ?? "Someone"
-                return repo.typingNames.count == 1 ? "\(first) is typing…" : "\(repo.typingNames.count) people typing…"
+                return repo.typingNames.count == 1 ? "\(first) is typingâ€¦" : "\(repo.typingNames.count) people typingâ€¦"
             }
             return conversation?.memberCountLabel
         }
         if repo.iBlocked { return nil }   // blocked: don't reveal their typing/online/last-seen
-        if typingPref && repo.otherTyping { return "typing…" }   // reciprocal: only if I share typing
+        if typingPref && repo.otherTyping { return "typingâ€¦" }   // reciprocal: only if I share typing
         // Reciprocal (my audience isn't "No One") AND their audience allows me (in a chat
-        // together we're contacts, so only their "No One" hides it — defense in depth on
+        // together we're contacts, so only their "No One" hides it â€” defense in depth on
         // top of their client not publishing at all).
         if PrivacyPrefs.mine("lastSeen") != .nobody && lastSeenPref,
            PrivacyPrefs.allows(repo.otherPrivacy, "lastSeen", contactOfMine: true) {
@@ -1277,7 +1277,7 @@ struct ThreadView: View {
         .padding(.horizontal, 36).padding(.top, 14).padding(.bottom, 6)
     }
 
-    // (The old SwiftUI fallback list was deleted 2026-07-11 — the UIKit list is THE list.
+    // (The old SwiftUI fallback list was deleted 2026-07-11 â€” the UIKit list is THE list.
     // Its ForEach(Array(repo.items.enumerated())) copied every Message per render and watchdogged
     // build 280 on the main thread.)
 
@@ -1293,7 +1293,7 @@ struct ThreadView: View {
     private func rowView(at index: Int, _ msg: Message, jumpTo: @escaping (String) -> Void) -> some View {
         if shouldShowDate(at: index) {
             // Inline day separator: translucent pill. NOT Liquid Glass (user clarified 2026-07-14:
-            // only the TOP floating "Today" pill is glass — the in-chat separators keep this look).
+            // only the TOP floating "Today" pill is glass â€” the in-chat separators keep this look).
             Text(dayLabel(msg.createdAt))
                 .modifier(ChatNoticePill())
                 .frame(maxWidth: .infinity)
@@ -1301,10 +1301,10 @@ struct ThreadView: View {
         }
         if msg.id == firstUnreadId { unreadDivider }
         if let pin = msg.pinNotice {
-            // Telegram-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
+            // Telegram-style "X pinned â€¦" notice: centered capsule, tap jumps to the pinned message.
             pinNoticeRow(msg, pin, jumpTo: jumpTo).id(msg.id)
         } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil && msg.poll == nil {
-            // A reserved kulan-…: payload we can't render as a card — either a newer app version's
+            // A reserved kulan-â€¦: payload we can't render as a card â€” either a newer app version's
             // feature OR a malformed known marker. Either way show the system notice, NEVER the raw
             // marker text.
             unsupportedRow(msg).id(msg.id)
@@ -1320,12 +1320,12 @@ struct ThreadView: View {
                 onReply: { m in beginReply(to: m) },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                 onCancelSending: { m in
-                    // Discard the pending optimistic send (media still uploading — not on the server yet).
+                    // Discard the pending optimistic send (media still uploading â€” not on the server yet).
                     if let clientId = m.clientId { repo.removePending(clientId: clientId) }
                 },
                 onTapContact: { uid, name, photo in
-                    // "message" on a shared-contact card → open (or create) the chat with that user.
-                    guard uid != me else { return }           // your own card → no self-chat
+                    // "message" on a shared-contact card â†’ open (or create) the chat with that user.
+                    guard uid != me else { return }           // your own card â†’ no self-chat
                     guard ChatService.convId(me, uid) != cid else { return }   // already in this chat
                     AppRouter.shared.pendingChatName = name    // so a brand-new chat shows the name/photo,
                     AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
@@ -1349,11 +1349,11 @@ struct ThreadView: View {
                         imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerImage = m } })
                 },
-                // ALBUM IMAGES FLY TOO — this was the last media kind opening with no transition at all
+                // ALBUM IMAGES FLY TOO â€” this was the last media kind opening with no transition at all
                 // (user: "make it sure image video multiple swipe swipe images"). It was never a broken
                 // animation, it was a missing one: single photos and videos already called `fly`, and
                 // album VIDEO tiles reach it through onTapVideo, but album IMAGE tiles went straight to
-                // the pager. The geometry was already there and unused — a tile's rect is registered under
+                // the pager. The geometry was already there and unused â€” a tile's rect is registered under
                 // `"<messageId>-<index>"`, which is exactly the `startId` handed to us here.
                 onTapAlbum: { gallery, startId in
                     let key = MediaOpenRects.key(.chat, startId)
@@ -1376,20 +1376,20 @@ struct ThreadView: View {
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
-                // THE SELECTION BLUR, THIRD PASS — the first two were real but incomplete. Entering
+                // THE SELECTION BLUR, THIRD PASS â€” the first two were real but incomplete. Entering
                 // selection reloads every visible cell; a context menu dismisses by animating its lifted
                 // preview back INTO the source cell; reload that cell mid-flight and the system's
                 // full-screen blur backdrop is stranded (user screenshot: sharp preview at top, blur
                 // everywhere, selection chrome up). The UIKit-menu path waits on its animator. SwiftUI
-                // menus give no animator, and the previous fix here — a blind 0.35s delay before the
-                // flip — was both too short for a big album preview's dismissal spring AND ungated: at
+                // menus give no animator, and the previous fix here â€” a blind 0.35s delay before the
+                // flip â€” was both too short for a big album preview's dismissal spring AND ungated: at
                 // 0.35s the reload landed no matter what was still animating.
                 //
                 // Now the action ARMS A GATE instead of guessing a delay: menuActionTick tells the list
                 // controller "a SwiftUI menu is dismissing right now", canLandLoad holds every reload
                 // inside that window, and the deferred selection flip lands through settleFlush the
                 // moment it closes. The state flip itself is immediate again, so the selection toolbar
-                // appears instantly — only the CELL reload waits, which is exactly the UIKit path's order.
+                // appears instantly â€” only the CELL reload waits, which is exactly the UIKit path's order.
                 onSelect: { m in
                     menuActionTick += 1
                     withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
@@ -1438,7 +1438,7 @@ struct ThreadView: View {
         }
     }
 
-    // The scrolling list itself — the UIKit list when the flag is on, else the
+    // The scrolling list itself â€” the UIKit list when the flag is on, else the
     // SwiftUI ScrollView. Extracted so threadScroll's builder stays under the type-checker limit.
     @ViewBuilder
     private func listContainer(_ proxy: ScrollViewProxy) -> some View {
@@ -1448,16 +1448,16 @@ struct ThreadView: View {
     }
 
     // The UIKit list is THE list (user decision 2026-07-11: "completely use this").
-    // The old SwiftUI fallback — and its main-thread Message-array copy that watchdogged build 280 —
+    // The old SwiftUI fallback â€” and its main-thread Message-array copy that watchdogged build 280 â€”
     // is gone along with the Settings toggle.
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         nativeList
             .contentShape(Rectangle())
-            // Tap anywhere on the conversation → dismiss the keyboard. The gesture itself lives in
+            // Tap anywhere on the conversation â†’ dismiss the keyboard. The gesture itself lives in
             // UIKit now (NativeMessageList's `backgroundTap`), because a SwiftUI tap here could not be
-            // reliably outvoted by a tap INSIDE a hosted cell — see KeyboardSafeRects for the full
+            // reliably outvoted by a tap INSIDE a hosted cell â€” see KeyboardSafeRects for the full
             // story. The list decides by hit test and calls back only when the tap was not claimed.
-            // Scrolled back down to the newest message → the missed messages are now seen: clear the
+            // Scrolled back down to the newest message â†’ the missed messages are now seen: clear the
             // away-counter and send the (throttled) read receipt.
             .onChange(of: isAtBottom) { _, atBottom in
                 if atBottom {
@@ -1474,19 +1474,19 @@ struct ThreadView: View {
 
     // Per-row CONTENT signature (what a bubble actually renders): text, edited, send state, reactions,
     // read tick, pinned, album count. The native list reconfigures a visible row ONLY when its signature
-    // changes — so the constant presence/typing/read re-renders of ThreadView's body don't reconfigure
+    // changes â€” so the constant presence/typing/read re-renders of ThreadView's body don't reconfigure
     // (re-render) every visible bubble = no flashing.
     // Per-emission signature cache (Signal's one-producer discipline): the BASE signatures are computed
-    // once per repo emission / read-cutoff / pin change and reused across every SwiftUI body re-run —
+    // once per repo emission / read-cutoff / pin change and reused across every SwiftUI body re-run â€”
     // the old computed property re-hashed every message's text on EVERY body run (typing flags, presence
-    // dots, keyboard focus…), pure churn during exactly the moments that need main-thread headroom.
+    // dots, keyboard focusâ€¦), pure churn during exactly the moments that need main-thread headroom.
     // A plain class box: not observed state, mutating it never re-runs the body.
     private final class SignatureCache {
         var key = ""
         var base: [String: String] = [:]
         // The DECORATED set (selection + highlight suffixes) memoised on its own key. Without this, the
-        // slow path below rebuilt a full copy of the dictionary — one string concatenation per loaded
-        // message — on EVERY body run for as long as selection mode was open or a jump flash was up.
+        // slow path below rebuilt a full copy of the dictionary â€” one string concatenation per loaded
+        // message â€” on EVERY body run for as long as selection mode was open or a jump flash was up.
         // The body re-runs on typing flags, presence, read receipts and keyboard focus, so in a long
         // conversation that was thousands of pointless string builds a second during exactly the two
         // interactions that need the main thread most: dragging through selection, and the moment after
@@ -1499,15 +1499,15 @@ struct ThreadView: View {
     private var rowSignatures: [String: String] {
         let readCutoff = repo.otherLastReadMillis
         let pins = repo.pinnedMessageIds
-        // Audit M3: the active search term must be a signature input — visible rows never repainted
+        // Audit M3: the active search term must be a signature input â€” visible rows never repainted
         // their in-text match highlight as the query changed (only the jumped-to row, via highlightId).
         let term = searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
         // Audit M2: viewedOnceTick keys the cache so consuming a view-once photo repaints its bubble.
-        // Chat colour: a live colour change flips a row's route (UIKit default-colour cell ⇄
+        // Chat colour: a live colour change flips a row's route (UIKit default-colour cell â‡„
         // colour-capable SwiftUI cell). It changes no message content, so without it in the
         // signature the route-flip reload never fires and the colour didn't apply until you
         // left and re-opened the chat (user report). Putting it in every row's signature makes
-        // the existing contentChanged→splitByRouteFlip→reloadItems path swap the cells live.
+        // the existing contentChangedâ†’splitByRouteFlipâ†’reloadItems path swap the cells live.
         let colorTok = chatColorSpec?.stored ?? "-"
         // EVERY value rowView reads eagerly must be in this key, or hosted cells keep stale content
         // (the class of bug that produced the frozen bubble corners). Added:
@@ -1524,7 +1524,7 @@ struct ThreadView: View {
                 // CLUSTER GEOMETRY BELONGS IN THE SIGNATURE. The corner radii and top gap are read
                 // EAGERLY when a row view is built (rowView passes isFirstInCluster/isLastInCluster and
                 // applies topGap) and then frozen into the cell's UIHostingConfiguration. A hosted cell
-                // is only rebuilt when its signature changes — so when a new message arrived, the row
+                // is only rebuilt when its signature changes â€” so when a new message arrived, the row
                 // ABOVE it kept the geometry it had when it was still the last row: full 18pt corners,
                 // ungrouped. Confirmed plain text hid the bug because it routes to a UIKit cell, and
                 // repaintUikitCells pushes fresh radii onto those on every update; SwiftUI-hosted rows
@@ -1533,20 +1533,20 @@ struct ThreadView: View {
                 let cluster = "\(isFirstInCluster(at: i))\(isLastInCluster(at: i))"
                 let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
                 let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
-                // View-once consumption (audit M2) — the bubble flips to "Viewed" only via reconfigure.
+                // View-once consumption (audit M2) â€” the bubble flips to "Viewed" only via reconfigure.
                 let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
-                // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
+                // Search match (audit M3) â€” matching rows re-render their term highlight per keystroke.
                 let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
                 out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)"
             }
             sigCache.key = key
             sigCache.base = out
         }
-        // Fast path (the overwhelmingly common state): no selection, no highlight → the cached base IS
+        // Fast path (the overwhelmingly common state): no selection, no highlight â†’ the cached base IS
         // the signature set. The suffixes below exist because:
-        //  • SELECTION must be in the signature: the row renders a checkbox (and dims) in select mode —
+        //  â€¢ SELECTION must be in the signature: the row renders a checkbox (and dims) in select mode â€”
         //    without it the visible rows never reconfigured and checkboxes were missing (308 bug).
-        //  • HIGHLIGHT must be in the signature: the jump-to flash renders via isHighlighted — without a
+        //  â€¢ HIGHLIGHT must be in the signature: the jump-to flash renders via isHighlighted â€” without a
         //    signature change the target row never reconfigured (the "jump didn't work" bug).
         if !selecting && highlightId == nil { return sigCache.base }
         // Only the SELECTED ids and the highlighted id can change a decorated value, so they are the whole
@@ -1565,14 +1565,14 @@ struct ThreadView: View {
         return out
     }
 
-    // UIKit bubble migration (stage 1): resolve a NATIVE model for a message the UIKit path fully supports —
+    // UIKit bubble migration (stage 1): resolve a NATIVE model for a message the UIKit path fully supports â€”
     // plain 1:1 delivered text, default bubble color, no adornments. Any special case returns nil and the
     // message keeps its SwiftUI cell, so no feature is lost while the surface is progressively migrated.
     // ROUND 2 (2026-07-14, after the 325 field failure): ON again, with the failure covered by
     // construction. In 325, read ticks on uikit rows did not refresh on device even though the
-    // diffable reconfigure chain reads correct — so uikit cells no longer DEPEND on that chain for
+    // diffable reconfigure chain reads correct â€” so uikit cells no longer DEPEND on that chain for
     // repaints: every SwiftUI update also pushes geometry-neutral model changes (ticks/time) straight
-    // onto the visible cells (repaintUikitCells → repaintIfMetaChanged, soft cross-dissolve matching
+    // onto the visible cells (repaintUikitCells â†’ repaintIfMetaChanged, soft cross-dissolve matching
     // the SwiftUI tick fade). Height-changing updates still ride the measured reconfigure/reload path.
     private static let useUIKitBubbles = true
 
@@ -1582,16 +1582,16 @@ struct ThreadView: View {
         var key = ""
         var models: [String: UIKitBubbleModel] = [:]
         // Bumped only when the models are actually rebuilt. The list uses it to skip its direct repaint
-        // pass entirely when nothing can have changed — see `uikitModelsVersion` at the call site.
+        // pass entirely when nothing can have changed â€” see `uikitModelsVersion` at the call site.
         var version = 0
     }
     @State private var uikitModelCache = UikitModelCache()
 
     private var uikitModels: [String: UIKitBubbleModel] {
         // Search highlights text inside SwiftUI bubbles; selection/custom-color/group cases render
-        // SwiftUI-only — in those states everything routes SwiftUI (empty dict).
+        // SwiftUI-only â€” in those states everything routes SwiftUI (empty dict).
         guard Self.useUIKitBubbles, !isGroup, !selecting, chatColorSpec == nil, !searchActive else { return [:] }
-        // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache —
+        // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache â€”
         // toggling the pref (or a block-state change) left uikit rows showing stale ticks.
         let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)"
         if uikitModelCache.key == key { return uikitModelCache.models }
@@ -1605,58 +1605,104 @@ struct ThreadView: View {
         return out
     }
 
-    // Long-press menu for UIKit-routed rows — the SAME native menu (same items, same order, same
-    // conditions) the SwiftUI .contextMenu builds, restricted to what a plain 1:1 delivered text
-    // message can do (no Save Image / Info — those never apply to this row class).
+    /// THE ONE MENU, for every message type.
+    ///
+    /// There used to be two: this one, restricted to a plain delivered 1:1 text message, and a SwiftUI
+    /// `.contextMenu` on the bubble carrying every other case. Two menus meant two long-press systems,
+    /// and the reaction bar could only hook the UIKit one - which is why the bar was missing on photos,
+    /// replies, voice, files, GIFs and videos, and why making it appear there needed a poller that
+    /// watched the screen for a menu it had not been told about. Deleting the second menu deletes that
+    /// whole class of problem: one presenter, one lifecycle, one place where the rules live.
+    ///
+    /// Every condition below is carried over verbatim from the SwiftUI menu it replaces, so no message
+    /// type gains or loses an action in the move.
     private func uikitMenu(for rowId: String) -> UIMenu? {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
-        var items: [UIMenuElement] = []
-        items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
-            beginReply(to: m)
-        })
-        // NOT UNTIL IT IS ON THE SERVER — the same two conditions the SwiftUI menu applies. Pending text
-        // reaches this menu now that it routes to the UIKit cell, and a reaction or an edit aimed at a
-        // message that does not exist server-side yet has nothing to attach to.
-        if m.sendState == nil {
-            items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
-                morePickerTarget = m
-            })
+        let mine = m.authorId == me
+        let canPin = !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false)
+        let isPinned = repo.pinnedMessageIds.contains(m.id)
+
+        func action(_ title: String, _ icon: String,
+                    destructive: Bool = false, _ run: @escaping () -> Void) -> UIAction {
+            UIAction(title: title, image: UIImage(systemName: icon),
+                     attributes: destructive ? .destructive : []) { _ in run() }
         }
-        if m.sendState == nil, m.authorId == me,
-           Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
-            items.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { _ in
+
+        var items: [UIMenuElement] = []
+
+        // MEDIA STILL UPLOADING: the message is not on the server yet, so the normal actions do not
+        // apply - only Save / Cancel Sending / Select.
+        if m.sendState == .sending && (m.isImage || m.isVideo || m.isAlbum || m.isGif) {
+            if m.isImage || m.isAlbum {
+                items.append(action("Save Image", "square.and.arrow.down") { Task { await saveImageToPhotos(m) } })
+            }
+            items.append(action("Cancel Sending", "xmark.circle", destructive: true) {
+                if let clientId = m.clientId { repo.removePending(clientId: clientId) }
+            })
+            items.append(UIMenu(options: .displayInline, children: [
+                action("Select", "checkmark.circle") {
+                    menuActionTick += 1
+                    withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+                }
+            ]))
+            return UIMenu(children: items)
+        }
+
+        // Order: Reply - React - Edit - Pin - Copy - Forward - Save Image - Info - Select, then Delete
+        // below a divider.
+        items.append(action("Reply", "arrowshape.turn.up.left") { beginReply(to: m) })
+
+        if m.sendState == nil && !iAmMuted {   // not until it is on the server; muted members cannot react
+            items.append(action("React…", "face.smiling") { morePickerTarget = m })
+        }
+        // Edit: text only - never a contact/location card (its "text" is a marker and editing would
+        // expose the raw payload), never GIF/file (their text is never rendered), and only inside the
+        // server-enforced edit window.
+        if mine && !iAmMuted && !m.isImage && !m.isAudio && !m.isCall
+            && !m.isFeatureMarker && !m.isGif && !m.isFile && !m.isVideo && !m.isAlbum
+            && m.sendState == nil
+            && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
+            items.append(action("Edit", "pencil") {
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 input = m.text
                 inputFocused = true
             })
         }
-        let isPinned = repo.pinnedMessageIds.contains(m.id)
-        items.append(UIAction(title: isPinned ? "Unpin" : "Pin",
-                              image: UIImage(systemName: isPinned ? "pin.slash" : "pin")) { _ in
-            togglePin(m)
-        })
-        items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
-            UIPasteboard.general.string = m.text
-        })
-        items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
-            forwardTarget = m
-        })
-        items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
+        if canPin {
+            items.append(action(isPinned ? "Unpin" : "Pin", isPinned ? "pin.slash" : "pin") { togglePin(m) })
+        }
+        // Copy: real text only - never a feature marker (a contact/location card would put its raw
+        // marker payload on the clipboard) and never view-once.
+        if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
+            items.append(action("Copy", "doc.on.doc") { UIPasteboard.general.string = m.text })
+        }
+        // Forward: not calls, and never a view-once photo (forwarding defeats view-once).
+        if !m.isCall && !m.viewOnce {
+            items.append(action("Forward", "arrowshape.turn.up.right") { forwardTarget = m })
+        }
+        // Save Image: real photos only - never view-once (saving defeats it).
+        if m.isImage && !m.viewOnce {
+            items.append(action("Save Image", "square.and.arrow.down") { Task { await saveImageToPhotos(m) } })
+        }
+        if isGroup && mine && m.sendState == nil {
+            items.append(action("Info", "info.circle") { infoTarget = m })
+        }
+        items.append(action("Select", "checkmark.circle") {
+            menuActionTick += 1
             withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
         })
         // NO "Report" on a message. The whole point of end-to-end encryption is that we cannot read what
-        // was sent, so a message report would either carry nothing useful or force us to ship the plaintext
-        // off the device - which would quietly break the guarantee the app makes. Reporting a PERSON or a
-        // GROUP still exists (ContactInfoView / GroupInfoView); it just does not attach message contents.
-        // Both sides get Delete instead, and the dialog offers "Delete for Me" for someone else's message.
-        let destructive = UIAction(title: "Delete", image: UIImage(systemName: "trash"),
-                                   attributes: .destructive) { _ in pendingDelete = m }
-        items.append(UIMenu(options: .displayInline, children: [destructive]))   // the divider + Delete
+        // was sent, so a message report would either carry nothing useful or force us to ship the
+        // plaintext off the device - which would quietly break the guarantee the app makes. Reporting a
+        // PERSON or a GROUP still exists; it just does not attach message contents.
+        items.append(UIMenu(options: .displayInline, children: [
+            action("Delete", "trash", destructive: true) { pendingDelete = m }
+        ]))
         return UIMenu(children: items)
     }
 
-    // Double-tap quick heart on a UIKit-routed row — mirrors the SwiftUI bubble's double-tap gesture.
+    // Double-tap quick heart on a UIKit-routed row â€” mirrors the SwiftUI bubble's double-tap gesture.
     private func uikitQuickReact(_ rowId: String) {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
         let m = repo.items[idx]
@@ -1685,15 +1731,15 @@ struct ThreadView: View {
         //
         // It was never a metrics bug. This guard used to say `sendState == nil`, so a plain text message
         // was drawn by the SwiftUI bubble while it was pending and by the UIKit bubble the instant it
-        // landed — TWO DIFFERENT RENDERERS, one per half of the message's life. They disagree by
+        // landed â€” TWO DIFFERENT RENDERERS, one per half of the message's life. They disagree by
         // construction: different padding constants, a different gap before the timestamp, and two
         // different implementations of the trailing reservation (a concatenated invisible Text run vs a
         // clear NSTextAttachment). No amount of tuning keeps two layout engines pixel-identical, and any
         // agreement reached today breaks the next time either side is edited.
         //
         // So the message stops changing renderer instead. One path owns it from the first optimistic
-        // frame to delivered and read, and `sizes()` — which measures the same attributed string the
-        // cell draws — returns one size for all of it.
+        // frame to delivered and read, and `sizes()` â€” which measures the same attributed string the
+        // cell draws â€” returns one size for all of it.
         //
         // FAILED still routes to SwiftUI: that bubble carries a tap-to-retry affordance the UIKit cell
         // has no equivalent for, and losing the retry would be a far worse bug than a resize.
@@ -1704,7 +1750,7 @@ struct ThreadView: View {
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
         guard !text.isEmpty else { return nil }
-        // Jumbomoji rows render borderless at up to 3.5x the body size — a shape the UIKit bubble path
+        // Jumbomoji rows render borderless at up to 3.5x the body size â€” a shape the UIKit bubble path
         // does not draw and does not measure. They stay in SwiftUI.
         guard text.jumbomojiCount == 0 else { return nil }
         // Links (OG preview card + tappable ranges) stay in SwiftUI for now; '@' may be a username/mention.
@@ -1724,8 +1770,8 @@ struct ThreadView: View {
                 tick = .sending   // the clock, same glyph the SwiftUI bubble drew while pending
             } else {
                 // Parity with the SwiftUI path (audit M5): a blocked contact's lastRead is ignored there
-                // (otherLastRead passed as 0 when iBlocked) — the uikit tick must match, or a blocked chat
-                // shows ✓✓ on text rows and ✓ on media rows, and a route flip visibly demotes the tick.
+                // (otherLastRead passed as 0 when iBlocked) â€” the uikit tick must match, or a blocked chat
+                // shows âœ“âœ“ on text rows and âœ“ on media rows, and a route flip visibly demotes the tick.
                 let read = !repo.iBlocked && repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
                 tick = read ? .read : .sent   // same rule as the SwiftUI bubble and the chat list
             }
@@ -1743,11 +1789,11 @@ struct ThreadView: View {
     private var nativeList: some View {
         NativeMessageList(
             rowIds: repo.items.map { $0.rowId },
-            rowSignatures: rowSignatures,   // per-row content signature → list reconfigures only changed rows
+            rowSignatures: rowSignatures,   // per-row content signature â†’ list reconfigures only changed rows
             row: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
-                    // The keyboard is kept here (Signal keeps it too) — the list's tap-to-dismiss
+                    // The keyboard is kept here (Signal keeps it too) â€” the list's tap-to-dismiss
                     // already refused to fire, because the quote publishes a KeyboardSafeRects rect.
                     Task {
                         await repo.ensureLoaded(jid)
@@ -1764,12 +1810,12 @@ struct ThreadView: View {
             // UIKit bubble migration: plain 1:1 delivered text renders as a native UIKit cell. The models
             // are a frozen per-emission snapshot (routing can never flip between measure and render).
             uikitModels: uikitModels,
-            // MUST stay directly after `uikitModels:` — argument expressions evaluate in source order, and
+            // MUST stay directly after `uikitModels:` â€” argument expressions evaluate in source order, and
             // reading `uikitModels` above is what refreshes the cache this version comes from.
             uikitModelsVersion: uikitModelCache.version,
             uikitMenu: { id in uikitMenu(for: id) },
             // The floating reactions bar (ReactionBar.swift): what I already reacted with, and what to
-            // do when a bar emoji is tapped. nil emoji = the "more" button → the full picker.
+            // do when a bar emoji is tapped. nil emoji = the "more" button â†’ the full picker.
             onReactionSelected: { rowId in
                 guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
                 return repo.items[idx].reactions[me]
@@ -1788,8 +1834,8 @@ struct ThreadView: View {
                 react(m, emoji)
             },
             // Feeds the reaction bar on SwiftUI-hosted rows (media, replies, anything already reacted
-            // to). The rule is COPIED FROM the SwiftUI menu's own "React…" condition — on the server,
-            // and not muted — so the bar and the menu item can never disagree about whether this
+            // to). The rule is COPIED FROM the SwiftUI menu's own "Reactâ€¦" condition â€” on the server,
+            // and not muted â€” so the bar and the menu item can never disagree about whether this
             // message takes a reaction.
             reactionBarRow: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return nil }
@@ -1806,7 +1852,7 @@ struct ThreadView: View {
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
             // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread
-            // messages, the FIRST open lands at the first unread — the same row anchorUnread marks with
+            // messages, the FIRST open lands at the first unread â€” the same row anchorUnread marks with
             // the divider. Computed synchronously (unreadOnOpen seeds from the cached conversation) so
             // it's ready when the list performs its first open; consumed exactly once.
             initialScrollId: {
@@ -1824,12 +1870,12 @@ struct ThreadView: View {
             },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
-            menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
+            menuActionTick: menuActionTick,         // SwiftUI menu action fired â†’ hold reloads through its dismissal
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
-            // the scroll callback. We only hand it a pure rowId → day-label mapping; no SwiftUI state is
+            // the scroll callback. We only hand it a pure rowId â†’ day-label mapping; no SwiftUI state is
             // written on scroll, so scrolling never re-runs the conversation tree.
             dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } }
         )
@@ -1858,11 +1904,11 @@ struct ThreadView: View {
                     text: Message.pinMarkerText(messageId: m.id, label: Self.pinLabel(m)),
                     group: isGroup ? groupMembers : nil)
             }
-        }   // already at the pin max → ignore
+        }   // already at the pin max â†’ ignore
     }
 
     // The notice's label, composed by the PINNER (who has the plaintext): a short quoted snippet for
-    // text, a friendly noun for media — mirrors Telegram exactly.
+    // text, a friendly noun for media â€” mirrors Telegram exactly.
     static func pinLabel(_ m: Message) -> String {
         if m.isImage || m.isAlbum { return "a photo" }
         if m.isVideo { return "a video" }
@@ -1871,7 +1917,7 @@ struct ThreadView: View {
         if m.isGif { return "a GIF" }
         let t = m.safeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return "a message" }
-        return t.count > 20 ? "\"\(t.prefix(20))…\"" : "\"\(t)\""
+        return t.count > 20 ? "\"\(t.prefix(20))â€¦\"" : "\"\(t)\""
     }
 
     private func flashAndScroll(_ id: String) {
@@ -1879,7 +1925,7 @@ struct ThreadView: View {
         highlightId = id
         // Signal's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
         // (the bubble's own 0.4s ease drives the fade). The old 2.2s hold felt sluggish across every
-        // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ Signal's timing.
+        // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade â‰ˆ Signal's timing.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             if highlightId == id { withAnimation { highlightId = nil } }
         }
@@ -1895,15 +1941,15 @@ struct ThreadView: View {
         withAnimation(.easeInOut(duration: 0.2)) { selecting = false; selectedIds = [] }
     }
 
-    // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit — they
+    // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit â€” they
     // can't both be active, or send would commit the edit and silently drop the reply.
     private func beginReply(to m: Message) {
         if editingMessage != nil { editingMessage = nil; setInputSilently(Drafts.shared.text(cid)) }
         withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
-        inputFocused = true   // replying = you're about to type → open the keyboard
+        inputFocused = true   // replying = you're about to type â†’ open the keyboard
     }
 
-    // Does the current selection include any of MY messages (→ "Delete for Everyone" is offered)?
+    // Does the current selection include any of MY messages (â†’ "Delete for Everyone" is offered)?
     private var selectionHasMine: Bool {
         repo.items.contains { selectedIds.contains($0.id) && $0.authorId == me }
     }
@@ -1946,25 +1992,25 @@ struct ThreadView: View {
         searchFocused = false
         withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
         searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil
-        // Leave the conversation where the last result was — no scroll restore on close.
+        // Leave the conversation where the last result was â€” no scroll restore on close.
     }
 
-    // Recompute matches as you type — our search semantics:
-    //  • minimum 2 characters (shorter queries clear results)
-    //  • identical-query dedup (arrow keys / focus changes don't re-run the search)
-    //  • token-prefix AND matching, case/diacritic/width-insensitive ("hel wor" matches "Hello World")
-    //  • corpus (history) + the LIVE window merged, so a just-sent or just-edited message is instantly
+    // Recompute matches as you type â€” our search semantics:
+    //  â€¢ minimum 2 characters (shorter queries clear results)
+    //  â€¢ identical-query dedup (arrow keys / focus changes don't re-run the search)
+    //  â€¢ token-prefix AND matching, case/diacritic/width-insensitive ("hel wor" matches "Hello World")
+    //  â€¢ corpus (history) + the LIVE window merged, so a just-sent or just-edited message is instantly
     //    searchable (the index updates on write; our corpus snapshot alone would be stale)
-    //  • capped at the newest 500 matches (default max results)
-    //  • the focused position is PRESERVED across query refinement (clamped), measured from the newest
-    //    end — clamp the previous index rather than yanking you back to the first result
+    //  â€¢ capped at the newest 500 matches (default max results)
+    //  â€¢ the focused position is PRESERVED across query refinement (clamped), measured from the newest
+    //    end â€” clamp the previous index rather than yanking you back to the first result
     private func updateSearchMatches() {
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else {
             searchMatches = []; lastSearchText = nil
             return
         }
-        guard q != lastSearchText else { return }   // identical query → no re-run (dedup)
+        guard q != lastSearchText else { return }   // identical query â†’ no re-run (dedup)
         lastSearchText = q
         let terms = ChatSearch.queryTerms(q)
         guard !terms.isEmpty else { searchMatches = []; return }
@@ -2007,9 +2053,9 @@ struct ThreadView: View {
             await repo.ensureLoaded(id)   // page older history in until the match is in the window
             await MainActor.run {
                 guard seq == searchJumpSeq else { return }   // a newer jump superseded this one
-                // SIGNAL'S RESULT NAVIGATION (user spec): jump to the match AND mark the found bubble —
+                // SIGNAL'S RESULT NAVIGATION (user spec): jump to the match AND mark the found bubble â€”
                 // the emphasis stays ~2s so the eye can land on which result was found, then fades
-                // smoothly. flashAndScroll also translates id → rowId (the native list keys by rowId;
+                // smoothly. flashAndScroll also translates id â†’ rowId (the native list keys by rowId;
                 // a deleted match resolves to no row and gracefully no-ops).
                 flashAndScroll(id)
             }
@@ -2020,7 +2066,7 @@ struct ThreadView: View {
     // Chats list. Avatar + name (+ presence) centered; voice + video as trailing glass items.
     // The native back button (leading) owns the real edge-swipe-back gesture.
     @ToolbarContentBuilder private var chatToolbar: some ToolbarContent {
-        // Selection mode (reference design): "Delete All" (leading) · name (centre) · X (trailing).
+        // Selection mode (reference design): "Delete All" (leading) Â· name (centre) Â· X (trailing).
         // Native toolbar buttons render as real Liquid Glass on iOS 26.
         if selecting {
             ToolbarItem(placement: .topBarLeading) {
@@ -2045,9 +2091,9 @@ struct ThreadView: View {
             }
         } else {
         // Avatar + name are the native UINavigationItem.titleView (see NavTitleView, installed in
-        // threadCovers), left-aligned after the back button and sliding with the swipe-back — only the
+        // threadCovers), left-aligned after the back button and sliding with the swipe-back â€” only the
         // call/video buttons live here in the toolbar.
-        // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
+        // 1:1 call buttons only â€” group calls need an SFU (not built yet). Show whenever we have a
         // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
         // underscore; the old cid.contains("_") heuristic hid them in the preview).
         if !isGroup && !otherUid.isEmpty {
@@ -2102,13 +2148,13 @@ struct ThreadView: View {
             }
     }
 
-    // Custom attach panel — slides up from the + button.
+    // Custom attach panel â€” slides up from the + button.
     // Top: one-tap recents strip (camera-roll photos + videos). Below: the pickers.
     private var attachPanel: some View {
         VStack(spacing: 0) {
-            // (No custom grabber — the sheet's SYSTEM drag indicator already shows one; drawing our own
+            // (No custom grabber â€” the sheet's SYSTEM drag indicator already shows one; drawing our own
             // capsule produced the "two lines" at the top.)
-            // Grid: X + "Recents ▾" album dropdown header, Camera tile, then recent photos/videos.
+            // Grid: X + "Recents â–¾" album dropdown header, Camera tile, then recent photos/videos.
             AttachRecentsStrip(
                 onCamera: {
                     showAttachPanel = false
@@ -2117,19 +2163,19 @@ struct ThreadView: View {
                 onClose: { showAttachPanel = false },
                 onPickPhoto: { ui in
                     // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
-                    // editor and lands BACK on the sheet to pick another image (user request — closing
+                    // editor and lands BACK on the sheet to pick another image (user request â€” closing
                     // the sheet first meant X dumped you all the way to the chat).
                     panelEditImage = EditImageWrap(image: ui)
                 },
                 onPickVideo: { url in
-                    // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
+                    // TAP a video â†’ trim editor OVER the media sheet (sheet stays underneath): X closes just
                     // the editor and lands BACK on the sheet to pick another (was closing the sheet first,
                     // which dumped you all the way to the chat on a stray X).
                     panelVideoApprove = VideoWrap(url: url)
                 },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
-                    // SELECT + Send → send each selected video directly (no editor). The caption rides
+                    // SELECT + Send â†’ send each selected video directly (no editor). The caption rides
                     // ONCE, on the first video (was duplicated onto every video in the batch).
                     Task {
                         var cap = caption
@@ -2138,8 +2184,8 @@ struct ThreadView: View {
                 },
                 onSendAlbum: { imgs, caption, viewOnce in
                     showAttachPanel = false
-                    // Selected via checkboxes + captioned inline: 1 photo → send as one (caption + optional
-                    // view-once); 2+ → send as one album with the caption (view-once is single-photo only).
+                    // Selected via checkboxes + captioned inline: 1 photo â†’ send as one (caption + optional
+                    // view-once); 2+ â†’ send as one album with the caption (view-once is single-photo only).
                     Task {
                         if imgs.count == 1, let d = imgs[0].jpegData(compressionQuality: 0.9) {
                             await sendPhoto(d, viewOnce: viewOnce, caption: caption)
@@ -2149,7 +2195,7 @@ struct ThreadView: View {
                     }
                 },
                 onSendMixed: { items, caption, clientId in
-                    // SELECT + Send with a mix (or 2+) → ONE grouped album message (photos + videos).
+                    // SELECT + Send with a mix (or 2+) â†’ ONE grouped album message (photos + videos).
                     showAttachPanel = false
                     Task {
                         var ordered: [SendMedia] = []
@@ -2173,7 +2219,7 @@ struct ThreadView: View {
                 },
                 onOptimisticFailed: { clientId in repo.markFailed(clientId: clientId) },
                 onOpenMedia: { items in
-                    // Tapping media while selecting → the mixed approval pager. A single item keeps its
+                    // Tapping media while selecting â†’ the mixed approval pager. A single item keeps its
                     // dedicated editor (image editor / video trim editor); 2+ open the pager. All open OVER
                     // the media sheet (sheet stays underneath) so X returns to it instead of the chat.
                     if items.count == 1, case .image(_, let ui) = items[0] {
@@ -2181,7 +2227,7 @@ struct ThreadView: View {
                     } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
                         panelVideoApprove = VideoWrap(url: url)
                     } else if let clips = ThreadView.videoClips(from: items) {
-                        panelMultiVideo = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
+                        panelMultiVideo = MultiVideoWrap(clips: clips)   // all videos â†’ single-editor page + rail
                     } else {
                         panelMediaApprove = MediaWrap(items: items)
                     }
@@ -2189,16 +2235,16 @@ struct ThreadView: View {
                 onCaptionFocused: { attachDetent = .large },
                 hasSelection: $recentsHasSelection)
                 .padding(.top, 10)
-            // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
+            // Source row (Photos/Files/GIF/Poll) â€” HIDDEN while items are selected (the caption + Send
             // bar in the recents strip takes its place).
             if !recentsHasSelection {
                 // Horizontally scrollable so the row never clips a tile (5 tiles overflow a phone width
-                // once Poll is added in groups) — swipe to reach them all.
+                // once Poll is added in groups) â€” swipe to reach them all.
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
+                        // Order: GIF Â· Files Â· Location Â· Poll (groups only). The Contacts tile is gone
                         // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Kulan has no
-                        // phone book — you introduce someone by sharing their profile from THEIR
+                        // phone book â€” you introduce someone by sharing their profile from THEIR
                         // profile page, which is where the action still lives.
                         attachTile("sparkles", "GIF") { showGifPicker = true }
                         attachTile("doc", "Files") { showFileImporter = true }
@@ -2211,7 +2257,7 @@ struct ThreadView: View {
             }
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
-        // only the editor → straight back to the sheet to pick another image. Send delivers the photo
+        // only the editor â†’ straight back to the sheet to pick another image. Send delivers the photo
         // AND closes the sheet, landing in the chat.
         // Send from an editor OVER the sheet: the editor does NOT self-dismiss (selfDismissOnSend: false);
         // closing the SHEET tears down the whole stack in one motion. When the editor dismissed itself
@@ -2255,7 +2301,7 @@ struct ThreadView: View {
         }
     }
 
-    // Polls aren't built yet — a small "coming soon" sheet at a 60% detent (user request).
+    // Polls aren't built yet â€” a small "coming soon" sheet at a 60% detent (user request).
     private func comingSoonSheet(_ c: ComingSoonWrap) -> some View {
         VStack(spacing: 14) {
             Spacer()
@@ -2266,7 +2312,7 @@ struct ThreadView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    // Attachment-button spec: a 76×50pt CAPSULE button
+    // Attachment-button spec: a 76Ã—50pt CAPSULE button
     // with the icon inside, and a footnote-medium label 8pt BELOW the capsule.
     private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
@@ -2321,7 +2367,7 @@ struct ThreadView: View {
             await MainActor.run { sendError = "File too large (max \(Limits.fileUploadBytes / (1024*1024)) MB)." }; return
         }
         let name = url.lastPathComponent
-        // Optimistic bubble FIRST (instant feedback) — the encrypt+upload then runs in the background and
+        // Optimistic bubble FIRST (instant feedback) â€” the encrypt+upload then runs in the background and
         // the server echo reconciles it by clientId. Was: awaited the whole upload before anything showed.
         let clientId = UUID().uuidString
         // Persist the document bytes keyed by clientId so a failed send can actually retry (the old
@@ -2342,23 +2388,23 @@ struct ThreadView: View {
     }
 
     // Live name: prefer the conversation's current displayName (which reads ContactNames observably), so
-    // a nickname change in the profile updates the header INSTANTLY — the `title` passed at open is a
+    // a nickname change in the profile updates the header INSTANTLY â€” the `title` passed at open is a
     // captured snapshot that never refreshed.
     private var liveTitle: String {
         let me = AuthService.shared.uid ?? ""
         return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? title
     }
 
-    // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
+    // Avatar + name + presence shown in the chat header (kept glass-free â€” see chatToolbar).
     private var headerLabel: some View {
         // Measurements matched to a reference conversation header (iOS 26 variant): 40pt avatar,
-        // 12pt avatar→name spacing, 17pt-semibold title (.headline), a 16×16 title-row icon at 5pt.
+        // 12pt avatarâ†’name spacing, 17pt-semibold title (.headline), a 16Ã—16 title-row icon at 5pt.
         HStack(spacing: 12) {
             AvatarView(name: liveTitle, photoUrl: photoUrl, size: 40)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     Text(liveTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    // Constant reminder that messages self-delete here —
+                    // Constant reminder that messages self-delete here â€”
                     // this timer being invisible is how a whole chat history vanished unnoticed.
                     if repo.disappearSeconds > 0 {
                         Image(systemName: "timer")
@@ -2422,7 +2468,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: $0.isAlbum ? "ðŸ“· Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "ðŸ“· Photo") : ($0.isVideo ? "ðŸŽ¥ Video" : ($0.isAudio ? "ðŸŽ¤ Voice message" : ($0.isFile ? "ðŸ“„ \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         replyingTo = nil
         typingSent = false
@@ -2447,19 +2493,19 @@ struct ThreadView: View {
         }
         repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
                                 sendState: .sending, linkPreview: pendingPreview))
-        broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typing…")
+        broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typingâ€¦")
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft)
         }
     }
 
-    // Re-try a failed message — re-drives the SAME send path that produced it, with the SAME clientId.
-    // Per-type routing (video checked BEFORE localImageData, which only holds its THUMBNAIL — the old
+    // Re-try a failed message â€” re-drives the SAME send path that produced it, with the SAME clientId.
+    // Per-type routing (video checked BEFORE localImageData, which only holds its THUMBNAIL â€” the old
     // single-branch retry re-sent that thumbnail as a photo, and audio/file/album retries sent nothing).
     private func resend(_ m: Message) {
         let clientId = m.clientId ?? UUID().uuidString
         // The original send may have actually SUCCEEDED after the failure flip (slow network): if its
-        // echo is already in the window, just drop the stale failed pending — never send a duplicate.
+        // echo is already in the window, just drop the stale failed pending â€” never send a duplicate.
         if repo.messages.contains(where: { $0.clientId == clientId }) {
             repo.removePending(clientId: clientId)
             return
@@ -2468,14 +2514,14 @@ struct ThreadView: View {
 
         if m.isVideo {
             // Video retry needs the transcoded bytes we persisted to tmp. If that file is gone (OS
-            // purged tmp / relaunch), DO NOT fall through to the image branch — localImageData holds
+            // purged tmp / relaunch), DO NOT fall through to the image branch â€” localImageData holds
             // only the POSTER thumbnail, so that path would silently send a still photo instead of the
             // video. Re-mark failed and surface it instead.
             guard let path = m.localMediaURL,
                   let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
                 repo.addPending(m)   // keep the failed video bubble; the payload is unrecoverable
                 repo.markFailed(clientId: clientId)
-                sendError = "This video can't be re-sent — please pick it again."
+                sendError = "This video can't be re-sent â€” please pick it again."
                 return
             }
             var p = Message(localVideoThumb: m.localImageData ?? Data(), duration: m.duration ?? 0,
@@ -2522,7 +2568,7 @@ struct ThreadView: View {
                 } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
         } else if let data = m.localImageData {
-            // Plain photo — retry keeps the caption AND the view-once flag (both were stripped before).
+            // Plain photo â€” retry keeps the caption AND the view-once flag (both were stripped before).
             var p = Message(localImageData: data, width: m.width ?? 1, height: m.height ?? 1,
                             authorId: me, clientId: clientId, sendState: .sending)
             p.text = m.text; p.viewOnce = m.viewOnce; p.replyTo = m.replyTo   // retry keeps the quote too
@@ -2538,13 +2584,13 @@ struct ThreadView: View {
                                     replyTo: m.replyTo, sendState: .sending))
             Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId) }
         }
-        // (empty text + no payload: nothing to resend — drop the pending rather than recreate a ghost)
+        // (empty text + no payload: nothing to resend â€” drop the pending rather than recreate a ghost)
     }
 
     // Send a photo with an instant optimistic bubble, then reconcile on the echo.
     // Send 2+ photos as ONE album (grid + one caption). Optimistic album bubble shows immediately.
     /// TEN PER ALBUM, THEN A NEW ALBUM. Picking twelve photos used to make ONE message of twelve, which
-    /// the bubble could only show as ten tiles and a "+2" badge — a message you cannot actually see the
+    /// the bubble could only show as ten tiles and a "+2" badge â€” a message you cannot actually see the
     /// contents of. Every messenger caps the group and starts another; twelve becomes 10 + 2.
     ///
     /// Chunked at the SEND, not in the bubble, so the cap is a property of the message rather than of one
@@ -2579,8 +2625,8 @@ struct ThreadView: View {
     /// on the Send tap) and this call must adopt it rather than post a second one.
     private func sendMixedGroup(_ ordered: [SendMedia], caption: String, hd: Bool,
                                 clientId posted: String? = nil) async {
-        // A lone item → the normal single-media send (keeps the existing UX). That path posts its own
-        // bubble, so retire the group bubble first — otherwise it would sit "sending" forever (this
+        // A lone item â†’ the normal single-media send (keeps the existing UX). That path posts its own
+        // bubble, so retire the group bubble first â€” otherwise it would sit "sending" forever (this
         // happens when several were picked but only one survived the resolve).
         if ordered.count == 1 {
             if let posted { await MainActor.run { repo.removePending(clientId: posted) } }
@@ -2595,7 +2641,7 @@ struct ThreadView: View {
 
         // Optimistic grouped bubble: thumbnails in order + which are videos (play badge). Build BOTH
         // arrays in ONE pass so their indices ALWAYS align (a compactMap'd previews vs a map'd flags
-        // list drifted apart when a thumbnail failed to encode → play badges on the wrong tiles).
+        // list drifted apart when a thumbnail failed to encode â†’ play badges on the wrong tiles).
         //
         // SKIPPED ENTIRELY when the sheet already posted the bubble: this loop is N full-resolution
         // JPEG encodes plus N decode-resize-re-encodes on the main thread, and doing it before first
@@ -2623,7 +2669,7 @@ struct ThreadView: View {
         }
 
         // Build the send items: images as-is, videos transcoded (HD toggle) to the delivery codec. If
-        // ANY item fails to prepare, fail the WHOLE group (don't silently drop an item — the album
+        // ANY item fails to prepare, fail the WHOLE group (don't silently drop an item â€” the album
         // would ship with fewer items than the bubble showed).
         var sendItems: [ChatService.AlbumSendItem] = []
         for item in ordered {
@@ -2660,7 +2706,7 @@ struct ThreadView: View {
         // A photo sent while replying carries the reply (like text/voice) and clears the bar.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: $0.isAlbum ? "ðŸ“· Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "ðŸ“· Photo") : ($0.isVideo ? "ðŸŽ¥ Video" : ($0.isAudio ? "ðŸŽ¤ Voice message" : ($0.isFile ? "ðŸ“„ \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         await MainActor.run {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
@@ -2698,8 +2744,8 @@ struct ThreadView: View {
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
                          draft: LinkPreviewService.LinkDraft? = nil) async {
         // DURABLE: persist the send BEFORE the network call so a mid-send app kill doesn't lose the
-        // message — it's re-driven on the next chat open (drainSendQueue). Removed once it lands.
-        // (A queue re-drive after an app kill sends WITHOUT the preview — the draft lives in memory
+        // message â€” it's re-driven on the next chat open (drainSendQueue). Removed once it lands.
+        // (A queue re-drive after an app kill sends WITHOUT the preview â€” the draft lives in memory
         // only; the text always survives, which is the part that matters.)
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
                       ts: Date().timeIntervalSince1970)
@@ -2711,7 +2757,7 @@ struct ThreadView: View {
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
                                            preview: preview)
-            SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
+            SendQueue.remove(clientId: clientId)   // landed â†’ no re-drive needed
         } catch {
             // Keep the message as a failed bubble (tap to retry); flag the encryption case. The queue
             // entry stays so the next chat open retries it automatically.
@@ -2747,7 +2793,7 @@ struct ThreadView: View {
     // Call record as a message bubble. Outgoing = right-aligned accent
     // bubble; incoming & missed = left-aligned received bubble. Inside: a circular call
     // A newer-version feature this build can't render: a centered, system-notification-style card (icon +
-    // explanation) — deliberately distinct from any chat bubble so it can't be read as normal content.
+    // explanation) â€” deliberately distinct from any chat bubble so it can't be read as normal content.
     private func unsupportedRow(_ m: Message) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.up.circle.fill").font(.system(size: 15))
@@ -2767,14 +2813,14 @@ struct ThreadView: View {
         .padding(.vertical, 6)
     }
 
-    // Centered gray system event ("X added Y", "Z left", "renamed to…") — group only.
-    // Telegram-style pin notice: "X pinned "snippet…"" / "X pinned a photo" — the system-row capsule
+    // Centered gray system event ("X added Y", "Z left", "renamed toâ€¦") â€” group only.
+    // Telegram-style pin notice: "X pinned "snippetâ€¦"" / "X pinned a photo" â€” the system-row capsule
     // with the pinner's name bolded; tapping jumps to the pinned message (pages history in if needed).
     private func pinNoticeRow(_ m: Message, _ pin: PinNoticeCard,
                               jumpTo: @escaping (String) -> Void) -> some View {
         Button { jumpTo(pin.messageId) } label: {
             // ONE uniform line, exactly the day pill's treatment (user: make it the same, no
-            // difference). The old per-word weight split is gone with it — "Today" is one weight,
+            // difference). The old per-word weight split is gone with it â€” "Today" is one weight,
             // so this is too.
             Text("\(m.authorId == me ? "You" : personName(m.authorId)) pinned \(pin.label)")
                 .lineLimit(1)
@@ -2795,7 +2841,7 @@ struct ThreadView: View {
     }
 
     // DISPLAY-TIME guard for reply-quote snippets: quotes persisted BEFORE the safeText fix carry the
-    // raw "kulan-…:" marker forever (they're encrypted snapshots) — map them to friendly labels when
+    // raw "kulan-â€¦:" marker forever (they're encrypted snapshots) â€” map them to friendly labels when
     // rendering, so old quotes clean up too.
     static func quoteLabel(_ t: String) -> String { quoteSafeLabel(t) }
     private static func _unusedQuoteLabelBody(_ t: String) -> String {
@@ -2812,12 +2858,12 @@ struct ThreadView: View {
         let missed = m.callOutcome == "missed"
         let video = m.callVideo
         // Call semantics (user spec): "Missed call" (red) is ONLY for calls I RECEIVED and didn't
-        // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" —
-        // neutral colors, outgoing arrow — never red, never "tap to call back" (I was the one calling).
+        // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" â€”
+        // neutral colors, outgoing arrow â€” never red, never "tap to call back" (I was the one calling).
         let incomingMissed = missed && !mine
         // A decline is its own outcome, never red and never "tap to call back": the person reading that
         // row is the one who chose to reject it. Previously it was written as "missed", so declining a
-        // call put "Missed call · Tap to call back" in the decliner's own chat.
+        // call put "Missed call Â· Tap to call back" in the decliner's own chat.
         let declined = m.callOutcome == "declined"
         let statusText: String = {
             if video { return incomingMissed ? "Missed video call" : "Video call" }
@@ -2826,11 +2872,11 @@ struct ThreadView: View {
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
-            if declined { return "Declined · \(time)" }
-            if incomingMissed { return "Tap to call back · \(time)" }
-            if missed { return "No answer · \(time)" }            // MY unanswered outgoing call
-            if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
-            return "\(mine ? "Outgoing" : "Incoming") · \(time)"
+            if declined { return "Declined Â· \(time)" }
+            if incomingMissed { return "Tap to call back Â· \(time)" }
+            if missed { return "No answer Â· \(time)" }            // MY unanswered outgoing call
+            if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) Â· \(time)" }
+            return "\(mine ? "Outgoing" : "Incoming") Â· \(time)"
         }()
         let iconName: String = {
             if video { return incomingMissed ? "video.slash.fill" : "video.fill" }
@@ -2868,12 +2914,12 @@ struct ThreadView: View {
             .padding(.vertical, 8).padding(.horizontal, 12)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
+            // Tap target is ONLY the bubble â€” NOT the full-width row. The old .contentShape/
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // CONFIRM before calling back (user spec): a stray tap on a call row must never place a
-            // call instantly. Native centered alert → Call / Cancel.
+            // call instantly. Native centered alert â†’ Call / Cancel.
             .onTapGesture { pendingCallBack = video ? .video : .voice }
             .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
@@ -2887,7 +2933,7 @@ struct ThreadView: View {
         return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
     }
 
-    // "Unread Messages" divider (our design) — a thin accent line + label.
+    // "Unread Messages" divider (our design) â€” a thin accent line + label.
     private var unreadDivider: some View {
         HStack(spacing: 8) {
             Rectangle().fill(Color.accentColor.opacity(0.3)).frame(height: 1)
@@ -2899,7 +2945,7 @@ struct ThreadView: View {
     }
 
     // Where the chat should land when it opens: the saved in-session spot if that message is still
-    // loaded, otherwise the newest. Cold start / first open this session → no saved anchor → newest.
+    // loaded, otherwise the newest. Cold start / first open this session â†’ no saved anchor â†’ newest.
     private var openAnchor: (id: String, edge: UnitPoint) {
         if case .message(let id)? = ChatScrollStore.shared.anchor(for: cid),
            repo.items.contains(where: { $0.id == id }) {
@@ -2909,10 +2955,10 @@ struct ThreadView: View {
     }
 
     // Remember (in RAM) where we're looking so reopening this chat lands here. Only after the open
-    // has SETTLED — during the load we're programmatically pinning, and saving then would feed the
+    // has SETTLED â€” during the load we're programmatically pinning, and saving then would feed the
     // pin back into itself. Called from row/BOTTOM onAppear only (teardown-safe).
     // Trailing-debounced save (0.5s after the last row appearance): per-appearance saves ran an O(n)
-    // scan + a store write on every scroll tick — pure churn during scrolling (anti-Signal pattern).
+    // scan + a store write on every scroll tick â€” pure churn during scrolling (anti-Signal pattern).
     private func schedulePersistScrollPosition() {
         visibleRows.persistWork?.cancel()
         let work = DispatchWorkItem { persistScrollPosition() }
@@ -2931,7 +2977,7 @@ struct ThreadView: View {
 
     // Reveal the chat exactly at the open anchor with NO jump. LazyVStack row heights aren't final on
     // the first scrollTo (offscreen rows are unmeasured), so it lands approximately; a second pass on
-    // the next runloop — after layout — corrects it. We reveal only after both passes, so a cold/first
+    // the next runloop â€” after layout â€” corrects it. We reveal only after both passes, so a cold/first
     // open lands in its FINAL position instead of scrolling-then-settling visibly (the "jump"). A warm
     // reopen already has measured rows, so pass 2 is just a harmless no-op there.
     private func revealAtOpenAnchor(_ proxy: ScrollViewProxy, settlePasses: Int = 11) {
@@ -2956,10 +3002,10 @@ struct ThreadView: View {
     }
 
     // Pin to the newest message across two frames: the first pin lands on the pre-insert layout, the
-    // second (next runloop, after the new row is measured) corrects it — so a freshly-arrived bubble
+    // second (next runloop, after the new row is measured) corrects it â€” so a freshly-arrived bubble
     // can never leave a visible jump. Used for both my sends and received-while-at-bottom.
     private func pinBottomStable(_ proxy: ScrollViewProxy) {
-        // Re-pin to the newest message over a few frames — a freshly-inserted bubble (especially a
+        // Re-pin to the newest message over a few frames â€” a freshly-inserted bubble (especially a
         // voice/media widget whose height finalizes late) shifts the bottom a runloop or two after
         // insert, so a single pin left a visible jump. Pinning ~5x across ~0.1s absorbs that.
         var passes = 0
@@ -2986,7 +3032,7 @@ struct ThreadView: View {
         guard !msgs.isEmpty else { return }
         let idx = max(0, msgs.count - unreadOnOpen)
         guard idx < msgs.count else { return }
-        // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
+        // Just mark WHERE the unread divider goes â€” do NOT scroll to it. The chat always opens at
         // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
         // (Scrolling to the first unread dropped the user into old history / old missed calls.)
         firstUnreadId = msgs[idx].id
@@ -3012,7 +3058,7 @@ struct ThreadView: View {
         let anchor = repo.items.first?.id
         let pinnedAtBottom = isAtBottom
         repo.loadOlder {
-            // Pinned at the bottom, a top-prepend doesn't move what you see — the anchor
+            // Pinned at the bottom, a top-prepend doesn't move what you see â€” the anchor
             // scroll was the thing CAUSING the lurch ~1s after opening (user video). Only
             // preserve position when the user is actually reading history.
             guard let anchor, !pinnedAtBottom else { return }
@@ -3025,7 +3071,7 @@ struct ThreadView: View {
         flashAndScroll(id)   // the UIKit list scrolls via the collection view (nativeScrollTarget)
     }
 
-    // Tapped a "Status" reply quote → open that status if it's still live, else say it's gone.
+    // Tapped a "Status" reply quote â†’ open that status if it's still live, else say it's gone.
     // The repo only holds unexpired stories, so "found" == still viewable.
     private func openStory(_ storyId: String, _ authorId: String, anchorId: String = "") {
         replyStoryAnchorId = anchorId
@@ -3043,7 +3089,7 @@ struct ThreadView: View {
         }
     }
 
-    // Multi-select (attachment-approval flow): one photo → the full editor; 2+ photos → the
+    // Multi-select (attachment-approval flow): one photo â†’ the full editor; 2+ photos â†’ the
     // approval screen (swipeable zoomable pages, ordered thumb rail, ONE caption, send in order).
     // Videos go straight into the send pipeline (separate transcode path), same as before.
     private func sendPickedMulti(_ items: [PhotosPickerItem]) async {
@@ -3058,7 +3104,7 @@ struct ThreadView: View {
         }
         // Load every picked item IN ORDER (selection order = send order) into the unified
         // media list: a lone photo/video keeps its dedicated editor; anything else (multiple photos,
-        // multiple videos, or a MIX) opens the mixed approval pager — swipe all, edit each, one caption.
+        // multiple videos, or a MIX) opens the mixed approval pager â€” swipe all, edit each, one caption.
         var items: [ApprovalMedia] = []
         for item in picked {
             if isVideoItem(item) {
@@ -3083,7 +3129,7 @@ struct ThreadView: View {
             } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
                 videoToApprove = VideoWrap(url: url)
             } else if let clips = ThreadView.videoClips(from: items) {
-                multiVideoApprove = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
+                multiVideoApprove = MultiVideoWrap(clips: clips)   // all videos â†’ single-editor page + rail
             } else {
                 mediaToApprove = MediaWrap(items: items)
             }
@@ -3094,10 +3140,10 @@ struct ThreadView: View {
         item.supportedContentTypes.contains { $0.conforms(to: .movie) }
     }
 
-    // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
+    // Transcode â†’ optimistic thumbnail bubble â†’ E2EE upload (ChatService.sendVideo keeps
     // the sender's copy on-device; the recipient's player deletes the server object).
     private func sendVideo(from url: URL, caption: String = "", hd: Bool = false) async {
-        // Per-send HD button OR the global Sent Media Quality "High" → 1080p.
+        // Per-send HD button OR the global Sent Media Quality "High" â†’ 1080p.
         guard let prepared = await VideoTranscoder.prepare(url, hd: hd || ChatService.highQualitySends) else {
             try? FileManager.default.removeItem(at: url)
             await MainActor.run { sendError = "Couldn't process this video." }
@@ -3110,7 +3156,7 @@ struct ThreadView: View {
         }
         let clientId = UUID().uuidString
         // Persist the transcoded bytes to tmp keyed by clientId so a FAILED send can retry the REAL
-        // video (the old retry path only had the thumbnail and re-sent it as a photo — data loss).
+        // video (the old retry path only had the thumbnail and re-sent it as a photo â€” data loss).
         let retryURL = FileManager.default.temporaryDirectory.appendingPathComponent("pending-video-\(clientId).mp4")
         try? prepared.data.write(to: retryURL)
         await MainActor.run {
@@ -3125,11 +3171,11 @@ struct ThreadView: View {
             try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
                                             duration: prepared.duration, width: prepared.width, height: prepared.height,
                                             caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil)
-            try? FileManager.default.removeItem(at: retryURL)   // delivered → retry payload no longer needed
+            try? FileManager.default.removeItem(at: retryURL)   // delivered â†’ retry payload no longer needed
         } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
-    // When I've blocked this contact, the composer is replaced by an unblock bar —
+    // When I've blocked this contact, the composer is replaced by an unblock bar â€”
     // you genuinely can't send while blocked (real enforcement, not cosmetic).
     // Top search bar: rounded field with inline clear + a circular X to close search.
     private var searchBar: some View {
@@ -3157,7 +3203,7 @@ struct ThreadView: View {
             Button { closeSearch() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // 44pt Apple tap target
-                    // Whole circle is the tap target — without a contentShape only the thin ✕ glyph
+                    // Whole circle is the tap target â€” without a contentShape only the thin âœ• glyph
                     // hit-tested, so taps on the glass circle fell through ("X not working").
                     .contentShape(Circle())
             }
@@ -3166,7 +3212,7 @@ struct ThreadView: View {
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
     }
 
-    // Bottom bar shown during search (replaces the composer, sits above the keyboard): ↑/↓ through
+    // Bottom bar shown during search (replaces the composer, sits above the keyboard): â†‘/â†“ through
     // matches + a count.
     private var searchNavBar: some View {
         HStack(spacing: 12) {
@@ -3193,7 +3239,7 @@ struct ThreadView: View {
     }
 
     // Bottom action bar during selection (reference design): Delete (glass circle, leading), "N Selected"
-    // (glass pill, centre), Forward (glass circle, trailing) — all real Liquid Glass, icons only.
+    // (glass pill, centre), Forward (glass circle, trailing) â€” all real Liquid Glass, icons only.
     private var selectionActionBar: some View {
         HStack {
             Button { showBulkDeleteConfirm = true } label: {
@@ -3232,7 +3278,7 @@ struct ThreadView: View {
     // still cached but I'm not in `users`. Show a non-interactive bar instead of the composer.
     private var notAMember: Bool {
         guard !cid.contains("_") else { return false }       // 1:1 chats are never "removed"
-        guard let conv = conversation else { return false }  // not loaded yet → don't assume
+        guard let conv = conversation else { return false }  // not loaded yet â†’ don't assume
         return !conv.users.contains(AuthService.shared.uid ?? "")
     }
 
@@ -3273,7 +3319,7 @@ struct ThreadView: View {
     }
 
     // Do we already share this chat (either side has sent something)? If so, messaging
-    // always stays open — the Messages-privacy gate only blocks COLD new chats.
+    // always stays open â€” the Messages-privacy gate only blocks COLD new chats.
     private var hasChatHistory: Bool {
         !(conversation?.lastMessageCipher ?? "").isEmpty
             || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif }
@@ -3321,7 +3367,7 @@ struct ThreadView: View {
                     let d = await LinkPreviewService.shared.draft(for: url)
                     guard !Task.isCancelled, let d else { return }
                     await MainActor.run {
-                        // The text may have changed while fetching — only show a still-current link.
+                        // The text may have changed while fetching â€” only show a still-current link.
                         guard LinkPreviewService.firstURL(in: input) == url else { return }
                         withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
                     }
@@ -3422,14 +3468,14 @@ struct ThreadView: View {
     private func saveEdit() {
         guard let e = editingMessage else { return }
         let newText = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Empty text = cancel the edit (an edit can't erase a message) — the old silent return
+        // Empty text = cancel the edit (an edit can't erase a message) â€” the old silent return
         // left the composer STUCK in edit mode with no way out.
         // Unchanged text = nothing to save; just leave edit mode.
         if !newText.isEmpty && newText != e.text {
             Task { try? await ChatService.editMessage(cid: cid, messageId: e.id, newText: newText, group: isGroup ? groupMembers : nil) }
         }
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
-        setInputSilently(Drafts.shared.text(cid))   // the pre-edit draft (if any) was never sent — restore it (no phantom typing)
+        setInputSilently(Drafts.shared.text(cid))   // the pre-edit draft (if any) was never sent â€” restore it (no phantom typing)
         inputFocused = false
     }
 
@@ -3461,8 +3507,8 @@ struct ThreadView: View {
                 Text(r.fileName ?? "File").font(.caption).lineLimit(1).foregroundStyle(.secondary)
             }
         } else {
-            // quoteSafeLabel: a contact/location card's text is a raw kulan-…: marker (uid + storage
-            // URL) — the live banner must show "Contact"/"Location", never the payload.
+            // quoteSafeLabel: a contact/location card's text is a raw kulan-â€¦: marker (uid + storage
+            // URL) â€” the live banner must show "Contact"/"Location", never the payload.
             Text(quoteSafeLabel(r.text)).font(.caption).lineLimit(1).foregroundStyle(.secondary)
         }
     }
@@ -3470,12 +3516,12 @@ struct ThreadView: View {
         let d = Int(r.duration ?? 0); return String(format: "%d:%02d", d / 60, d % 60)
     }
 
-    // Subtle neutral fill (no glass, no shadow) — the native field tint.
+    // Subtle neutral fill (no glass, no shadow) â€” the native field tint.
     private var fieldFill: Color { dark ? Color(hex: 0x2A2A2E) : Color(hex: 0xEEEEF2) }
 
     // True while the finger is held down recording (not yet locked).
     // Driven by holdStarted (set on touch-down) NOT recorder.isRecording, so the recording
-    // UI appears the instant you press — no waiting for the audio session to warm up.
+    // UI appears the instant you press â€” no waiting for the audio session to warm up.
     private var recordingHeld: Bool { holdStarted && !recordLocked }
     // Live finger translation, clamped to up/left (the two meaningful directions).
     private var clampedDrag: CGSize {
@@ -3484,7 +3530,7 @@ struct ThreadView: View {
         CGSize(width: Self.rubberband(recordDrag.width, limit: 90),
                height: Self.rubberband(recordDrag.height, limit: 100))
     }
-    // iOS overscroll: within `limit` it's linear; beyond, r = limit + (1 − 1/(over·c/dim + 1))·dim.
+    // iOS overscroll: within `limit` it's linear; beyond, r = limit + (1 âˆ’ 1/(overÂ·c/dim + 1))Â·dim.
     private static func rubberband(_ x: CGFloat, limit: CGFloat, dim: CGFloat = 220, c: CGFloat = 0.55) -> CGFloat {
         guard x < 0 else { return 0 }          // only up/left drags move the mic
         let d = -x
@@ -3542,13 +3588,13 @@ struct ThreadView: View {
     private var inputRow: some View {
         // CRITICAL: the glass container's `grouped` flag must NOT depend on recordingHeld. When it
         // flipped on record-start, SwiftUI swapped GlassEffectContainer <-> plain content, which
-        // re-created the entire subtree — destroying the mic's live DragGesture mid-touch (the
+        // re-created the entire subtree â€” destroying the mic's live DragGesture mid-touch (the
         // frozen/stuck recording). Kept constant, the subtree is stable and the gesture survives.
         // (No blur bridge now: the recording mic is a red circle, not a glass element.)
         composerGlassContainer(grouped: true) {
         HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left; the field (with the mic INSIDE); Send
             // Hidden ENTIRELY while recording (the attach button is removed from the
-            // toolbar during a voice memo). Collapsing via opacity/frame did NOT work — iOS 26's
+            // toolbar during a voice memo). Collapsing via opacity/frame did NOT work â€” iOS 26's
             // native glassEffect ignores .opacity, so the "+" kept showing. Fully removing it is the
             // reliable fix; the mic is a separate stable slot (its own .id), so this sibling change
             // can't disturb the recording gesture.
@@ -3565,7 +3611,7 @@ struct ThreadView: View {
                         // iOS serialize the animations (sheet first), so the chat + composer stayed lifted
                         // at keyboard height under the open sheet and only settled once the presentation
                         // finished (the "still up, closes late" report). A few frames later, both run
-                        // concurrently — keyboard slides down while the sheet slides up.
+                        // concurrently â€” keyboard slides down while the sheet slides up.
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { showAttachPanel = true }
                     } else {
                         showAttachPanel = true
@@ -3574,7 +3620,7 @@ struct ThreadView: View {
                     Image(systemName: sendingPhoto ? "ellipsis" : "plus")
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(.primary)
-                        .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
+                        .contentTransition(.symbolEffect(.replace))   // smooth +/â€¦ swap
                         .frame(width: 40, height: 40)
                         .liquidGlass(Circle(), interactive: true)
                 }
@@ -3603,11 +3649,11 @@ struct ThreadView: View {
                     Divider().padding(.horizontal, 12)
                 }
                 HStack(alignment: .bottom, spacing: 4) {
-                    // Field content swaps between the text field and the recording bar…
+                    // Field content swaps between the text field and the recording barâ€¦
                     if recordingHeld { recordingHoldRow } else { messageField }
-                    // …sticker + camera show only when idle & empty…
+                    // â€¦sticker + camera show only when idle & emptyâ€¦
                     if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
-                    // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
+                    // â€¦and the MIC lives INSIDE the pill (clean idle: sticker Â· camera Â· mic in one bar).
                     // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
                     // the DragGesture survives record-start; zIndex keeps the red circle in front of the
                     // pill glass. The red is sized to FIT the 40px bar, so it never overflows/clips.
@@ -3615,12 +3661,12 @@ struct ThreadView: View {
                 }
                 .frame(minHeight: 40)   // input row stays 40px even in voice mode
             }
-            // Real Liquid Glass on the field in BOTH states — including the recording bar (user spec).
+            // Real Liquid Glass on the field in BOTH states â€” including the recording bar (user spec).
             // Interactive Liquid Glass restored (the field looked flat without it). Hold-to-record
             // speed is kept up by the snappy record-start animation + the pre-warmed audio session.
             .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
 
-            // Send button (only while typing) — the mic lives INSIDE the pill now.
+            // Send button (only while typing) â€” the mic lives INSIDE the pill now.
             rightButton
         }
         }
@@ -3630,7 +3676,7 @@ struct ThreadView: View {
     }
 
     // Native iOS 26: group the composer's glass shapes (the + and the field) so they
-    // render as ONE cohesive liquid-glass system, the way Apple's own bars do — instead
+    // render as ONE cohesive liquid-glass system, the way Apple's own bars do â€” instead
     // of two disconnected glass blobs. No-op layout-wise; pure native glass rendering.
     @ViewBuilder private func composerGlassContainer<C: View>(grouped: Bool = true, @ViewBuilder _ content: () -> C) -> some View {
         if grouped, #available(iOS 26.0, *) {
@@ -3640,7 +3686,7 @@ struct ThreadView: View {
         }
     }
 
-    // Just the text field — trailing buttons are stable siblings (so the mic view never
+    // Just the text field â€” trailing buttons are stable siblings (so the mic view never
     // unmounts when the field swaps to the recording row mid-hold).
     private var messageField: some View {
         TextField("Message", text: $input, axis: .vertical)
@@ -3650,16 +3696,16 @@ struct ThreadView: View {
             .padding(.leading, 14)
             .padding(.vertical, 9)   // single-line field height ~40 to match the + button
             .onChange(of: input) { _, v in
-                // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
+                // Programmatic set (draft restore / edit teardown) â€” no typing implications (audit M6).
                 if typingBox.suppressNext { typingBox.suppressNext = false; return }
                 // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
                 let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 if now != typingSent {
                     typingSent = now
-                    broadcastTyping(now)   // serialized — writes can't land out of order
+                    broadcastTyping(now)   // serialized â€” writes can't land out of order
                 }
                 // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
-                // in the field), so a parked draft doesn't show "typing…" forever on the other side.
+                // in the field), so a parked draft doesn't show "typingâ€¦" forever on the other side.
                 typingIdleStop?.cancel()
                 if now {
                     let work = DispatchWorkItem {
@@ -3719,10 +3765,10 @@ struct ThreadView: View {
             }
             .transition(.scale.combined(with: .opacity))
         }
-        // When not typing, the mic is INSIDE the pill (see the field row) — no button here.
+        // When not typing, the mic is INSIDE the pill (see the field row) â€” no button here.
     }
 
-    // Live recording row inside the capsule: red dot + timer + "‹ slide to cancel".
+    // Live recording row inside the capsule: red dot + timer + "â€¹ slide to cancel".
     private var recordingHoldRow: some View {
         HStack(spacing: 10) {
             Image(systemName: "mic.fill")
@@ -3739,21 +3785,21 @@ struct ThreadView: View {
             // Fade the hint as the finger slides toward the cancel threshold.
             .opacity(1.0 - min(1.0, Double(-clampedDrag.width) / 90.0) * 0.6)
         }
-        .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording — no vertical distortion
+        .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording â€” no vertical distortion
     }
 
     // Hold-to-record (standard hold-to-record, our own code on the AudioRecorder engine):
-    //   • press & hold the mic  → recording starts instantly (session is pre-warmed)
-    //   • slide LEFT past the threshold, release → cancel (discard)
-    //   • slide UP into the lock target → hands-free lock (finger can lift; bar takes over)
-    //   • release without cancel/lock → send
+    //   â€¢ press & hold the mic  â†’ recording starts instantly (session is pre-warmed)
+    //   â€¢ slide LEFT past the threshold, release â†’ cancel (discard)
+    //   â€¢ slide UP into the lock target â†’ hands-free lock (finger can lift; bar takes over)
+    //   â€¢ release without cancel/lock â†’ send
     // Rubber-banded drag + haptics at each threshold. A quick tap (too short) flashes the hint.
     private static let cancelThreshold: CGFloat = 80
     private static let lockThreshold: CGFloat = 88
     private var lockProgress: CGFloat { min(1, max(0, -clampedDrag.height / Self.lockThreshold)) }
 
     // In-pill mic: the small idle icon (matches sticker/camera) AND the drag gesture's hit target.
-    // While recording it's invisible (opacity 0) — the BIG red mic is drawn by `recordingMicOverlay`
+    // While recording it's invisible (opacity 0) â€” the BIG red mic is drawn by `recordingMicOverlay`
     // on top of the whole composer, so it's never clipped by / behind the pill's glass. The gesture
     // still lives here (opacity doesn't affect hit-testing), keeping a stable identity (no freeze).
     private var micButton: some View {
@@ -3763,7 +3809,7 @@ struct ThreadView: View {
             .frame(width: 22, height: 24)
             .frame(width: 40, height: 40)                  // 40x40 tap target
             .opacity(recordingHeld ? 0 : 1)
-            // Instant UIKit hold gesture (minimumPressDuration 0) — fires on touch-down, no SwiftUI
+            // Instant UIKit hold gesture (minimumPressDuration 0) â€” fires on touch-down, no SwiftUI
             // arbitration lag. Overlay stays mounted during recording so it keeps tracking the drag.
             .overlay {
                 HoldToRecordView(
@@ -3784,7 +3830,7 @@ struct ThreadView: View {
             recordingBlockedByCall = true
             return
         }
-        // Permission already DENIED: don't flip into the recording UI (nothing would be captured —
+        // Permission already DENIED: don't flip into the recording UI (nothing would be captured â€”
         // the bar ran with a frozen 0:00). Point the user at Settings instead. A first-ever hold
         // (undetermined) still falls through to requestAndStart(), which shows the system prompt.
         if AVAudioApplication.shared.recordPermission == .denied {
@@ -3809,9 +3855,9 @@ struct ThreadView: View {
         if cancelled || recordCancelArmed {
             cancelRecording()
         } else if recorder.elapsed < 1.0 {
-            // Match AudioRecorder.finish()'s 1.0s floor EXACTLY — a hold under 1s can't produce a note
+            // Match AudioRecorder.finish()'s 1.0s floor EXACTLY â€” a hold under 1s can't produce a note
             // (finish returns nil), so treat it as an accidental tap here instead of "sending" nothing.
-            cancelRecording(); flashHoldHint()             // too short → discard + "hold to record"
+            cancelRecording(); flashHoldHint()             // too short â†’ discard + "hold to record"
         } else {
             sendRecording()
         }
@@ -3821,7 +3867,7 @@ struct ThreadView: View {
     // aligned over the in-pill mic. Non-interactive (the gesture is on micButton); follows the drag.
     private var recordingMicOverlay: some View {
         ZStack(alignment: .center) {
-            // Lock pill floats above, FIXED — the mic slides up to it.
+            // Lock pill floats above, FIXED â€” the mic slides up to it.
             if !recordCancelArmed {
                 lockTarget.offset(y: -86)
             }
@@ -3840,7 +3886,7 @@ struct ThreadView: View {
         .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
     }
 
-    // Lock target floating above the mic — fills toward accent as you slide up, then locks.
+    // Lock target floating above the mic â€” fills toward accent as you slide up, then locks.
     private var lockTarget: some View {
         VStack(spacing: 7) {
             Image(systemName: lockProgress > 0.7 ? "lock.fill" : "lock.open.fill")
@@ -3856,7 +3902,7 @@ struct ThreadView: View {
         .scaleEffect(0.92 + lockProgress * 0.12)
     }
 
-    // Locked (hands-free) recording bar — shown after you slide up to lock: delete · timer + waveform · send.
+    // Locked (hands-free) recording bar â€” shown after you slide up to lock: delete Â· timer + waveform Â· send.
     private var lockedRecordingBar: some View {
         HStack(spacing: 14) {
             Button { cancelRecording() } label: {
@@ -3924,19 +3970,19 @@ struct ThreadView: View {
     private func stopAndSendAudio() async {
         // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
         // still tear down cleanly so the recording UI never gets stuck. Keep replyingTo though:
-        // a dropped too-short note must not destroy the reply target — the user just retries.
+        // a dropped too-short note must not destroy the reply target â€” the user just retries.
         guard let (data, dur, wf) = recorder.finish() else { return }
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
-        // recording), then reconcile when the upload echoes back — no dead lag on release.
+        // recording), then reconcile when the upload echoes back â€” no dead lag on release.
         let clientId = UUID().uuidString
         // Bug 1: a voice note recorded while replying must carry the reply (works for photo/voice
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: $0.isAlbum ? "ðŸ“· Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "ðŸ“· Photo") : ($0.isVideo ? "ðŸŽ¥ Video" : ($0.isAudio ? "ðŸŽ¤ Voice message" : ($0.isFile ? "ðŸ“„ \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         await MainActor.run {
-            // The optimistic bubble must carry the quote too — without it the voice reply
+            // The optimistic bubble must carry the quote too â€” without it the voice reply
             // looked quote-less until the server echo reconciled (read as "reply didn't work").
             var pending = Message(localAudioData: data, duration: dur, waveform: wf,
                                   authorId: me, clientId: clientId, sendState: .sending)
@@ -3972,7 +4018,7 @@ enum ViewedOnce {
 // Selection wrapper: in select mode a circular checkmark slides in on the LEADING edge
 // (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
 // selected row gets a soft highlight. Off select mode, the row is untouched.
-/// THE ONE LOOK FOR EVERY CENTRED IN-CHAT NOTICE — the day separator ("Today"), the "X pinned …"
+/// THE ONE LOOK FOR EVERY CENTRED IN-CHAT NOTICE â€” the day separator ("Today"), the "X pinned â€¦"
 /// notice and system rows. They had drifted apart: the day pill was primary text on frosted material
 /// while the others were secondary grey on a flat received-bubble tint, so two pills a few lines
 /// apart read as two different things (user screenshot, "make it the same, no difference"). One
@@ -3996,7 +4042,7 @@ struct SelectableRow: ViewModifier {
         if selecting {
             HStack(spacing: 10) {
                 // READS ON ANY BACKGROUND (user: hard to see in light mode / over a wallpaper). The old
-                // unselected state was a hairline `circle` in secondary grey at 55% — it vanished over a
+                // unselected state was a hairline `circle` in secondary grey at 55% â€” it vanished over a
                 // photo wallpaper and was barely there in light mode. Signal's selection circle carries
                 // its own contrast rather than borrowing the background's: a filled disc UNDER a light
                 // ring, plus a soft shadow, so the control is legible over white, black, or a photo.
@@ -4019,7 +4065,7 @@ struct SelectableRow: ViewModifier {
             }
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)   // checkbox only — no row highlight
+            .onTapGesture(perform: onToggle)   // checkbox only â€” no row highlight
         } else {
             content
         }
@@ -4027,7 +4073,7 @@ struct SelectableRow: ViewModifier {
 }
 
 // Upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
-// frosted-material pinwheel) — one consistent look for photo / album / video uploads.
+// frosted-material pinwheel) â€” one consistent look for photo / album / video uploads.
 struct UploadingRing: View {
     @State private var spin = false
     var body: some View {
@@ -4063,8 +4109,8 @@ struct MessageBubble: View, Equatable {
     var avatarFor: (String) -> String? = { _ in nil }
     var onReply: (Message) -> Void = { _ in }
     var onDelete: (Message) -> Void = { _ in }
-    var onCancelSending: (Message) -> Void = { _ in }   // media still uploading → discard the pending send
-    var onTapContact: (_ uid: String, _ name: String, _ photo: String?) -> Void = { _, _, _ in }   // card "message" → open chat
+    var onCancelSending: (Message) -> Void = { _ in }   // media still uploading â†’ discard the pending send
+    var onTapContact: (_ uid: String, _ name: String, _ photo: String?) -> Void = { _, _, _ in }   // card "message" â†’ open chat
     var onTapImage: (Message) -> Void = { _ in }
     var onTapAlbum: (_ gallery: [Message], _ startId: String) -> Void = { _, _ in }
     /// Tapping a group of photos opens the ALBUM SCREEN (a scrollable list of the group) rather than
@@ -4090,7 +4136,7 @@ struct MessageBubble: View, Equatable {
     var onSaveImage: (Message) -> Void = { _ in }
     var canPin: Bool = true
     var isPinned: Bool = false
-    var restricted: Bool = false   // I'm muted in this group → can't react / edit (parity with the composer)
+    var restricted: Bool = false   // I'm muted in this group â†’ can't react / edit (parity with the composer)
 
     private var fileSizeLabel: String {
         guard let b = message.fileSize else { return "Document" }
@@ -4105,8 +4151,8 @@ struct MessageBubble: View, Equatable {
     var onResend: (Message) -> Void = { _ in }
     var onJumpTo: (String) -> Void = { _ in }
     // Resolve the ORIGINAL message a reply points at (from the loaded list), so a photo/video/GIF
-    // reply can show a real thumbnail in the quote (WhatsApp-style) instead of "📷 Photo" text.
-    // Returns nil if the original isn't loaded → the quote falls back to the text snippet.
+    // reply can show a real thumbnail in the quote (WhatsApp-style) instead of "ðŸ“· Photo" text.
+    // Returns nil if the original isn't loaded â†’ the quote falls back to the text snippet.
     var resolveReplyOriginal: (String) -> Message? = { _ in nil }
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
     var replyStoryNS: Namespace.ID? = nil   // native zoom anchor for the story-quote thumbnail
@@ -4119,7 +4165,7 @@ struct MessageBubble: View, Equatable {
     var isViewedOnce: Bool = false        // view-once photo already consumed on this device
 
     // Fill behind MY bubbles: the custom chat colour if set, else the default systemBlue (adaptive
-    // light/dark — see Theme.defaultBubble).
+    // light/dark â€” see Theme.defaultBubble).
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
@@ -4127,8 +4173,8 @@ struct MessageBubble: View, Equatable {
 
     @AppStorage("readReceipts") private var readReceiptsPref = true
     @State private var dragX: CGFloat = 0   // swipe-to-reply offset (SwiftUI bubbles move INSIDE the cell)
-    @State private var swipeArmed = false   // past the commit point → the threshold haptic already fired
-    @State private var swipeFollowing = false   // axis decided for THIS touch → follow every frame
+    @State private var swipeArmed = false   // past the commit point â†’ the threshold haptic already fired
+    @State private var swipeFollowing = false   // axis decided for THIS touch â†’ follow every frame
 
     private var myUid: String { AuthService.shared.uid ?? "" }
     private var myReaction: String? { message.reactions[myUid] }
@@ -4141,7 +4187,7 @@ struct MessageBubble: View, Equatable {
     }
 
     // Message body: tappable URLs + @usernames + highlighted group @mentions.
-    // Built ONCE — NSDataDetector / NSRegularExpression construction is expensive; doing it per
+    // Built ONCE â€” NSDataDetector / NSRegularExpression construction is expensive; doing it per
     // render per bubble was the main scroll-jank source.
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let mentionRegex = try? NSRegularExpression(pattern: "@([A-Za-z0-9_]{3,24})")
@@ -4157,10 +4203,10 @@ struct MessageBubble: View, Equatable {
         let full = message.text
         var str = AttributedString(full)
         str.font = .system(size: 17)
-        // In-chat search: highlight the matched TERM inside the text — never the whole
+        // In-chat search: highlight the matched TERM inside the text â€” never the whole
         // bubble. Applied before the plain-text fast path so text-only messages highlight too.
         // Gated at 2+ chars (the search floor) and matched case/diacritic/width-insensitively, so the
-        // highlight finds exactly what the search matched (café highlights for "cafe").
+        // highlight finds exactly what the search matched (cafÃ© highlights for "cafe").
         if searchTerm.count >= 2 {
             var from = full.startIndex
             while let r = full.range(of: searchTerm,
@@ -4192,20 +4238,20 @@ struct MessageBubble: View, Equatable {
             if underline { str[lo..<hi].underlineStyle = .single }
         }
 
-        // Web links → tappable (blue, underlined).
+        // Web links â†’ tappable (blue, underlined).
         if let detector = Self.linkDetector {
             for m in detector.matches(in: full, range: whole) where m.url != nil {
                 style(m.range, link: m.url, underline: true)
             }
         }
-        // @usernames → kulan://u/<handle> (resolved on tap).
+        // @usernames â†’ kulan://u/<handle> (resolved on tap).
         if let re = Self.mentionRegex {
             for m in re.matches(in: full, range: whole) {
                 let handle = ns.substring(with: m.range(at: 1))
                 style(m.range, link: URL(string: "kulan://u/\(handle)"))
             }
         }
-        // Group @mentions by display name → bold + accent (overrides the generic style).
+        // Group @mentions by display name â†’ bold + accent (overrides the generic style).
         for uid in message.mentions {
             let token = "@\(nameFor(uid))"
             var idx = str.startIndex
@@ -4218,7 +4264,7 @@ struct MessageBubble: View, Equatable {
         return Text(str)
     }
 
-    // How many emoji this message qualifies as "jumbomoji" with — 0 when it is an ordinary message.
+    // How many emoji this message qualifies as "jumbomoji" with â€” 0 when it is an ordinary message.
     private var jumbomojiCount: Int { message.text.jumbomojiCount }
 
     /// Signal's `CVComponentBodyText.textMessageFont`, verbatim: multipliers on the body point size.
@@ -4235,7 +4281,7 @@ struct MessageBubble: View, Equatable {
         }
     }
 
-    // The message text + trailing time as one line (short) or wrapped (long) — shared by the plain and
+    // The message text + trailing time as one line (short) or wrapped (long) â€” shared by the plain and
     // the reply-quote layouts so the two stay identical.
     @ViewBuilder private var bodyLine: some View {
         if metaNeedsOwnLine {
@@ -4245,7 +4291,7 @@ struct MessageBubble: View, Equatable {
             // Why this branch exists (user report + screenshot: a long paste wrapped ~55pt short on
             // EVERY line, with a tall empty column above the timestamp): the inline invisible
             // reservation is the right trick only when the time can actually share the last line. Once
-            // `metaNeedsOwnLine` is true — a word too long to leave room, or a hard-wrapped paste —
+            // `metaNeedsOwnLine` is true â€” a word too long to leave room, or a hard-wrapped paste â€”
             // the reservation begins with a newline, and a trailing run that starts a new line still
             // participates in the concatenated Text's width, so the wrap column shrank by the meta's
             // width for the whole paragraph. Reserving nothing, and giving the meta its own row, is
@@ -4260,7 +4306,7 @@ struct MessageBubble: View, Equatable {
             // SHORT MESSAGE: the text flows FULL WIDTH and only the LAST line reserves room for the
             // timestamp. An HStack { text; time } instead reserved a full-height column beside the
             // text, so EVERY line wrapped early. Here we append an INVISIBLE inline run that mirrors
-            // the metaRow (same font/glyphs → exact same width) to the end of the text, so only the
+            // the metaRow (same font/glyphs â†’ exact same width) to the end of the text, so only the
             // last line leaves a gap, then overlay the REAL time bottom-trailing on top of that gap.
             (bodyText + metaPlaceholder.foregroundColor(.clear))
                 .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
@@ -4269,13 +4315,13 @@ struct MessageBubble: View, Equatable {
     }
 
     // Same as bodyLine but the TEXT fills the hugged column FIRST, so the overlaid time anchors to the
-    // bubble's right edge — not the text's natural right edge. Used only in the reply-quote layout, where
+    // bubble's right edge â€” not the text's natural right edge. Used only in the reply-quote layout, where
     // the QUOTE can drive the bubble wider than the body: with plain bodyLine the time landed mid-bubble
     // (user report: reply timestamp not right-aligned). The frame's .infinity is clamped by the overlay's
     // offered width (= the template's hugged bubble width), so long text still wraps at the bubble cap.
     @ViewBuilder private var bodyLineFilled: some View {
         if metaNeedsOwnLine {
-            // Same own-line treatment as bodyLine — the two MUST branch identically or the template
+            // Same own-line treatment as bodyLine â€” the two MUST branch identically or the template
             // and the visible copy would measure to different heights.
             VStack(alignment: .trailing, spacing: 2) {
                 bodyText
@@ -4294,10 +4340,10 @@ struct MessageBubble: View, Equatable {
     // Signal's footer rule: the timestamp shares the message's LAST line when it fits, else drops to
     // its OWN line. The inline invisible spacer below reserves the trailing room for the fit case; when
     // the widest unbreakable word leaves no room for the time (a long word / gibberish token that fills
-    // the bubble width), the reservation can't push it — the time then painted OVER the text (user
+    // the bubble width), the reservation can't push it â€” the time then painted OVER the text (user
     // report). This detects that case deterministically (UIKit text measurement, no SwiftUI feedback)
     // and forces the time onto its own line.
-    /// True when the timestamp cannot share the message's last line — a word too long to leave room
+    /// True when the timestamp cannot share the message's last line â€” a word too long to leave room
     /// beside it. When true, `bodyLine` gives the meta a real row of its own and reserves NOTHING
     /// inline, so the text keeps the full bubble width on every line.
     private var metaNeedsOwnLine: Bool { metaNeedsOwnLine(inWidth: maxBubbleWidth - 30) }
@@ -4310,7 +4356,7 @@ struct MessageBubble: View, Equatable {
         var metaStr = message.edited ? "edited " : ""
         metaStr += timeString
         var metaW = (metaStr as NSString).size(withAttributes: [.font: metaFont]).width
-        // The read pair, ALWAYS — same constant reservation metaPlaceholder makes, so this test and the
+        // The read pair, ALWAYS â€” same constant reservation metaPlaceholder makes, so this test and the
         // reservation can never disagree about how wide the footer is (they must agree, or the
         // invisible template and the visible copy measure to different heights).
         if isMe { metaW += 25 }
@@ -4324,20 +4370,20 @@ struct MessageBubble: View, Equatable {
     ///
     /// THE CAPTION GETS THE WHOLE BUBBLE. Every media caption used to be
     /// `HStack { Text; Spacer; metaRow }`, and an HStack reserves its siblings' width for the FULL
-    /// HEIGHT of the row — so the timestamp cut ~70pt off EVERY line of the caption, not just the last
+    /// HEIGHT of the row â€” so the timestamp cut ~70pt off EVERY line of the caption, not just the last
     /// one. On a long caption that reads as a bubble with a tall empty column down the right-hand side,
     /// which is exactly what the user photographed, and he named the cause himself: "the problem is
     /// right side timestamp line".
     ///
     /// Text bubbles never had this because they use the reservation trick instead: an invisible inline
     /// run at the end of the text, so only the LAST line leaves a gap, with the real timestamp overlaid
-    /// on it. Captions now use the same two branches for the same reasons — including the long-message
+    /// on it. Captions now use the same two branches for the same reasons â€” including the long-message
     /// branch, where a reservation that begins on a new line would shrink the wrap column for the whole
     /// paragraph, so the meta takes a real row and the text reserves nothing.
     @ViewBuilder private func captionBody(width: CGFloat) -> some View {
         let fg = isMe ? onMyBubble : (dark ? Color.white : .black)
         Group {
-            if metaNeedsOwnLine(inWidth: width - 24) {   // 2 × 12pt caption insets
+            if metaNeedsOwnLine(inWidth: width - 24) {   // 2 Ã— 12pt caption insets
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(message.text).font(.system(size: 17))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4355,15 +4401,15 @@ struct MessageBubble: View, Equatable {
         .frame(width: width, alignment: .leading)
     }
 
-    // A Text that renders IDENTICALLY to metaRow (edited? · time · tick?) but is drawn clear — used only
-    // to reserve the trailing space on the message's last line. Same fonts/symbols → widths match exactly.
+    // A Text that renders IDENTICALLY to metaRow (edited? Â· time Â· tick?) but is drawn clear â€” used only
+    // to reserve the trailing space on the message's last line. Same fonts/symbols â†’ widths match exactly.
     // A leading newline drops the reservation (and thus the overlaid time) to its own line when the text
     // leaves no room for it on the last line.
     private var metaPlaceholder: Text { metaPlaceholder(ownLine: metaNeedsOwnLine) }
 
     /// `ownLine` is passed in rather than re-derived, because the caller already knows the answer FOR
     /// ITS OWN WIDTH. A caption asked about the media box; re-deriving here would answer about the text
-    /// bubble instead, and the two can disagree — which would prepend a newline to a reservation the
+    /// bubble instead, and the two can disagree â€” which would prepend a newline to a reservation the
     /// caller had just decided could sit on the last line.
     private func metaPlaceholder(ownLine: Bool) -> Text {
         var t = Text(ownLine ? "\n  " : "  ")   // own line for long text; else a small gap
@@ -4372,11 +4418,11 @@ struct MessageBubble: View, Equatable {
         // ONE CONSTANT WIDTH FOR EVERY SEND STATE, which is the point (user report + photo: "pending
         // message and sended message is using different bubble size, the problem is the timestamp").
         //
-        // This used to mirror whatever metaRow was drawing at that instant — nothing while sending
+        // This used to mirror whatever metaRow was drawing at that instant â€” nothing while sending
         // (metaRow shows a clock there, which this never reserved), one checkmark delivered, two once
         // read. Since the reservation is what the last line wraps against, and the bubble hugs that
         // width, the bubble RESIZED as the message progressed: it grew the moment the send landed and
-        // grew again when the other side read it. Reserving the widest state always — the read pair —
+        // grew again when the other side read it. Reserving the widest state always â€” the read pair â€”
         // makes the bubble the same size the whole way through. The real metaRow is overlaid at the
         // trailing edge, so a narrower state just leaves invisible slack behind the timestamp.
         if isMe {
@@ -4424,7 +4470,7 @@ struct MessageBubble: View, Equatable {
     // Time + status, shown INSIDE the bubble bottom-right. Status = clock while sending,
     // red "!" if it failed, ONE check when delivered, TWO checks once the other person has read it.
     //
-    // The read state used to be `checkmark.circle.fill` — still a SINGLE glyph, just inside a circle,
+    // The read state used to be `checkmark.circle.fill` â€” still a SINGLE glyph, just inside a circle,
     // in the same colour at 9pt. That is why read receipts looked broken: the data was arriving and
     // the tick was upgrading, but the upgrade was invisible. The chat list already drew real double
     // ticks (MainShell `ticksView`); the thread now matches it.
@@ -4475,7 +4521,7 @@ struct MessageBubble: View, Equatable {
     }
 
     /// Video bubble box. Same as `imageDisplaySize`, plus the PHOTO path's caption min-width floor.
-    /// Without it a portrait video (aspect ~0.46 → ~157pt wide) forced the caption to 157pt, so a long
+    /// Without it a portrait video (aspect ~0.46 â†’ ~157pt wide) forced the caption to 157pt, so a long
     /// caption wrapped at roughly one word per line and the bubble became absurdly tall. The photo path
     /// has always applied this floor; video never did.
     private var videoBox: CGSize {
@@ -4483,7 +4529,7 @@ struct MessageBubble: View, Equatable {
         guard !message.text.isEmpty else { return s }
         let boxMax = min(maxBubbleWidth, 350)
         let textW = (message.text as NSString)
-            .size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24   // 2 × 12pt insets
+            .size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24   // 2 Ã— 12pt insets
         s.width = min(boxMax, max(s.width, textW))
         return s
     }
@@ -4519,11 +4565,11 @@ struct MessageBubble: View, Equatable {
         if !all.isEmpty {
             let shown = Array(all.prefix(3))
             let extra = all.count - shown.count
-            // A LITTLE BIGGER than it originally was (user 2026-07-29: "add small size not big" — a
-            // small increase, not a large one). The growth is in the GLYPH, 12→14, with the capsule's
+            // A LITTLE BIGGER than it originally was (user 2026-07-29: "add small size not big" â€” a
+            // small increase, not a large one). The growth is in the GLYPH, 12â†’14, with the capsule's
             // padding left where it was: the emoji is what you actually read at this size, and adding
             // padding instead would have inflated the capsule without making the reaction any easier
-            // to see. The count follows at 11→12 so it stays subordinate to the emoji beside it.
+            // to see. The count follows at 11â†’12 so it stays subordinate to the emoji beside it.
             HStack(spacing: 4) {
                 ForEach(shown, id: \.emoji) { r in
                     HStack(spacing: 3) {
@@ -4571,7 +4617,7 @@ struct MessageBubble: View, Equatable {
                         .onTapGesture { onTapSender(message.authorId) }
                 }
                 // Status reply: caption + BIG story card floating on the wallpaper ABOVE the bubble
-                // (reference look, our own take) — replaces the small in-bubble quote for status replies.
+                // (reference look, our own take) â€” replaces the small in-bubble quote for status replies.
                 if let reply = message.replyTo, reply.isStatus {
                     // The card is part of the message: it rides the reply-swipe with the bubble
                     // and swiping the card itself also starts the reply (user report: only the
@@ -4590,77 +4636,29 @@ struct MessageBubble: View, Equatable {
                             .fill(Color.primary.opacity(isHighlighted ? 0.18 : 0))
                             .allowsHitTesting(false)
                     )
+                    // Tells the list where this bubble is, so a long press lifts the BUBBLE and not the
+                    // full-width row around it. Same place as the flash, for the same reason: this view
+                    // IS the bubble, corners and all.
+                    .modifier(BubbleRectReporter(id: message.rowId,
+                                                 radius: max(bubbleCorners.topLeading, bubbleCorners.bottomTrailing)))
                     // Tappable links/usernames inside the bubble route through here. The "Open link?"
                     // confirm + user-not-found alert are presented ONCE at the ThreadView level (via
-                    // onConfirmLink/onUserNotFound) — not per bubble.
+                    // onConfirmLink/onUserNotFound) â€” not per bubble.
                     .environment(\.openURL, OpenURLAction { url in routeTappedURL(url) })
-                    // REAL native iOS context menu (user decision 2026-07-11): Apple handles the lift +
-                    // blur + spring. No custom overlay. Reactions live in the "React…" item (opens the
-                    // emoji picker) since Apple gives no public API to attach a reaction bar to it.
-                    .contextMenu {
-                        // MEDIA STILL UPLOADING (user spec): the message isn't on the server yet, so the
-                        // normal actions don't apply — only Save / Cancel Sending / Select.
-                        if message.sendState == .sending && (message.isImage || message.isVideo || message.isAlbum || message.isGif) {
-                            if message.isImage || message.isAlbum {
-                                Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
-                            }
-                            Button(role: .destructive) { onCancelSending(message) } label: {
-                                Label("Cancel Sending", systemImage: "xmark.circle")
-                            }
-                            Divider()
-                            Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
-                        } else {
-                        // Order (user spec): Reply · React… · Edit · Pin · Copy · Forward · Select, then
-                        // Delete/Report below a divider (Select sits ABOVE Delete, not after it).
-                        // Save Image / Info stay as context-specific items in place.
-                        Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
-                        if message.sendState == nil && !restricted {   // can't react until on server; muted members can't react
-                            Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
-                        }
-                        // Edit: text messages only — NOT a contact/location card (its "text" is a marker;
-                        // editing would corrupt the card and expose the raw payload in the composer).
-                        // GIF/file are excluded too (their text is never rendered, so an "edit" would be
-                        // invisible), and Edit only shows inside the server-enforced edit window.
-                        if isMe && !restricted && !message.isImage && !message.isAudio && !message.isCall
-                            && !message.isFeatureMarker && !message.isGif && !message.isFile
-                            && message.sendState == nil
-                            && Date().timeIntervalSince(message.createdAt) < Limits.editWindowSeconds {
-                            Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
-                        }
-                        if canPin {
-                            Button { onPin(message) } label: {
-                                Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
-                            }
-                        }
-                        // Copy: real text only — never a feature marker (contact/location card would put
-                        // the raw kulan-…: payload + uid/photo URL on the clipboard) and never view-once.
-                        if !message.text.isEmpty && !message.isFeatureMarker && !message.viewOnce {
-                            Button { UIPasteboard.general.string = message.text } label: { Label("Copy", systemImage: "doc.on.doc") }
-                        }
-                        // Forward: not calls, and NEVER a view-once photo (forwarding defeats view-once).
-                        if !message.isCall && !message.viewOnce {
-                            Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                        }
-                        // Save Image: real photos only — NEVER a view-once photo (saving defeats view-once).
-                        if message.isImage && !message.viewOnce {
-                            Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
-                        }
-                        if isGroup && isMe && message.sendState == nil {
-                            Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
-                        }
-                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
-                        Divider()
-                        // Delete for both directions - see the UIKit menu above for why Report is gone.
-                        Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
-                        }   // end normal (non-sending) menu
-                    }
+                    // DELETED HERE: the bubble's own `.contextMenu`. Long press is now presented by the
+                    // message list for EVERY message type, through one UIKit menu built in one place
+                    // (uikitMenu). Two menus meant two long-press systems, and the reaction bar could
+                    // only hook one of them - which is why the bar was missing on photos, replies,
+                    // voice, files, GIFs and videos, and why making it appear there needed a poller
+                    // watching the screen for a menu nobody had told it about. Every item and condition
+                    // moved across verbatim; nothing gained or lost an action.
                     // Double-tap to quick-react. The emoji is the user's choice (Settings > Appearance >
                     // Quick Reaction), read here AND in uikitQuickReact so both row paths agree.
                     //
                     // NOT ON MEDIA (user 2026-07-29: "video and images please remove double tap react,
                     // I need to open fast"). A double-tap recogniser makes every SINGLE tap wait to find
-                    // out whether a second one is coming — that wait is unavoidable, it is how tap
-                    // counting works — so on a photo or a video it sat between the tap and the viewer
+                    // out whether a second one is coming â€” that wait is unavoidable, it is how tap
+                    // counting works â€” so on a photo or a video it sat between the tap and the viewer
                     // opening. Text has nothing to open, so the wait costs it nothing and it keeps the
                     // shortcut; media pays for it on every single tap, which is the common action.
                     // Reacting to media is still there through long press, where the bar now lives.
@@ -4675,7 +4673,7 @@ struct MessageBubble: View, Equatable {
                         including: opensOnTap ? .subviews : .all
                     )
                     // SWIPE-TO-REPLY (build-285 model, restored): move the bubble via SwiftUI .offset
-                    // INSIDE the cell — the cell frame never changes, so neighbors can't drift and
+                    // INSIDE the cell â€” the cell frame never changes, so neighbors can't drift and
                     // nothing duplicates. Only SwiftUI-hosted bubbles (reply/image/video/etc.) render
                     // MessageBubble; native text cells keep the UIKit pan. The reply arrow sits in the
                     // vacated space (added after the offset so it stays put).
@@ -4683,7 +4681,7 @@ struct MessageBubble: View, Equatable {
                     .simultaneousGesture(replySwipeGesture)
                     // REACTIONS HANG OFF THE BUBBLE'S EDGE, not in the gap below it (user: a badge
                     // floating between two bubbles belongs to neither, so you cannot tell WHICH
-                    // message was reacted to — his circled screenshots). WhatsApp and iMessage both
+                    // message was reacted to â€” his circled screenshots). WhatsApp and iMessage both
                     // attach it to the bubble, overlapping the corner it belongs to: trailing for my
                     // messages, leading for theirs. The overlay rides `dragX`, so it swipes with the
                     // bubble instead of being left behind.
@@ -4696,7 +4694,7 @@ struct MessageBubble: View, Equatable {
                     }
                     // Reserve the overhang so the badge cannot collide with the next bubble. Measured
                     // by the sizer like any other row content, so heights stay honest.
-                    // Matches the overhang above — reserve less than the badge hangs and it collides
+                    // Matches the overhang above â€” reserve less than the badge hangs and it collides
                     // with the next bubble, reserve more and there is a gap nothing draws into.
                     .padding(.bottom, reactionCounts.isEmpty ? 0 : 13)   // pop in/out
                 if isMe && message.sendState == .failed {
@@ -4709,12 +4707,12 @@ struct MessageBubble: View, Equatable {
                 }
             }
             // (Jump-to flash moved onto `content` above so it uses the bubble's exact shape + cluster
-            // corners — this row-level generic rounded rect over/under-hung the actual bubble.)
+            // corners â€” this row-level generic rounded rect over/under-hung the actual bubble.)
             .frame(maxWidth: maxBubbleWidth, alignment: isMe ? .trailing : .leading)
             if !isMe { Spacer(minLength: 0) }
         }
         .animation(.easeInOut(duration: 0.4), value: isHighlighted)   // smooth found-result fade (Signal-like)
-        // Reply arrow at a FIXED spot inside the right edge (not riding the bubble → never off-screen).
+        // Reply arrow at a FIXED spot inside the right edge (not riding the bubble â†’ never off-screen).
         // It fades/scales in with the swipe distance and is revealed in the gap the bubble vacates.
         .overlay(alignment: .trailing) {
             Image(systemName: "arrowshape.turn.up.left.fill")
@@ -4740,7 +4738,7 @@ struct MessageBubble: View, Equatable {
                 guard !VoiceScrubState.touchOnWaveform else { return }
                 // AXIS DECIDED ONCE PER TOUCH, THEN FOLLOW EVERY FRAME. The old per-frame
                 // `abs(w) > abs(h)` guard froze the bubble on any frame where the finger drifted more
-                // vertically than horizontally mid-swipe — stale offset for a frame, then a catch-up
+                // vertically than horizontally mid-swipe â€” stale offset for a frame, then a catch-up
                 // jump, which is the "not smooth, not following my finger" report. A UIKit pan decides
                 // its axis at recognition and then never re-litigates it; this now does the same.
                 if !swipeFollowing {
@@ -4750,14 +4748,14 @@ struct MessageBubble: View, Equatable {
                 // CLAMP THE VALUE, DO NOT GATE THE ASSIGNMENT (the swipe-back fix, kept).
                 //
                 // REBASE BY THE ACTIVATION DISTANCE: `translation` counts from TOUCH-DOWN, but this
-                // gesture only begins after 18pt of travel — so the bubble's first rendered frame
+                // gesture only begins after 18pt of travel â€” so the bubble's first rendered frame
                 // teleported 18pt to catch up with the finger. The UIKit pan's translation starts at
                 // zero at recognition, which is why plain text felt right and media bubbles did not.
                 // Same gesture, same app, one coordinate base apart.
                 let t = min(0, v.translation.width + 18)
                 dragX = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)   // rubber-band past -70
                 // Buzz the INSTANT the swipe crosses the commit point, so the finger feels that a
-                // reply is armed — and again (once) if you pull back under it. This is what the plain
+                // reply is armed â€” and again (once) if you pull back under it. This is what the plain
                 // text cells (the UIKit swipe path) already did; media/voice/reply bubbles only
                 // buzzed after release, so on those you couldn't feel the threshold at all.
                 if dragX <= -50, !swipeArmed {
@@ -4788,12 +4786,12 @@ struct MessageBubble: View, Equatable {
     @ViewBuilder private var content: some View {
         if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
-            // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
+            // button 42 + HStack spacing 12 + waveform 158) in every playback state â€” the speed toggle sits
             // inside a 158-wide frame narrower than the waveform, so it can NEVER widen the bubble. The real
             // culprit was the `HStack { Spacer(minLength:0); metaRow }` I added for the timestamp: a greedy
             // Spacer inside the bubble. Its ideal width is 0 (first layout hugs 212), but on the cell
             // RECONFIGURE that fires when `player != nil` flips true on the first play, SwiftUI re-resolved
-            // the Spacer toward the proposed maxBubbleWidth → that one bubble bloomed and ate the gap to its
+            // the Spacer toward the proposed maxBubbleWidth â†’ that one bubble bloomed and ate the gap to its
             // neighbors. (Media bubbles never bloom because their metaRow is an .overlay, which doesn't
             // affect size.) Fix = pin the column to the known 212 and drop the Spacer: no flexible child
             // left to re-resolve, so the bubble is provably 212 before/during/after playback. metaRow
@@ -4801,7 +4799,7 @@ struct MessageBubble: View, Equatable {
             // fill so nothing can bloom.
             VStack(alignment: .trailing, spacing: 4) {
                 replyQuoteBox(fillWidth: true)
-                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState → the reply pan yields
+                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState â†’ the reply pan yields
                 metaRow   // time+tick, right-aligned; NO greedy Spacer (that was the bloom vector)
             }
             .frame(width: 212, alignment: .leading)
@@ -4859,7 +4857,7 @@ struct MessageBubble: View, Equatable {
             }
         } else if message.isVideo {
             // ONE bubble: video on top, caption flush below sharing a single background + outline
-            // as one unit — the caption was previously not rendered at all ("video + caption not
+            // as one unit â€” the caption was previously not rendered at all ("video + caption not
             // working"). With a caption the meta lives in the caption row; a bare video floats it.
             let hasCaption = !message.text.isEmpty
             VStack(alignment: .leading, spacing: 4) {
@@ -4921,25 +4919,25 @@ struct MessageBubble: View, Equatable {
             }
         } else if message.isAlbum {
             // Album (2+ photos as ONE message): a MOSAIC GRID inside the bubble + one caption.
-            // Restored from `abde537^` at the user's request — that commit had replaced this with
+            // Restored from `abde537^` at the user's request â€” that commit had replaced this with
             // fanned/tilted floating cards, which read as a messy scattered pile rather than the
             // clean grid every messenger uses.
             VStack(alignment: .leading, spacing: 0) {
                 // HUG THE MOSAIC, don't force the full album width. The solver returns the exact block the
-                // photos make, and for shapes that do not fill the width that block is narrower — pinning
+                // photos make, and for shapes that do not fill the width that block is narrower â€” pinning
                 // the bubble to `albumWidth` left bare bubble down one side (user: "left and right empty
                 // bubbles").
                 //
                 // The hug is on the GRID ALONE, and that is the fix for the overflowing caption
                 // (2026-07-29). It used to sit on the whole VStack, which meant the caption `Text` was
-                // asked for its IDEAL width too — and a Text's ideal width is the whole string on ONE
+                // asked for its IDEAL width too â€” and a Text's ideal width is the whole string on ONE
                 // line. So a long caption made the stack's ideal width hundreds of points wider than the
                 // screen; the outer `.frame(maxWidth: maxBubbleWidth)` could clamp the frame but not
                 // re-wrap content that had already refused the proposal, so the bubble ran off the right
                 // edge with its text cut (user: "if i add that caption image is using different width").
                 albumGrid
                     .fixedSize(horizontal: true, vertical: false)
-                // The caption wraps at the album's own width — never wider, so the bubble keeps a
+                // The caption wraps at the album's own width â€” never wider, so the bubble keeps a
                 // definite size, and never narrower, so the timestamp stays on the trailing edge.
                 if !message.text.isEmpty { captionBody(width: albumWidth) }
             }
@@ -4955,14 +4953,14 @@ struct MessageBubble: View, Equatable {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                // No caption → the time floats on the grid, like a bare photo bubble.
+                // No caption â†’ the time floats on the grid, like a bare photo bubble.
                 if message.text.isEmpty {
                     metaRow.padding(.horizontal, 7).padding(.vertical, 3)
                         .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
                 }
             }
         } else if message.isImage, message.viewOnce {
-            // View-once photo: never rendered inline — a "① Photo" pill. The recipient taps it
+            // View-once photo: never rendered inline â€” a "â‘  Photo" pill. The recipient taps it
             // to open the full-screen viewer EXACTLY once; after that it reads "Viewed" and is inert.
             // The sender's own pill is always inert (senders can't reopen).
             let viewed = isViewedOnce
@@ -4984,7 +4982,7 @@ struct MessageBubble: View, Equatable {
             }
         } else if message.isImage {
             // ONE bubble: the photo on top, the caption flush below, sharing a
-            // single background + a single rounded outline — never two separate bubbles.
+            // single background + a single rounded outline â€” never two separate bubbles.
             // Media sizing algorithm (our own measure rules):
             // aspect clamped to [0.35, 2.857] (very tall/wide images clamp, squares fill
             // the box), the box height caps at the max media width, the CAPTION reserves only a MIN-width
@@ -4997,8 +4995,8 @@ struct MessageBubble: View, Equatable {
                     guard let w = message.width, let h = message.height, w > 0, h > 0 else { return 1 }
                     return min(max(CGFloat(w / h), 0.35), 2.857)
                 }()
-                // Caption min-width floor: single-line caption width + 2×12pt text insets, capped at the box.
-                // MEASURED AT 17, the size the caption actually renders at below — it used to measure at
+                // Caption min-width floor: single-line caption width + 2Ã—12pt text insets, capped at the box.
+                // MEASURED AT 17, the size the caption actually renders at below â€” it used to measure at
                 // 15, so every floor came out ~12% short and a caption that would have fitted on one line
                 // wrapped early, leaving the dead space at the end of the line the user photographed.
                 let minW: CGFloat = hasCaption
@@ -5032,7 +5030,7 @@ struct MessageBubble: View, Equatable {
                         }
                     }
                     .frame(width: box.width, height: box.height)
-                    .clipped()   // a tall captioned photo fills+crops — never bleeds over the caption below
+                    .clipped()   // a tall captioned photo fills+crops â€” never bleeds over the caption below
                     // Native zoom hero (same mechanism as the story close): the viewer grows out of this
                     // bubble and the drag-down dismiss shrinks back into it, following the finger.
                     .modifier(MediaRectReporter(id: message.id, scope: .chat))   // live bubble rect
@@ -5056,12 +5054,12 @@ struct MessageBubble: View, Equatable {
                     }
                     // The whole photo rect must be the tap target. SecureImageView goes
                     // tap-transparent once loaded (allowsHitTesting(waitingTap)) so its gated-download
-                    // tap doesn't block the viewer — but without this contentShape the parent had no
+                    // tap doesn't block the viewer â€” but without this contentShape the parent had no
                     // hit area left, so tapping a loaded photo did nothing (couldn't open the viewer).
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if message.sendState == .failed { onResend(message) }
-                        else { onTapImage(message) }   // uploading photos open too — the viewer shows the local copy
+                        else { onTapImage(message) }   // uploading photos open too â€” the viewer shows the local copy
                     }
                     // Caption INSIDE the same bubble (the caption is the message body).
                     if hasCaption { captionBody(width: box.width) }
@@ -5137,7 +5135,7 @@ struct MessageBubble: View, Equatable {
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if jumbomojiCount > 0, message.replyTo == nil, firstLinkURL == nil {
-            // JUMBOMOJI — Signal's behaviour, read from their source (2026-07-28) rather than eyeballed.
+            // JUMBOMOJI â€” Signal's behaviour, read from their source (2026-07-28) rather than eyeballed.
             //
             //   DisplayableText.swift:
             //     public static let kMaxJumbomojiCount: Int = 5
@@ -5145,8 +5143,8 @@ struct MessageBubble: View, Equatable {
             //     let emojiCount = string.removeCharacters(characterSet: .whitespacesAndNewlines).count
             //     if emojiCount > kMaxJumbomojiCount { return 0 }
             //
-            //   CVComponentBodyText.swift, textMessageFont — multipliers on the body point size:
-            //     1 → 3.5   2 → 3.0   3 → 2.75   4 → 2.5   5 → 2.25
+            //   CVComponentBodyText.swift, textMessageFont â€” multipliers on the body point size:
+            //     1 â†’ 3.5   2 â†’ 3.0   3 â†’ 2.75   4 â†’ 2.5   5 â†’ 2.25
             //
             //   CVComponentState.swift:
             //     var isBorderlessJumbomojiMessage: Bool {
@@ -5155,8 +5153,8 @@ struct MessageBubble: View, Equatable {
             //
             // Three things that fall out of those and are easy to get wrong: SIX or more emoji is a
             // completely ordinary message with a bubble (not "capped at 5"); whitespace is ignored for
-            // the emoji-only test AND stripped before counting, so "🙂 🙂" is two; and borderless applies
-            // only to a TEXT-ONLY message, so an emoji-only REPLY keeps its bubble — which is why the
+            // the emoji-only test AND stripped before counting, so "ðŸ™‚ ðŸ™‚" is two; and borderless applies
+            // only to a TEXT-ONLY message, so an emoji-only REPLY keeps its bubble â€” which is why the
             // quote and link-preview cases are excluded here rather than inside the count.
             //
             // Signal's borderless message keeps the bubble VIEW and makes it transparent
@@ -5172,24 +5170,24 @@ struct MessageBubble: View, Equatable {
             .padding(.vertical, 10)
         } else {
             // Single-column Grid (the reference structure, ONE layout pass): the column hugs the WIDEST
-            // row (usually the body text), and the reply quote's maxWidth:.infinity fills that column —
+            // row (usually the body text), and the reply quote's maxWidth:.infinity fills that column â€”
             // so a one-character reply never collapses into a tiny box above a wide message, and a long
             // quote still widens the bubble. This replaces the measured quoteFillWidth preference, which
             // broke inside the hosted cells (state reset on reconfigure + the pre-measured first pass
-            // rendered before the measurement existed → the tiny box came back).
+            // rendered before the measurement existed â†’ the tiny box came back).
             // SIGNAL'S QUOTE/BUBBLE SIZING MODEL (verified from CVComponentMessage + ManualStackView
             // source): MEASURE every part at its NATURAL width (quote truncates when long), the bubble
-            // hugs the WIDEST part; RENDER with fill — the quote stretches to that hugged width.
+            // hugs the WIDEST part; RENDER with fill â€” the quote stretches to that hugged width.
             // In SwiftUI: an invisible natural-width TEMPLATE defines the hug (it wraps normally at the
             // proposed 72% cap, so long text + the timestamp reservation behave exactly like a plain
-            // bubble — the fixedSize attempt fed the text its UNWRAPPED ideal, which clipped it and
+            // bubble â€” the fixedSize attempt fed the text its UNWRAPPED ideal, which clipped it and
             // painted the time over the words); the VISIBLE copy overlays it and fills. The overlay
             // cannot influence the host's size, so nothing is greedy. Quote internals untouched; its
             // one-line snippet keeps template and visible heights identical.
             VStack(alignment: .leading, spacing: 4) {
-                replyQuote   // NATURAL width — measurement only (its 150pt floor applies)
+                replyQuote   // NATURAL width â€” measurement only (its 150pt floor applies)
                 if let lp = message.linkPreview {
-                    // Only what TRAVELLED with the message renders (Signal's model) — no viewer-side
+                    // Only what TRAVELLED with the message renders (Signal's model) â€” no viewer-side
                     // fetch, so old messages without an embedded preview stay plain links.
                     LinkPreviewCard(preview: lp, cid: cid, isMe: isMe, dark: dark)
                 }
@@ -5200,7 +5198,7 @@ struct MessageBubble: View, Equatable {
             .accessibilityHidden(true)
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
-                    // FILL the hugged width — and it has to be the quote's OWN fillWidth knob, not a
+                    // FILL the hugged width â€” and it has to be the quote's OWN fillWidth knob, not a
                     // .frame() from out here. replyQuoteBox applies its tint with .background() at the end
                     // of its own chain, so a frame added by the caller lands AFTER the background is
                     // already sized: the box stayed content-sized and merely sat leading-aligned in a wider
@@ -5214,8 +5212,8 @@ struct MessageBubble: View, Equatable {
                     }
                     // Text + time: the invisible trailing reservation + overlaid time (Signal does the
                     // same body/footer overlap). FILLED like the quote (user report): when the QUOTE
-                    // drives the bubble width, an unstretched body line kept its trailing edge — and the
-                    // time — mid-bubble; filling anchors the time to the bubble's right edge, always.
+                    // drives the bubble width, an unstretched body line kept its trailing edge â€” and the
+                    // time â€” mid-bubble; filling anchors the time to the bubble's right edge, always.
                     bodyLineFilled
                 }
             }
@@ -5233,12 +5231,12 @@ struct MessageBubble: View, Equatable {
         if message.album.indices.contains(i), message.album[i].height > 0 {
             return CGFloat(message.album[i].width / message.album[i].height)
         }
-        // THE OPTIMISTIC ALBUM HAS NO `album` YET — it only has `localAlbum`, the preview JPEGs. Falling
+        // THE OPTIMISTIC ALBUM HAS NO `album` YET â€” it only has `localAlbum`, the preview JPEGs. Falling
         // through to 1 here meant every pending photo measured as a SQUARE, so the mosaic solved one
         // arrangement while sending and a completely different one the moment the server echo arrived
         // with real dimensions. That is the user's "pending uses one design, after sending uses another".
         //
-        // The previews are the same pictures, so their proportions are already correct — read them
+        // The previews are the same pictures, so their proportions are already correct â€” read them
         // instead of guessing. Decoding just the header is enough for a size, and the result is cached by
         // the row's measured height, so this does not run per frame.
         if message.localAlbum.indices.contains(i),
@@ -5249,7 +5247,7 @@ struct MessageBubble: View, Equatable {
     }
 
     // Album MOSAIC (not a uniform grid): 2 = side-by-side (or stacked when the shots are
-    // wide), 3 = one large + two stacked, 4 = 2×2, 5+ = 2×2 with a "+N" on the last. Photos crop-to-fill
+    // wide), 3 = one large + two stacked, 4 = 2Ã—2, 5+ = 2Ã—2 with a "+N" on the last. Photos crop-to-fill
     // their cells; the caption rides below in the SAME bubble (handled by the album branch).
     // Portrait card for the stacked-album look (4:5, capped to the bubble width).
     private var albumCardSize: CGSize {
@@ -5291,7 +5289,7 @@ struct MessageBubble: View, Equatable {
         }
     }
 
-    // Stacked / fanned cards. 2–3 photos FAN OUT (front card centered, the rest tilted behind, peeking left/
+    // Stacked / fanned cards. 2â€“3 photos FAN OUT (front card centered, the rest tilted behind, peeking left/
     // right); 4+ form a DECK (up to 4 cards, subtle alternating rotation + outward offset for depth). Front
     // card is always the first photo, on top. Tapping the stack opens the full album gallery.
     @ViewBuilder private func albumStack(_ n: Int) -> some View {
@@ -5299,8 +5297,8 @@ struct MessageBubble: View, Equatable {
         ZStack {
             if n <= 2 {
                 // Peek the back card INWARD (away from the screen edge the bubble hugs) so its tilted
-                // corner is never clipped: my messages hug the right → back card leans left; received hug
-                // the left → back card leans right.
+                // corner is never clipped: my messages hug the right â†’ back card leans left; received hug
+                // the left â†’ back card leans right.
                 if n == 2 { albumCard(1, s).rotationEffect(.degrees(isMe ? -7 : 7)).offset(x: isMe ? -18 : 18, y: 6) }
                 albumCard(0, s)
             } else if n == 3 {
@@ -5327,7 +5325,7 @@ struct MessageBubble: View, Equatable {
     }
 
     // THE MOSAIC, driven by the photos' real shapes (MediaGroupLayout, which is Telegram's algorithm
-    // written as our own code — see that file's header).
+    // written as our own code â€” see that file's header).
     //
     // What this replaces: a switch on the COUNT with hardcoded fractions (W * 0.56, c * 1.2, 2x2 squares)
     // and a single `wide = albumAspect(0) > 1.15` test on the FIRST photo only. Every album therefore came
@@ -5375,7 +5373,7 @@ struct MessageBubble: View, Equatable {
         }
         .frame(width: w, height: h).clipped()
         .overlay {
-            // Video item → a play glyph + duration badge over its poster.
+            // Video item â†’ a play glyph + duration badge over its poster.
             if albumItemIsVideo(i), extra == 0 {
                 ZStack {
                     Image(systemName: "play.circle.fill")
@@ -5398,7 +5396,7 @@ struct MessageBubble: View, Equatable {
             }
         }
         .contentShape(Rectangle())
-        // Each album CELL is its own zoom-hero source (same native transition as single photos/videos —
+        // Each album CELL is its own zoom-hero source (same native transition as single photos/videos â€”
         // user spec). The synthetic per-item ids ("<msgId>-<i>") match the viewer covers' sourceIDs; the
         // +N cell taps through its own visible cell, so every open has a real source.
         // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
@@ -5408,7 +5406,7 @@ struct MessageBubble: View, Equatable {
         // Tapping a tile opens THAT item straight in the viewer (user rule, 2026-07-28): with 10 or
         // fewer items every photo is already visible in the mosaic, so a list screen in between is a
         // second tap for nothing. The album list sheet earns its place only when there is more than
-        // the mosaic shows — an album of 11+ (old messages; new sends cap at 10) — or via a "+N"
+        // the mosaic shows â€” an album of 11+ (old messages; new sends cap at 10) â€” or via a "+N"
         // overflow tile, whose whole meaning is "there is more to see than this grid".
         .onTapGesture {
             guard message.sendState == nil else { return }
@@ -5421,13 +5419,13 @@ struct MessageBubble: View, Equatable {
         let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
     }
 
-    // Tap an album photo → open the full-screen viewer paged over EVERY photo in the album (an
+    // Tap an album photo â†’ open the full-screen viewer paged over EVERY photo in the album (an
     // album opens as a swipeable gallery, starting on the tapped photo). Each album item becomes a
     // synthetic image Message so ImageViewerView can page through them.
     private func openAlbumItem(_ i: Int) {
         guard message.album.indices.contains(i) else { return }
         let it = message.album[i]
-        // Video item → play it full-screen (synthetic video Message from its videoUrl/videoEnc, keyed by
+        // Video item â†’ play it full-screen (synthetic video Message from its videoUrl/videoEnc, keyed by
         // a per-item id so VideoCache stores each album video separately).
         if it.isVideo, let vurl = it.videoUrl, let venc = it.videoEnc {
             let d: [String: Any] = ["type": "video", "videoUrl": vurl, "enc": venc.asDict,
@@ -5440,7 +5438,7 @@ struct MessageBubble: View, Equatable {
             onTapVideo(vmsg)
             return
         }
-        // Image items → page through ONLY the album's images (skip videos) in the full-screen gallery.
+        // Image items â†’ page through ONLY the album's images (skip videos) in the full-screen gallery.
         let imageItems = message.album.enumerated().filter { !$0.element.isVideo }
         let gallery: [Message] = imageItems.map { idx, im in
             let data: [String: Any] = ["type": "image", "imageUrl": im.imageUrl, "enc": im.enc.asDict,
@@ -5471,7 +5469,7 @@ struct MessageBubble: View, Equatable {
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             if storyReplyExpired(reply) {
                 // EXPIRED, AND IT SAYS SO. Before, an expired story left this header as a bare "You
-                // replied to their story" line with nothing under it — the card simply vanished and the
+                // replied to their story" line with nothing under it â€” the card simply vanished and the
                 // reply read as though something had failed to load. A story is a 24-hour object, so
                 // the honest thing is to state that it is gone rather than leave a hole where it was.
                 Text("Story unavailable")
@@ -5488,7 +5486,7 @@ struct MessageBubble: View, Equatable {
                     // ~92x160 (measured from the reference): small enough to read as a story CARD,
                     // not a sent photo. Hairline stroke separates light stories from the wallpaper.
                     // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
-                    // crop — the preview must show exactly what opening the story shows (6 people
+                    // crop â€” the preview must show exactly what opening the story shows (6 people
                     // in the story = 6 people in the card, user rule). Threshold = the card's own
                     // aspect so a card-tall photo still fills edge-to-edge with no bars.
                     StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
@@ -5496,7 +5494,7 @@ struct MessageBubble: View, Equatable {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-                        // Unique per MESSAGE (two replies can quote the same story — duplicate
+                        // Unique per MESSAGE (two replies can quote the same story â€” duplicate
                         // hero ids glitch the transition).
                         .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
                         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -5512,7 +5510,7 @@ struct MessageBubble: View, Equatable {
 
     /// `fillWidth: true` stretches the tinted box to the full available width BEFORE the background is
     /// applied. The voice bubble is a fixed 212pt column, and the caller's `.frame(maxWidth: .infinity)`
-    /// lands AFTER `.background()` inside the quote — so the tint stayed content-sized and the rest of
+    /// lands AFTER `.background()` inside the quote â€” so the tint stayed content-sized and the rest of
     /// the row was empty space to its right. Only the voice path opts in; every other bubble keeps the
     /// hugging behaviour untouched.
     @ViewBuilder private func replyQuoteBox(fillWidth: Bool) -> some View {
@@ -5525,16 +5523,16 @@ struct MessageBubble: View, Equatable {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(fg.opacity(0.7))
                     .frame(width: 3)
-                // Status reply → show the status thumbnail.
+                // Status reply â†’ show the status thumbnail.
                 if reply.isStatus, let thumb = reply.storyThumbUrl, !thumb.isEmpty {
                     StoryImage(url: thumb)
                         .frame(width: 30, height: 38)
                         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        // Unique per MESSAGE (two replies can quote the same story — duplicate
+                        // Unique per MESSAGE (two replies can quote the same story â€” duplicate
                         // hero ids glitch the transition).
                         .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
                 } else if let o = original {
-                    // Photo / GIF / video / album reply → real thumbnail (WhatsApp-style preview).
+                    // Photo / GIF / video / album reply â†’ real thumbnail (WhatsApp-style preview).
                     replyMediaThumb(o)
                 }
                 VStack(alignment: .leading, spacing: 1) {
@@ -5549,14 +5547,14 @@ struct MessageBubble: View, Equatable {
                 .frame(minWidth: 150, alignment: .leading)
             }
             .frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
-            // ONE HEIGHT, ALWAYS — only the width varies (explicit user request 2026-07-28, with a
+            // ONE HEIGHT, ALWAYS â€” only the width varies (explicit user request 2026-07-28, with a
             // screenshot of one quote rendering three times taller than its neighbour).
             //
             // The cause was that this box could be STRETCHED by its parent. The accent line is a
             // RoundedRectangle with only a width, and a Shape accepts any height it is offered, so the
             // whole HStack was vertically flexible. In the text bubble the quote sits in a VStack that is
             // laid out inside the bubble's measured template height, and a VStack hands leftover height to
-            // whichever child will take it — this one. So the quote silently grew to absorb whatever slack
+            // whichever child will take it â€” this one. So the quote silently grew to absorb whatever slack
             // the body text left behind, which is why the tall example was the bubble with the long body.
             //
             // A definite height ends that: a fixed frame cannot be stretched, no matter what proposes to
@@ -5567,7 +5565,7 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 8).padding(.vertical, 5)
             // In the text bubble the Grid stretches this to the bubble's content width (fill); elsewhere it
             // hugs content with the minWidth floor above. Long snippets truncate at the bubble width.
-            // Tint the quote box with the (contrasting) text color so it's always visible —
+            // Tint the quote box with the (contrasting) text color so it's always visible â€”
             // the old white tint vanished on the white "mine" bubble in dark mode.
             .background(fg.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -5579,7 +5577,7 @@ struct MessageBubble: View, Equatable {
             // Publishes this box's window rect so the list's tap-to-dismiss refuses to begin here: the
             // quote jumps and the keyboard stays up, like Signal. The invisible measurement copy is
             // excluded by its caller (it would register the same id at the same place, harmlessly, but
-            // the visible one must win) — see KeyboardSafeRects.
+            // the visible one must win) â€” see KeyboardSafeRects.
             .modifier(KeyboardSafeTapArea(id: "quote-\(message.id)"))
         }
     }
@@ -5678,8 +5676,8 @@ private struct MessageActionDialogs: ViewModifier {
                 Text("The server refused the delete. The message is still there for both of you.")
             }
             // Native alert (the confirmationDialog rendered as an anchored popover on iOS 26). My own
-            // message → "Delete for Everyone" (removes the doc) + "Delete for Me" (local hide);
-            // someone else's → "Delete for Me" only.
+            // message â†’ "Delete for Everyone" (removes the doc) + "Delete for Me" (local hide);
+            // someone else's â†’ "Delete for Me" only.
             .alert("Delete this message?",
                    isPresented: Binding(get: { pendingDelete != nil },
                                         set: { if !$0 { pendingDelete = nil } })) {
@@ -5706,7 +5704,7 @@ private struct MessageActionDialogs: ViewModifier {
 }
 
 // Recording timer + waveform isolated into their OWN views, so the AudioRecorder's 20Hz
-// updates re-render only these tiny views — never ThreadView's body (which would re-render
+// updates re-render only these tiny views â€” never ThreadView's body (which would re-render
 // the whole message list on every tick: the cause of voice-recording stutter/frame drops).
 // Audio-reactive recording halo, isolated so its 30 Hz metering re-render never touches the mic
 // button (which owns the drag-to-lock offset). Breathes continuously and swells with the live level.
@@ -5744,7 +5742,7 @@ struct PDFDocWrap: Identifiable { let id = UUID(); let url: URL; let title: Stri
 // Native document preview (QuickLook) for a received file.
 // The document preview as a proper SHEET page: rounded top, visible grabber, and a glass close
 // button (QuickLook's own Done bar doesn't render inside a plain sheet, and the scrolling content
-// eats the swipe-down — the bare preview was unclosable).
+// eats the swipe-down â€” the bare preview was unclosable).
 struct FilePreviewSheet: View {
     let url: URL
     @Environment(\.dismiss) private var dismiss
@@ -5782,13 +5780,13 @@ struct FilePreview: UIViewControllerRepresentable {
     }
 }
 
-// DISPLAY-TIME guard for reply-quote snippets (file scope — used by MessageBubble AND ThreadView):
-// quotes persisted BEFORE the safeText fix carry the raw "kulan-…:" marker forever (encrypted
-// snapshots) — map them to friendly labels when rendering, so old quotes clean up too.
+// DISPLAY-TIME guard for reply-quote snippets (file scope â€” used by MessageBubble AND ThreadView):
+// quotes persisted BEFORE the safeText fix carry the raw "kulan-â€¦:" marker forever (encrypted
+// snapshots) â€” map them to friendly labels when rendering, so old quotes clean up too.
 func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.contactMarker) { return "Contact" }
     if t.hasPrefix(Message.locationMarker) { return "Location" }
-    if t.hasPrefix(Message.pinMarker) { return "📌 Pinned a message" }
+    if t.hasPrefix(Message.pinMarker) { return "ðŸ“Œ Pinned a message" }
     if t.range(of: Message.featureMarkerPattern, options: .regularExpression) != nil { return "Message" }
     return t
 }
@@ -5799,7 +5797,7 @@ func quoteSafeLabel(_ t: String) -> String {
 // (`UnicodeScalar.isEmoji` in String+SSK.swift). Swift exposes the same information through Unicode
 // properties, so this asks the Unicode tables directly instead of shipping a table that goes stale every
 // time Unicode adds emoji. The one correction their table also makes: ASCII digits, '#' and '*' report
-// `isEmoji == true` but are not emoji on their own — they only become one inside a keycap sequence.
+// `isEmoji == true` but are not emoji on their own â€” they only become one inside a keycap sequence.
 private extension Unicode.Scalar {
     var isEmojiScalar: Bool {
         if properties.isEmojiPresentation { return true }
@@ -5823,7 +5821,7 @@ extension String {
 
     /// Signal's `DisplayableText.jumbomojiCount(in:)`, including its two easily-missed details: whitespace
     /// is ignored for the emoji-only test AND stripped before counting (so "X Y" is two, not three), and
-    /// SIX or more returns 0 — an ordinary message with a bubble, not a count capped at five.
+    /// SIX or more returns 0 â€” an ordinary message with a bubble, not a count capped at five.
     var jumbomojiCount: Int {
         guard containsOnlyEmojiIgnoringWhitespace else { return 0 }
         let count = filter { !$0.isWhitespace }.count   // grapheme clusters, so a ZWJ family is one
