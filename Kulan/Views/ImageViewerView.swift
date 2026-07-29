@@ -262,11 +262,14 @@ struct ImageViewerView: View {
     // (offset/jank at the page seam). The image aspect-fits + centers WITHIN each uniform page.
     private var pagerLayer: some View {
         GeometryReader { geo in
+            // The window is computed ONCE here and handed to each page as a plain Int, instead of every
+            // page searching `gallery` for itself and for the current id — see indexById.
+            let here = currentIndex
             TabView(selection: $current) {
-                ForEach(gallery) { m in
-                    pagerPage(m)
+                ForEach(Array(gallery.enumerated()), id: \.element.id) { pair in
+                    pagerPage(pair.element, idx: pair.offset, currentIdx: here)
                         .frame(width: geo.size.width, height: geo.size.height)   // uniform page size
-                        .tag(m.id)
+                        .tag(pair.element.id)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -287,16 +290,27 @@ struct ImageViewerView: View {
         .task { prefetchNeighbors() }
     }
 
-    private var currentIndex: Int { gallery.firstIndex { $0.id == current } ?? 0 }
+    /// Position of every message id, built ONCE per gallery change instead of scanned per page.
+    ///
+    /// `currentIndex` and `pagerPage` both used to call `gallery.firstIndex { $0.id == ... }`, and a
+    /// paging TabView evaluates every page on every body pass — so each pass cost O(pages × gallery)
+    /// string comparisons, over the whole chat's photo set. That work landed squarely on the frame the
+    /// swipe commits, which is where the stutter was visible.
+    private var indexById: [String: Int] {
+        var out: [String: Int] = [:]
+        out.reserveCapacity(gallery.count)
+        for (i, m) in gallery.enumerated() { out[m.id] = i }
+        return out
+    }
+    private var currentIndex: Int { indexById[current] ?? 0 }
 
-    @ViewBuilder private func pagerPage(_ m: Message) -> some View {
+    @ViewBuilder private func pagerPage(_ m: Message, idx: Int, currentIdx: Int) -> some View {
         // A paging TabView materialises EVERY child up front. In a chat with dozens of photos that
         // meant dozens of ZoomImageViews — each with its own decrypt+decode task — all built before
         // the first frame could appear, which is the rest of the "opens late" delay. Only the current
         // page and its immediate neighbours get a real view; the far pages stay empty until you page
         // near them (they were never on screen anyway).
-        let idx = gallery.firstIndex { $0.id == m.id } ?? 0
-        if abs(idx - currentIndex) > 1 {
+        if abs(idx - currentIdx) > 1 {
             Color.clear
         } else {
             // PIN THE PAGE TO THE WINDOW, by measurement instead of guesswork. The paging TabView has
@@ -376,7 +390,12 @@ struct ImageViewerView: View {
     // Split into small pieces (thumbCell / thumbImage) — the inline version blew the type-checker budget.
     private var thumbStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
+            // LAZY, and with no strip-wide animation — both for the swipe's sake. This was an eager
+            // HStack over every photo in the chat, each thumb drawing a full-size UIImage through a
+            // clipShape + strokeBorder (an offscreen pass apiece), and the `.animation(value: current)`
+            // meant all of them ran a 200ms layout animation on the exact frame the page committed.
+            // The per-cell animation below still animates the one thumb whose size actually changes.
+            LazyHStack(spacing: 5) {
                 ForEach(gallery) { m in thumbCell(m) }
             }
             .padding(.horizontal, 16)
@@ -384,7 +403,6 @@ struct ImageViewerView: View {
         }
         .frame(height: 44)
         .padding(.bottom, 8)
-        .animation(.easeInOut(duration: 0.2), value: current)
     }
 
     private func thumbCell(_ m: Message) -> some View {
@@ -400,6 +418,7 @@ struct ImageViewerView: View {
                 .overlay { if isCurrent { shape.strokeBorder(Color.white, lineWidth: 1.5) } }
         }
         .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.2), value: isCurrent)   // only the two thumbs that change
     }
 
     @ViewBuilder private func thumbImage(_ m: Message) -> some View {
@@ -562,6 +581,8 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate {
     private var scrollView: ZoomableMediaView!
     private var imageView: UIImageView!
     var mediaCornerRadius: CGFloat = 0
+    /// Last ratio handed to `onZoom`, so a layout pass that changed nothing writes no SwiftUI state.
+    private var lastReportedZoom: CGFloat = 1
 
     func setCornerRadius(_ r: CGFloat) {
         guard r != mediaCornerRadius else { return }
@@ -623,8 +644,15 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate {
         // while the screen shows it at fit, which silently blocked BOTH the drag-to-close (canBegin)
         // and the back arrow (its zoom-out-first loop waited for a callback that could never come).
         // Re-report the true ratio after every layout; async so the SwiftUI state write never lands
-        // mid-layout, and a same-value write is free.
+        // mid-layout.
+        //
+        // ONLY WHEN IT CHANGED. A same-value write is NOT free: `onZoom` sets SwiftUI @State, and this
+        // runs on every layout pass of every live page, so an unconditional write re-invalidated the
+        // viewer's body over and over during a swipe — which rebuilt the pager, which laid out again.
+        // That loop is what turned the paging animation's one busy frame into sustained stutter.
         let ratio = scrollView.zoomScale / max(scrollView.minimumZoomScale, 0.0001)
+        guard abs(ratio - lastReportedZoom) > 0.001 else { return }
+        lastReportedZoom = ratio
         DispatchQueue.main.async { [weak self] in self?.onZoom?(ratio) }
     }
 
@@ -633,7 +661,8 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate {
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         (scrollView as? ZoomableMediaView)?.updateZoomScaleForLayout()
         view.layoutIfNeeded()
-        onZoom?(scrollView.zoomScale / scrollView.minimumZoomScale)   // 1.0 == fit (not zoomed)
+        lastReportedZoom = scrollView.zoomScale / scrollView.minimumZoomScale
+        onZoom?(lastReportedZoom)   // 1.0 == fit (not zoomed)
     }
 
 }
