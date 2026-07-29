@@ -258,15 +258,11 @@ struct ThreadView: View {
             // + keyboard) exactly like it sees the top nav inset, so `.always` folds it and the newest message
             // still rests clear of the composer — same mechanism as the top, just mirrored.
             .ignoresSafeArea(.container, edges: [.top, .bottom])
-            // OUR OWN progressive edge blur (user report, twice: no blur at the top/bottom while
-            // scrolling — on iOS 26 AND 27). Apple's scroll-edge effect is the third system geometry
-            // feature to break against the inverted list: on 26 it washed the whole chat, on 27 it
-            // draws nothing at all. A material masked by a fade-out gradient is the standard
-            // approximation of the same look, identical on every OS this app runs on — and it cannot
-            // wash anything, because its size is ours. Added BEFORE the jump button and the composer
-            // bar in the chain, so both stay above it and fully interactive.
-            .overlay(alignment: .top) { edgeBlurBand(top: true) }
-            .overlay(alignment: .bottom) { edgeBlurBand(top: false) }
+            // NO custom edge blur. The hand-made gradient-masked bands (ef7b076) rendered as huge
+            // frosted blocks through the MIDDLE of the chat on device (user screenshot, removed on
+            // demand the same night) — the overlay alignment did not pin to the screen edges the way
+            // it reasoned on paper. The progressive edge blur, if it comes, must be Apple's native
+            // scroll edge effect, integrated properly — research first, prefer-native rule.
             // Jump-to-bottom chevron as a FLOATING OVERLAY (not inside the bar). It MUST NOT live in the
             // composer safeAreaBar: the bar now feeds the content inset, so a button that appears/disappears
             // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
@@ -295,30 +291,6 @@ struct ThreadView: View {
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
-    }
-
-    // Real window safe-area insets (the view's own are ignored — the list is full-bleed).
-    private var winInsets: UIEdgeInsets {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
-            .max(by: { $0.top < $1.top }) ?? .zero
-    }
-
-    // One progressive-blur band: a thin material strongest at the screen edge, melting to clear where
-    // the messages run free. Top band covers the status bar + header region; bottom covers the
-    // composer + home indicator. Never interactive.
-    @ViewBuilder private func edgeBlurBand(top: Bool) -> some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .mask(
-                LinearGradient(stops: [.init(color: .black, location: 0),
-                                       .init(color: .black.opacity(0.7), location: 0.5),
-                                       .init(color: .clear, location: 1)],
-                               startPoint: top ? .top : .bottom,
-                               endPoint: top ? .bottom : .top)
-            )
-            .frame(height: top ? winInsets.top + 48 : winInsets.bottom + composerBarHeight + 14)
-            .allowsHitTesting(false)
     }
 
     // Type-erase the heavy messages chain at the scrollStack boundary: the chain's opaque type grew past
