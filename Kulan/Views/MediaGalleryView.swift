@@ -1,19 +1,19 @@
-import SwiftUI
+﻿import SwiftUI
 
 // "Go to Chat" event: the open ThreadView for `cid` pops back to itself (out of the profile/gallery
-// push) and scrolls to + flashes `messageId`. The standard behavior — return to the conversation at
+// push) and scrolls to + flashes `messageId`. The standard behavior â€” return to the conversation at
 // that message, not open a duplicate chat.
 struct GoToMessage { let cid: String; let messageId: String }
 extension Notification.Name { static let goToMessage = Notification.Name("goToMessage") }
 
 // Process-lifetime cache of each conversation's gallery content, kept OUTSIDE the view so it survives
-// every open/close of "See All Media" — a stability trick (the gallery model is retained and only
+// every open/close of "See All Media" â€” a stability trick (the gallery model is retained and only
 // loaded once; reopen renders the cached sections synchronously with no spinner). @MainActor so the
 // SwiftUI views that read/write it stay data-race free.
 @MainActor enum GalleryCache { static var store: [String: [Message]] = [:] }
 
 // Full-screen shared-content gallery, PUSHED (not a sheet). An "All Media" header with a live
-// photo/video count and a filter button, then five tabs — Media, Files, Voice, Links, GIFs — with
+// photo/video count and a filter button, then five tabs â€” Media, Files, Voice, Links, GIFs â€” with
 // time-grouped sections, long-press context menus, and a selection mode with a bottom Share / count /
 // Delete toolbar.
 struct MediaGalleryView: View {
@@ -43,7 +43,7 @@ struct MediaGalleryView: View {
     @State private var selection = Set<String>()
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
-    // The grid's visible region (global coords) — the drag-close lands CLIPPED through it, so a copy
+    // The grid's visible region (global coords) â€” the drag-close lands CLIPPED through it, so a copy
     // flying home to a tile near the top slides behind the All Media header exactly like the chat's
     // close slides behind the chat header (user report: the gallery close felt different).
     @State private var gridFrame: CGRect = .zero
@@ -54,14 +54,13 @@ struct MediaGalleryView: View {
     @Environment(\.dismiss) private var dismiss
     // Same zoom hero as the profile photo / chat bubbles: the viewer grows out of the tapped
     // tile and the drag-down close shrinks back into it.
-    @Namespace private var tabGlassNS   // lets the selected tab's glass MORPH across, not cross-fade
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
     // MARK: - Derived lists (gifs get their own tab, so they're excluded from Media)
 
     // Albums expanded into their individual photos/videos (user report: a single photo showed in All
-    // Media, a multi-photo album never did — `isAlbum` messages fell through the image/video filter).
+    // Media, a multi-photo album never did â€” `isAlbum` messages fell through the image/video filter).
     // The synthetic "<messageId>-<index>" ids match the chat's album tile registry, so the fly-open and
     // the drag-close landing resolve real geometry.
     private var expandedAll: [Message] { all.flatMap { $0.expandedGalleryItems(cid: cid) } }
@@ -107,17 +106,17 @@ struct MediaGalleryView: View {
                 })
         }
         // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
-        // subtitle, the standard circular back button, and a "..." menu on the right — instead of
+        // subtitle, the standard circular back button, and a "..." menu on the right â€” instead of
         // a custom left-aligned header.
         .navigationTitle("All Media")
         .navigationSubtitle(subtitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
+        .navigationBarBackButtonHidden(selecting)   // selection mode â†’ only the X, no back
         .toolbar { toolbar }
         .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
         .task {
             // STABLE via a persistent-backed store, so reopen is instant: render the cached list
-            // synchronously first — no full-screen spinner on reopen — then refresh in the background
+            // synchronously first â€” no full-screen spinner on reopen â€” then refresh in the background
             // and update the cache. The spinner shows only on the very first load.
             if let cached = GalleryCache.store[cid] { all = cached; loaded = true }
             let fresh = await ChatService.galleryContent(cid)
@@ -149,69 +148,36 @@ struct MediaGalleryView: View {
         } message: { Text("This removes the message from this chat.") }
     }
 
-    // (The old custom header is gone — the native nav bar now carries the title + count.)
+    // (The old custom header is gone â€” the native nav bar now carries the title + count.)
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
-    /// The selected segment's glass. Split into a modifier because `glassEffectID` is iOS 26 only and a
-    /// `@ViewBuilder` if/else inside the row would give the two branches different view identities,
-    /// which is what breaks the morph it exists to produce.
-    private struct SelectedTabGlass: ViewModifier {
-        let selected: Bool
-        let ns: Namespace.ID
-        func body(content: Content) -> some View {
-            if #available(iOS 26.0, *), selected {
-                content
-                    .glassEffect(.regular.interactive(), in: Capsule(style: .continuous))
-                    .glassEffectID("selectedTab", in: ns)
-            } else {
-                content
-            }
-        }
-    }
-
-    // Liquid-glass segmented tab bar (user spec): the 5 tabs live inside one glass capsule and the
-    // selected tab rides in its own raised pill — not a flat underline.
+    // THE SYSTEM SEGMENTED CONTROL, not a hand-built one (user 2026-07-29: "this all media bar is not
+    // following apple… the active tab and bar is not like app guidelines… it must work like Chats /
+    // Calls / Settings on the home screen").
+    //
+    // He is right, and the reason is structural. The home bar looks correct because it IS Apple's — a
+    // real TabView, so its selected state, its glass, its motion and its accessibility all come from
+    // the system. This bar was a hand-rolled imitation: five buttons in a glass capsule with a second
+    // glass pill on the selected one, kept in step by a namespace and a morph id. Two glass surfaces
+    // that have to be told they belong together, a font weight that changes on selection and therefore
+    // changes the segment's width, and an active pill sized to its label rather than its share of the
+    // bar. Every one of those is a thing the system already gets right.
+    //
+    // For switching between mutually exclusive views of one collection, the platform component is the
+    // segmented control, so that is what this is now. Selection indicator, sliding animation, hit
+    // targets, Dynamic Type, VoiceOver traits and the iOS 26 glass treatment all arrive for free and
+    // cannot drift from the OS. Roughly forty lines of custom glass plumbing went with it.
     private var tabBar: some View {
-        // NATIVE iOS 26 GLASS, USED THE WAY APPLE INTENDS. `liquidGlass` was already the real
-        // `.glassEffect` API, so the problem was never a custom material — it was that two glass surfaces
-        // were stacked with nothing telling the system they belong together. Glass inside glass, with no
-        // `GlassEffectContainer`, does not blend: each surface samples independently and the inner pill
-        // reads as a grey blob on top of the outer bar, which is exactly how it looked.
-        //
-        // A container makes them ONE glass system, and `glassEffectID` makes the selected pill MORPH
-        // across to the tapped segment instead of cross-fading — the iOS 26 segmented-control behaviour,
-        // and the same pattern the composer already uses.
-        tabRow
-            .padding(5)
-            .liquidGlass(Capsule(style: .continuous), interactive: true)
-            .padding(.horizontal, 16)
-            .padding(.top, 2)
-    }
-
-    @ViewBuilder private var tabRow: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 4) { tabButtons }
-        } else {
-            tabButtons
-        }
-    }
-
-    @ViewBuilder private var tabButtons: some View {
-        HStack(spacing: 4) {
+        Picker("", selection: $tab) {
             ForEach(Tab.allCases, id: \.self) { t in
-                Button { withAnimation(.easeInOut(duration: 0.22)) { tab = t } } label: {
-                    Text(t.label)
-                        .font(.subheadline.weight(tab == t ? .semibold : .medium))
-                        .foregroundStyle(tab == t ? Color.primary : Color.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .contentShape(Capsule(style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .modifier(SelectedTabGlass(selected: tab == t, ns: tabGlassNS))
+                Text(t.label).tag(t)
             }
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
     }
 
     // Swipe left/right to move between tabs, using the NATIVE paging TabView rather than a hand-rolled
@@ -238,7 +204,7 @@ struct MediaGalleryView: View {
         }
     }
 
-    // MARK: - Toolbar (selection only — the tabs live in the header now)
+    // MARK: - Toolbar (selection only â€” the tabs live in the header now)
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         if selecting {
@@ -250,7 +216,7 @@ struct MediaGalleryView: View {
         }
     }
 
-    // "..." menu (user spec): filtering lives here now, plus Select — so the nav bar stays clean
+    // "..." menu (user spec): filtering lives here now, plus Select â€” so the nav bar stays clean
     // and the same control works on every tab, not just Media.
     private var moreMenu: some View {
         Menu {
@@ -288,7 +254,7 @@ struct MediaGalleryView: View {
 
     private var selectionToolbar: some View {
         HStack {
-            // Share — 48px real Liquid Glass circle.
+            // Share â€” 48px real Liquid Glass circle.
             Button { shareSelected() } label: {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 20)).foregroundStyle(.primary)
                     .frame(width: 48, height: 48)
@@ -296,13 +262,13 @@ struct MediaGalleryView: View {
             }
             .disabled(selection.isEmpty)
             Spacer()
-            // Count — a glass pill (Apple's floating-toolbar style), not a plain label on a bar.
+            // Count â€” a glass pill (Apple's floating-toolbar style), not a plain label on a bar.
             Text("\(selection.count) Selected")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                 .padding(.horizontal, 18).frame(height: 48)
                 .liquidGlass(Capsule(), interactive: true)
             Spacer()
-            // Delete — 48px real Liquid Glass circle, red glyph.
+            // Delete â€” 48px real Liquid Glass circle, red glyph.
             Button { confirmDelete = true } label: {
                 Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(.red)
                     .frame(width: 48, height: 48)
@@ -363,7 +329,7 @@ struct MediaGalleryView: View {
     private func mediaCell(_ m: Message) -> some View {
         let selected = selection.contains(m.id)
         // A square container (Color.clear) drives the tile size; the thumbnail fills it as an overlay.
-        // This makes the size come from the grid column, NOT the content — so images and GIFs (a
+        // This makes the size come from the grid column, NOT the content â€” so images and GIFs (a
         // UIViewRepresentable whose intrinsic size otherwise leaks into the row) are identical squares.
         return Color.clear
             .aspectRatio(1, contentMode: .fit)
@@ -398,7 +364,7 @@ struct MediaGalleryView: View {
             // the profile strip register the same message ids, and an unscoped registry let whichever
             // laid out last win (the wrong-area open/close).
             // cornerRadius 0 because THESE TILES ARE SQUARE (`.clipped()`, no clip shape). The modifier's
-            // default is 14 — the profile strip's radius — so the drag-close used to shrink the photo
+            // default is 14 â€” the profile strip's radius â€” so the drag-close used to shrink the photo
             // into a rounded shape that matched nothing on this screen (user: "the rounded corners are
             // only when i stay profile, not inside All Media").
             .modifier(MediaRectReporter(id: m.id, scope: .gallery, cornerRadius: 0))
@@ -441,7 +407,7 @@ struct MediaGalleryView: View {
             if selecting {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22)).foregroundStyle(selected ? Color.accentColor : .secondary)
-                // Static row while selecting (no play — the whole row toggles the checkbox).
+                // Static row while selecting (no play â€” the whole row toggles the checkbox).
                 Image(systemName: "waveform").font(.system(size: 18)).foregroundStyle(Color.accentColor)
                     .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
@@ -450,7 +416,7 @@ struct MediaGalleryView: View {
                 }
                 Spacer()
             } else {
-                // The REAL playable voice player (same one used in chat) — tap the play button to
+                // The REAL playable voice player (same one used in chat) â€” tap the play button to
                 // decrypt + play, scrub the waveform, change speed.
                 VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark, plainBackground: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -549,7 +515,7 @@ struct MediaGalleryView: View {
         Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
         Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
-        // Delete-for-everyone is only for MY OWN media — received media can't be deleted from the server.
+        // Delete-for-everyone is only for MY OWN media â€” received media can't be deleted from the server.
         // Not offered on album CHILDREN: the server only knows the album message, and a per-item delete
         // by synthetic id would silently do nothing (deleteSelected already filters them out).
         if m.authorId == AuthService.shared.uid, m.id == parentMessageId(m.id) {
@@ -577,7 +543,7 @@ struct MediaGalleryView: View {
         // swallowed by SwiftUI (user: "when I close an image and click again fast it doesn't work").
         let present = { MediaPresentGate.present(rawPresent) }
         let key = MediaOpenRects.key(.gallery, m.id)
-        // Resolves through BOTH cache tiers — memory only was why the first tap after returning from
+        // Resolves through BOTH cache tiers â€” memory only was why the first tap after returning from
         // the background slid up from the bottom instead of flying. See SignalMediaOpen.flyOrPresent.
         SignalMediaOpen.flyOrPresent(imageUrl: poster, rectKey: key, present: present)
     }
@@ -587,18 +553,18 @@ struct MediaGalleryView: View {
     private func exitSelection() { selecting = false; selection = [] }
 
     // Go to Chat (popToViewController: land directly on the conversation, no profile shown).
-    // We do NOT dismiss the gallery ourselves — dismiss() pops us to the PROFILE (a visible flash), and
+    // We do NOT dismiss the gallery ourselves â€” dismiss() pops us to the PROFILE (a visible flash), and
     // racing it with the profile-pop over-unwound to the chat list. Instead, just tell the open ThreadView
-    // to drop its ENTIRE profile→gallery branch at once (showContactInfo = false pops both in one
+    // to drop its ENTIRE profileâ†’gallery branch at once (showContactInfo = false pops both in one
     // animation), then it scrolls to + briefly flashes the message.
     private func goToChat(_ m: Message) {
-        // An album child jumps to its ALBUM message — the chat has one row per album, keyed by the
+        // An album child jumps to its ALBUM message â€” the chat has one row per album, keyed by the
         // parent id; the synthetic per-item id matches no row.
         NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: parentMessageId(m.id)))
     }
 
     private func deleteSelected() {
-        // Only MY OWN messages — the server rejects deleting others', which made them reappear.
+        // Only MY OWN messages â€” the server rejects deleting others', which made them reappear.
         let me = AuthService.shared.uid
         let ids = Set(all.filter { selection.contains($0.id) && $0.authorId == me }.map(\.id))
         Task {
