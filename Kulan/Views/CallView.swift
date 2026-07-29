@@ -583,7 +583,7 @@ struct CallContainer<Content: View>: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14).frame(height: 40)
                 .frame(maxWidth: .infinity)
-                .background(Color.green)
+                .background(LiveCallBarBackground())   // same living sweep as the 1:1 bar
                 .contentShape(Rectangle())
                 .onTapGesture {
                     group.minimized = false
@@ -739,6 +739,31 @@ struct FloatingCallWindow: View {
     }
 }
 
+// MARK: - LiveCallBarBackground
+
+// The "alive" wash for the minimized call bars (user reference: Telegram's animated call banner): a
+// soft band of light drifting across the green every ~3s, so the bar reads as a LIVE call rather
+// than a static banner. Same technique as the sign-up logo's light sweep. TimelineView-driven at
+// 30fps over a 40pt strip — GPU-trivial, and it only exists while a bar is on screen.
+struct LiveCallBarBackground: View {
+    var body: some View {
+        GeometryReader { geo in
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let phase = CGFloat(t.truncatingRemainder(dividingBy: 2.8) / 2.8)
+                Color.green.overlay(
+                    LinearGradient(colors: [.clear, .white.opacity(0.16), .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: -geo.size.width * 0.6 + phase * (geo.size.width * 1.6)),
+                    alignment: .leading
+                )
+                .clipped()
+            }
+        }
+    }
+}
+
 // MARK: - MiniCallBar
 
 // A 40pt green bar at the top when the call is minimized.
@@ -803,7 +828,7 @@ struct MiniCallBar: View {
         .padding(.horizontal, 14)
         .frame(height: 40)
         .frame(maxWidth: .infinity)
-        .background(Color.green)
+        .background(LiveCallBarBackground())   // Telegram-style living sweep, not a static green
         .onReceive(ticker) { now = $0 }
     }
 }
