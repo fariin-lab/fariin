@@ -66,7 +66,11 @@ struct AttachRecentsStrip: View {
     var onPickVideo: (URL) -> Void                              // TAP a video → open the trim editor
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
-    var onSendMixed: ([ApprovalMedia], String) -> Void = { _, _ in }   // SELECT + Send → ONE mixed group (ordered)
+    var onSendMixed: ([ApprovalMedia], String, String?) -> Void = { _, _, _ in }   // items, caption, clientId of the already-posted bubble
+    /// Posted the instant Send is tapped, from the grid's already-decoded thumbnails: grid images,
+    /// which are videos, caption, clientId. The real send reuses that clientId.
+    var onOptimisticGroup: ([UIImage], [Bool], String, String) -> Void = { _, _, _, _ in }
+    var onOptimisticFailed: (String) -> Void = { _ in }   // nothing resolved → don't strand the bubble
     var onOpenMedia: ([ApprovalMedia]) -> Void = { _ in }        // tapping media WHILE selecting → the mixed approval pager
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
@@ -535,6 +539,29 @@ struct AttachRecentsStrip: View {
         selectedIds = []; selectedAssets = [:]; caption = ""; viewOnce = false; hasSelection = false
         onClose()
 
+        // …but "close first" still left the conversation EMPTY for as long as the resolve took, because
+        // the optimistic bubble was only posted once every asset had been pulled from PhotoKit at full
+        // resolution, one at a time, and re-encoded. Nine photos, some of them in iCloud, is the ~5s the
+        // user timed. The bubble does not need any of that: the grid it was just picked from is holding
+        // decoded 300pt thumbnails already, which is exactly what an album bubble renders. So post the
+        // bubble NOW from those, and let the real bytes catch up under it.
+        //
+        // Multi-item only. A single photo already paints immediately through its own send, and posting
+        // here too would show it twice.
+        let optimisticId: String? = ids.count > 1 ? UUID().uuidString : nil
+        if let optimisticId {
+            Task {
+                var thumbs: [UIImage] = []
+                var isVideo: [Bool] = []
+                for id in ids {
+                    guard let a = byId[id] else { continue }
+                    if let t = await Self.gridThumb(a) { thumbs.append(t); isVideo.append(a.mediaType == .video) }
+                }
+                guard !thumbs.isEmpty else { return }
+                onOptimisticGroup(thumbs, isVideo, cap, optimisticId)
+            }
+        }
+
         Task {
             // Build the ORDERED mixed list (selection order) so photos + videos ship as ONE group.
             var ordered: [ApprovalMedia] = []
@@ -555,12 +582,31 @@ struct AttachRecentsStrip: View {
                 }
             }
             await MainActor.run {
-                guard !ordered.isEmpty else { return }
+                guard !ordered.isEmpty else {
+                    if let optimisticId { onOptimisticFailed(optimisticId) }
+                    return
+                }
                 // A single view-once photo keeps its dedicated view-once send (view-once can't be an album).
                 if onceWanted, ordered.count == 1, case .image(_, let ui) = ordered[0] {
                     onSendAlbum([ui], cap, true); return
                 }
-                onSendMixed(ordered, cap)   // ONE group (grouping handled downstream; single item fast-paths)
+                onSendMixed(ordered, cap, optimisticId)   // ONE group (grouping handled downstream; single item fast-paths)
+            }
+        }
+    }
+
+    // The SAME thumbnail the grid tile is already showing — same manager, same params, so a picked
+    // photo is a cache hit and returns in microseconds. This is what the instant album bubble renders.
+    private static func gridThumb(_ asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { cont in
+            var resumed = false
+            RecentsCache.thumbs.requestImage(for: asset, targetSize: RecentsCache.thumbSize,
+                                             contentMode: .aspectFill,
+                                             options: RecentsCache.thumbOptions) { img, _ in
+                // `.opportunistic` can call back twice (fast then sharp); the continuation takes one.
+                guard !resumed else { return }
+                resumed = true
+                cont.resume(returning: img)
             }
         }
     }

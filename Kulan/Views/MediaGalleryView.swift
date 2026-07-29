@@ -397,7 +397,11 @@ struct MediaGalleryView: View {
             // fly-open source AND drag-close landing target, in THIS screen's namespace: the chat and
             // the profile strip register the same message ids, and an unscoped registry let whichever
             // laid out last win (the wrong-area open/close).
-            .modifier(MediaRectReporter(id: m.id, scope: .gallery))
+            // cornerRadius 0 because THESE TILES ARE SQUARE (`.clipped()`, no clip shape). The modifier's
+            // default is 14 — the profile strip's radius — so the drag-close used to shrink the photo
+            // into a rounded shape that matched nothing on this screen (user: "the rounded corners are
+            // only when i stay profile, not inside All Media").
+            .modifier(MediaRectReporter(id: m.id, scope: .gallery, cornerRadius: 0))
             .onTapGesture { tap(m) }
             .contextMenu { if !selecting { itemMenu(m) } }
     }
