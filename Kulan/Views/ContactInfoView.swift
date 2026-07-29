@@ -276,8 +276,9 @@ struct ContactInfoView: View {
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
             .sheet(isPresented: $showRename) {
-                SetNicknameView(current: localName ?? "") { newName in
-                    ContactNames.shared.set(newName, for: otherUid)
+                // The editor owns the whole card now (first/last/note + delete); this just re-reads
+                // the resulting display name for the header.
+                SetNicknameView(uid: otherUid, profileName: name, photoUrl: photoUrl) {
                     localName = ContactNames.shared.name(for: otherUid)
                 }
             }
