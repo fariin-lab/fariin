@@ -5358,6 +5358,19 @@ struct MessageBubble: View, Equatable {
         onTapAlbum(gallery, "\(message.id)-\(i)")
     }
 
+    /// Is the story this reply points at certainly gone?
+    ///
+    /// Decided LOCALLY, with no lookup: a story lives 24 hours (StoriesService posts every one with
+    /// `expiresAt = now + 24h`), so a reply older than that cannot still have a story behind it. That
+    /// makes the test free, correct without a network round trip, and right even offline. A reply that
+    /// never captured a thumbnail is treated the same way, because there is nothing to show either.
+    /// (Restored by hand on the rebuild line: the original definition rode inside the held-back
+    /// phone-numbers commit, while the accent-rule commit that CALLS it is kept.)
+    private func storyReplyExpired(_ reply: ReplyRef) -> Bool {
+        if reply.storyThumbUrl?.isEmpty ?? true { return true }
+        return Date().timeIntervalSince(message.createdAt) > 24 * 3600
+    }
+
     // The BIG floating story card above the bubble (status replies render here, not in the quote box):
     // secondary caption line, then a tall rounded story thumbnail that opens the status on tap.
     @ViewBuilder private func storyReplyHeader(_ reply: ReplyRef) -> some View {
@@ -5366,23 +5379,39 @@ struct MessageBubble: View, Equatable {
             Text(isMe ? (reply.authorId == me ? "You replied to your story" : "You replied to their story")
                       : (reply.authorId == me ? "Replied to your story" : "Replied to their story"))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
-            if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
-                // ~92x160 (measured from the reference): small enough to read as a story CARD,
-                // not a sent photo. Hairline stroke separates light stories from the wallpaper.
-                // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
-                // crop — the preview must show exactly what opening the story shows (6 people
-                // in the story = 6 people in the card, user rule). Threshold = the card's own
-                // aspect so a card-tall photo still fills edge-to-edge with no bars.
-                StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
-                    .frame(width: 80, height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-                    // Unique per MESSAGE (two replies can quote the same story — duplicate
-                    // hero ids glitch the transition).
-                    .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
-                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .onTapGesture { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }
+            if storyReplyExpired(reply) {
+                // EXPIRED, AND IT SAYS SO. Before, an expired story left this header as a bare "You
+                // replied to their story" line with nothing under it — the card simply vanished and the
+                // reply read as though something had failed to load. A story is a 24-hour object, so
+                // the honest thing is to state that it is gone rather than leave a hole where it was.
+                Text("Story unavailable")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)
+            } else if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
+                // ACCENT BAR + CARD, the way a reply quote is built everywhere else in the app: a
+                // rounded rule on the leading edge, then the quoted thing. The story card was the one
+                // quote in the conversation that floated with no rule beside it (user's reference
+                // screenshot has one), so it did not read as a quotation at all.
+                HStack(alignment: .center, spacing: 9) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.35))
+                        .frame(width: 5, height: 140)
+                    // ~92x160 (measured from the reference): small enough to read as a story CARD,
+                    // not a sent photo. Hairline stroke separates light stories from the wallpaper.
+                    // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
+                    // crop — the preview must show exactly what opening the story shows (6 people
+                    // in the story = 6 people in the card, user rule). Threshold = the card's own
+                    // aspect so a card-tall photo still fills edge-to-edge with no bars.
+                    StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
+                        .frame(width: 80, height: 140)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+                        // Unique per MESSAGE (two replies can quote the same story — duplicate
+                        // hero ids glitch the transition).
+                        .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .onTapGesture { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }
+                }
             }
         }
         .padding(.bottom, 2)
