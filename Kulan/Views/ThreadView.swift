@@ -1653,9 +1653,9 @@ struct ThreadView: View {
         // below a divider.
         items.append(action("Reply", "arrowshape.turn.up.left") { beginReply(to: m) })
 
-        if m.sendState == nil && !iAmMuted {   // not until it is on the server; muted members cannot react
-            items.append(action("React…", "face.smiling") { morePickerTarget = m })
-        }
+        // NO "React…" ITEM. The floating bar above the message is the way to react now (user 2026-07-29),
+        // and its "more" button opens the same full picker this item used to. An item that duplicates the
+        // control sitting directly above it is just a second door to the same room.
         // Edit: text only - never a contact/location card (its "text" is a marker and editing would
         // expose the raw payload), never GIF/file (their text is never rendered), and only inside the
         // server-enforced edit window.

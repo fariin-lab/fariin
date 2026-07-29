@@ -2094,13 +2094,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             bubbleInWindow = native.previewBubble.convert(native.previewBubble.bounds, to: nil)
             if let path = native.previewBubble.lastCornerPath { params.visiblePath = path }
         } else {
-            guard let id = dataSource.itemIdentifier(for: indexPath),
-                  let inWindow = BubbleRects.rect(id) else { return nil }   // nil → UIKit lifts the cell
-            bubble = cell.contentView
-            bubbleInWindow = inWindow
-            let local = bubble.convert(inWindow, from: nil)
-            params.visiblePath = UIBezierPath(roundedRect: local,
-                                              cornerRadius: BubbleRects.radius(id))
+            // HOSTED CELLS TAKE UIKIT'S OWN LIFT. Masking `cell.contentView` to the published bubble rect
+            // looked right in theory and duplicated the message in practice: the user saw the bubble in
+            // place AND a lifted copy of it (his screenshot of an album appearing twice). Handing UIKit
+            // a cell's ROOT view as the preview is not the same as handing it a subview — it will not
+            // take that view out of the flow the way it does a bubble view, so the original stays on
+            // screen behind the copy. Returning nil lets UIKit lift the cell itself, which is what these
+            // rows did before the menus were unified and never duplicated.
+            //
+            // The cost is honest: the lift is the full-width row rather than just the bubble, so media
+            // rows lift a wider shape than text ones. That is a cosmetic difference; two of the same
+            // message on screen is not.
+            return nil
         }
 
         // TELLING UIKIT WHERE TO PUT ITS OWN PREVIEW — which is how iMessage keeps
