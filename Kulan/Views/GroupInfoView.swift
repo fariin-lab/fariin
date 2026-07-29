@@ -136,7 +136,18 @@ struct GroupInfoView: View {
                 await MainActor.run { uploadingAvatar = false; avatarItem = nil }
             }
         }
-        .task { media = await ChatService.sharedMedia(cid) }
+        // Local first (offline + instant), then the server; a failed load leaves what we have rather
+        // than emptying the section — see ContactInfoView.load for the whole story.
+        .task {
+            if let local = ThreadMessageCache.shared.messages(for: cid) {
+                let localMedia = local
+                    .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                    .flatMap { $0.expandedGalleryItems(cid: cid) }
+                    .reversed()
+                if !localMedia.isEmpty { media = Array(localMedia) }
+            }
+            if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
+        }
         .sheet(isPresented: $showAllMedia) { SharedMediaGridView(cid: cid, media: media) }
         .fullScreenCover(isPresented: $showCall) { GroupCallView() }
     }
