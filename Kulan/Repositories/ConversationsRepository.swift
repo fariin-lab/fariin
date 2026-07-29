@@ -16,6 +16,21 @@ final class ConversationsRepository {
     var conversations: [Conversation] = []
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
 
+    // "Has this account ever shown a non-empty chat list on this device?" — decides whether the FIRST
+    // load may show the skeleton. A fresh sign-up has nothing coming, and shimmer rows there fake
+    // content that does not exist (user report: "first time sign up have this loading, what is this");
+    // they go straight to the empty state instead. A returning account, whose chats really are on the
+    // way, keeps the skeleton. Keyed per uid so switching accounts on one device stays honest.
+    var expectsChats: Bool {
+        guard let uid = Auth.auth().currentUser?.uid else { return false }
+        return UserDefaults.standard.bool(forKey: "everHadChats-\(uid)")
+    }
+    private func rememberHadChats() {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let key = "everHadChats-\(uid)"
+        if !UserDefaults.standard.bool(forKey: key) { UserDefaults.standard.set(true, forKey: key) }
+    }
+
     func start() {
         #if DEBUG
         if DemoMode.active { hasLoaded = true; return }   // demo data already injected; don't let Firebase overwrite it
@@ -74,6 +89,7 @@ final class ConversationsRepository {
     private let minPublishInterval: TimeInterval = 0.15
 
     private func publish(_ convs: [Conversation]) {
+        if !convs.isEmpty { rememberHadChats() }
         guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
             lastPublish = Date()

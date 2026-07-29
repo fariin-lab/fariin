@@ -264,9 +264,11 @@ struct CallsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !repo.hasLoaded {
-                    CallListSkeleton()   // shimmer placeholders while the first load runs
-                } else if repo.calls.isEmpty {
+                if !repo.hasLoaded && ConversationsRepository.shared.expectsChats {
+                    // Shimmer only for an account with history on this device — a fresh sign-up goes
+                    // straight to the empty state instead of fake rows (same rule as the chat list).
+                    CallListSkeleton()
+                } else if !repo.hasLoaded || repo.calls.isEmpty {
                     EmptyStateView(title: "No Calls Yet", icon: "phone",
                                    text: "Your call history will appear here.")
                 } else {
@@ -960,8 +962,11 @@ struct ChatsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if !repo.hasLoaded {
-                    ChatListSkeleton()   // shimmer placeholders on a cold load (cached = instant)
+                if !repo.hasLoaded && repo.expectsChats {
+                    // Shimmer placeholders on a cold load — ONLY for an account that has ever had
+                    // chats here. A fresh sign-up skips the fake rows and lands on the real empty
+                    // state directly (its chats, if any ever come, still pop in via the listener).
+                    ChatListSkeleton()
                 } else {
                     // NOTE: the empty state is an OVERLAY inside this ZStack (below), not a separate
                     // branch — a separate branch replaced the whole view incl. the Stories row, so
