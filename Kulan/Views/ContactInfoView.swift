@@ -197,8 +197,10 @@ struct ContactInfoView: View {
             // The remembered count first (disk, instant), then the warm cache, then the network.
             mediaHint = ChatService.SharedMediaPresence.count(cid)
             if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
+            // `load()` owns mediaHint from here: it is the only place that knows whether the count it
+            // has is an ANSWER or a failure. Setting it from `media.count` out here zeroed the hint
+            // whenever the load failed, which is how the section disappeared from a chat full of photos.
             await load()
-            mediaHint = media.count   // a chat whose media was all deleted stops reserving the space
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
             localName = ContactNames.shared.name(for: otherUid)
             // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
@@ -299,7 +301,11 @@ struct ContactInfoView: View {
             .alert("Clear your messages?", isPresented: $showClear) {
                 Button("Cancel", role: .cancel) {}
                 Button("Clear", role: .destructive) {
-                    Task { await ChatService.clearMyMessages(cid); media = await ChatService.sharedMedia(cid) }
+                    // A refusal here must not blank the strip — only a real answer replaces it.
+                    Task {
+                        await ChatService.clearMyMessages(cid)
+                        if let fresh = await ChatService.sharedMedia(cid) { media = fresh; mediaHint = fresh.count }
+                    }
                 }
             } message: {
                 Text("This deletes the messages you sent in this chat. It can't be undone.")
@@ -700,7 +706,29 @@ struct ContactInfoView: View {
             mutedUntil = muteUntil
             blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
         }
-        media = await ChatService.sharedMedia(cid)
+        // LOCAL FIRST, THE WAY SIGNAL DOES IT. Signal's media gallery is a query over its own message
+        // database, so it renders offline and instantly; it never asks the network for something it has
+        // already received. Kulan has no SQLite store, but it does keep this chat's decrypted messages
+        // in memory — that cache is what lets the conversation paint before the push transition
+        // finishes, and you reach this profile BY WAY OF that conversation, so it is warm exactly when
+        // you need it. Reading media out of it costs nothing, needs no connection, and answers on the
+        // first frame (user: "we are sending image but when i click profile all media I am not seeing…
+        // why need internet that section").
+        if let local = ThreadMessageCache.shared.messages(for: cid) {
+            let localMedia = local
+                .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                .flatMap { $0.expandedGalleryItems(cid: cid) }
+                .reversed()                       // cache is oldest-first; this strip is newest-first
+            if !localMedia.isEmpty { media = Array(localMedia) }
+        }
+        // Then the server, which sees further back than the in-memory window. A FAILED load returns nil
+        // and is ignored — it must never empty a strip that local knowledge already filled.
+        if let fresh = await ChatService.sharedMedia(cid) {
+            media = fresh
+            mediaHint = fresh.count   // authoritative: a chat whose media was deleted stops reserving
+        } else if !media.isEmpty {
+            mediaHint = media.count   // offline, but we know what we have
+        }
         loaded = true
     }
 }

@@ -1067,11 +1067,21 @@ enum ChatService {
         }
     }
 
-    static func sharedMedia(_ cid: String) async -> [Message] {
+    /// Returns nil when the LOAD FAILED, which is a different thing from a chat that has no media —
+    /// that is an empty array. The two were indistinguishable before, and the profile treated both as
+    /// "no media": a failed load (offline, or a permission hiccup) emptied `mediaHint` and the All
+    /// Media section vanished from a chat full of photos (user report + screenshots, build 400).
+    static func sharedMedia(_ cid: String) async -> [Message]? {
         do {
+            // 200 MESSAGES, not 60. This is a window over MESSAGES that is then filtered down to media,
+            // so the number that matters is how much conversation can sit on top of the last photo
+            // before it falls out of view. Sixty is one busy evening of texting: a chat with plenty of
+            // photos showed an empty All Media section simply because they had been pushed out of the
+            // window. (The proper form is a query on a media flag, which needs a composite index; this
+            // is the honest interim, and the local pass in the profile covers the common case for free.)
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true)
-                .limit(to: 60).getDocuments()
+                .limit(to: 200).getDocuments()
             // Albums COUNT as media (user report: a single photo showed here, a multi-photo album never
             // did — this filter dropped album messages before any view could see them) and are expanded
             // into their individual photos/videos.
@@ -1085,7 +1095,8 @@ enum ChatService {
             }
             return out
         } catch {
-            return await MainActor.run { sharedMediaCache[cid] ?? [] }
+            // The warm cache is a real answer; nothing at all is a failure, and says so.
+            return await MainActor.run { sharedMediaCache[cid] }
         }
     }
 
