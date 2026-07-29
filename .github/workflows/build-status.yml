@@ -48,18 +48,31 @@ jobs:
           # it has been given to a group. A build with no groups sits in App Store Connect looking
           # perfectly healthy and never reaches anyone's phone, which is indistinguishable from "the
           # upload failed" unless you ask this question.
-          print("\nWho each build is released to:")
+          # WHAT ACTUALLY DECIDES WHETHER A BUILD APPEARS IN THE TESTFLIGHT APP.
+          #
+          # `processingState` only says the binary is usable. The field that says a tester can INSTALL it
+          # is buildBetaDetail.internalBuildState — a build can be VALID and still sit at
+          # PROCESSING/MISSING_EXPORT_COMPLIANCE there. Groups matter too, but they are not the whole
+          # story: a build can be visible without appearing in the betaGroups relationship, so reading
+          # only that led to the wrong conclusion once already.
+          print("\nPer build: install state, groups, testers")
           for b in r.get("data", []):
               bid, ver = b["id"], b["attributes"]["version"]
-              groups = requests.get(f"{BASE}/builds/{bid}/betaGroups", headers=H,
-                                    params={"fields[betaGroups]": "name,isInternalGroup"}).json().get("data", [])
+              def rel(path, params=None):
+                  try:
+                      return requests.get(f"{BASE}/builds/{bid}/{path}", headers=H, params=params or {}).json()
+                  except Exception as e:
+                      return {"error": str(e)}
+              detail = (rel("buildBetaDetail").get("data") or {}).get("attributes", {})
+              groups = rel("betaGroups", {"fields[betaGroups]": "name,isInternalGroup"}).get("data", [])
+              testers = rel("individualTesters", {"limit": 5}).get("data", [])
+              locs = rel("betaBuildLocalizations", {"fields[betaBuildLocalizations]": "whatsNew"}).get("data", [])
               names = ", ".join(
                   f"{g['attributes'].get('name')}"
-                  f"{' (internal)' if g['attributes'].get('isInternalGroup') else ' (external)'}"
-                  for g in groups) or "NO GROUPS — nobody can see this build"
-              # External groups additionally need Beta App Review; internal ones never do.
-              rev = requests.get(f"{BASE}/builds/{bid}/betaAppReviewSubmission", headers=H,
-                                 params={"fields[betaAppReviewSubmissions]": "betaReviewState"}).json()
-              state = (rev.get("data") or {}).get("attributes", {}).get("betaReviewState", "n/a")
-              print(f"  {ver:>4}: {names}   beta-review: {state}")
+                  f"{'(int)' if g['attributes'].get('isInternalGroup') else '(ext)'}"
+                  for g in groups) or "none"
+              print(f"  {ver:>4}: internal={detail.get('internalBuildState')} "
+                    f"external={detail.get('externalBuildState')} "
+                    f"expired={detail.get('autoNotifyEnabled')} "
+                    f"groups=[{names}] individualTesters={len(testers)} whatsNew={len(locs)}")
           PY
