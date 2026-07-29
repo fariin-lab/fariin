@@ -813,13 +813,23 @@ final class CallService: NSObject {
     }
     private func stopRingback() { ringbackPlayer?.stop(); ringbackPlayer = nil }
 
-    // Called by CallKit the instant it activates the audio session. Until this fires the session is
-    // dead (CallKit owns it), so the ringback started at startCall was silent. Restart it fresh on
-    // the live session — but only while we're still the caller waiting for an answer (outgoing).
+    // Called by CallKit the instant it activates the audio session. The ringback starts at startCall
+    // (deliberate: immediate, Signal-verified) but the session may not be live yet then — on some
+    // devices the early player is SILENT until this fires, on others it is already audible. The old
+    // unconditional stop+start covered the silent case but gave the audible case a hear-it, cut,
+    // hear-it-again stutter on every call (user report). RESUME, don't restart: an already-playing
+    // player is left alone; a silent/stalled one is nudged with play() on the same instance (no
+    // restart-from-zero blip); only a wedged player that refuses play() is rebuilt.
     func audioSessionActivated() {
         guard state == .outgoing else { return }   // ringback plays for the whole wait, not only once they ring
-        stopRingback()
-        startRingback()
+        if let p = ringbackPlayer {
+            if !p.isPlaying, !p.play() {
+                stopRingback()
+                startRingback()
+            }
+        } else {
+            startRingback()
+        }
     }
 
     // One-shot call-progress tone (busy/declined or ended). Same audio-session nudge
