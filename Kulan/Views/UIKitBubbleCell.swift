@@ -94,7 +94,7 @@ final class UIKitBubbleView: UIView {
         // artifact — a thin line exactly across the timestamp area (user screenshot). An empty
         // UIImage draws nothing; the bounds still reserve the meta's width on the last line.
         spacer.image = UIImage()
-        spacer.bounds = CGRect(x: 0, y: 0, width: metaWidth(m) + BubblePalette.metaGap, height: 1)
+        spacer.bounds = CGRect(x: 0, y: 0, width: reservedMetaWidth(m) + BubblePalette.metaGap, height: 1)
         out.append(NSAttributedString(attachment: spacer))
         return out
     }
@@ -149,6 +149,23 @@ final class UIKitBubbleView: UIView {
 
     private static func metaWidth(_ m: UIKitBubbleModel) -> CGFloat {
         ceil(metaAttr(m).size().width)
+    }
+
+    /// The width the LAST LINE reserves — measured against the WIDEST state this message will ever
+    /// reach, never the state it happens to be in.
+    ///
+    /// The reservation is what the text wraps against, and the bubble hugs the result, so measuring the
+    /// current tick made the bubble a different size in each phase of its life: clock while sending,
+    /// one check delivered, two once read. Reserving the read pair throughout makes all three identical,
+    /// and the real meta label is drawn over the reservation at the trailing edge, so the narrower
+    /// states simply leave invisible slack behind the timestamp. The SwiftUI bubble's `metaPlaceholder`
+    /// reserves the same widest state for the same reason — the two paths have to agree on this, because
+    /// a message crosses between them (a failed send falls back to SwiftUI).
+    private static func reservedMetaWidth(_ m: UIKitBubbleModel) -> CGFloat {
+        guard m.isMe else { return metaWidth(m) }   // their bubbles have no tick at all
+        var widest = m
+        widest.tick = .read
+        return metaWidth(widest)
     }
 
     // ── Sizing (the exact bubble + cell size the layout will use) ──

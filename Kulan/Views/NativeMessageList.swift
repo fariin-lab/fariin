@@ -2154,11 +2154,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // presented here and dismissed in willEndContextMenuInteraction, which are the only two facts
         // it needs from the system menu. It never modifies the menu, and the menu never knows it
         // exists: `UIContextMenuInteraction` is untouched, which was the whole requirement.
+        // `canReact` is checked here as well as on the SwiftUI path: plain text now routes to the UIKit
+        // cell while it is still SENDING, and a message that is not on the server yet has nothing for a
+        // reaction to attach to — the menu hides its own React… item for the same reason.
         if let id = configuration.identifier as? String,
            let scene = view.window?.windowScene,
            let ip = dataSource.indexPath(for: id),
            let cell = collectionView.cellForItem(at: ip) as? UIKitBubbleCell,
-           let model = uikitModels[id] {
+           let model = uikitModels[id],
+           reactionBarRow(id)?.canReact ?? true {
             let bubble = cell.previewBubble
             let frame = bubble.convert(bubble.bounds, to: nil)
             ReactionBarPresenter.shared.show(

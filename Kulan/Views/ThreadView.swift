@@ -1621,10 +1621,16 @@ struct ThreadView: View {
         items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
             beginReply(to: m)
         })
-        items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
-            morePickerTarget = m
-        })
-        if m.authorId == me, Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
+        // NOT UNTIL IT IS ON THE SERVER — the same two conditions the SwiftUI menu applies. Pending text
+        // reaches this menu now that it routes to the UIKit cell, and a reaction or an edit aimed at a
+        // message that does not exist server-side yet has nothing to attach to.
+        if m.sendState == nil {
+            items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
+                morePickerTarget = m
+            })
+        }
+        if m.sendState == nil, m.authorId == me,
+           Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
             items.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { _ in
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 input = m.text
@@ -1680,7 +1686,24 @@ struct ThreadView: View {
         // the commonest case the divider was missing from BOTH render and measurement.
         guard rowId != firstUnreadId else { return nil }
         let m = repo.items[idx]
-        guard m.id != highlightId, m.sendState == nil,                 // delivered only
+        // SENDING ROUTES HERE TOO, and that is the fix for "the pending bubble and the sent bubble are
+        // different sizes" (user 2026-07-29, two screenshots of the same message before and after).
+        //
+        // It was never a metrics bug. This guard used to say `sendState == nil`, so a plain text message
+        // was drawn by the SwiftUI bubble while it was pending and by the UIKit bubble the instant it
+        // landed — TWO DIFFERENT RENDERERS, one per half of the message's life. They disagree by
+        // construction: different padding constants, a different gap before the timestamp, and two
+        // different implementations of the trailing reservation (a concatenated invisible Text run vs a
+        // clear NSTextAttachment). No amount of tuning keeps two layout engines pixel-identical, and any
+        // agreement reached today breaks the next time either side is edited.
+        //
+        // So the message stops changing renderer instead. One path owns it from the first optimistic
+        // frame to delivered and read, and `sizes()` — which measures the same attributed string the
+        // cell draws — returns one size for all of it.
+        //
+        // FAILED still routes to SwiftUI: that bubble carries a tap-to-retry affordance the UIKit cell
+        // has no equivalent for, and losing the retry would be a far worse bug than a resize.
+        guard m.id != highlightId, m.sendState != .failed,
               m.replyTo == nil, m.reactions.isEmpty,
               !m.isFeatureMarker, !m.viewOnce,
               !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
@@ -1703,11 +1726,15 @@ struct ThreadView: View {
             : .init(topLeading: first ? big : small, topTrailing: big, bottomLeading: last ? big : small, bottomTrailing: big)
         let tick: UIKitBubbleModel.Tick
         if isMe {
-            // Parity with the SwiftUI path (audit M5): a blocked contact's lastRead is ignored there
-            // (otherLastRead passed as 0 when iBlocked) — the uikit tick must match, or a blocked chat
-            // shows ✓✓ on text rows and ✓ on media rows, and a route flip visibly demotes the tick.
-            let read = !repo.iBlocked && repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
-            tick = read ? .read : .sent   // same rule as the SwiftUI bubble and the chat list
+            if m.sendState == .sending {
+                tick = .sending   // the clock, same glyph the SwiftUI bubble drew while pending
+            } else {
+                // Parity with the SwiftUI path (audit M5): a blocked contact's lastRead is ignored there
+                // (otherLastRead passed as 0 when iBlocked) — the uikit tick must match, or a blocked chat
+                // shows ✓✓ on text rows and ✓ on media rows, and a route flip visibly demotes the tick.
+                let read = !repo.iBlocked && repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
+                tick = read ? .read : .sent   // same rule as the SwiftUI bubble and the chat list
+            }
         } else { tick = .none }
 
         return UIKitBubbleModel(
