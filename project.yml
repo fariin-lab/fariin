@@ -51,15 +51,21 @@ targets:
         # catalog; these are loose PNGs in Resources/AltIcons, referenced by base name.
         CFBundleIcons:
           CFBundleAlternateIcons:
-            icon-blue:   { CFBundleIconFiles: [icon-blue] }
-            icon-ivory:  { CFBundleIconFiles: [icon-ivory] }
-            icon-chrome: { CFBundleIconFiles: [icon-chrome] }
-            # The black mark, as a PICKABLE icon. It already existed as the primary icon's dark
-            # appearance in the asset catalog, but that variant only ever swaps itself in on a dark Home
-            # Screen and can never appear in the in-app picker — so the user could not find it and
-            # reasonably concluded it had not been added. Now it is both: automatic on dark, and
-            # choosable outright.
-            icon-black:  { CFBundleIconFiles: [icon-black] }
+            # ONE MARK, SEVERAL GROUNDS. The tri-arrow icons that used to live here (blue/ivory/chrome)
+            # were the PREVIOUS logo, kept around after the speech bubble replaced it; the user asked
+            # for them gone (2026-07-29). Every icon below is the current bubble, composited from the
+            # black master onto a flat ground, so the set cannot drift from the brand.
+            #
+            # Black already existed as the primary icon's dark APPEARANCE in the asset catalog, but that
+            # variant only swaps itself in on a dark Home Screen and can never show in the in-app
+            # picker — so the user could not find it and reasonably concluded it was never added. It is
+            # both now: automatic on dark, and choosable outright.
+            icon-black:    { CFBundleIconFiles: [icon-black] }
+            icon-graphite: { CFBundleIconFiles: [icon-graphite] }
+            icon-indigo:   { CFBundleIconFiles: [icon-indigo] }
+            icon-emerald:  { CFBundleIconFiles: [icon-emerald] }
+            icon-crimson:  { CFBundleIconFiles: [icon-crimson] }
+            icon-sand:     { CFBundleIconFiles: [icon-sand] }
         # Export compliance: 2026-07-24 the account owner made the determination that Kulan
         # QUALIFIES FOR THE STANDARD EXEMPTION (uses standard, publicly-available crypto —
         # libsodium — and is offered as a mass-market app; France distribution = No). That was
