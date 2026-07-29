@@ -4241,8 +4241,11 @@ struct MessageBubble: View, Equatable {
     /// True when the timestamp cannot share the message's last line — a word too long to leave room
     /// beside it. When true, `bodyLine` gives the meta a real row of its own and reserves NOTHING
     /// inline, so the text keeps the full bubble width on every line.
-    private var metaNeedsOwnLine: Bool {
-        let textAvail = maxBubbleWidth - 30   // bubble horizontal padding
+    private var metaNeedsOwnLine: Bool { metaNeedsOwnLine(inWidth: maxBubbleWidth - 30) }
+
+    /// The same test against an ARBITRARY content width, so a media caption can ask it about the media
+    /// box it actually wraps in rather than about the text bubble's width.
+    private func metaNeedsOwnLine(inWidth textAvail: CGFloat) -> Bool {
         let bodyFont = UIFont.systemFont(ofSize: 17)
         let metaFont = UIFont.systemFont(ofSize: 10)
         var metaStr = message.edited ? "edited " : ""
@@ -4258,12 +4261,53 @@ struct MessageBubble: View, Equatable {
         return longestWord + metaW > textAvail
     }
 
+    /// A media caption + its timestamp, in a bubble `width` points wide.
+    ///
+    /// THE CAPTION GETS THE WHOLE BUBBLE. Every media caption used to be
+    /// `HStack { Text; Spacer; metaRow }`, and an HStack reserves its siblings' width for the FULL
+    /// HEIGHT of the row — so the timestamp cut ~70pt off EVERY line of the caption, not just the last
+    /// one. On a long caption that reads as a bubble with a tall empty column down the right-hand side,
+    /// which is exactly what the user photographed, and he named the cause himself: "the problem is
+    /// right side timestamp line".
+    ///
+    /// Text bubbles never had this because they use the reservation trick instead: an invisible inline
+    /// run at the end of the text, so only the LAST line leaves a gap, with the real timestamp overlaid
+    /// on it. Captions now use the same two branches for the same reasons — including the long-message
+    /// branch, where a reservation that begins on a new line would shrink the wrap column for the whole
+    /// paragraph, so the meta takes a real row and the text reserves nothing.
+    @ViewBuilder private func captionBody(width: CGFloat) -> some View {
+        let fg = isMe ? onMyBubble : (dark ? Color.white : .black)
+        Group {
+            if metaNeedsOwnLine(inWidth: width - 24) {   // 2 × 12pt caption insets
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(message.text).font(.system(size: 17))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    metaRow
+                }
+            } else {
+                (Text(message.text).font(.system(size: 17))
+                    + metaPlaceholder(ownLine: false).foregroundColor(.clear))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+            }
+        }
+        .foregroundStyle(fg)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(width: width, alignment: .leading)
+    }
+
     // A Text that renders IDENTICALLY to metaRow (edited? · time · tick?) but is drawn clear — used only
     // to reserve the trailing space on the message's last line. Same fonts/symbols → widths match exactly.
     // A leading newline drops the reservation (and thus the overlaid time) to its own line when the text
     // leaves no room for it on the last line.
-    private var metaPlaceholder: Text {
-        var t = Text(metaNeedsOwnLine ? "\n  " : "  ")   // own line for long text; else a small gap
+    private var metaPlaceholder: Text { metaPlaceholder(ownLine: metaNeedsOwnLine) }
+
+    /// `ownLine` is passed in rather than re-derived, because the caller already knows the answer FOR
+    /// ITS OWN WIDTH. A caption asked about the media box; re-deriving here would answer about the text
+    /// bubble instead, and the two can disagree — which would prepend a newline to a reservation the
+    /// caller had just decided could sit on the last line.
+    private func metaPlaceholder(ownLine: Bool) -> Text {
+        var t = Text(ownLine ? "\n  " : "  ")   // own line for long text; else a small gap
         if message.edited { t = t + Text("edited ").italic() }
         t = t + Text(timeString)
         // ONE CONSTANT WIDTH FOR EVERY SEND STATE, which is the point (user report + photo: "pending
@@ -4782,15 +4826,7 @@ struct MessageBubble: View, Equatable {
                         else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
                     }
                     // Caption INSIDE the same bubble (the caption is the message body).
-                    if hasCaption {
-                        HStack(alignment: .bottom, spacing: 6) {
-                            Text(message.text).font(.system(size: 17))
-                                .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
-                            metaRow.padding(.bottom, 1)   // time on EVERY bubble
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(width: videoBox.width, alignment: .leading)
-                    }
+                    if hasCaption { captionBody(width: videoBox.width) }
                 }
                 .frame(width: videoBox.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -4816,20 +4852,9 @@ struct MessageBubble: View, Equatable {
                 // edge with its text cut (user: "if i add that caption image is using different width").
                 albumGrid
                     .fixedSize(horizontal: true, vertical: false)
-                if !message.text.isEmpty {
-                    HStack(alignment: .bottom, spacing: 6) {
-                        Text(message.text).font(.system(size: 17))   // caption text is never shrunk
-                            .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
-                        // The bubble is a fixed `albumWidth`, so without this the time trailed the
-                        // caption text mid-bubble instead of sitting at the trailing edge.
-                        Spacer(minLength: 6)
-                        metaRow.padding(.bottom, 1)
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    // The caption wraps at the album's own width — never wider, so the bubble keeps a
-                    // definite size, and never narrower, so the timestamp stays on the trailing edge.
-                    .frame(maxWidth: albumWidth, alignment: .leading)
-                }
+                // The caption wraps at the album's own width — never wider, so the bubble keeps a
+                // definite size, and never narrower, so the timestamp stays on the trailing edge.
+                if !message.text.isEmpty { captionBody(width: albumWidth) }
             }
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
@@ -4952,16 +4977,7 @@ struct MessageBubble: View, Equatable {
                         else { onTapImage(message) }   // uploading photos open too — the viewer shows the local copy
                     }
                     // Caption INSIDE the same bubble (the caption is the message body).
-                    if hasCaption {
-                        HStack(alignment: .bottom, spacing: 6) {
-                            Text(message.text).font(.system(size: 17))   // same as a normal message (caption text is never shrunk)
-                                .foregroundStyle(isMe ? onMyBubble : (dark ? Color.white : .black))
-                            Spacer(minLength: 6)   // time pinned to the bubble edge, not trailing the text
-                            metaRow.padding(.bottom, 1)   // time on EVERY bubble
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(width: box.width, alignment: .leading)
-                    }
+                    if hasCaption { captionBody(width: box.width) }
                 }
                 .frame(width: box.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
