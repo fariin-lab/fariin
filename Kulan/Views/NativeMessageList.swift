@@ -64,6 +64,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // keyboard focus â€” all of which leave the models identical. Comparing one integer skips that walk.
     var uikitModelsVersion: Int = 0
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
+    // Floating reactions bar (ReactionBar.swift): my current reaction on a row, and the tap handler.
+    var onReactionSelected: (String) -> String? = { _ in nil }
+    var onReactionPick: (String, String?) -> Void = { _, _ in }
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
     var onReachedTop: () -> Void               // near the oldest loaded row -> page older
     var selecting: Bool = false                // selection mode â€” drives the selection-animation land gate
@@ -109,6 +112,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.loadViewIfNeeded()
         vc.uikitModels = uikitModels   // BEFORE apply: measure + cell provider see the same frozen routing
         vc.uikitMenu = uikitMenu
+        vc.onReactionSelected = onReactionSelected
+        vc.onReactionPick = onReactionPick
         vc.onUikitDoubleTap = onUikitDoubleTap
         vc.setComposerBarHeight(composerBarHeight)
         vc.setTopOverlayHeight(topOverlayHeight)
@@ -1943,6 +1948,36 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                         willDisplayContextMenu configuration: UIContextMenuConfiguration,
                         animator: UIContextMenuInteractionAnimating?) {
         contextMenuVisible = true
+        // THE FLOATING REACTIONS BAR (Signal's, in our own window — see ReactionBar.swift). It is
+        // presented here and dismissed in willEndContextMenuInteraction, which are the only two facts
+        // it needs from the system menu. It never modifies the menu, and the menu never knows it
+        // exists: `UIContextMenuInteraction` is untouched, which was the whole requirement.
+        if let id = configuration.identifier as? String,
+           let scene = view.window?.windowScene,
+           let ip = dataSource.indexPath(for: id),
+           let cell = collectionView.cellForItem(at: ip) as? UIKitBubbleCell,
+           let model = uikitModels[id] {
+            let bubble = cell.previewBubble
+            let frame = bubble.convert(bubble.bounds, to: nil)
+            ReactionBarPresenter.shared.show(
+                in: scene,
+                bubbleFrame: frame,
+                alignTrailing: model.isMe,       // Signal aligns the bar to the bubble's own edge
+                selected: onReactionSelected(id)
+            ) { [weak self] emoji in
+                guard let self else { return }
+                // Apply, then take the menu down the same way a menu action would. The bar asks the
+                // interaction to dismiss; it does not reach inside it.
+                onReactionPick(id, emoji)
+                ReactionBarPresenter.shared.hide()
+                // Ask the menu to close, the way tapping one of its own actions would. `interactions`
+                // and `dismissMenu()` are both public UIKit — we are requesting a dismissal through
+                // the front door, not reaching into the menu's internals.
+                collectionView.interactions
+                    .compactMap { $0 as? UIContextMenuInteraction }
+                    .forEach { $0.dismissMenu() }
+            }
+        }
         // WHICH row the menu belongs to. The configuration's identifier IS the row id (see
         // contextMenuConfig). Only THIS cell must survive untouched until the dismissal ends — the
         // stranded-blur bug was its destruction mid-flight, not any other cell's. Knowing which one
@@ -1953,6 +1988,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func collectionView(_ collectionView: UICollectionView,
                         willEndContextMenuInteraction configuration: UIContextMenuConfiguration,
                         animator: UIContextMenuInteractionAnimating?) {
+        // The bar leaves WITH the menu, riding the same duration — it was never part of it, so this is
+        // simply the moment we were told the interaction is ending.
+        ReactionBarPresenter.shared.hide()
         guard let animator else {
             contextMenuVisible = false; contextMenuSourceId = nil; settleFlush(); return
         }

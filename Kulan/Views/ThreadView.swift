@@ -1788,6 +1788,25 @@ struct ThreadView: View {
             // reading `uikitModels` above is what refreshes the cache this version comes from.
             uikitModelsVersion: uikitModelCache.version,
             uikitMenu: { id in uikitMenu(for: id) },
+            // The floating reactions bar (ReactionBar.swift): what I already reacted with, and what to
+            // do when a bar emoji is tapped. nil emoji = the "more" button → the full picker.
+            onReactionSelected: { rowId in
+                guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
+                return repo.items[idx].reactions[me]
+            },
+            onReactionPick: { rowId, emoji in
+                guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
+                let m = repo.items[idx]
+                // "More" opens the same any-emoji picker the long-press menu already uses. A short
+                // delay so the sheet presents after the context menu's own dismissal, never into it.
+                guard let emoji else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { morePickerTarget = m }
+                    return
+                }
+                // react() already toggles: tapping the reaction I have removes it, and it records the
+                // emoji in ReactionRecents. Same call the menu's own emoji actions make.
+                react(m, emoji)
+            },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)

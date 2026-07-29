@@ -1,0 +1,265 @@
+import UIKit
+
+// THE FLOATING REACTIONS BAR — Signal's, rebuilt in our code, sitting ABOVE the long-pressed message
+// while Apple's native context menu keeps working underneath it, untouched.
+//
+// WHY IT IS BUILT THIS WAY (read 2026-07-29 from Signal-iOS):
+//   MessageReactionPicker.swift        — the bar itself: every number below is theirs.
+//   ContextMenuReactionBarAccessory.swift — how they place it relative to the message.
+//
+// Signal presents the bar as an ACCESSORY of their OWN context menu (they reimplemented Apple's menu
+// in ContextMenuController). We deliberately do NOT do that — the user's requirement is to keep
+// `UIContextMenuInteraction` exactly as it is, because matching Apple's menu behaviour by hand is a
+// trap. So the bar lives in its own window ABOVE the system menu's own window, driven only by the two
+// UIKit callbacks that tell us the menu appeared and is going away. Neither side controls the other:
+// the menu does not know the bar exists, and the bar never touches the menu.
+//
+// Signal's exact geometry and motion, kept:
+//   • bar height 56 (50 on a narrow phone), inner padding 6 → 44pt tap targets
+//   • capsule glass on iOS 26+, else a solid card with the same two-shadow recipe
+//   • present: background fades in; each button starts 24pt low and transparent and rises with a
+//     0.01s stagger, easeIn, 0.2s
+//   • dismiss: the whole bar fades out over the menu's own dismissal duration
+//   • placement: ABOVE the bubble (exterior top), aligned to the bubble's OWN side — trailing for my
+//     messages, leading for theirs — with a 12pt gap
+final class ReactionBarView: UIView {
+    private enum L {
+        static var height: CGFloat { UIScreen.main.bounds.width <= 375 ? 50 : 56 }
+        static let padding: CGFloat = 6
+        static var button: CGFloat { height - padding * 2 }
+        static var selectedDisc: CGFloat { height - 4 }
+    }
+
+    private let stack = UIStackView()
+    private var background: UIView?
+    private var buttons: [UIView] = []
+    private let onPick: (String?) -> Void      // nil = the "more" button
+    private let selected: String?
+
+    /// - Parameters:
+    ///   - emojis: the quick set, in order.
+    ///   - selected: the emoji I already reacted with, drawn on a filled disc (tapping it removes).
+    init(emojis: [String], selected: String?, onPick: @escaping (String?) -> Void) {
+        self.onPick = onPick
+        self.selected = selected
+        super.init(frame: .zero)
+
+        // Background: Signal uses real glass on iOS 26 and a shadowed card before it.
+        if #available(iOS 26.0, *) {
+            let glass = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+            glass.cornerConfiguration = .capsule()
+            addSubview(glass)
+            glass.frame = bounds
+            glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            background = glass
+        } else {
+            let card = UIView()
+            card.backgroundColor = .secondarySystemGroupedBackground
+            card.layer.cornerRadius = L.height / 2
+            card.layer.cornerCurve = .continuous
+            card.layer.shadowColor = UIColor.black.cgColor
+            card.layer.shadowRadius = 12
+            card.layer.shadowOpacity = 0.3
+            card.layer.shadowOffset = CGSize(width: 0, height: 4)
+            addSubview(card)
+            card.frame = bounds
+            card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            background = card
+        }
+
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.distribution = .fillEqually
+        stack.spacing = 0
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.layoutMargins = UIEdgeInsets(top: L.padding, left: L.padding,
+                                           bottom: L.padding, right: L.padding)
+        addSubview(stack)
+
+        for e in emojis { buttons.append(makeEmojiButton(e)) }
+        buttons.append(makeMoreButton())
+        buttons.forEach { stack.addArrangedSubview($0) }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        stack.frame = bounds
+    }
+
+    /// The bar's natural size for a given emoji count — the caller positions with this.
+    static func size(emojiCount: Int) -> CGSize {
+        let cells = CGFloat(emojiCount + 1)   // + the "more" button
+        return CGSize(width: cells * L.button + L.padding * 2, height: L.height)
+    }
+
+    private func makeEmojiButton(_ emoji: String) -> UIView {
+        let holder = UIView()
+        // The already-chosen reaction sits on a filled disc, exactly like Signal's selected state.
+        if emoji == selected {
+            let disc = UIView()
+            disc.backgroundColor = .tintColor.withAlphaComponent(0.18)
+            disc.layer.cornerRadius = L.selectedDisc / 2
+            disc.isUserInteractionEnabled = false
+            holder.addSubview(disc)
+            disc.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                disc.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+                disc.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+                disc.widthAnchor.constraint(equalToConstant: L.selectedDisc),
+                disc.heightAnchor.constraint(equalToConstant: L.selectedDisc),
+            ])
+        }
+        let label = UILabel()
+        label.text = emoji
+        label.font = .systemFont(ofSize: L.button * 0.72)
+        label.textAlignment = .center
+        label.isUserInteractionEnabled = false
+        holder.addSubview(label)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+        ])
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tappedEmoji(_:)))
+        holder.addGestureRecognizer(tap)
+        holder.accessibilityLabel = emoji
+        return holder
+    }
+
+    private func makeMoreButton() -> UIView {
+        let holder = UIView()
+        let disc = UIView()
+        disc.backgroundColor = UIColor.label.withAlphaComponent(0.08)
+        disc.layer.cornerRadius = L.button * 0.42
+        disc.isUserInteractionEnabled = false
+        let glyph = UIImageView(image: UIImage(systemName: "ellipsis"))
+        glyph.tintColor = .label
+        glyph.contentMode = .center
+        disc.addSubview(glyph)
+        holder.addSubview(disc)
+        disc.translatesAutoresizingMaskIntoConstraints = false
+        glyph.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            disc.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
+            disc.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+            disc.widthAnchor.constraint(equalToConstant: L.button * 0.84),
+            disc.heightAnchor.constraint(equalToConstant: L.button * 0.84),
+            glyph.centerXAnchor.constraint(equalTo: disc.centerXAnchor),
+            glyph.centerYAnchor.constraint(equalTo: disc.centerYAnchor),
+        ])
+        holder.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tappedMore)))
+        holder.accessibilityLabel = "More reactions"
+        return holder
+    }
+
+    @objc private func tappedEmoji(_ g: UITapGestureRecognizer) {
+        guard let e = g.view?.accessibilityLabel else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onPick(e)
+    }
+    @objc private func tappedMore() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onPick(nil)
+    }
+
+    // MARK: - Signal's animations, verbatim
+
+    func playPresentation(duration: TimeInterval = 0.2) {
+        background?.alpha = 0
+        UIView.animate(withDuration: duration) { self.background?.alpha = 1 }
+        var delay: TimeInterval = 0
+        for v in buttons {
+            v.alpha = 0
+            v.transform = CGAffineTransform(translationX: 0, y: 24)
+            UIView.animate(withDuration: duration, delay: delay, options: .curveEaseIn) {
+                v.transform = .identity
+                v.alpha = 1
+            }
+            delay += 0.01
+        }
+    }
+
+    func playDismissal(duration: TimeInterval = 0.2, completion: @escaping () -> Void) {
+        UIView.animate(withDuration: duration) {
+            if #available(iOS 26.0, *) { (self.background as? UIVisualEffectView)?.effect = nil }
+            self.alpha = 0
+        } completion: { _ in completion() }
+    }
+}
+
+/// Owns the window the bar floats in, so the bar can sit ABOVE the system context menu without ever
+/// touching it. One instance per app; the list controller drives it from the two menu callbacks.
+@MainActor
+final class ReactionBarPresenter {
+    static let shared = ReactionBarPresenter()
+
+    private var window: UIWindow?
+    private var bar: ReactionBarView?
+
+    var isShowing: Bool { bar != nil }
+
+    /// Show the bar above `bubbleFrame` (window coordinates).
+    /// - Parameters:
+    ///   - alignTrailing: my messages align to the bubble's right edge, theirs to the left — Signal's
+    ///     `horizontalEdgeAlignment`, which is what makes the bar feel attached to that bubble.
+    func show(in scene: UIWindowScene,
+              bubbleFrame: CGRect,
+              alignTrailing: Bool,
+              selected: String?,
+              onPick: @escaping (String?) -> Void) {
+        hide(animated: false)
+
+        let emojis = Array(QuickReaction.choices.prefix(6))
+        let bar = ReactionBarView(emojis: emojis, selected: selected, onPick: onPick)
+        let size = ReactionBarView.size(emojiCount: emojis.count)
+
+        let w = UIWindow(windowScene: scene)
+        w.windowLevel = .alert + 1          // above the menu's own window
+        w.backgroundColor = .clear
+        w.isHidden = false
+        // PASSTHROUGH: only the bar itself takes touches. Everything else — including the menu
+        // underneath — keeps receiving them, so the native menu behaves exactly as before.
+        let root = PassthroughView()
+        w.rootViewController = PassthroughController(content: root)
+
+        let bounds = w.bounds
+        // Signal: 12pt above the bubble, flipped below when the top would clip.
+        var y = bubbleFrame.minY - size.height - 12
+        if y < bounds.minY + 60 { y = min(bubbleFrame.maxY + 12, bounds.maxY - size.height - 20) }
+        var x = alignTrailing ? bubbleFrame.maxX - size.width : bubbleFrame.minX
+        x = max(12, min(x, bounds.width - size.width - 12))
+        bar.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+
+        root.addSubview(bar)
+        self.window = w
+        self.bar = bar
+        bar.playPresentation()
+    }
+
+    func hide(animated: Bool = true) {
+        guard let bar else { tearDown(); return }
+        guard animated else { tearDown(); return }
+        bar.playDismissal { [weak self] in self?.tearDown() }
+    }
+
+    private func tearDown() {
+        bar?.removeFromSuperview()
+        bar = nil
+        window?.isHidden = true
+        window = nil
+    }
+
+    /// A view that is invisible to touches unless one of its subviews wants them.
+    private final class PassthroughView: UIView {
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            subviews.contains { !$0.isHidden && $0.alpha > 0.01 && $0.frame.contains(point) }
+        }
+    }
+    private final class PassthroughController: UIViewController {
+        private let content: UIView
+        init(content: UIView) { self.content = content; super.init(nibName: nil, bundle: nil) }
+        required init?(coder: NSCoder) { fatalError() }
+        override func loadView() { view = content }
+    }
+}
