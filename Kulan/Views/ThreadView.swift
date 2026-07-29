@@ -1355,15 +1355,9 @@ struct ThreadView: View {
                     // Scoped key (.chat): All Media and the profile strip register the SAME ids.
                     // Through the gate so a fast re-open right after a close is never swallowed.
                     let key = MediaOpenRects.key(.chat, m.id)
-                    let present = { MediaPresentGate.present { viewerImage = m } }
-                    if let rect = MediaOpenRects.rect(key),
-                       let url = m.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
-                        SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
-                                            clip: MediaOpenRects.clipRect, present: present)
-                    } else {
-                        present()
-                    }
+                    SignalMediaOpen.flyOrPresent(
+                        imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
+                        present: { MediaPresentGate.present { viewerImage = m } })
                 },
                 // ALBUM IMAGES FLY TOO — this was the last media kind opening with no transition at all
                 // (user: "make it sure image video multiple swipe swipe images"). It was never a broken
@@ -1373,34 +1367,21 @@ struct ThreadView: View {
                 // `"<messageId>-<index>"`, which is exactly the `startId` handed to us here.
                 onTapAlbum: { gallery, startId in
                     let key = MediaOpenRects.key(.chat, startId)
-                    let present = {
-                        MediaPresentGate.present { albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) }
-                    }
-                    if let rect = MediaOpenRects.rect(key),
-                       let tapped = gallery.first(where: { $0.id == startId }),
-                       let url = tapped.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
-                        SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
-                                            clip: MediaOpenRects.clipRect,
-                                            present: present)
-                    } else {
-                        present()
-                    }
+                    SignalMediaOpen.flyOrPresent(
+                        imageUrl: gallery.first(where: { $0.id == startId })?.imageUrl,
+                        rectKey: key, clip: MediaOpenRects.clipRect,
+                        present: {
+                            MediaPresentGate.present { albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) }
+                        })
                 },
                 onOpenAlbum: { m in albumScreen = m },
                 // Video takes the SAME path with its poster - one pipeline for all media, which is also
                 // how Signal does it (they fly a still frame for video, never a layer).
                 onTapVideo: { m in
                     let key = MediaOpenRects.key(.chat, m.id)
-                    let present = { MediaPresentGate.present { viewerVideo = m } }
-                    if let rect = MediaOpenRects.rect(key),
-                       let url = m.thumbUrl, let img = DiskImageCache.shared.memoryImage(url) {
-                        SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
-                                            clip: MediaOpenRects.clipRect, present: present)
-                    } else {
-                        present()
-                    }
+                    SignalMediaOpen.flyOrPresent(
+                        imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
+                        present: { MediaPresentGate.present { viewerVideo = m } })
                 },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
                 onPin: { m in togglePin(m) },
