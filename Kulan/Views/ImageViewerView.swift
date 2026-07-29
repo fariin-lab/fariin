@@ -407,7 +407,8 @@ struct ImageViewerView: View {
             ZoomImageView(image: img,
                           onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
                           onZoom: { pageZoom = $0 },
-                          zoomOutToken: zoomOutToken)
+                          zoomOutToken: zoomOutToken,
+                          imageKey: m.id)   // reload on a new PHOTO, never on a new UIImage of the same one
         } else {
             ProgressView().tint(.white)
                 .task { await load(m) }
@@ -612,6 +613,9 @@ struct ZoomImageView: UIViewControllerRepresentable {
     // transition and the swap is visible as a jump. A counter rather than a Bool so repeated requests
     // still fire, and so the value can never get stuck on.
     var zoomOutToken: Int = 0
+    /// Identity of the PHOTO, not of the UIImage object. Given one, a reload happens only when this
+    /// changes — see updateUIViewController for why that matters.
+    var imageKey: String? = nil
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
@@ -624,14 +628,29 @@ struct ZoomImageView: UIViewControllerRepresentable {
         return vc
     }
 
-    final class Coordinator { var lastZoomOutToken = 0 }
+    final class Coordinator {
+        var lastZoomOutToken = 0
+        var lastImageKey: String?
+    }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func updateUIViewController(_ uiViewController: ZoomImageController, context: Context) {
         if zoomOutToken != context.coordinator.lastZoomOutToken {
             context.coordinator.lastZoomOutToken = zoomOutToken
             uiViewController.zoomOutToFit(animated: true)
         }
-        if uiViewController.image !== image {
+        // RELOAD ON A NEW PHOTO, NOT ON A NEW OBJECT — this is the flash when arriving at the next
+        // image (user 2026-07-29). The test used to be `!==`, pure object identity, and the same photo
+        // arrives as a DIFFERENT UIImage all the time: a page rendered from `localImageData` builds one
+        // on every body pass, and the settled prefetch drops its own copy into `loaded` a moment after
+        // a swipe lands. Each of those looked like a change, so the controller tore the image view down
+        // and rebuilt it — on the page you had just swiped to, which is exactly when you see it.
+        //
+        // The key is the photo's id plus its pixel size, so re-resolving the same picture is free while
+        // a genuinely better decode still reloads.
+        let key = imageKey.map { "\($0)|\(Int(image.size.width))x\(Int(image.size.height))" }
+        let changed = key.map { $0 != context.coordinator.lastImageKey } ?? (uiViewController.image !== image)
+        if changed {
+            context.coordinator.lastImageKey = key
             uiViewController.image = image
             uiViewController.reloadImage()
         }
