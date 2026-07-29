@@ -59,7 +59,7 @@ struct ShareStorySheet: View {
                     Button("OK", role: .cancel) {}
                 } message: {
                     Text(mode == 2
-                         ? "Pick at least one person under \"Only share with,\" or choose \"My contacts.\""
+                         ? "Pick at least one person under \"Only share with,\" or choose \"My friends.\""
                          : "Everyone you'd share with is excluded. Adjust the audience and try again.")
                 }
         }
@@ -75,14 +75,16 @@ struct ShareStorySheet: View {
         List {
             Section {
                 optionRow(3, "globe", "Everyone")
-                optionRow(0, "person.fill", "My contacts")
-                optionRow(1, "person.fill.xmark", "My contacts except")
+                // "Friends", not "contacts" — there is no phone book behind this, only the people you
+                // chat with. See the Audience enum in PrivacyPages for the full reasoning.
+                optionRow(0, "person.fill", "My friends")
+                optionRow(1, "person.fill.xmark", "My friends except")
                 optionRow(2, "person.crop.circle.badge.checkmark", "Only share with")
             } header: {
                 Text("Who can see your story")
             } footer: {
                 if mode == 3 {
-                    Text("Anyone who finds your profile can see this story. Your contacts also see it in their story tray.")
+                    Text("Anyone who finds your profile can see this story. Your friends also see it in their story tray.")
                 }
             }
             if mode == 1 {

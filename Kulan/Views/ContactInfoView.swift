@@ -168,7 +168,9 @@ struct ContactInfoView: View {
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
         Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
-        Button { showShare = true } label: { Label("Share Contact", systemImage: "square.and.arrow.up") }
+        // "Share Profile", not "Share Contact" — what it sends is a Kulan profile link, and there is no
+        // contact card behind it (no phone book, no numbers).
+        Button { showShare = true } label: { Label("Share Profile", systemImage: "square.and.arrow.up") }
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
     }
 
