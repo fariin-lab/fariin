@@ -236,7 +236,27 @@ struct AuthMethodView: View {
                 try await op()
                 await MainActor.run { onAuthed() }
             } catch {
-                await MainActor.run { self.error = error.localizedDescription }
+                let ns = error as NSError
+                // Cancelling a sign-in sheet is a decision, not a failure — show NOTHING for it. The
+                // raw pass-through here is what printed Apple's internal
+                // "WebAuthenticationSession error 1" (= the user tapped Cancel on the Google consent)
+                // in red on the login page (user report). Covered cancels: the web-auth sheet (code 1),
+                // the Apple-ID sheet (1001), the Google SDK (-5), and Foundation's generic cancel.
+                let cancelled =
+                    (ns.domain == "com.apple.AuthenticationServices.WebAuthenticationSession" && ns.code == 1)
+                    || (ns.domain == "com.apple.AuthenticationServices.AuthorizationError" && ns.code == 1001)
+                    || (ns.domain == "com.google.GIDSignIn" && ns.code == -5)
+                    || (ns.domain == NSCocoaErrorDomain && ns.code == NSUserCancelledError)
+                #if DEBUG
+                if !cancelled { print("[auth] sign-in failed: \(ns.domain) \(ns.code) \(error)") }
+                #endif
+                await MainActor.run {
+                    if !cancelled {
+                        // Real failures speak like a person — never a raw NSError on the front door.
+                        self.error = ns.code == 17020 ? "No internet connection. Try again."
+                                                      : "Couldn't sign in. Please try again."
+                    }
+                }
             }
             await MainActor.run { busy = false }
         }
