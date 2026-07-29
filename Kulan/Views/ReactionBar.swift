@@ -196,8 +196,44 @@ final class ReactionBarPresenter {
 
     private var window: UIWindow?
     private var bar: ReactionBarView?
+    private var follow: CADisplayLink?
+    private var anchor: (() -> CGRect?)?
+    private var alignTrailing = true
+    private var followUntil: CFTimeInterval = 0
 
     var isShowing: Bool { bar != nil }
+
+    /// THE LIFTED MESSAGE, not the bubble in the list.
+    ///
+    /// When the system menu opens, UIKit takes the bubble out of the list, puts a copy in its own
+    /// container window and MOVES it to make room for the menu. Positioning against the bubble's
+    /// original frame is therefore wrong the moment UIKit shifts anything — which is exactly what the
+    /// user saw: the bar drawn on top of the menu. Signal never hits this because they own their menu
+    /// and shift the preview themselves (`previewWillShift`); keeping Apple's menu means we have to
+    /// READ where it put the message instead.
+    ///
+    /// `_UIMorphingPlatterView` is the container UIKit lifts the preview into. This walks the window
+    /// hierarchy for it by class NAME — no private API is called, only public view geometry is read —
+    /// and every caller falls back to the bubble's own frame if the lookup ever fails.
+    static func liftedPreviewFrame() -> CGRect? {
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for w in scene.windows where !w.isHidden {
+                if let v = firstSubview(in: w, classNameContains: "MorphingPlatterView"),
+                   v.bounds.width > 1, v.bounds.height > 1 {
+                    return v.convert(v.bounds, to: nil)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func firstSubview(in root: UIView, classNameContains name: String) -> UIView? {
+        if NSStringFromClass(type(of: root)).contains(name) { return root }
+        for s in root.subviews {
+            if let hit = firstSubview(in: s, classNameContains: name) { return hit }
+        }
+        return nil
+    }
 
     /// Show the bar above `bubbleFrame` (window coordinates).
     /// - Parameters:
@@ -223,27 +259,58 @@ final class ReactionBarPresenter {
         let root = PassthroughView()
         w.rootViewController = PassthroughController(content: root)
 
-        let bounds = w.bounds
-        // Signal: 12pt above the bubble, flipped below when the top would clip.
-        var y = bubbleFrame.minY - size.height - 12
-        if y < bounds.minY + 60 { y = min(bubbleFrame.maxY + 12, bounds.maxY - size.height - 20) }
-        var x = alignTrailing ? bubbleFrame.maxX - size.width : bubbleFrame.minX
-        x = max(12, min(x, bounds.width - size.width - 12))
-        bar.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
-
+        bar.frame = CGRect(origin: .zero, size: size)
         root.addSubview(bar)
         self.window = w
         self.bar = bar
+        self.alignTrailing = alignTrailing
+        // Follow the lifted message while UIKit animates it into place; fall back to the bubble's own
+        // frame whenever the lifted copy cannot be found.
+        self.anchor = { ReactionBarPresenter.liftedPreviewFrame() ?? bubbleFrame }
+        reposition()
         bar.playPresentation()
+
+        // The menu's open animation moves the preview over ~0.4s, so the bar tracks it for that long
+        // rather than guessing a final position — "follows the selected message", as asked.
+        followUntil = CACurrentMediaTime() + 0.6
+        follow?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(step))
+        link.add(to: .main, forMode: .common)
+        follow = link
+    }
+
+    @objc private func step() {
+        guard bar != nil else { follow?.invalidate(); follow = nil; return }
+        reposition()
+        if CACurrentMediaTime() > followUntil { follow?.invalidate(); follow = nil }
+    }
+
+    /// iMessage's stacking, top to bottom: REACTION BAR · the message · the menu. The bar therefore
+    /// always sits ABOVE the lifted message, 12pt clear of it, and only drops below when the message
+    /// is so near the top of the screen that there is no room — the same flip Signal uses.
+    private func reposition() {
+        guard let bar, let w = window, let rect = anchor?() else { return }
+        let size = bar.bounds.size
+        let bounds = w.bounds
+        let safeTop = w.safeAreaInsets.top
+        var y = rect.minY - size.height - 12
+        if y < safeTop + 8 { y = min(rect.maxY + 12, bounds.maxY - size.height - 20) }
+        var x = alignTrailing ? rect.maxX - size.width : rect.minX
+        x = max(12, min(x, bounds.width - size.width - 12))
+        let frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+        if bar.frame != frame { bar.frame = frame }
     }
 
     func hide(animated: Bool = true) {
-        guard let bar else { tearDown(); return }
-        guard animated else { tearDown(); return }
+        follow?.invalidate(); follow = nil
+        anchor = nil
+        guard let bar, animated else { tearDown(); return }
         bar.playDismissal { [weak self] in self?.tearDown() }
     }
 
     private func tearDown() {
+        follow?.invalidate(); follow = nil
+        anchor = nil
         bar?.removeFromSuperview()
         bar = nil
         window?.isHidden = true
