@@ -295,6 +295,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
     // instance, which can't switch renderers.
     private var configuredRoutes: [String: Bool] = [:]
+    private var edgeHeaderContainer: UIView?     // native edge-effect registration: the header region
+    private var edgeComposerContainer: UIView?   // native edge-effect registration: the composer region
     private var doubleTapGesture: UITapGestureRecognizer!
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
@@ -365,14 +367,45 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // UIKit computes the collection view's safe area from the WINDOW, which is why .always worked
         // here for months. Do not take these insets over again without device proof.
         collectionView.contentInsetAdjustmentBehavior = .always
-        // SYSTEM SCROLL EDGE EFFECTS: OFF, permanently, every OS. Third strike for system geometry
-        // features against the inverted list: on iOS 26 the effect washed out ENTIRE chats; enabled on
-        // iOS 27 it drew NOTHING at all (user screenshots, both). The progressive edge blur the user
-        // wants is now OURS — gradient-masked material bands in ThreadView (edgeBlurBand), identical
-        // on every OS, sized by us, incapable of washing anything.
+        // THE NATIVE SCROLL EDGE EFFECT, integrated the documented way this time (research pass
+        // 2026-07-29, on the user's "please Apple first"). Both earlier states were IMPROPER uses:
+        //   * the default (top on, nothing registered) washed whole chats on iOS 26;
+        //   * blindly un-hiding both effects on iOS 27 drew nothing;
+        //   * hand-made gradient bands rendered as frosted blocks mid-chat and were removed on demand.
+        // What was always missing: our header and composer are SWIFTUI overlays UIKit cannot see, and
+        // Apple's effect only engages for registered edge elements. The documented API for custom bars
+        // is UIScrollEdgeElementContainerInteraction — attach to a CONTAINER of the floating elements,
+        // point it at the scroll view and the edge, and the system draws the progressive blur under it.
+        // Two invisible registration containers below are pinned over the real bar regions
+        // (viewDidLayoutSubviews sizes them), style .soft = the progressive look.
+        //
+        // FLIP MAPPING (best reasoning, settled only by a device): the effect belongs to the scroll
+        // view's own coordinate world, and the flip makes the VISUAL TOP the scroll view's BOTTOM edge —
+        // so the header registers .bottom and the composer .top. If a device shows them swapped, swap
+        // the two `edge` lines, nothing else.
         if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
+            collectionView.topEdgeEffect.isHidden = false
+            collectionView.bottomEdgeEffect.isHidden = false
+            collectionView.topEdgeEffect.style = .soft
+            collectionView.bottomEdgeEffect.style = .soft
+
+            let headerContainer = UIView()
+            headerContainer.isUserInteractionEnabled = false
+            let headerInteraction = UIScrollEdgeElementContainerInteraction()
+            headerInteraction.scrollView = collectionView
+            headerInteraction.edge = .bottom   // flip: visual top
+            headerContainer.addInteraction(headerInteraction)
+            view.addSubview(headerContainer)
+            edgeHeaderContainer = headerContainer
+
+            let composerContainer = UIView()
+            composerContainer.isUserInteractionEnabled = false
+            let composerInteraction = UIScrollEdgeElementContainerInteraction()
+            composerInteraction.scrollView = collectionView
+            composerInteraction.edge = .top    // flip: visual bottom
+            composerContainer.addInteraction(composerInteraction)
+            view.addSubview(composerContainer)
+            edgeComposerContainer = composerContainer
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -1609,11 +1642,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // Keep the system edge effects OFF (UIKit can reset them) — the edge blur is ours now, in
-        // ThreadView's edgeBlurBand overlays.
+        // Keep the native edge effect's registration containers pinned over the REAL bar regions —
+        // the system sizes the progressive blur from these frames. And keep the effects visible
+        // (UIKit can reset the flags).
         if #available(iOS 26.0, *) {
-            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
-            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
+            let safe = view.safeAreaInsets
+            edgeHeaderContainer?.frame = CGRect(x: 0, y: 0, width: view.bounds.width,
+                                                height: safe.top + topOverlayHeight + 8)
+            let composerRegion = safe.bottom + composerBarH + 12
+            edgeComposerContainer?.frame = CGRect(x: 0, y: view.bounds.height - composerRegion,
+                                                  width: view.bounds.width, height: composerRegion)
+            if collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = false }
+            if collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = false }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
         // swipe-to-reply and resetSwipe is the single choke point that restores it â€” so ANY path that ends
