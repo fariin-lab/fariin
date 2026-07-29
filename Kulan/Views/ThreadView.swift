@@ -3866,13 +3866,26 @@ struct SelectableRow: ViewModifier {
     func body(content: Content) -> some View {
         if selecting {
             HStack(spacing: 10) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .symbolRenderingMode(selected ? .palette : .monochrome)
-                    // Fixed brand blue (accentColor is WHITE in dark mode → white-on-white check).
-                    .foregroundStyle(selected ? Color.white : Color.secondary.opacity(0.55),
-                                     selected ? Color(hex: 0x3DA1FD) : Color.clear)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                // READS ON ANY BACKGROUND (user: hard to see in light mode / over a wallpaper). The old
+                // unselected state was a hairline `circle` in secondary grey at 55% — it vanished over a
+                // photo wallpaper and was barely there in light mode. Signal's selection circle carries
+                // its own contrast rather than borrowing the background's: a filled disc UNDER a light
+                // ring, plus a soft shadow, so the control is legible over white, black, or a photo.
+                ZStack {
+                    Circle()
+                        .fill(selected ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.30))
+                        .frame(width: 24, height: 24)
+                    Circle()
+                        .strokeBorder(Color.white.opacity(selected ? 0 : 0.92), lineWidth: 1.5)
+                        .frame(width: 24, height: 24)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                .transition(.move(edge: .leading).combined(with: .opacity))
                 content.allowsHitTesting(false)
             }
             .padding(.horizontal, 4)
