@@ -603,15 +603,32 @@ struct ChatColorPage: View {
 
 // MARK: - App Icon (alternate icons made from the user's logo)
 
+/// Icons that shipped once and no longer do. Someone who chose one is still on it — iOS remembers the
+/// name, and with the file gone their Home Screen has an icon the system can no longer resolve. Nothing
+/// in the picker would show as selected either, since the name matches none of its rows. So on launch
+/// we put them back on the default, which is the one honest outcome available.
+enum RetiredAppIcons {
+    private static let names: Set<String> = ["icon-blue", "icon-ivory", "icon-chrome"]
+
+    @MainActor static func resetIfInUse() {
+        guard let current = UIApplication.shared.alternateIconName, names.contains(current) else { return }
+        UIApplication.shared.setAlternateIconName(nil)
+    }
+}
+
 struct AppIconPage: View {
     @State private var current = UIApplication.shared.alternateIconName
 
-    // nil = the primary Midnight (white-on-black) icon from the asset catalog.
+    /// One mark, several grounds. `nil` is the primary blue bubble from the asset catalog; the rest are
+    /// the same bubble composited onto a flat colour. The old tri-arrow icons (Blue/Ivory/Chrome) were
+    /// the PREVIOUS logo and were removed at the user's request — an app whose icon picker offers two
+    /// different logos does not look like it knows what it is.
     private let icons: [(name: String?, label: String)] = [
-        (nil, "Midnight"), ("icon-blue", "Blue"), ("icon-black", "Black"),
-        ("icon-ivory", "Ivory"), ("icon-chrome", "Chrome"),
+        (nil, "Blue"), ("icon-black", "Black"), ("icon-graphite", "Graphite"),
+        ("icon-indigo", "Indigo"), ("icon-emerald", "Emerald"), ("icon-crimson", "Crimson"),
+        ("icon-sand", "Sand"),
     ]
-    // 4 across, so five icons wrap onto a second row rather than being squeezed.
+    // 4 across, so the set wraps onto a second row rather than being squeezed.
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
 
     var body: some View {

@@ -13,6 +13,9 @@ struct KulanApp: App {
                 .tint(.primary)   // monochrome: no iOS system-blue anywhere
                 .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
                 .onOpenURL { url in handleDeepLink(url) }
+                // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
+                // resolve — put them back on the default rather than leave them with a broken icon.
+                .task { RetiredAppIcons.resetIfInUse() }
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await PresenceService.set(online: phase == .active) }
