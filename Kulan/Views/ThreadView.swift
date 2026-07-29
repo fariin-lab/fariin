@@ -1305,11 +1305,7 @@ struct ThreadView: View {
             // Inline day separator: translucent pill. NOT Liquid Glass (user clarified 2026-07-14:
             // only the TOP floating "Today" pill is glass — the in-chat separators keep this look).
             Text(dayLabel(msg.createdAt))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 12).padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
+                .modifier(ChatNoticePill())
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
         }
@@ -2730,13 +2726,12 @@ struct ThreadView: View {
     private func pinNoticeRow(_ m: Message, _ pin: PinNoticeCard,
                               jumpTo: @escaping (String) -> Void) -> some View {
         Button { jumpTo(pin.messageId) } label: {
-            (Text(m.authorId == me ? "You" : personName(m.authorId)).fontWeight(.semibold)
-                + Text(" pinned \(pin.label)"))
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+            // ONE uniform line, exactly the day pill's treatment (user: make it the same, no
+            // difference). The old per-word weight split is gone with it — "Today" is one weight,
+            // so this is too.
+            Text("\(m.authorId == me ? "You" : personName(m.authorId)) pinned \(pin.label)")
                 .lineLimit(1)
-                .padding(.horizontal, 12).padding(.vertical, 5)
-                .background(Theme.received(dark).opacity(0.7), in: Capsule())
+                .modifier(ChatNoticePill())
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -2746,11 +2741,8 @@ struct ThreadView: View {
 
     private func systemRow(_ m: Message) -> some View {
         Text(m.text)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 12).padding(.vertical, 5)
-            .background(Theme.received(dark).opacity(0.7), in: Capsule())
+            .modifier(ChatNoticePill())
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
     }
@@ -3933,6 +3925,22 @@ enum ViewedOnce {
 // Selection wrapper: in select mode a circular checkmark slides in on the LEADING edge
 // (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
 // selected row gets a soft highlight. Off select mode, the row is untouched.
+/// THE ONE LOOK FOR EVERY CENTRED IN-CHAT NOTICE — the day separator ("Today"), the "X pinned …"
+/// notice and system rows. They had drifted apart: the day pill was primary text on frosted material
+/// while the others were secondary grey on a flat received-bubble tint, so two pills a few lines
+/// apart read as two different things (user screenshot, "make it the same, no difference"). One
+/// modifier now owns the look, which is also what stops it drifting again.
+struct ChatNoticePill: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12).padding(.vertical, 5)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
+    }
+}
+
 struct SelectableRow: ViewModifier {
     let selecting: Bool
     let selected: Bool
