@@ -295,6 +295,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onSwipeReply: (String) -> Void = { _ in }
     var uikitModels: [String: UIKitBubbleModel] = [:]   // frozen routing snapshot (set before every apply)
     var uikitMenu: (String) -> UIMenu? = { _ in nil }
+    // Floating reactions bar (ReactionBar.swift), fed from SwiftUI like every other callback here.
+    var onReactionSelected: (String) -> String? = { _ in nil }
+    var onReactionPick: (String, String?) -> Void = { _, _ in }
     var onUikitDoubleTap: (String) -> Void = { _ in }
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
