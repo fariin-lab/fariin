@@ -1,6 +1,48 @@
 ﻿import SwiftUI
 import UIKit
 
+/// Window-space rects of the taps that must NEVER close the keyboard — today, the reply quotes.
+///
+/// Tap-to-dismiss used to be a SwiftUI `simultaneousGesture` on the list, cancelled one runloop turn
+/// later by anything that wanted the keyboard kept. That cancel LOST A RACE it could not win: the quote
+/// lives inside a `UIHostingConfiguration` cell, which is a separate SwiftUI tree joined to the list
+/// only through UIKit, so the two taps are arbitrated as plain UIGestureRecognizers and SwiftUI is free
+/// to deliver the inner one in a later turn than the outer one. When it did, the keyboard closed before
+/// the cancel arrived and the relayout that followed swallowed the jump scroll — the user's "it just
+/// closes the keyboard and does not jump", still reported after the deferral shipped.
+///
+/// So the decision is no longer a race. The list's dismiss is a UIKit recognizer that refuses to BEGIN
+/// when the touch lands inside one of these rects, which is a hit test, not an ordering.
+@MainActor enum KeyboardSafeRects {
+    private static var rects: [String: CGRect] = [:]
+
+    /// OFF-SCREEN CAPTURES ARE IGNORED, and that matters: every bubble is also rendered twice more —
+    /// once as the invisible measurement template inside the bubble, and once in the list's off-screen
+    /// sizer — and each of those copies reports a rect under the same id. Letting the sizer's copy land
+    /// would overwrite the real quote's position with a rect nowhere near the finger, and the tap would
+    /// dismiss the keyboard again. Stale entries need no cleanup because the reader only consults ids
+    /// belonging to currently visible cells, and a visible quote re-reports on every layout pass.
+    static func capture(_ id: String, _ rect: CGRect) {
+        guard !rect.isEmpty, rect.intersects(UIScreen.main.bounds) else { return }
+        rects[id] = rect
+    }
+    static func rect(_ id: String) -> CGRect? { rects[id] }
+}
+
+/// Publishes a view's window rect into `KeyboardSafeRects` for as long as it is on screen.
+struct KeyboardSafeTapArea: ViewModifier {
+    let id: String
+    func body(content: Content) -> some View {
+        content.background(
+            GeometryReader { g in
+                Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
+                    KeyboardSafeRects.capture(id, f)
+                }
+            }
+        )
+    }
+}
+
 // UIKit-backed conversation list. A UICollectionView hosts our existing SwiftUI rows (MessageBubble etc.)
 // via UIHostingConfiguration, so no bubble feature is lost â€” only the scroll container differs.
 //
@@ -68,6 +110,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onReactionSelected: (String) -> String? = { _ in nil }
     var onReactionPick: (String, String?) -> Void = { _, _ in }
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
+    // Tap on the conversation BACKGROUND (never on a bubble) -> dismiss the keyboard. Lives in UIKit so a
+    // tap that lands on a bubble can never dismiss: a SwiftUI tap on the list raced the quote's own tap.
+    var onBackgroundTap: () -> Void = {}
     var onReachedTop: () -> Void               // near the oldest loaded row -> page older
     var selecting: Bool = false                // selection mode â€” drives the selection-animation land gate
     // The initial scroll position: when the conversation has unread messages, the FIRST open lands with
@@ -114,6 +159,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.uikitMenu = uikitMenu
         vc.onReactionSelected = onReactionSelected
         vc.onReactionPick = onReactionPick
+        vc.onBackgroundTap = onBackgroundTap
         vc.onUikitDoubleTap = onUikitDoubleTap
         vc.setComposerBarHeight(composerBarHeight)
         vc.setTopOverlayHeight(topOverlayHeight)
@@ -210,7 +256,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
     private var sizerRefused = Set<String>()
-    private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
     private var scrollWorkTimer: Timer?                  // 0.1s debounce for pagination + isAtBottom writes
     private var userScrolledSinceTimer = false           // the debounced work only pages on USER scrolls
@@ -298,6 +343,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Floating reactions bar (ReactionBar.swift), fed from SwiftUI like every other callback here.
     var onReactionSelected: (String) -> String? = { _ in nil }
     var onReactionPick: (String, String?) -> Void = { _, _ in }
+    var onBackgroundTap: () -> Void = {}
+    private var backgroundTap: UITapGestureRecognizer!
     var onUikitDoubleTap: (String) -> Void = { _ in }
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
@@ -407,6 +454,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         doubleTapGesture.delegate = self
         collectionView.addGestureRecognizer(doubleTapGesture)
 
+        // Tap-to-dismiss-keyboard. Passive (`cancelsTouchesInView = false`) so every tap still reaches
+        // the SwiftUI row underneath, and gated in `gestureRecognizerShouldBegin` against
+        // KeyboardSafeRects so a tap on a reply quote never dismisses. It must also lose to the
+        // double-tap quick-react, or a double tap would dismiss on its first half.
+        backgroundTap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
+        backgroundTap.cancelsTouchesInView = false
+        backgroundTap.delaysTouchesEnded = false
+        backgroundTap.delegate = self
+        backgroundTap.require(toFail: doubleTapGesture)
+        collectionView.addGestureRecognizer(backgroundTap)
+
         // PASSIVE long-press observer (never consumes touches): marks the context-menu lift window so
         // canLandLoad blocks content lands during it â€” a reconfigure landing mid-lift replaced the menu's
         // source view (flickering / vanishing long-press menu).
@@ -474,10 +532,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // handler is inert outside an armed menu-dismissal grace window.
         NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
                                                name: UIWindow.didBecomeHiddenNotification, object: nil)
-        // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
-        NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
-                                               name: UIApplication.userDidTakeScreenshotNotification, object: nil)
-
         buildDataSource()
     }
 
@@ -785,8 +839,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if sendAnimating || programmaticScrollAnimating { return false }
         // A reply swipe owns its cell's transform; a relayout under it moves the thing being dragged.
         if swipingCell != nil { return false }
-        // The system's full-page screenshot capture scrolls the list programmatically with no drag flags.
-        if Date() < captureFreezeUntil { return false }
         return true
     }
 
@@ -1704,6 +1756,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // and a right-swipe (interactive pop) is untouched. This is what makes one pan safe where N SwiftUI
     // drags were not: the scroll gesture keeps every vertical drag.
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g === backgroundTap {
+            // A tap on a reply quote belongs to the quote: it jumps to the original and KEEPS the
+            // keyboard (Signal keeps it too). Decided by hit test, never by gesture ordering.
+            let win = collectionView.convert(g.location(in: collectionView), to: nil)
+            for ip in collectionView.indexPathsForVisibleItems {
+                guard let id = dataSource.itemIdentifier(for: ip),
+                      let safe = KeyboardSafeRects.rect("quote-\(id)") else { continue }
+                if safe.contains(win) { return false }
+            }
+            return true
+        }
         if g === doubleTapGesture {
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
@@ -1736,7 +1799,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // holdPress is a PASSIVE observer â€” it must never block the SwiftUI context-menu press or anything else.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        g === swipePan || g === holdPress
+        g === swipePan || g === holdPress || g === backgroundTap
+    }
+
+    // Dismiss only — the touch is never consumed, so whatever the tap landed on still handles it.
+    @objc private func handleBackgroundTap(_ g: UITapGestureRecognizer) {
+        guard !isSelecting else { return }   // selection mode: taps toggle rows, keyboard is already down
+        onBackgroundTap()
     }
 
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
@@ -2020,9 +2089,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
-        // nothing.
-        if Date() < captureFreezeUntil { return }
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
             lastStableOffset = scrollView.contentOffset.y
             userScrolledSinceTimer = true
@@ -2047,7 +2113,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func scrollWorkTimerDidFire() {
         scrollWorkTimer?.invalidate()
         scrollWorkTimer = nil
-        guard isViewLoaded, Date() >= captureFreezeUntil else { return }
+        guard isViewLoaded else { return }
         // The jump-to-latest button's affordance, coalesced to at most ten writes a second.
         let atBottom = isNearNewest
         if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
@@ -2060,7 +2126,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // zone-entry debounce: a short page leaves the reader still inside the zone, and the time throttle
     // alone lets the chain continue until content outruns the threshold.
     private func autoLoadMoreIfNeeded() {
-        guard didReveal, Date() >= captureFreezeUntil else { return }
+        guard didReveal else { return }
         let threshold = max(72, collectionView.bounds.height * 3)
         guard maxContentOffsetY - collectionView.contentOffset.y <= threshold,
               Date().timeIntervalSince(lastLoadOlderAt) > 2 else { return }
@@ -2093,29 +2159,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
-    // MARK: - Screenshot recovery
-
-    // iOS 26 full-page screenshots scroll the view PROGRAMMATICALLY (no drag flags) right after the
-    // notification, to capture every page. Freeze all landings for the capture window and snap back to the
-    // last stable offset once it has finished.
-    @objc func screenshotTaken() {
-        guard didFirstLand, !isDisappearing,
-              !collectionView.isDragging, !collectionView.isTracking,
-              !collectionView.isDecelerating else { return }
-        captureFreezeUntil = Date().addingTimeInterval(1.5)
-        let snapBack: () -> Void = { [weak self] in
-            guard let self else { return }
-            let target = self.clampOffset(self.lastStableOffset)
-            if abs(self.collectionView.contentOffset.y - target) > 4 {
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
-            }
-        }
-        DispatchQueue.main.async(execute: snapBack)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.55) { [weak self] in
-            snapBack()
-            self?.settleFlush()
-        }
-    }
+    // MARK: - Screenshot recovery — DELETED 2026-07-29, it WAS the jump
+    //
+    // There used to be a `userDidTakeScreenshotNotification` handler here that froze the list for 1.5s
+    // and then twice snapped the offset back to `lastStableOffset`. It was written for a premise that
+    // is not true of this app: iOS only scrolls a view for a screenshot when the app implements
+    // `UIScreenshotServiceDelegate` and returns a PDF for full-page capture. Kulan implements no such
+    // delegate (nothing in the project references it), so a screenshot here is a plain framebuffer
+    // grab and the list never moves on its own.
+    //
+    // What the handler DID do was move it. `lastStableOffset` is only written on a land, on an
+    // explicit scroll, and while the user is dragging — never by the five inset/keyboard/clamp writers
+    // that legitimately reposition the list. So after opening the keyboard (which shifts the resting
+    // offset by the keyboard's height) the saved value was hundreds of points stale, and the snapback
+    // teleported the reader into history on the next screenshot — exactly the report. The delayed
+    // second snapback then yanked the list back again 1.55s later, undoing any scrolling done in
+    // between, because the freeze also suppressed the `scrollViewDidScroll` bookkeeping that would
+    // have refreshed the saved offset.
+    //
+    // Nothing replaces it: with no handler, a screenshot touches no scroll state at all.
 }
 
 // Pre-measured, INVERTED layout: cell heights are known before layout (never self-sized), so every frame
