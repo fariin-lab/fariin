@@ -128,13 +128,16 @@ struct ImageViewerView: View {
          onDeleteForMe: ((Message) -> Void)? = nil,
          clipProvider: @escaping () -> CGRect? = { nil },
          rectScope: MediaOpenRects.Scope = .chat) {
-        self.gallery = gallery.isEmpty ? [message] : gallery
+        let list = gallery.isEmpty ? [message] : gallery
+        self.gallery = list
         self.cid = cid
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
         self.clipProvider = clipProvider
         self.rectScope = rectScope
         _current = State(initialValue: message.id)
+        // Seeded so the FIRST frame renders the opened page, not a window centred on 0.
+        _windowIndex = State(initialValue: list.firstIndex { $0.id == message.id } ?? 0)
     }
 
     @State private var chromeHidden = false     // single-tap toggles header + toolbar (Apple Photos)
@@ -145,6 +148,10 @@ struct ImageViewerView: View {
     @State private var shareItems: [Any]?
     @State private var loaded: [String: UIImage] = [:]   // page id -> decrypted image
     @State private var pageZoom: CGFloat = 1              // current page's zoom (1 == fit); gates drag-close
+    /// Which page the ±1 render window is centred on. Deliberately BEHIND `current` — it catches up
+    /// once a swipe has settled, so no page is built or torn down while a finger is still dragging.
+    @State private var windowIndex = 0
+    @State private var settleToken = 0                    // debounce: only the newest swipe settles
     @State private var zoomOutToken = 0                  // bump to ask the current page to return to fit
     @State private var closeToken = 0                    // bump → the button close flies home like the drag
     @State private var dismissing = false                 // dismiss in flight → live content hidden ONCE
@@ -300,9 +307,8 @@ struct ImageViewerView: View {
     // (offset/jank at the page seam). The image aspect-fits + centers WITHIN each uniform page.
     private var pagerLayer: some View {
         GeometryReader { geo in
-            // The window is computed ONCE here and handed to each page as a plain Int, instead of every
-            // page searching `gallery` for itself and for the current id — see indexById.
-            let here = currentIndex
+            // THE WINDOW LAGS THE SELECTION ON PURPOSE — see the note on `.onChange(of: current)`.
+            let here = windowIndex
             TabView(selection: $current) {
                 ForEach(Array(gallery.enumerated()), id: \.element.id) { pair in
                     pagerPage(pair.element, idx: pair.offset, currentIdx: here)
@@ -319,13 +325,36 @@ struct ImageViewerView: View {
             .ignoresSafeArea()
         }
         .ignoresSafeArea()
-        // Gallery prefetch: decrypt+decode the ADJACENT pages while you look at this one,
-        // so swiping to the next photo is instant instead of showing a spinner.
+        // NOTHING HEAVY ON THE COMMIT FRAME. This is the "swipe only follows my finger halfway, then it
+        // finishes by itself" report, and the cause is what used to run right here.
+        //
+        // A paging TabView flips `current` as you pass the midpoint, WHILE YOUR FINGER IS STILL DOWN.
+        // Three things then fired on that single frame: a `pageZoom` state write that invalidated the
+        // whole viewer, a prefetch, and — the expensive one — the ±1 page window shifting, which
+        // destroys one ZoomImageView and builds another SYNCHRONOUSLY. A UIViewControllerRepresentable
+        // being torn down and reconstructed mid-gesture is exactly what breaks an interactive
+        // transition: the tracking stops and the system animates the remaining half. Hence "50%".
+        //
+        // So the work is moved off that frame. `windowIndex` — which decides which pages are real —
+        // follows the selection only after the transition has settled, so no page is created or
+        // destroyed while you are still dragging. The page you are swiping INTO is already inside the
+        // old window, so it is live the whole way.
         .onChange(of: current) { _, _ in
-            prefetchNeighbors()
-            pageZoom = 1   // fresh page
+            // Only when it actually differs: paging is gated on being at fit anyway (`canBegin`), so
+            // this was almost always writing 1 over 1 and invalidating the body for nothing.
+            if pageZoom != 1 { pageZoom = 1 }
+            settleToken &+= 1
+            let token = settleToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard token == settleToken else { return }   // superseded by a newer swipe
+                windowIndex = currentIndex
+                prefetchNeighbors()   // decrypt+decode the new neighbours, now that nothing is moving
+            }
         }
-        .task { prefetchNeighbors() }
+        .task {
+            windowIndex = currentIndex
+            prefetchNeighbors()
+        }
     }
 
     /// Position of every message id, built ONCE per gallery change instead of scanned per page.
