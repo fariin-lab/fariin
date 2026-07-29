@@ -114,6 +114,14 @@ struct ThreadView: View {
     @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
+    // NEW-REACTION BADGE (user request): someone reacts to one of my older messages while I am reading
+    // up the chat. The jump-to-bottom arrow cannot say that — it points at the newest message, not at
+    // the one that was reacted to — so this is its sibling: it shows the emoji, and tapping it scrolls
+    // to that exact message and flashes it.
+    @State private var reactionJumpId: String?
+    @State private var reactionJumpEmoji = ""
+    @State private var seenReactionSigs: [String: String] = [:]
+    @State private var reactionSigsSeeded = false
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
@@ -273,7 +281,13 @@ struct ThreadView: View {
             // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
             // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
-            .overlay(alignment: .bottomTrailing) { jumpToBottomButton.padding(.bottom, 10) }
+            .overlay(alignment: .bottomTrailing) {
+                VStack(spacing: 10) {
+                    reactionJumpButton   // sits ABOVE the arrow, like the reference
+                    jumpToBottomButton
+                }
+                .padding(.bottom, 10)
+            }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
             .floatingBottomBar {
@@ -397,6 +411,15 @@ struct ThreadView: View {
                 if ids.isEmpty { pinBarHeight = 0 }
             }
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
+            // A reaction changes no message text, so it arrives as a content-only update — this is the
+            // one signal that sees it.
+            .onChange(of: repo.itemsVersion) { _, _ in noteReactionChanges() }
+            // Reaching the newest message means you have caught up; the badge has nothing left to say.
+            .onChange(of: isAtBottom) { _, atBottom in
+                if atBottom, reactionJumpId != nil {
+                    withAnimation(.easeInOut(duration: 0.2)) { reactionJumpId = nil }
+                }
+            }
             .onChange(of: repo.otherTyping) { _, t in
                 // Typing indicator appears while at the bottom → reveal it (the reference auto-scrolls for
                 // a typing indicator only when the reader was at the bottom). proxy.scrollTo was a NO-OP
@@ -440,6 +463,48 @@ struct ThreadView: View {
 
     // Floating jump-to-bottom button — appears when scrolled up, with a count of messages that arrived
     // while away. Anchored above the composer bar (see scrollStack).
+    /// The new-reaction badge. Appears ONLY while there is an unseen reaction on one of my messages
+    /// and I am not at the bottom; tapping scrolls to that message and flashes it, then it is gone.
+    @ViewBuilder private var reactionJumpButton: some View {
+        if let id = reactionJumpId, !recordingHeld, !recordLocked {
+            Button {
+                flashAndScroll(id)
+                withAnimation(.easeInOut(duration: 0.2)) { reactionJumpId = nil }
+            } label: {
+                Text(reactionJumpEmoji)
+                    .font(.system(size: 19))
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(Circle(), interactive: true)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 16)
+            .transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    /// Watch my own messages for reactions that ARRIVED (not ones that were already there when the
+    /// chat opened). The first pass only seeds the baseline — otherwise every existing reaction in the
+    /// loaded window would fire the badge the moment you walk into a chat.
+    private func noteReactionChanges() {
+        var sigs: [String: String] = [:]
+        var arrived: (id: String, emoji: String)?
+        for m in repo.items where m.authorId == me && !m.reactions.isEmpty {
+            let sig = m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
+            sigs[m.id] = sig
+            // Changed since we last looked, and the change is someone ELSE's reaction.
+            if let old = seenReactionSigs[m.id], old != sig,
+               let theirs = m.reactions.first(where: { $0.key != me })?.value {
+                arrived = (m.id, theirs)
+            }
+        }
+        let seeding = !reactionSigsSeeded
+        seenReactionSigs = sigs
+        reactionSigsSeeded = true
+        guard !seeding, let a = arrived, !isAtBottom else { return }
+        reactionJumpEmoji = a.emoji
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { reactionJumpId = a.id }
+    }
+
     @ViewBuilder private var jumpToBottomButton: some View {
         if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
             Button {
@@ -4450,8 +4515,20 @@ struct MessageBubble: View, Equatable {
                     // vacated space (added after the offset so it stays put).
                     .offset(x: dragX)
                     .simultaneousGesture(replySwipeGesture)
-                reactionBadges
-                    .animation(.spring(response: 0.35, dampingFraction: 0.6), value: message.reactions)   // pop in/out
+                    // REACTIONS HANG OFF THE BUBBLE'S EDGE, not in the gap below it (user: a badge
+                    // floating between two bubbles belongs to neither, so you cannot tell WHICH
+                    // message was reacted to — his circled screenshots). WhatsApp and iMessage both
+                    // attach it to the bubble, overlapping the corner it belongs to: trailing for my
+                    // messages, leading for theirs. The overlay rides `dragX`, so it swipes with the
+                    // bubble instead of being left behind.
+                    .overlay(alignment: isMe ? .bottomTrailing : .bottomLeading) {
+                        reactionBadges
+                            .offset(x: isMe ? -10 : 10, y: 12)
+                            .animation(.spring(response: 0.35, dampingFraction: 0.6), value: message.reactions)
+                    }
+                    // Reserve the overhang so the badge cannot collide with the next bubble. Measured
+                    // by the sizer like any other row content, so heights stay honest.
+                    .padding(.bottom, reactionCounts.isEmpty ? 0 : 12)   // pop in/out
                 if isMe && message.sendState == .failed {
                     Button { onResend(message) } label: {
                         Label("Not delivered. Tap to retry", systemImage: "arrow.clockwise")
