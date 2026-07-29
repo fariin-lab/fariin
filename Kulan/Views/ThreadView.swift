@@ -4423,22 +4423,27 @@ struct MessageBubble: View, Equatable {
         if !all.isEmpty {
             let shown = Array(all.prefix(3))
             let extra = all.count - shown.count
-            HStack(spacing: 4) {
+            // SMALL (user 2026-07-29, with the badge circled: "reaction is big, make it small"). It is a
+            // footnote on a message, not a control competing with the message — the badge was reading
+            // as tall as the timestamp row it sits beside. Every number here came down together, glyph,
+            // count and padding, so the capsule stays a capsule instead of turning into a stretched
+            // pill: 12→10 emoji, 11→9 count, 6/3→5/2 padding.
+            HStack(spacing: 3) {
                 ForEach(shown, id: \.emoji) { r in
-                    HStack(spacing: 3) {
-                        Text(r.emoji).font(.system(size: 12))
+                    HStack(spacing: 2) {
+                        Text(r.emoji).font(.system(size: 10))
                         if r.count > 1 {
-                            Text("\(r.count)").font(.system(size: 11, weight: .semibold))
+                            Text("\(r.count)").font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(r.mine ? Color.accentColor : .secondary)
                         }
                     }
-                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
                     .background(r.mine ? Color.accentColor.opacity(0.18) : Theme.received(dark), in: Capsule())
                     .overlay(Capsule().stroke(Color.accentColor.opacity(r.mine ? 0.9 : 0), lineWidth: 1))
                 }
                 if extra > 0 {
-                    Text("+\(extra)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 3)
+                    Text("+\(extra)").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
                         .background(Theme.received(dark), in: Capsule())
                 }
             }
@@ -4588,12 +4593,16 @@ struct MessageBubble: View, Equatable {
                     // bubble instead of being left behind.
                     .overlay(alignment: isMe ? .bottomTrailing : .bottomLeading) {
                         reactionBadges
-                            .offset(x: isMe ? -10 : 10, y: 12)
+                            // 12 → 9: the badge is shorter now, so it must hang lower by less or it
+                            // would float away from the corner it belongs to.
+                            .offset(x: isMe ? -10 : 10, y: 9)
                             .animation(.spring(response: 0.35, dampingFraction: 0.6), value: message.reactions)
                     }
                     // Reserve the overhang so the badge cannot collide with the next bubble. Measured
                     // by the sizer like any other row content, so heights stay honest.
-                    .padding(.bottom, reactionCounts.isEmpty ? 0 : 12)   // pop in/out
+                    // Matches the smaller badge's overhang — reserving the old 12 would leave a gap
+                    // under every reacted bubble that nothing draws into.
+                    .padding(.bottom, reactionCounts.isEmpty ? 0 : 9)   // pop in/out
                 if isMe && message.sendState == .failed {
                     Button { onResend(message) } label: {
                         Label("Not delivered. Tap to retry", systemImage: "arrow.clockwise")
