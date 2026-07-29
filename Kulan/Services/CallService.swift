@@ -821,13 +821,22 @@ final class CallService: NSObject {
     // player is left alone; a silent/stalled one is nudged with play() on the same instance (no
     // restart-from-zero blip); only a wedged player that refuses play() is rebuilt.
     func audioSessionActivated() {
+        ringbackFallback?.invalidate(); ringbackFallback = nil
         guard state == .outgoing else { return }   // ringback plays for the whole wait, not only once they ring
-        if let p = ringbackPlayer {
-            if !p.isPlaying, !p.play() {
-                stopRingback()
-                startRingback()
-            }
-        } else {
+        // The session is live NOW. Nothing was started before this point (see beginOutgoingMedia), so
+        // this is the FIRST and ONLY start: audible, from the top, with nothing to cut.
+        guard ringbackPlayer == nil else { return }
+        startRingback()
+    }
+
+    /// Belt for the case CallKit never activates the session (activation failure, or a device that
+    /// simply does not call back): after a short wait, start the ringback anyway rather than leave the
+    /// caller in silence. Cancelled the moment a real activation arrives.
+    private var ringbackFallback: Timer?
+    private func armRingbackFallback() {
+        ringbackFallback?.invalidate()
+        ringbackFallback = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
+            guard let self, state == .outgoing, ringbackPlayer == nil else { return }
             startRingback()
         }
     }
@@ -875,6 +884,9 @@ final class CallService: NSObject {
         noAnswerWork?.cancel(); noAnswerWork = nil
         iceRestartWork?.cancel(); iceRestartWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
+        // A pending ringback fallback must die with the call, or a call that ends inside its 1.2s
+        // window would start a ringback nothing is left to stop.
+        ringbackFallback?.invalidate(); ringbackFallback = nil
     }
 
     // MARK: - Reconnection (bad / lost connection)
@@ -964,10 +976,15 @@ final class CallService: NSObject {
 
     // The media half of startCall, split out so the TURN wait can sit between the mic prompt and here.
     private func beginOutgoingMedia(to uid: String) {
-            // Ringback starts IMMEDIATELY (user decision 2026-07-22, verified against Signal live):
-            // the caller never sits in dead silence. The SOUND is comfort; the LABEL is truth —
-            // "Calling…" flips to "Ringing…" only when their phone confirms it is actually ringing.
-            self.startRingback()
+            // RINGBACK IS STARTED BY THE AUDIO SESSION, NOT HERE (2026-07-29). Starting it at this
+            // point plays into a session CallKit has not activated yet: on some devices that is silent,
+            // on others briefly audible — and every scheme that then corrected it on activation was
+            // either a stutter (stop+start) or a permanent silence (leave-a-"playing"-but-mute-player
+            // alone; AVAudioPlayer reports isPlaying = true even when the session was dead, which is the
+            // bug the user heard: one blip, then nothing for the rest of the call). One start, on a live
+            // session, is the only version with no failure mode. `armRingbackFallback` covers the case
+            // where activation never comes, so the caller can never sit in true silence either.
+            self.armRingbackFallback()
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
             let ref = self.db.collection("calls").document()
             self.callId = ref.documentID
