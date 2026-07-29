@@ -1043,6 +1043,30 @@ enum ChatService {
     @MainActor private static var sharedMediaCache: [String: [Message]] = [:]
     @MainActor static func cachedSharedMedia(_ cid: String) -> [Message]? { sharedMediaCache[cid] }
 
+    /// HOW MUCH MEDIA THIS CHAT HAD LAST TIME, remembered on disk per conversation.
+    ///
+    /// The profile's "All Media" section used to appear only once the network answered, so opening a
+    /// profile showed the page WITHOUT it and then shifted everything down a moment later (user
+    /// screenshots, one frame before and one after). The in-memory cache only helped on re-entry
+    /// within the same app run; a fresh launch always jumped.
+    ///
+    /// A count survives a relaunch and is enough to settle the layout on the FIRST frame: >0 means
+    /// reserve the section and show placeholder tiles while the real thumbnails load; 0 means this
+    /// chat has never had media, so nothing is drawn at all and there is nothing to shift. Exactly the
+    /// two rules the user stated.
+    enum SharedMediaPresence {
+        private static let key = "sharedMediaCount.v1"
+        static func count(_ cid: String) -> Int {
+            (UserDefaults.standard.dictionary(forKey: key) as? [String: Int])?[cid] ?? 0
+        }
+        static func note(_ cid: String, _ count: Int) {
+            var d = (UserDefaults.standard.dictionary(forKey: key) as? [String: Int]) ?? [:]
+            guard d[cid] != count else { return }
+            d[cid] = count
+            UserDefaults.standard.set(d, forKey: key)
+        }
+    }
+
     static func sharedMedia(_ cid: String) async -> [Message] {
         do {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
@@ -1055,7 +1079,10 @@ enum ChatService {
                 .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
                 .filter { $0.isImage || $0.isVideo || $0.isAlbum }
                 .flatMap { $0.expandedGalleryItems(cid: cid) }
-            await MainActor.run { sharedMediaCache[cid] = out }
+            await MainActor.run {
+                sharedMediaCache[cid] = out
+                SharedMediaPresence.note(cid, out.count)   // settles the NEXT open's first frame
+            }
             return out
         } catch {
             return await MainActor.run { sharedMediaCache[cid] ?? [] }
