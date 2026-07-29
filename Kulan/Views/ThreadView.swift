@@ -122,6 +122,9 @@ struct ThreadView: View {
     @State private var reactionJumpEmoji = ""
     @State private var seenReactionSigs: [String: String] = [:]
     @State private var reactionSigsSeeded = false
+    /// The list's tap-to-dismiss-keyboard, held for one runloop turn so an inner tap that wants the
+    /// keyboard kept (a reply quote jump) can cancel it — see listBody.
+    @State private var pendingKeyboardDismiss = false
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
@@ -1484,11 +1487,24 @@ struct ThreadView: View {
             .contentShape(Rectangle())
             // Tap anywhere on the conversation → dismiss the keyboard. This gesture
             // lived on the deleted SwiftUI fallback list; simultaneous so bubble taps still work.
+            //
+            // …but SIMULTANEOUS means it also fires when the tap was meant for something inside a
+            // bubble, which is why tapping a reply quote with the keyboard up both jumped AND closed
+            // the keyboard (user: it must work and not close the keyboard, like Signal). The dismissal
+            // is therefore DEFERRED by one runloop turn and cancellable: anything that handles a tap
+            // itself and wants the keyboard kept (the quote jump) clears the flag in the same event,
+            // and because the cancel and the dismissal cannot race — the dismissal runs strictly after
+            // both gestures have fired — the order SwiftUI happens to deliver them in does not matter.
             .simultaneousGesture(
                 TapGesture().onEnded {
-                    inputFocused = false
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                    to: nil, from: nil, for: nil)
+                    pendingKeyboardDismiss = true
+                    DispatchQueue.main.async {
+                        guard pendingKeyboardDismiss else { return }
+                        pendingKeyboardDismiss = false
+                        inputFocused = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                        to: nil, from: nil, for: nil)
+                    }
                 }
             )
             // Scrolled back down to the newest message → the missed messages are now seen: clear the
@@ -1754,6 +1770,9 @@ struct ThreadView: View {
             row: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
+                    // This tap was FOR the quote — keep the keyboard (Signal keeps it too). Cancels
+                    // the list's deferred tap-to-dismiss before it can run.
+                    pendingKeyboardDismiss = false
                     Task {
                         await repo.ensureLoaded(jid)
                         await MainActor.run {
