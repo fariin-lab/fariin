@@ -172,7 +172,8 @@ struct AuthMethodView: View {
                     switch result {
                     case .success(let auth):
                         run { try await AuthService.shared.completeApple(authorization: auth,
-                                                                         requireExistingAccount: mode == .login) }
+                                                                         requireExistingAccount: mode == .login,
+                                                                         requireNewAccount: mode == .create) }
                     case .failure:
                         break   // user cancelled the sheet — not an error worth showing
                     }
@@ -194,7 +195,8 @@ struct AuthMethodView: View {
                 .clipShape(Capsule())
 
                 Button {
-                    run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login) }
+                    run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login,
+                                                                        requireNewAccount: mode == .create) }
                 } label: {
                     // Google's brand rules also call for a white button with dark text, so the
                     // matched set costs us nothing on either company's guidelines.

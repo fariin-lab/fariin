@@ -37,7 +37,9 @@ final class AuthService: NSObject {
 
     /// The one rule every door goes through: anonymous session + new credential = LINK
     /// (keep the uid); credential already taken = sign into that existing account.
-    private func authenticate(with credential: AuthCredential, requireExistingAccount: Bool = false) async throws {
+    private func authenticate(with credential: AuthCredential,
+                              requireExistingAccount: Bool = false,
+                              requireNewAccount: Bool = false) async throws {
         if let user = Auth.auth().currentUser, user.isAnonymous {
             do {
                 let result = try await user.link(with: credential)
@@ -67,6 +69,13 @@ final class AuthService: NSObject {
             try? Auth.auth().signOut()
             throw AuthFlowError.noAccount
         }
+        // THE SIGN-UP DOOR, mirror guard: this Google/Apple identity ALREADY has a Kulan account.
+        // Entering the old account under a "create" flow reads as the app losing your new account —
+        // sign back out and point at the right door, exactly like the email door's emailTaken.
+        if requireNewAccount, result.additionalUserInfo?.isNewUser != true {
+            try? Auth.auth().signOut()
+            throw AuthFlowError.accountExists
+        }
         uid = result.user.uid
         reportLogin()
     }
@@ -82,9 +91,12 @@ final class AuthService: NSObject {
         request.nonce = Self.sha256(nonce)
     }
 
-    func completeApple(authorization: ASAuthorization, requireExistingAccount: Bool = false) async throws {
+    func completeApple(authorization: ASAuthorization,
+                       requireExistingAccount: Bool = false,
+                       requireNewAccount: Bool = false) async throws {
         try await authenticate(with: makeAppleCredential(authorization: authorization),
-                               requireExistingAccount: requireExistingAccount)
+                               requireExistingAccount: requireExistingAccount,
+                               requireNewAccount: requireNewAccount)
     }
 
     /// Build the Firebase credential from an Apple authorization. Shared by sign-in and by
@@ -129,8 +141,10 @@ final class AuthService: NSObject {
 
     private var webSession: ASWebAuthenticationSession?
 
-    func signInWithGoogle(requireExistingAccount: Bool = false) async throws {
-        try await authenticate(with: obtainGoogleCredential(), requireExistingAccount: requireExistingAccount)
+    func signInWithGoogle(requireExistingAccount: Bool = false, requireNewAccount: Bool = false) async throws {
+        try await authenticate(with: obtainGoogleCredential(),
+                               requireExistingAccount: requireExistingAccount,
+                               requireNewAccount: requireNewAccount)
     }
 
     /// Run the Google web flow and return the Firebase credential. Shared by sign-in and by
@@ -403,7 +417,7 @@ extension AuthService: ASWebAuthenticationPresentationContextProviding {
 enum AuthFlowError: LocalizedError {
     case appleFailed, googleFailed, emailTaken, emailTakenWrongPassword
     case notSignedIn, alreadyConnected, alreadyLinkedElsewhere
-    case noAccount
+    case noAccount, accountExists
 
     var errorDescription: String? {
         switch self {
@@ -418,6 +432,8 @@ enum AuthFlowError: LocalizedError {
             return "That login already belongs to a different Kulan account. Sign out and log in with it instead."
         case .noAccount:
             return "You haven't signed up with this account before. Go back and choose Sign Up to continue."
+        case .accountExists:
+            return "This account already has a Kulan account. Go back and choose Log In instead."
         }
     }
 }
