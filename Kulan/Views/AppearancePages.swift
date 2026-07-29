@@ -618,6 +618,7 @@ enum RetiredAppIcons {
 
 struct AppIconPage: View {
     @State private var current = UIApplication.shared.alternateIconName
+    @State private var iconError: String?
 
     /// One mark, several grounds. `nil` is the primary blue bubble from the asset catalog; the rest are
     /// the same bubble composited onto a flat colour. The old tri-arrow icons (Blue/Ivory/Chrome) were
@@ -668,6 +669,12 @@ struct AppIconPage: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("App Icon")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Couldn't change the icon",
+               isPresented: Binding(get: { iconError != nil }, set: { if !$0 { iconError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(iconError ?? "")
+        }
     }
 
     @ViewBuilder private func iconImage(_ name: String?) -> some View {
@@ -682,8 +689,20 @@ struct AppIconPage: View {
 
     private func choose(_ name: String?) {
         guard name != current else { return }
+        // THE FAILURE IS SAID OUT LOUD NOW. This used to keep the error and drop it on the floor, so a
+        // refused icon looked exactly like a tap that did nothing: the tile never became selected, the
+        // Home Screen never changed, and there was nothing to go on (user: "icons look good but they
+        // are not working"). The cause that time was an alpha channel in the generated PNGs, which iOS
+        // will not accept in an app icon — but the point is that it took a guess to find, and it should
+        // not have.
         UIApplication.shared.setAlternateIconName(name) { err in
-            if err == nil { DispatchQueue.main.async { current = name } }
+            DispatchQueue.main.async {
+                if let err {
+                    iconError = err.localizedDescription
+                } else {
+                    current = name
+                }
+            }
         }
     }
 }
