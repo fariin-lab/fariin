@@ -42,7 +42,10 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         private let container = TitleContainerView()
         private weak var target: UIViewController?
         private var observation: NSKeyValueObservation?
+        private var backObservation: NSKeyValueObservation?   // back-button visibility — the title area's left edge
         private var reassertScheduled = false   // coalesces KVO re-asserts so they can't storm the bar
+        private var relayoutScheduled = false   // coalesces back-button re-seats the same way
+        private var needsReseatOnResume = false // set by suspend(): the next install re-seats once
 
         init(onTap: @escaping () -> Void) {
             self.onTap = onTap
@@ -74,9 +77,18 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             guard let vc = marker.owningViewController else { return }
             if target !== vc {
                 observation?.invalidate(); observation = nil
+                backObservation?.invalidate(); backObservation = nil
                 target = vc
             }
             assertTitleView()
+            // Coming back from selection mode: UIKit property observation is best-effort, so the
+            // guaranteed path is this one — the install that runs when `isActive` flips back on. The
+            // deferred re-seat lands on the next runloop tick, by which time SwiftUI's same commit has
+            // restored the back button, so the bar recomputes the title area with the chevron in place.
+            if needsReseatOnResume {
+                needsReseatOnResume = false
+                scheduleTitleRelayout()
+            }
             applyBlurAppearance(to: vc)
             // SwiftUI re-manages the navigationItem on its own update cycles and clears titleView
             // (the "avatar+name sometimes gone" flicker). Observe it and put ours back — but ASYNC and
@@ -90,6 +102,39 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
                 observation = item.observe(\.titleView, options: [.new]) { [weak self] _, _ in
                     self?.scheduleAssertTitleView()
                 }
+            }
+            // THE SECOND HALF OF THE SELECTION-EXIT FIX. Re-assigning the titleView on the way out
+            // (assertTitleView) was not enough on device: our install runs synchronously when
+            // `selecting` flips false, but SwiftUI restores the back button LATER in its own commit —
+            // and when the chevron lands, nothing told the bar the title area's left edge had moved,
+            // so the avatar and name stayed at the full-width frame computed while the leading area
+            // was empty, underneath the chevron (user report, 12:08 screenshot, second occurrence).
+            // The trigger to anchor to is the back button itself: when its visibility changes, re-seat
+            // the title. Deferred and coalesced for the same storm reasons as the titleView observer.
+            if backObservation == nil, let item = target?.navigationItem {
+                backObservation = item.observe(\.hidesBackButton, options: [.new]) { [weak self] _, _ in
+                    self?.scheduleTitleRelayout()
+                }
+            }
+        }
+
+        // A REAL nil→container re-assignment, not just a layout flag: releasing and re-setting the
+        // titleView is what provably makes the bar recompute the title frame (see suspend()); a
+        // setNeedsLayout alone left the stale frame on device. Both assignments land in one runloop
+        // tick, so nothing flickers. Only when we currently own the title — during selection mode the
+        // principal toolbar owns it, and stealing it back here would fight that owner.
+        private func scheduleTitleRelayout() {
+            guard !relayoutScheduled else { return }
+            relayoutScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.relayoutScheduled = false
+                guard let item = self.target?.navigationItem else { return }
+                if item.titleView === self.container {
+                    item.titleView = nil
+                    item.titleView = self.container
+                }
+                self.target?.navigationController?.navigationBar.setNeedsLayout()
             }
         }
 
@@ -147,6 +192,8 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         /// forces the bar to recompute the title frame now that the back button is back.
         func suspend() {
             observation?.invalidate(); observation = nil
+            backObservation?.invalidate(); backObservation = nil
+            needsReseatOnResume = true
             guard let item = target?.navigationItem, item.titleView === container else { return }
             item.titleView = nil
             target?.navigationController?.navigationBar.setNeedsLayout()
@@ -154,6 +201,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
 
         func remove() {
             observation?.invalidate(); observation = nil
+            backObservation?.invalidate(); backObservation = nil
             if target?.navigationItem.titleView === container { target?.navigationItem.titleView = nil }
         }
     }
