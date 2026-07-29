@@ -1,4 +1,4 @@
-import SwiftUI
+﻿import SwiftUI
 import AVFoundation
 import UIKit
 
@@ -15,8 +15,8 @@ struct ApprovalClip: Identifiable {
 // start/end), a caption field, and Send. On Send it exports just the trimmed range (or sends the original
 // untouched if nothing was trimmed).
 //
-// MULTI-VIDEO MODE (user spec, reference screenshot): the SAME page — identical zoom, HD button, trim
-// strip, caption, spacing — plus a horizontal THUMBNAIL RAIL at the canvas's bottom-right showing every
+// MULTI-VIDEO MODE (user spec, reference screenshot): the SAME page â€” identical zoom, HD button, trim
+// strip, caption, spacing â€” plus a horizontal THUMBNAIL RAIL at the canvas's bottom-right showing every
 // selected video (duration badge, blue border on the current one, X to remove it). Tapping a thumb
 // switches the editor to that clip; each clip keeps its own trim. Send exports every clip.
 struct VideoApprovalView: View {
@@ -48,7 +48,7 @@ struct VideoApprovalView: View {
         self.selfDismissOnSend = selfDismissOnSend
     }
 
-    // Multiple videos → the same editor with the thumbnail rail.
+    // Multiple videos â†’ the same editor with the thumbnail rail.
     init(clips: [ApprovalClip], onSendMulti: @escaping (_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void,
          selfDismissOnSend: Bool = true) {
         _clipList = State(initialValue: clips)
@@ -61,24 +61,24 @@ struct VideoApprovalView: View {
     private var activeClipId: UUID { clipList[current].id }
 
     @State private var caption = ""
-    @State private var playing = false   // PAUSED by default — plays only when the user taps play (user request)
+    @State private var playing = false   // PAUSED by default â€” plays only when the user taps play (user request)
     @State private var hd = false
     @FocusState private var captionFocused: Bool
 
-    // Pinch-to-zoom + pan on the video preview (1×…4×), like the photo viewer.
+    // Pinch-to-zoom + pan on the video preview (1Ã—â€¦4Ã—), like the photo viewer.
     @State private var zoom: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
     @State private var pan: CGSize = .zero
     @GestureState private var drag: CGSize = .zero
 
     // Trim state
-    @State private var videoSize: CGSize = .zero   // natural (rotation-corrected) size → tall-video rounding
+    @State private var videoSize: CGSize = .zero   // natural (rotation-corrected) size â†’ tall-video rounding
     @State private var duration: Double = 0
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
     @State private var thumbnails: [UIImage] = []
-    @State private var scrubTime: Double? = nil   // non-nil while dragging a handle → seek preview
-    @State private var playhead: Double = 0        // live playback position (seconds) → scrubber line
+    @State private var scrubTime: Double? = nil   // non-nil while dragging a handle â†’ seek preview
+    @State private var playhead: Double = 0        // live playback position (seconds) â†’ scrubber line
     @State private var draggingPlayhead = false
     @State private var exporting = false
 
@@ -87,63 +87,32 @@ struct VideoApprovalView: View {
     private let minDuration: Double = 1   // keep at least ~1s
 
     private var trimmed: Bool { duration > 0 && (trimStart > 0.05 || trimEnd < duration - 0.05) }
-    // 9:16 or taller → long-portrait presentation (rounded corners on the video itself).
+    // 9:16 or taller â†’ long-portrait presentation (rounded corners on the video itself).
     private var isTallVideo: Bool { videoSize.width > 0 && videoSize.height >= videoSize.width * (16.0 / 9.0) - 1 }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            // Same layout as the image editor: the video aspect-FITS the area BETWEEN the chrome (the
-            // top bar + trim strip + caption, reserved by safeAreaInset below) instead of filling the
-            // whole screen behind them — fully visible / zoomed-out, letterboxed on black, rounded
-            // corners. (Was .ignoresSafeArea() → edge-to-edge full screen.)
-            // The white playhead line tracks the player's REAL current time during playback (Bug 1/2 fix):
-            // the periodic time observer reports the position every 0.05s and we write it to `playhead`,
-            // so the line glides frame-by-frame in sync with the video instead of sitting frozen near the
-            // left handle. While the user is dragging a handle/the playhead, `scrubTime` owns the position,
-            // so we ignore player time then (no fight between the seek-preview and the observer).
-            Group {
-                let base = TrimmingPlayerView(url: activeURL, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
-                                              scrubTime: scrubTime,
-                                              onTime: { t in if scrubTime == nil { playhead = t } })
-                    .id(activeClipId)   // switching clips rebuilds the player (the UIView holds its url)
-                if isTallVideo {
-                    // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
-                    // ROUNDED CORNERS hug the video itself — standard ratios keep the untouched chain.
-                    base.aspectRatio(videoSize.width / videoSize.height, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                } else {
-                    base
+            // THE PLATFORM'S PAGER, the same one the multi-IMAGE editor uses (user 2026-07-29: "when I
+            // send multi video the swipe works but it's not smooth, it's not following my finger - make
+            // it like multi image").
+            //
+            // He was describing exactly what the old code did. There was no pager here at all: a
+            // DragGesture with only an `onEnded` watched for a FINISHED swipe and then swapped the clip
+            // behind a 0.2s cross-fade. Nothing ever moved with the finger, because nothing was
+            // connected to it - you dragged, let go, and the app changed the picture afterwards.
+            //
+            // Only the CURRENT page carries a player; the others draw their rail poster. Paging
+            // therefore costs one still image per neighbour instead of an AVPlayer per clip.
+            TabView(selection: $current) {
+                ForEach(Array(clipList.enumerated()), id: \.element.id) { pair in
+                    clipPage(pair.offset, pair.element).tag(pair.offset)
                 }
             }
-                .scaleEffect(max(1, zoom * pinch))
-                .offset(x: pan.width + drag.width, y: pan.height + drag.height)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
-                .gesture(
-                    MagnificationGesture()
-                        .updating($pinch) { v, s, _ in s = v }
-                        .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
-                )
-                .simultaneousGesture(
-                    zoom > 1 ? DragGesture().updating($drag) { v, s, _ in s = v.translation }
-                        .onEnded { v in pan.width += v.translation.width; pan.height += v.translation.height } : nil
-                )
-                .onTapGesture(count: 2) { withAnimation(.easeInOut(duration: 0.2)) { zoom = zoom > 1 ? 1 : 2; if zoom <= 1 { pan = .zero } } }
-                .onTapGesture { if captionFocused { captionFocused = false } else { playing.toggle() } }
-                // SWIPE between clips (user report: the mixed editor pages by swipe, this one only via
-                // rail taps). Horizontal-dominant swipe at rest switches clip; disabled while zoomed
-                // (the pan owns the drag there) and for single clips.
-                .simultaneousGesture(
-                    max(1, zoom * pinch) > 1.01 || clipList.count < 2 ? nil : DragGesture(minimumDistance: 30)
-                        .onEnded { g in
-                            let dx = g.translation.width, dy = g.translation.height
-                            guard abs(dx) > abs(dy) * 1.5, abs(dx) > 60 else { return }
-                            let next = dx < 0 ? current + 1 : current - 1
-                            guard clipList.indices.contains(next) else { return }
-                            withAnimation(.easeInOut(duration: 0.2)) { switchTo(next) }
-                        }
-                )
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
+            .onChange(of: current) { old, new in clipChanged(from: old, to: new) }
+
             if !playing && scrubTime == nil {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
@@ -153,16 +122,65 @@ struct VideoApprovalView: View {
                 ZStack { Color.black.opacity(0.4).ignoresSafeArea(); ProgressView().tint(.white).scaleEffect(1.3) }
             }
         }
-        // Top bar FLOATS over the video (X · HD) instead of sitting on a black band above it — the
+        // Top bar FLOATS over the video (X - HD) instead of sitting on a black band above it - the
         // video extends up to the top, no black "header". Only the bottom chrome insets the video.
         .overlay(alignment: .top) { topBar }
-        // Thumbnail RAIL (multi-video only): bottom-right of the canvas, above the trim strip — the
+        // Thumbnail RAIL (multi-video only): bottom-right of the canvas, above the trim strip - the
         // reference position. Hidden while the caption keyboard is up (the strip area is reclaimed).
         .overlay(alignment: .bottomTrailing) {
             if clipList.count > 1 && !captionFocused { thumbRail }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
         .task(id: activeClipId) { await loadVideoIfNeeded() }
+    }
+
+    /// One page of the clip pager: the live editor for the current clip, a still poster for the rest.
+    ///
+    /// The swipe-between-clips DragGesture that used to hang off this view is GONE - the TabView owns
+    /// that gesture now, which is the whole point. Pinch-zoom, pan-while-zoomed and the tap handlers
+    /// stay, and they only exist on the page you are actually looking at.
+    @ViewBuilder private func clipPage(_ i: Int, _ clip: ApprovalClip) -> some View {
+        if i == current {
+            Group {
+                let base = TrimmingPlayerView(url: activeURL, playing: $playing, start: trimStart, end: max(trimStart + 0.1, trimEnd),
+                                              scrubTime: scrubTime,
+                                              onTime: { t in if scrubTime == nil { playhead = t } })
+                    .id(activeClipId)   // switching clips rebuilds the player (the UIView holds its url)
+                if isTallVideo {
+                    // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
+                    // ROUNDED CORNERS hug the video itself - standard ratios keep the untouched chain.
+                    base.aspectRatio(videoSize.width / videoSize.height, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                } else {
+                    base
+                }
+            }
+            .scaleEffect(max(1, zoom * pinch))
+            .offset(x: pan.width + drag.width, y: pan.height + drag.height)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
+            .gesture(
+                MagnificationGesture()
+                    .updating($pinch) { v, s, _ in s = v }
+                    .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
+            )
+            .simultaneousGesture(
+                zoom > 1 ? DragGesture().updating($drag) { v, s, _ in s = v.translation }
+                    .onEnded { v in pan.width += v.translation.width; pan.height += v.translation.height } : nil
+            )
+            .onTapGesture(count: 2) { withAnimation(.easeInOut(duration: 0.2)) { zoom = zoom > 1 ? 1 : 2; if zoom <= 1 { pan = .zero } } }
+            .onTapGesture { if captionFocused { captionFocused = false } else { playing.toggle() } }
+        } else {
+            // A neighbour: its poster, fitted on black. Cheap enough that paging never waits on it.
+            Group {
+                if let t = railImage(clip) {
+                    Image(uiImage: t).resizable().scaledToFit()
+                } else {
+                    Color.black
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     // MARK: - Thumbnail rail (multi-video)
@@ -242,20 +260,31 @@ struct VideoApprovalView: View {
 
     // MARK: - Clip switching
 
-    private func stashCurrent() {
+    private func stashCurrent() { stash(clipId: activeClipId) }
+
+    private func stash(clipId: UUID) {
         guard duration > 0 else { return }
-        stash[activeClipId] = ClipTrim(duration: duration, trimStart: trimStart, trimEnd: trimEnd,
-                                       videoSize: videoSize, thumbnails: thumbnails)
+        stash[clipId] = ClipTrim(duration: duration, trimStart: trimStart, trimEnd: trimEnd,
+                                 videoSize: videoSize, thumbnails: thumbnails)
     }
 
+    /// Rail taps just move the selection; everything that used to live here now happens in
+    /// `onChange(of: current)`, so a tap and a swipe follow the SAME path. When the pager owns the
+    /// gesture, the selection can change without anyone calling this.
     private func switchTo(_ i: Int) {
         guard i != current, clipList.indices.contains(i) else { return }
-        stashCurrent()
+        withAnimation(.easeInOut(duration: 0.2)) { current = i }
+    }
+
+    /// The clip changed, however it changed. Stash the trim of the one we LEFT (by its own id â€” after
+    /// the fact `current` already points at the new clip), then load the one we arrived at.
+    private func clipChanged(from old: Int, to new: Int) {
+        guard old != new, clipList.indices.contains(new) else { return }
+        if clipList.indices.contains(old) { stash(clipId: clipList[old].id) }
         playing = false
         scrubTime = nil
         zoom = 1; pan = .zero
-        current = i
-        restoreOrReset(clipList[i].id)
+        restoreOrReset(clipList[new].id)
     }
 
     private func restoreOrReset(_ id: UUID) {
@@ -267,7 +296,7 @@ struct VideoApprovalView: View {
             videoSize = .zero; thumbnails = []
         }
         playhead = trimStart
-        // duration == 0 → the .task(id:) reload fetches this clip's metadata + filmstrip.
+        // duration == 0 â†’ the .task(id:) reload fetches this clip's metadata + filmstrip.
     }
 
     private func removeClip(_ i: Int) {
@@ -297,7 +326,7 @@ struct VideoApprovalView: View {
                 Text(trimLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary)
                     .padding(.horizontal, 12).frame(height: 32).liquidGlass(Capsule(), interactive: false)
             }
-            // HD toggle (top-right) — 1080p when on, else 720p (matches the photo editor's HD).
+            // HD toggle (top-right) â€” 1080p when on, else 720p (matches the photo editor's HD).
             Button { hd.toggle() } label: {
                 Text("HD").font(.system(size: 13, weight: .bold))
                     .foregroundStyle(hd ? Color(hex: 0x3DA1FD) : .primary)
@@ -310,7 +339,7 @@ struct VideoApprovalView: View {
 
     @ViewBuilder private var bottomControls: some View {
         VStack(spacing: 12) {
-            // Trim bar HIDES while the caption keyboard is up (user request; matches the multi pager) —
+            // Trim bar HIDES while the caption keyboard is up (user request; matches the multi pager) â€”
             // typing needs the space, and trimming while typing isn't a real flow.
             if !captionFocused {
                 if !thumbnails.isEmpty && duration > 0 {
@@ -319,7 +348,7 @@ struct VideoApprovalView: View {
                     // RESERVE the strip's slot while the filmstrip loads: the strip appearing LATE grew
                     // the bottom inset after the first frame, so the video fitted BIG first and re-fitted
                     // smaller a beat later (the "zoom out is coming late" report). The image editor never
-                    // did this because its chrome height is known synchronously — now this one is too.
+                    // did this because its chrome height is known synchronously â€” now this one is too.
                     Color.clear.frame(height: stripHeight)
                 }
             }
@@ -329,7 +358,7 @@ struct VideoApprovalView: View {
         .animation(.easeInOut(duration: 0.2), value: captionFocused)
     }
 
-    // THE shared trimmer (VideoTrimStrip) — one implementation for the single editor AND the multi
+    // THE shared trimmer (VideoTrimStrip) â€” one implementation for the single editor AND the multi
     // pager, so every trim fix lands everywhere at once.
     private var trimStrip: some View {
         VideoTrimStrip(duration: duration, thumbnails: thumbnails,
@@ -342,7 +371,7 @@ struct VideoApprovalView: View {
 
     private var captionBar: some View {
         HStack(spacing: 10) {
-            TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)),
+            TextField("", text: $caption, prompt: Text("Add a captionâ€¦").foregroundColor(Color(.systemGray3)),
                       axis: .vertical)
                 .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls
                 .foregroundStyle(.primary).focused($captionFocused)
@@ -376,7 +405,7 @@ struct VideoApprovalView: View {
         let asset = AVURLAsset(url: activeURL)
         let dur = (try? await asset.load(.duration).seconds) ?? 0
         guard dur > 0 else { return }
-        // Natural (rotation-corrected) size → drives the long-portrait rounded presentation.
+        // Natural (rotation-corrected) size â†’ drives the long-portrait rounded presentation.
         if let track = try? await asset.loadTracks(withMediaType: .video).first,
            let sz = try? await track.load(.naturalSize),
            let tf = try? await track.load(.preferredTransform) {
@@ -491,7 +520,7 @@ final class TrimPlayerUIView: UIView {
                                  toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }
-        // Do NOT auto-play — the owner's `playing` binding drives play/pause (paused by default).
+        // Do NOT auto-play â€” the owner's `playing` binding drives play/pause (paused by default).
     }
     required init?(coder: NSCoder) { fatalError("not implemented") }
 
