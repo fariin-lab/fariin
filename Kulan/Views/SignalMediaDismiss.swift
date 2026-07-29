@@ -106,8 +106,12 @@ struct SignalDismissHost: UIViewRepresentable {
         }
 
 
-        // Coexist with the pager + zoom scroll views (coordinated via delegation the same way);
-        // the directional recognizer self-cancels on horizontal intent, and we gate on canBegin.
+        // Coexist with the pager + zoom scroll views (coordinated via delegation the same way); we gate
+        // on canBegin, and the directional recogniser FAILS on horizontal intent — which it only really
+        // does since 2026-07-29. It used to judge direction from the delta since the last touch sample
+        // and merely decline to engage on a horizontal one, staying `.possible` and armed for the rest
+        // of the swipe. Simultaneous recognition then meant a sideways drag was being contested the
+        // whole way across, and one wobbly frame handed it to the dismiss outright.
         func gestureRecognizer(_ g: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
