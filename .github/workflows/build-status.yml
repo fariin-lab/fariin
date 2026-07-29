@@ -73,6 +73,8 @@ jobs:
                   for g in groups) or "none"
               print(f"  {ver:>4}: internal={detail.get('internalBuildState')} "
                     f"external={detail.get('externalBuildState')} "
-                    f"expired={detail.get('autoNotifyEnabled')} "
+                    f"autoNotify={detail.get('autoNotifyEnabled')} "
                     f"groups=[{names}] individualTesters={len(testers)} whatsNew={len(locs)}")
+          print("\nVisible to internal testers = internal IN_BETA_TESTING. "
+                "internal=None means Apple has not finished setting the build up for testing yet.")
           PY
