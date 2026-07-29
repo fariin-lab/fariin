@@ -295,6 +295,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
     // instance, which can't switch renderers.
     private var configuredRoutes: [String: Bool] = [:]
+    // Our own progressive edge blur (see viewDidLoad): real blur views, gradient-masked, frames set by
+    // hand every layout pass. Nothing about them touches the transformed scroll view.
+    private let topBlurBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let bottomBlurBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let topBlurMask = CAGradientLayer()
+    private let bottomBlurMask = CAGradientLayer()
     private var doubleTapGesture: UITapGestureRecognizer!
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
@@ -365,17 +371,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // UIKit computes the collection view's safe area from the WINDOW, which is why .always worked
         // here for months. Do not take these insets over again without device proof.
         collectionView.contentInsetAdjustmentBehavior = .always
-        // SCROLL EDGE BLUR: PERMANENTLY OFF for this list, verdict FINAL (2026-07-29, three device
-        // strikes). Apple's effect cannot survive the inverted list in ANY configuration: the default
-        // washed whole chats on iOS 26; blindly enabled it drew nothing on 27; and PROPERLY REGISTERED
-        // (UIScrollEdgeElementContainerInteraction on containers over the real bar regions, .soft, the
-        // documented custom-bar way) it washed the ENTIRE chat again — user screenshot, every bubble
-        // ghosted. The hand-made gradient bands failed separately (frosted blocks mid-chat).
-        // DO NOT TRY AGAIN without a device in hand: not the system effect, not custom bands. The chat
-        // scrolls raw under its bars, which the user has accepted over any of the failure modes.
+        // APPLE'S SCROLL EDGE EFFECT STAYS OFF — three device strikes, and the reason is structural:
+        // it reads the scroll view's own geometry, and this list is TRANSFORMED (scaleY -1). Default →
+        // washed whole chats on iOS 26; blindly enabled → drew nothing on 27; properly registered with
+        // UIScrollEdgeElementContainerInteraction → washed the whole chat again. Signal gets the effect
+        // for free because THEIR conversation list is not inverted; ours is, and that inversion is what
+        // permanently killed the scroll jump. Not a trade we undo for a visual.
         if #available(iOS 26.0, *) {
             collectionView.topEdgeEffect.isHidden = true
             collectionView.bottomEdgeEffect.isHidden = true
+        }
+        // OUR OWN PROGRESSIVE BLUR, in UIKit, with exact frames (attempt 4 — the user asked why Signal
+        // has this and we do not). The previous hand-made attempt was SwiftUI overlays on the messages
+        // layer and rendered as frosted blocks mid-chat: in that layered, safe-area-ignoring tree the
+        // overlay's frame is not the screen. This version cannot land anywhere unexpected — two real
+        // blur views owned by THIS controller (whose view is untransformed and IS the screen region),
+        // frames written by hand in viewDidLayoutSubviews from view.bounds + view.safeAreaInsets, with
+        // a CAGradientLayer mask so the blur is strongest at the very edge and fades to nothing.
+        // Inserted directly ABOVE the collection view and BELOW the date pill (added later), so
+        // messages blur under the bars while the pill stays crisp.
+        for (band, mask, isTop) in [(topBlurBand, topBlurMask, true), (bottomBlurBand, bottomBlurMask, false)] {
+            band.isUserInteractionEnabled = false
+            mask.colors = isTop
+                ? [UIColor.black.cgColor, UIColor.black.withAlphaComponent(0.55).cgColor, UIColor.clear.cgColor]
+                : [UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.55).cgColor, UIColor.black.cgColor]
+            mask.locations = [0, 0.6, 1]
+            mask.startPoint = CGPoint(x: 0.5, y: 0)
+            mask.endPoint = CGPoint(x: 0.5, y: 1)
+            band.layer.mask = mask
+            view.insertSubview(band, aboveSubview: collectionView)
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -1612,11 +1636,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // Keep the system edge effects OFF (UIKit can reset the flags) — see the verdict at setup.
+        // Keep the system edge effects OFF (UIKit can reset the flags) — see the note at setup.
         if #available(iOS 26.0, *) {
             if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
             if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
         }
+        // OUR blur bands: exact frames over the real bar regions. The top band covers the status bar +
+        // nav bar (+ the pinned-message bar when shown); the bottom covers the composer + home
+        // indicator. CATransaction disables the implicit animation a layer-frame write would otherwise
+        // ride, which would smear the mask on every keyboard/composer height change.
+        let safe = view.safeAreaInsets
+        let topH = safe.top + topOverlayHeight
+        let bottomH = safe.bottom + composerBarH
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        topBlurBand.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: max(0, topH))
+        topBlurMask.frame = topBlurBand.bounds
+        bottomBlurBand.frame = CGRect(x: 0, y: view.bounds.height - max(0, bottomH),
+                                      width: view.bounds.width, height: max(0, bottomH))
+        bottomBlurMask.frame = bottomBlurBand.bounds
+        CATransaction.commit()
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
         // swipe-to-reply and resetSwipe is the single choke point that restores it â€” so ANY path that ends
         // a swipe without reaching resetSwipe leaves the thread permanently unscrollable, with nothing to
