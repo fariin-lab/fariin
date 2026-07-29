@@ -65,14 +65,9 @@ struct SettingsView: View {
                     NavigationLink { AppearanceSettingsView() } label: {
                         Label("Appearance", systemImage: "paintbrush")
                     }
-                    // App Icon sits at the TOP LEVEL as well as inside Appearance (user request
-                    // 2026-07-29). It was only reachable three taps deep, behind Appearance, which is
-                    // where people look for wallpapers and themes — not for the icon on their Home
-                    // Screen. Both entry points push the same page, so there is no second copy of
-                    // anything to keep in step.
-                    NavigationLink { AppIconPage() } label: {
-                        Label("App Icon", systemImage: "app.badge")
-                    }
+                    // NO App Icon row here: it lives inside Appearance, and one door is enough (user
+                    // 2026-07-29, after seeing both). Two rows leading to the same page reads as a
+                    // duplicate, which is what it was.
                     NavigationLink { StorySettingsView() } label: {
                         SettingsRowLabel("Stories", "ic_stories")
                     }
