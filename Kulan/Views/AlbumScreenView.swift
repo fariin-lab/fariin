@@ -77,12 +77,16 @@ struct AlbumScreenView: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
         // Presented FROM this screen, which is what makes "back" land on the album again.
+        // `.album` scope: this sheet's own tiles register no rects, so the viewer finds no landing
+        // target and closes with the honest drift-down fallback. Without the scope it would inherit
+        // `.chat` and fly home to an album tile sitting BEHIND this sheet — a landing the user cannot
+        // see, which is exactly the wrong-area class of bug.
         .fullScreenCover(item: $viewerImage) { m in
             ImageViewerView(message: m, in: imageGallery, cid: cid,
-                            onDeleteForMe: { _ in })
+                            onDeleteForMe: { _ in }, rectScope: .album)
         }
         .fullScreenCover(item: $viewerVideo) { m in
-            VideoPlayerScreen(message: m, cid: cid)
+            VideoPlayerScreen(message: m, cid: cid, rectScope: .album)
         }
     }
 

@@ -79,6 +79,9 @@ struct ImageViewerView: View {
     // is clipped through it (Signal's clippingAreaInsets). The conversation wires this to the message
     // list's live viewport; profile/gallery leave it nil (no clipping, same as before).
     var clipProvider: () -> CGRect? = { nil }
+    // Which screen's tile registry this viewer lands on (chat bubble vs All Media tile vs profile
+    // thumb). They share message ids, so the scope is what keeps them apart.
+    var rectScope: MediaOpenRects.Scope = .chat
     private struct PenEditWrap: Identifiable { let id = UUID(); let image: UIImage }
     @State private var penEdit: PenEditWrap?
 
@@ -86,23 +89,27 @@ struct ImageViewerView: View {
     init(message: Message, cid: String,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
          onDeleteForMe: ((Message) -> Void)? = nil,
-         clipProvider: @escaping () -> CGRect? = { nil }) {
+         clipProvider: @escaping () -> CGRect? = { nil },
+         rectScope: MediaOpenRects.Scope = .chat) {
         self.gallery = [message]; self.cid = cid
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
         self.clipProvider = clipProvider
+        self.rectScope = rectScope
         _current = State(initialValue: message.id)
     }
     // Gallery entry: swipe between all the images, starting at `message`.
     init(message: Message, in gallery: [Message], cid: String,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
          onDeleteForMe: ((Message) -> Void)? = nil,
-         clipProvider: @escaping () -> CGRect? = { nil }) {
+         clipProvider: @escaping () -> CGRect? = { nil },
+         rectScope: MediaOpenRects.Scope = .chat) {
         self.gallery = gallery.isEmpty ? [message] : gallery
         self.cid = cid
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
         self.clipProvider = clipProvider
+        self.rectScope = rectScope
         _current = State(initialValue: message.id)
     }
 
@@ -152,7 +159,7 @@ struct ImageViewerView: View {
     }
     /// The drag-close's exit. The flying copy IS the animation, so the presentation itself must go
     /// without one — SignalDismissHost calls this with its copy still covering the same pixels.
-    private func instantDismiss() { dismiss() }
+    private func instantDismiss() { MediaPresentGate.noteDismissed(); dismiss() }
 
     var body: some View {
         // Split into pagerLayer/chromeLayer — the inline body blew the type-checker budget.
@@ -186,8 +193,8 @@ struct ImageViewerView: View {
                 // Land on the thumbnail this photo came from. Reported live by MediaRectReporter,
                 // keyed by the CURRENT page's id, so paging to another photo and closing lands on
                 // that one's tile rather than the one we opened with.
-                targetRect: { MediaOpenRects.rect(current) },
-                targetId: { current },
+                targetRect: { MediaOpenRects.rect(MediaOpenRects.key(rectScope, current)) },
+                targetId: { MediaOpenRects.key(rectScope, current) },
                 clipRect: clipProvider,
                 closeToken: closeToken,
                 onDismiss: { instantDismiss() })

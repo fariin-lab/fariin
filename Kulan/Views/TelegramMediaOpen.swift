@@ -12,15 +12,27 @@ import UIKit
 @MainActor enum MediaOpenRects {
     private static var rects: [String: CGRect] = [:]
     private static var radii: [String: CGFloat] = [:]
-    static func capture(_ id: String, _ rect: CGRect, cornerRadius: CGFloat) {
-        rects[id] = rect
-        radii[id] = cornerRadius
+
+    /// THE KEY IS SCOPED BY SCREEN, and that is the whole bug fix (2026-07-29). The registry used to be
+    /// keyed by message id ALONE — but the SAME message id is registered by the chat bubble, the All
+    /// Media tile, and the profile strip thumb. Whichever screen laid out last overwrote the others, so
+    /// opening a photo in All Media flew from (and landed on) the CHAT's coordinates: the user's
+    /// "opening wrong area / closing wrong area". And when the stale entry belonged to a screen that had
+    /// scrolled, the lookup could miss entirely, which dropped the open to a plain presentation and the
+    /// close to the drift-down fallback — his "sometimes it uses the old animation / the image goes
+    /// down". One id, three screens, one dictionary. Now every screen owns its own namespace.
+    enum Scope: String { case chat, gallery, profile, album }
+    static func key(_ scope: Scope, _ id: String) -> String { "\(scope.rawValue)|\(id)" }
+
+    static func capture(_ key: String, _ rect: CGRect, cornerRadius: CGFloat) {
+        rects[key] = rect
+        radii[key] = cornerRadius
     }
-    static func rect(_ id: String) -> CGRect? { rects[id] }
+    static func rect(_ key: String) -> CGRect? { rects[key] }
     /// The bubble's own corner radius, so a transition interpolates from the REAL shape instead of a
     /// hardcoded guess. The close used a flat 14 and the open had no radius at all, so media with a
     /// different bubble radius visibly changed shape at the moment the copy took over.
-    static func cornerRadius(_ id: String) -> CGFloat { radii[id] ?? 14 }
+    static func cornerRadius(_ key: String) -> CGFloat { radii[key] ?? 14 }
 
     /// The visible message viewport in window coordinates — Signal's `clippingAreaInsets`, as a rect.
     /// Published by the message list controller on every layout pass. The transition's flying copy is
@@ -49,18 +61,39 @@ import UIKit
 // and hides itself while a transition is flying to or from it.
 struct MediaRectReporter: ViewModifier {
     let id: String
+    var scope: MediaOpenRects.Scope = .chat
     var cornerRadius: CGFloat = 14
     @ObservedObject private var visibility = MediaSourceVisibility.shared
+    private var key: String { MediaOpenRects.key(scope, id) }
     func body(content: Content) -> some View {
         content
-            .opacity(visibility.hiddenId == id ? 0 : 1)
+            // Hiding is keyed the same scoped way, so hiding the gallery tile can never blank the
+            // chat bubble behind it (they share an id but not a key).
+            .opacity(visibility.hiddenId == key ? 0 : 1)
             .background(
                 GeometryReader { g in
                     Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
-                        MediaOpenRects.capture(id, f, cornerRadius: cornerRadius)
+                        MediaOpenRects.capture(key, f, cornerRadius: cornerRadius)
                     }
                 }
             )
+    }
+}
+
+/// Re-opening media IMMEDIATELY after closing it did nothing — the user had to wait a second. SwiftUI
+/// ignores a `fullScreenCover` presentation requested while the previous one is still dismissing, so the
+/// tap was silently swallowed. This gate does not block anything: it runs the presentation NOW when the
+/// coast is clear, and otherwise DEFERS it just past the dismissal, so a fast tap always opens.
+@MainActor enum MediaPresentGate {
+    private static var lastDismiss = Date.distantPast
+    private static let settle: TimeInterval = 0.42   // SwiftUI's cover dismissal transaction window
+
+    static func noteDismissed() { lastDismiss = Date() }
+
+    static func present(_ block: @escaping () -> Void) {
+        let since = Date().timeIntervalSince(lastDismiss)
+        guard since < settle else { block(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (settle - since), execute: block)
     }
 }
 

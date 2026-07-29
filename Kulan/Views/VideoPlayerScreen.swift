@@ -17,6 +17,8 @@ struct VideoPlayerScreen: View {
     // The visible viewport of the screen the video came from (window coords) — the drag-close's landing
     // is clipped through it, same as the image viewer. Nil = no clipping (gallery/profile).
     var clipProvider: () -> CGRect? = { nil }
+    // Which screen's tile registry to land on — ids are shared across screens, scopes are not.
+    var rectScope: MediaOpenRects.Scope = .chat
     // (A second, SwiftUI open/close animation used to live here alongside the UIKit one. It is gone —
     // see the note in ImageViewerView. One pipeline owns both directions for photo and video alike.)
 
@@ -94,8 +96,8 @@ struct VideoPlayerScreen: View {
                 // Land on the thumbnail this video came from. Without this the default { nil } was used,
                 // so video drifted and faded in mid-air while photos flew home to their tile - the single
                 // most visible difference between the two media types.
-                targetRect: { MediaOpenRects.rect(message.id) },
-                targetId: { message.id },
+                targetRect: { MediaOpenRects.rect(MediaOpenRects.key(rectScope, message.id)) },
+                targetId: { MediaOpenRects.key(rectScope, message.id) },
                 clipRect: clipProvider,
                 closeToken: closeToken,
                 onDismiss: { instantDismiss() })
@@ -167,7 +169,7 @@ struct VideoPlayerScreen: View {
     // dismisses plainly, so closing is never blocked).
     private func closeViewer() { closeToken += 1 }
     /// The drag-close's exit: the flying poster IS the animation, so the presentation goes without one.
-    private func instantDismiss() { dismiss() }
+    private func instantDismiss() { MediaPresentGate.noteDismissed(); dismiss() }
 
     private func skipBadge(_ icon: String) -> some View {
         Image(systemName: icon).font(.system(size: 26, weight: .medium)).foregroundStyle(.primary)

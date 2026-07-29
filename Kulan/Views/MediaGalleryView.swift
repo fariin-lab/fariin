@@ -131,11 +131,13 @@ struct MediaGalleryView: View {
             // and left the zoom's own dismiss pan fighting SignalDismissHost's.
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
                             cid: cid,
-                            clipProvider: { gridFrame == .zero ? nil : gridFrame })
+                            clipProvider: { gridFrame == .zero ? nil : gridFrame },
+                            rectScope: .gallery)
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid,
-                              clipProvider: { gridFrame == .zero ? nil : gridFrame })
+                              clipProvider: { gridFrame == .zero ? nil : gridFrame },
+                              rectScope: .gallery)
         }
         .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
             if let items = shareItems { ActivityView(items: items) }
@@ -392,7 +394,10 @@ struct MediaGalleryView: View {
                 }
             }
             .contentShape(Rectangle())
-            .modifier(MediaRectReporter(id: m.id))   // fly-open source AND drag-close landing target
+            // fly-open source AND drag-close landing target, in THIS screen's namespace: the chat and
+            // the profile strip register the same message ids, and an unscoped registry let whichever
+            // laid out last win (the wrong-area open/close).
+            .modifier(MediaRectReporter(id: m.id, scope: .gallery))
             .onTapGesture { tap(m) }
             .contextMenu { if !selecting { itemMenu(m) } }
     }
@@ -563,11 +568,15 @@ struct MediaGalleryView: View {
     // dismiss pan ran ALONGSIDE SignalDismissHost's, two gestures fighting over one close. The tile's
     // rect is already registered (MediaRectReporter, the drag-close's landing target), so the open now
     // reads the same registry the close lands on - one pipeline, both directions, every entry point.
-    private func flyOpen(_ m: Message, poster: String?, present: @escaping () -> Void) {
-        if let rect = MediaOpenRects.rect(m.id),
+    private func flyOpen(_ m: Message, poster: String?, present rawPresent: @escaping () -> Void) {
+        // Through the gate: a tap arriving while the previous viewer is still dismissing used to be
+        // swallowed by SwiftUI (user: "when I close an image and click again fast it doesn't work").
+        let present = { MediaPresentGate.present(rawPresent) }
+        let key = MediaOpenRects.key(.gallery, m.id)
+        if let rect = MediaOpenRects.rect(key),
            let url = poster, let img = DiskImageCache.shared.memoryImage(url) {
             SignalMediaOpen.fly(image: img, from: rect,
-                                sourceCornerRadius: MediaOpenRects.cornerRadius(m.id), present: present)
+                                sourceCornerRadius: MediaOpenRects.cornerRadius(key), present: present)
         } else {
             present()   // no live rect or undecoded thumb - plain presentation, never blocked
         }
