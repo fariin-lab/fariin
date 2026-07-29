@@ -2,15 +2,19 @@ import Foundation
 import Network
 import FirebaseFirestore
 
-// Live network state for the auto-download policies (Wi-Fi vs cellular).
+// Live network state for the auto-download policies (Wi-Fi vs cellular) — and a plain online flag
+// for flows that should refuse early instead of opening a doomed sheet (the auth doors: an offline
+// "Continue with Google" used to open the web sign-in straight into Safari's connection error page).
 final class NetworkState {
     static let shared = NetworkState()
     private let monitor = NWPathMonitor()
-    private(set) var isWifi = true   // optimistic until the first path update
+    private(set) var isWifi = true     // optimistic until the first path update
+    private(set) var isOnline = true   // optimistic until the first path update
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             self?.isWifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            self?.isOnline = path.status == .satisfied
         }
         monitor.start(queue: DispatchQueue(label: "NetworkState"))
     }

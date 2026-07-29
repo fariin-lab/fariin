@@ -233,6 +233,13 @@ struct AuthMethodView: View {
     }
 
     private func run(_ op: @escaping () async throws -> Void) {
+        // Refuse OFFLINE up front, before any sheet opens (user reference: "Network connection
+        // issue"). Without this, an offline Continue-with-Google opened the web sign-in straight
+        // into Safari's own connection-error page — the worst possible way to learn you are offline.
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
         busy = true; error = nil
         Task {
             do {
@@ -361,6 +368,11 @@ struct EmailAuthView: View {
     }
 
     private func submit() {
+        // Same early offline refusal as the social doors — say it plainly before trying.
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
         busy = true; error = nil
         Task {
             do {
