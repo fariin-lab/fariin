@@ -697,9 +697,13 @@ struct ThreadView: View {
                                     clipProvider: { MediaOpenRects.clipRect })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
-                    // Pass every photo in the chat so you can swipe between them (system-style paging).
-                    ImageViewerView(message: msg, in: repo.items.filter { $0.isImage && !$0.isGif && !$0.viewOnce },
-                                    cid: cid,
+                    // A SINGLE PHOTO OPENS ALONE (user spec 2026-07-29: "when i send only one image then
+                    // i click i see multi image… bottom thumbnails is only group images, not single
+                    // image"). This used to hand the viewer EVERY photo in the conversation so you could
+                    // page between unrelated messages, which meant one photo arrived with a filmstrip of
+                    // other people's pictures under it and swiped away to them. Albums still open as a
+                    // group — that gallery comes from the album's own items, further down.
+                    ImageViewerView(message: msg, cid: cid,
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     },
