@@ -198,6 +198,7 @@ final class ReactionBarPresenter {
     private var bar: ReactionBarView?
     private var follow: CADisplayLink?
     private var anchor: (() -> CGRect?)?
+    private weak var hostWindow: UIWindow?   // the list's window — excluded from both searches
     private var alignTrailing = true
     private var followUntil: CFTimeInterval = 0
 
@@ -289,12 +290,22 @@ final class ReactionBarPresenter {
         let bar = ReactionBarView(emojis: emojis, selected: selected, onPick: onPick)
         let size = ReactionBarView.size(emojiCount: emojis.count)
 
-        let w = UIWindow(windowScene: scene)
+        // A PASSTHROUGH **WINDOW**, not merely a passthrough root view — and that distinction was the
+        // frozen screen (user, twice: "when i long press all the screen is frozen… if i touch
+        // everywhere is not working").
+        //
+        // `UIView.hitTest` returns SELF when the point is inside it and no subview claims it. A window
+        // is a view whose bounds are the whole screen, so every touch outside the bar walked: window
+        // (inside → yes) → root view (passthrough → nil) → no subview took it → **the window returned
+        // itself**. The bar's window sits above everything at `.alert + 1`, so from that moment every
+        // touch on the device was delivered to an empty transparent window and nothing underneath ever
+        // saw it. The screen looked perfectly normal and was completely dead, for as long as the window
+        // existed. Making the root view transparent to touches was never enough; the window has to
+        // decline the touch too.
+        let w = PassthroughWindow(windowScene: scene)
         w.windowLevel = .alert + 1          // above the menu's own window
         w.backgroundColor = .clear
         w.isHidden = false
-        // PASSTHROUGH: only the bar itself takes touches. Everything else — including the menu
-        // underneath — keeps receiving them, so the native menu behaves exactly as before.
         let root = PassthroughView()
         w.rootViewController = PassthroughController(content: root)
 
@@ -302,6 +313,7 @@ final class ReactionBarPresenter {
         root.addSubview(bar)
         self.window = w
         self.bar = bar
+        self.hostWindow = hostWindow
         self.alignTrailing = alignTrailing
         // Follow the lifted message while UIKit animates it into place; fall back to the bubble's own
         // frame whenever the lifted copy cannot be found.
@@ -326,20 +338,80 @@ final class ReactionBarPresenter {
         if CACurrentMediaTime() > followUntil { follow?.invalidate(); follow = nil }
     }
 
-    /// iMessage's stacking, top to bottom: REACTION BAR · the message · the menu. The bar therefore
-    /// always sits ABOVE the lifted message, 12pt clear of it, and only drops below when the message
-    /// is so near the top of the screen that there is no room — the same flip Signal uses.
+    /// iMessage's stacking, top to bottom: REACTION BAR · the message · the menu.
+    ///
+    /// Above the lifted message is the goal, and it is what happens for an ordinary message: UIKit
+    /// lifts the bubble and puts its menu underneath, leaving the space above free.
+    ///
+    /// IT CANNOT BE GUARANTEED FOR EVERY MESSAGE, and that is a property of Apple's menu, not a bug
+    /// here. UIKit decides where to put its own menu and knows nothing about this bar, so on a very
+    /// tall message the preview fills the screen, the menu is laid over the preview itself, and there
+    /// is no free space above it to sit in. Signal never meets this because Signal does not use Apple's
+    /// menu — its ContextMenuController owns the accessory, the preview and the menu together, and it
+    /// SHRINKS the preview until all three fit. Keeping the native menu, which is the standing
+    /// instruction, means the third piece is not ours to move.
+    ///
+    /// So the rule is: prefer above the message; if that would sit off-screen or ON the menu, go below
+    /// the message; if that also collides, sit clear of the menu's nearest edge. Never overlap the menu.
     private func reposition() {
         guard let bar, let w = window, let rect = anchor?() else { return }
         let size = bar.bounds.size
         let bounds = w.bounds
         let safeTop = w.safeAreaInsets.top
-        var y = rect.minY - size.height - 12
-        if y < safeTop + 8 { y = min(rect.maxY + 12, bounds.maxY - size.height - 20) }
+        let menu = ReactionBarPresenter.menuFrame(excluding: hostWindow)
+
+        func collides(_ y: CGFloat) -> Bool {
+            guard let menu else { return false }
+            return menu.intersects(CGRect(x: 0, y: y, width: bounds.width, height: size.height))
+        }
+
+        let above = rect.minY - size.height - 12
+        let below = rect.maxY + 12
+        var y = above
+        if above < safeTop + 8 || collides(above) {
+            y = below
+            // Below is no good either — tuck against whichever side of the menu has room.
+            if below + size.height > bounds.maxY - 20 || collides(below), let menu {
+                let overMenu = menu.minY - size.height - 12
+                y = overMenu >= safeTop + 8 ? overMenu : menu.maxY + 12
+            }
+        }
+        y = max(safeTop + 8, min(y, bounds.maxY - size.height - 20))
+
         var x = alignTrailing ? rect.maxX - size.width : rect.minX
         x = max(12, min(x, bounds.width - size.width - 12))
         let frame = CGRect(x: x, y: y, width: size.width, height: size.height)
         if bar.frame != frame { bar.frame = frame }
+    }
+
+    /// Where UIKit put the MENU (not the preview), so the bar can refuse to sit on it. Same bounded
+    /// search as `liftedPreviewFrame`, looking for the menu's own container instead of the platter.
+    private static weak var cachedMenu: UIView?
+
+    static func menuFrame(excluding host: UIWindow? = nil) -> CGRect? {
+        if let v = cachedMenu, v.window != nil, v.bounds.width > 1, v.bounds.height > 1 {
+            return v.convert(v.bounds, to: nil)
+        }
+        cachedMenu = nil
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for w in scene.windows where !w.isHidden && w !== host {
+                if let v = firstNamed(in: w, "ContextMenuListView", depth: maxSearchDepth),
+                   v.bounds.width > 1, v.bounds.height > 1 {
+                    cachedMenu = v
+                    return v.convert(v.bounds, to: nil)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func firstNamed(in root: UIView, _ name: String, depth: Int) -> UIView? {
+        if NSStringFromClass(type(of: root)).contains(name) { return root }
+        guard depth > 0 else { return nil }
+        for sub in root.subviews {
+            if let hit = firstNamed(in: sub, name, depth: depth - 1) { return hit }
+        }
+        return nil
     }
 
     func hide(animated: Bool = true) {
@@ -352,10 +424,26 @@ final class ReactionBarPresenter {
     private func tearDown() {
         follow?.invalidate(); follow = nil
         anchor = nil
+        hostWindow = nil
         bar?.removeFromSuperview()
         bar = nil
         window?.isHidden = true
         window = nil
+        // The menu is gone with the bar; a cached view from it would be stale next time.
+        Self.cachedMenu = nil
+        Self.cachedPlatter = nil
+    }
+
+    /// A window that only claims touches its CONTENT wants. Without this the window itself answers the
+    /// hit test for every touch that misses the bar — see the note in `show`.
+    private final class PassthroughWindow: UIWindow {
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            let hit = super.hitTest(point, with: event)
+            // Landing on the window or on its empty root means nothing here wanted this touch, so
+            // report a miss and let it reach whatever is underneath.
+            if hit === self || hit === rootViewController?.view { return nil }
+            return hit
+        }
     }
 
     /// A view that is invisible to touches unless one of its subviews wants them.
