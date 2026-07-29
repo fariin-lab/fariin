@@ -4294,9 +4294,10 @@ struct MessageBubble: View, Equatable {
         var metaStr = message.edited ? "edited " : ""
         metaStr += timeString
         var metaW = (metaStr as NSString).size(withAttributes: [.font: metaFont]).width
-        // Two overlapping checkmarks once read (see metaRow) are wider than the single delivered tick,
-        // so the reservation has to grow with them or the second check paints over the last characters.
-        if isMe { metaW += isRead ? 25 : 16 }
+        // The read pair, ALWAYS — same constant reservation metaPlaceholder makes, so this test and the
+        // reservation can never disagree about how wide the footer is (they must agree, or the
+        // invisible template and the visible copy measure to different heights).
+        if isMe { metaW += 25 }
         metaW += 8                // gap between the last word and the time
         let longestWord = message.text.split(whereSeparator: { $0.isWhitespace })
             .map { (String($0) as NSString).size(withAttributes: [.font: bodyFont]).width }.max() ?? 0
@@ -4311,11 +4312,18 @@ struct MessageBubble: View, Equatable {
         var t = Text(metaNeedsOwnLine ? "\n  " : "  ")   // own line for long text; else a small gap
         if message.edited { t = t + Text("edited ").italic() }
         t = t + Text(timeString)
-        // Must mirror metaRow EXACTLY (that is this placeholder's whole job): one checkmark delivered,
-        // two once read. It said checkmark.circle.fill, which is a different width from either.
+        // ONE CONSTANT WIDTH FOR EVERY SEND STATE, which is the point (user report + photo: "pending
+        // message and sended message is using different bubble size, the problem is the timestamp").
+        //
+        // This used to mirror whatever metaRow was drawing at that instant — nothing while sending
+        // (metaRow shows a clock there, which this never reserved), one checkmark delivered, two once
+        // read. Since the reservation is what the last line wraps against, and the bubble hugs that
+        // width, the bubble RESIZED as the message progressed: it grew the moment the send landed and
+        // grew again when the other side read it. Reserving the widest state always — the read pair —
+        // makes the bubble the same size the whole way through. The real metaRow is overlaid at the
+        // trailing edge, so a narrower state just leaves invisible slack behind the timestamp.
         if isMe {
-            t = t + Text(" ") + Text(Image(systemName: "checkmark"))
-            if isRead { t = t + Text(Image(systemName: "checkmark")) }
+            t = t + Text(" ") + Text(Image(systemName: "checkmark")) + Text(Image(systemName: "checkmark"))
         }
         return t.font(.system(size: 10))
     }
