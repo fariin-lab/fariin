@@ -105,7 +105,9 @@ struct VideoPlayerScreen: View {
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
         .statusBarHidden(true)
         .task { await load() }
-        .onDisappear { cleanup() }
+        // noteClosed: the cover is gone for real, so a tap that arrived while it was leaving can run
+        // now instead of waiting out a fixed guess. See MediaPresentGate.
+        .onDisappear { cleanup(); MediaPresentGate.noteClosed() }
     }
 
     /// The still the transition flies. Signal flies a poster frame for video too — never a player
@@ -169,7 +171,14 @@ struct VideoPlayerScreen: View {
     // dismisses plainly, so closing is never blocked).
     private func closeViewer() { closeToken += 1 }
     /// The drag-close's exit: the flying poster IS the animation, so the presentation goes without one.
-    private func instantDismiss() { MediaPresentGate.noteDismissed(); dismiss() }
+    /// The transaction is what makes that true — a bare `dismiss()` still ran the cover's own slide-out
+    /// under the copy, which held the presentation open and blocked an immediate re-tap.
+    private func instantDismiss() {
+        MediaPresentGate.noteDismissed()
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { dismiss() }
+    }
 
     private func skipBadge(_ icon: String) -> some View {
         Image(systemName: icon).font(.system(size: 26, weight: .medium)).foregroundStyle(.primary)
