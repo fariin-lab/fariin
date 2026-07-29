@@ -221,7 +221,7 @@ struct ContactInfoView: View {
                 // No system .zoom: SignalMediaOpen flies the tapped thumb (see the strip's tap),
                 // the same pipeline as the conversation and the gallery. The story cover below still
                 // uses .zoom - stories deliberately keep the system hero transition.
-                ImageViewerView(message: msg, cid: cid)
+                ImageViewerView(message: msg, cid: cid, rectScope: .profile)
             }
             // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
             // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and
@@ -629,20 +629,22 @@ struct ContactInfoView: View {
                                 .frame(width: 84, height: 84)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .modifier(MediaRectReporter(id: m.id))   // fly-open source + drag-close landing
+                                // Own namespace — the chat and All Media register these same ids.
+                                .modifier(MediaRectReporter(id: m.id, scope: .profile))
                                 // OPEN LIKE THE CHAT: fly the thumb's media out of its tile (one
                                 // pipeline, every entry point), falling back to a plain presentation.
                                 // The system .zoom here scaled the whole cover AND ran its own dismiss
                                 // pan alongside SignalDismissHost's.
                                 .onTapGesture {
-                                    if let rect = MediaOpenRects.rect(m.id),
+                                    let key = MediaOpenRects.key(.profile, m.id)
+                                    let present = { MediaPresentGate.present { viewerImage = m } }
+                                    if let rect = MediaOpenRects.rect(key),
                                        let img = DiskImageCache.shared.memoryImage(url) {
                                         SignalMediaOpen.fly(image: img, from: rect,
-                                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id)) {
-                                            viewerImage = m
-                                        }
+                                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
+                                                            present: present)
                                     } else {
-                                        viewerImage = m
+                                        present()
                                     }
                                 }
                         }
@@ -718,7 +720,9 @@ struct SharedMediaGridView: View {
             .navigationTitle("Shared Media")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .fullScreenCover(item: $viewer) { ImageViewerView(message: $0, cid: cid) }
+            // `.album` scope: this grid registers no rects either, so the close falls back honestly
+            // instead of flying to a chat bubble hidden behind this sheet.
+            .fullScreenCover(item: $viewer) { ImageViewerView(message: $0, cid: cid, rectScope: .album) }
         }
     }
 }

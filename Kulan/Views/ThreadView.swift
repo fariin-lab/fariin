@@ -1287,15 +1287,17 @@ struct ThreadView: View {
                 // has a different radius started the flight at one shape and finished at another. Two
                 // directions, two radii, from one registry that already had the right number in it.
                 onTapImage: { m in
-                    if let rect = MediaOpenRects.rect(m.id),
+                    // Scoped key (.chat): All Media and the profile strip register the SAME ids.
+                    // Through the gate so a fast re-open right after a close is never swallowed.
+                    let key = MediaOpenRects.key(.chat, m.id)
+                    let present = { MediaPresentGate.present { viewerImage = m } }
+                    if let rect = MediaOpenRects.rect(key),
                        let url = m.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
                         SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id),
-                                            clip: MediaOpenRects.clipRect) {
-                            viewerImage = m
-                        }
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
+                                            clip: MediaOpenRects.clipRect, present: present)
                     } else {
-                        viewerImage = m
+                        present()
                     }
                 },
                 // ALBUM IMAGES FLY TOO — this was the last media kind opening with no transition at all
@@ -1305,12 +1307,15 @@ struct ThreadView: View {
                 // the pager. The geometry was already there and unused — a tile's rect is registered under
                 // `"<messageId>-<index>"`, which is exactly the `startId` handed to us here.
                 onTapAlbum: { gallery, startId in
-                    let present = { albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) }
-                    if let rect = MediaOpenRects.rect(startId),
+                    let key = MediaOpenRects.key(.chat, startId)
+                    let present = {
+                        MediaPresentGate.present { albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId) }
+                    }
+                    if let rect = MediaOpenRects.rect(key),
                        let tapped = gallery.first(where: { $0.id == startId }),
                        let url = tapped.imageUrl, let img = DiskImageCache.shared.memoryImage(url) {
                         SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(startId),
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
                                             clip: MediaOpenRects.clipRect,
                                             present: present)
                     } else {
@@ -1321,15 +1326,15 @@ struct ThreadView: View {
                 // Video takes the SAME path with its poster - one pipeline for all media, which is also
                 // how Signal does it (they fly a still frame for video, never a layer).
                 onTapVideo: { m in
-                    if let rect = MediaOpenRects.rect(m.id),
+                    let key = MediaOpenRects.key(.chat, m.id)
+                    let present = { MediaPresentGate.present { viewerVideo = m } }
+                    if let rect = MediaOpenRects.rect(key),
                        let url = m.thumbUrl, let img = DiskImageCache.shared.memoryImage(url) {
                         SignalMediaOpen.fly(image: img, from: rect,
-                                            sourceCornerRadius: MediaOpenRects.cornerRadius(m.id),
-                                            clip: MediaOpenRects.clipRect) {
-                            viewerVideo = m
-                        }
+                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
+                                            clip: MediaOpenRects.clipRect, present: present)
                     } else {
-                        viewerVideo = m
+                        present()
                     }
                 },
                 onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
@@ -4605,7 +4610,7 @@ struct MessageBubble: View, Equatable {
                     .clipped()
                     // Native zoom hero: the player grows out of this thumbnail and the drag-down close
                     // shrinks back into it (same as photos).
-                    .modifier(MediaRectReporter(id: message.id))   // Telegram-open test: live bubble rect
+                    .modifier(MediaRectReporter(id: message.id, scope: .chat))   // live bubble rect
                     .overlay {   // upload ring while sending, play disc once delivered
                         if message.sendState == .sending {
                             ZStack { Color.black.opacity(0.18); UploadingRing() }
@@ -4768,7 +4773,7 @@ struct MessageBubble: View, Equatable {
                     .clipped()   // a tall captioned photo fills+crops — never bleeds over the caption below
                     // Native zoom hero (same mechanism as the story close): the viewer grows out of this
                     // bubble and the drag-down dismiss shrinks back into it, following the finger.
-                    .modifier(MediaRectReporter(id: message.id))   // Telegram-open test: live bubble rect
+                    .modifier(MediaRectReporter(id: message.id, scope: .chat))   // live bubble rect
                     .overlay {   // clean upload indicator (ring in a frosted disc)
                         if message.sendState == .sending {
                             ZStack {
@@ -5016,7 +5021,7 @@ struct MessageBubble: View, Equatable {
             // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
             // photo had no destination: the copy drifted off into nothing instead of flying back
             // to its tile, which is what single photos have done all along.
-            .modifier(MediaRectReporter(id: "\(message.id)-\(i)"))
+            .modifier(MediaRectReporter(id: "\(message.id)-\(i)", scope: .chat))
     }
 
     // The image/poster content of an album item (local optimistic bytes, else the decrypted remote photo).
@@ -5144,7 +5149,7 @@ struct MessageBubble: View, Equatable {
         // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
         // photo had no destination: the copy drifted off into nothing instead of flying back
         // to its tile, which is what single photos have done all along.
-        .modifier(MediaRectReporter(id: "\(message.id)-\(i)"))
+        .modifier(MediaRectReporter(id: "\(message.id)-\(i)", scope: .chat))
         // Tapping a tile opens THAT item straight in the viewer (user rule, 2026-07-28): with 10 or
         // fewer items every photo is already visible in the mosaic, so a list screen in between is a
         // second tap for nothing. The album list sheet earns its place only when there is more than
