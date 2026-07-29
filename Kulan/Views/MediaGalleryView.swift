@@ -474,23 +474,16 @@ struct MediaGalleryView: View {
         let selected = selection.contains(m.id)
         let me = AuthService.shared.uid ?? ""
         return HStack(spacing: 12) {
-            if selecting {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22)).foregroundStyle(selected ? Color.accentColor : .secondary)
-                // Static row while selecting (no play â€” the whole row toggles the checkbox).
-                Image(systemName: "waveform").font(.system(size: 18)).foregroundStyle(Color.accentColor)
-                    .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Voice message").font(.system(size: 16, weight: .medium))
-                    Text(durationLabel(m.duration)).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            } else {
-                // The REAL playable voice player (same one used in chat) â€” tap the play button to
-                // decrypt + play, scrub the waveform, change speed.
-                VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark, plainBackground: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            if selecting { checkbox(selected) }
+            // THE SAME PLAYER IN BOTH MODES (user 2026-07-29: "before it is using correct design voice,
+            // but when I click select it is using another design"). Selection used to swap in a static
+            // "Voice message" row with a waveform glyph - a second design for the same thing, and the
+            // only reason for it was that the player owns its own taps. Turning its hit testing off
+            // while selecting solves that without changing what you are looking at: the row keeps its
+            // waveform, duration and speed, and the whole row toggles.
+            VoiceMessageView(message: m, cid: cid, isMe: m.authorId == me, dark: dark, plainBackground: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .allowsHitTesting(!selecting)
             Text(m.createdAt.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -515,21 +508,35 @@ struct MediaGalleryView: View {
 
     private func linkRow(_ m: Message) -> some View {
         let url = Self.firstURL(in: m.text)
-        return Button { goToChat(m) } label: {
+        let selected = selection.contains(m.id)
+        // Links and files had NO selection support at all — no checkbox, and a tap still navigated to
+        // the chat. Select mode was reachable from the menu on every tab, so on these two it looked
+        // broken: a toolbar saying "0 Selected" over rows that could not be selected.
+        return HStack(spacing: 12) {
+            if selecting { checkbox(selected) }
             VStack(alignment: .leading, spacing: 3) {
                 Text(url?.host ?? "Link").font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
                 Text(m.text).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 if let url { Text(url.absoluteString).font(.caption2).foregroundStyle(Color.accentColor).lineLimit(1) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture { if selecting { toggle(m) } else { goToChat(m) } }
         .contextMenu {
-            Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
-            if let url { Button { UIApplication.shared.open(url) } label: { Label("Open Link", systemImage: "safari") } }
+            if !selecting {
+                Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+                if let url { Button { UIApplication.shared.open(url) } label: { Label("Open Link", systemImage: "safari") } }
+            }
         }
+    }
+
+    /// The selection circle, identical on every tab so one row type cannot drift from another.
+    private func checkbox(_ selected: Bool) -> some View {
+        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 22))
+            .foregroundStyle(selected ? Color.accentColor : .secondary)
     }
 
     // MARK: - Files list (documents shared in this chat)
@@ -547,26 +554,28 @@ struct MediaGalleryView: View {
     }
 
     private func fileRow(_ m: Message) -> some View {
-        Button { goToChat(m) } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "doc.fill")
-                    .font(.system(size: 18)).foregroundStyle(Color.accentColor)
-                    .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(m.fileName ?? "Document")
-                        .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
-                    Text(fileMeta(m)).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(m.createdAt.formatted(date: .abbreviated, time: .omitted))
-                    .font(.caption).foregroundStyle(.secondary)
+        let selected = selection.contains(m.id)
+        return HStack(spacing: 12) {
+            if selecting { checkbox(selected) }
+            Image(systemName: "doc.fill")
+                .font(.system(size: 18)).foregroundStyle(Color.accentColor)
+                .frame(width: 44, height: 44).background(Color.accentColor.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.fileName ?? "Document")
+                    .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
+                Text(fileMeta(m)).font(.caption).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .contentShape(Rectangle())
+            Spacer()
+            Text(m.createdAt.formatted(date: .abbreviated, time: .omitted))
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture { if selecting { toggle(m) } else { goToChat(m) } }
         .contextMenu {
-            Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+            if !selecting {
+                Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+            }
         }
     }
 
