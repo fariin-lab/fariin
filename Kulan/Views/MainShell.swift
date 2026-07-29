@@ -1691,13 +1691,17 @@ struct ChatRow: View, Equatable {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 11)).foregroundStyle(.tertiary)
                     }
-                    // The reaction itself, next to the preview (user reference: the heart on the right
-                    // of the row). The preview TEXT already said "Reacted ❤️ to your message"; this
-                    // makes it recognisable at a glance without reading. Same freshness rule as the
-                    // text, so the two can never disagree.
-                    if let emoji = freshReactionEmoji {
-                        Text(emoji)
-                            .font(.system(size: 17))
+                    // ONE badge for every reaction, never the emoji itself (user spec 2026-07-29, with
+                    // the reference screenshot: "if react always use that badge"). The preview text
+                    // beside it already spells out WHICH emoji — "Reacted 🐱 to your message" — so
+                    // repeating it here just made the right edge of the row a second, competing emoji.
+                    // A constant heart reads as "there is a reaction" at a glance, and keeps the row's
+                    // trailing column visually stable whatever anyone reacts with. Same freshness rule
+                    // as the text, so the two can never disagree.
+                    if freshReactionEmoji != nil {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
                             .transition(.scale.combined(with: .opacity))
                     }
                     if unread > 0 {
