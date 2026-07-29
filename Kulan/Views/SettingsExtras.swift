@@ -176,8 +176,22 @@ struct DevicesView: View {
 
             Section {
                 if others.isEmpty {
-                    Text(loaded ? "No other devices are signed in." : "Loading…")
-                        .foregroundStyle(.secondary)
+                    if loaded {
+                        // A reassuring empty state, not a bare strip of grey text (user feedback).
+                        HStack(spacing: 12) {
+                            Image(systemName: "checkmark.shield.fill")
+                                .font(.system(size: 22))
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("No other devices").font(.subheadline.weight(.semibold))
+                                Text("Only this device is signed in to your account.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    } else {
+                        Text("Loading…").foregroundStyle(.secondary)
+                    }
                 } else {
                     ForEach(others) { s in
                         row(s)
@@ -251,10 +265,16 @@ struct DevicesView: View {
 
     private func row(_ s: DeviceSession) -> some View {
         HStack(spacing: 14) {
+            // A colored device tile — the flat grey glyph read as unfinished (user feedback,
+            // Telegram's device tiles as the reference; our green, our glyph).
             Image(systemName: "iphone")
-                .font(.system(size: 26))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 34)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(
+                    LinearGradient(colors: [Color.green.opacity(0.95), Color.green.opacity(0.65)],
+                                   startPoint: .top, endPoint: .bottom),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(s.model).font(.body.weight(.semibold))
@@ -269,10 +289,23 @@ struct DevicesView: View {
                 Text([s.os, s.appVersion.isEmpty ? nil : "Kulan \(s.appVersion)"]
                         .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
-                Text(subtitle(s)).font(.caption).foregroundStyle(.secondary)
+                statusLine(s)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    // "Active now" is the one piece of good news on this page — it gets the live green dot.
+    @ViewBuilder private func statusLine(_ s: DeviceSession) -> some View {
+        let text = subtitle(s)
+        if text == "Active now" {
+            HStack(spacing: 5) {
+                Circle().fill(Color.green).frame(width: 7, height: 7)
+                Text(text).font(.caption.weight(.medium)).foregroundStyle(.green)
+            }
+        } else {
+            Text(text).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     /// "Active now" for this phone (it is, you are looking at it), a relative time for the rest.
