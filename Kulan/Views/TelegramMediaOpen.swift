@@ -84,16 +84,47 @@ struct MediaRectReporter: ViewModifier {
 /// ignores a `fullScreenCover` presentation requested while the previous one is still dismissing, so the
 /// tap was silently swallowed. This gate does not block anything: it runs the presentation NOW when the
 /// coast is clear, and otherwise DEFERS it just past the dismissal, so a fast tap always opens.
+/// WAITS FOR THE EVENT, NOT FOR A CLOCK (2026-07-29). This used to hold a re-open for a fixed 0.42s
+/// after any dismissal — a guess at how long SwiftUI's cover takes to leave. The guess was the delay
+/// the user felt: the photo had landed back in its bubble and looked ready, but tapping it did nothing
+/// for the rest of that window (user: "I have to wait a short time before it becomes tappable again").
+///
+/// Signal has no such window because its viewer is a UIKit custom transition: the interactive dismiss
+/// calls `completeTransition`, and the presenting controller is ready in that same instant. We can't
+/// borrow the mechanism through a `fullScreenCover`, but we can borrow the principle — gate on the
+/// cover ACTUALLY being gone, which the viewer reports from `onDisappear`. Combined with dismissing
+/// without an animation (see `instantDismiss`), the wait collapses to a frame or two.
 @MainActor enum MediaPresentGate {
-    private static var lastDismiss = Date.distantPast
-    private static let settle: TimeInterval = 0.42   // SwiftUI's cover dismissal transaction window
+    private static var closing = false
+    private static var queued: (() -> Void)?
+    private static var safety: DispatchWorkItem?
 
-    static func noteDismissed() { lastDismiss = Date() }
+    /// A viewer started leaving. SwiftUI silently DROPS a presentation requested before the previous
+    /// cover has finished, so a tap that arrives now must be held rather than fired into the void.
+    static func noteDismissed() {
+        closing = true
+        safety?.cancel()
+        // Belt: a viewer torn down without ever reporting (killed by a parent pop, say) must not
+        // strand a queued tap forever.
+        let w = DispatchWorkItem { MediaPresentGate.noteClosed() }
+        safety = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: w)
+    }
+
+    /// The cover is really gone. Releases the tap that came in while it was leaving.
+    static func noteClosed() {
+        safety?.cancel(); safety = nil
+        closing = false
+        guard let q = queued else { return }
+        queued = nil
+        // One hop: `noteClosed` is called from onDisappear, and presenting from inside a view update
+        // is a state write mid-update.
+        DispatchQueue.main.async(execute: q)
+    }
 
     static func present(_ block: @escaping () -> Void) {
-        let since = Date().timeIntervalSince(lastDismiss)
-        guard since < settle else { block(); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (settle - since), execute: block)
+        guard closing else { block(); return }
+        queued = block   // newest tap wins; an older queued open is stale by definition
     }
 }
 

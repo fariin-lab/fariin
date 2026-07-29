@@ -159,7 +159,18 @@ struct ImageViewerView: View {
     }
     /// The drag-close's exit. The flying copy IS the animation, so the presentation itself must go
     /// without one — SignalDismissHost calls this with its copy still covering the same pixels.
-    private func instantDismiss() { MediaPresentGate.noteDismissed(); dismiss() }
+    ///
+    /// …which is what this now actually does. It used to be a bare `dismiss()`, so the cover ALSO
+    /// played its own slide-out underneath the copy: invisible, because the copy covers those pixels,
+    /// but it kept the presentation alive for the length of that animation — and SwiftUI drops a new
+    /// cover requested while the old one is still leaving. That is why the photo was back in its bubble
+    /// and still not tappable.
+    private func instantDismiss() {
+        MediaPresentGate.noteDismissed()
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { dismiss() }
+    }
 
     var body: some View {
         // Split into pagerLayer/chromeLayer — the inline body blew the type-checker budget.
@@ -201,6 +212,9 @@ struct ImageViewerView: View {
         }
         // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.
         .presentationBackground(.clear)
+        // The cover is gone for real — release a tap that arrived while it was leaving, instead of
+        // making it wait out a fixed guess at how long that takes. See MediaPresentGate.
+        .onDisappear { MediaPresentGate.noteClosed() }
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
