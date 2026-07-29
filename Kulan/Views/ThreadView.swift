@@ -4173,15 +4173,35 @@ struct MessageBubble: View, Equatable {
 
     // The message text + trailing time as one line (short) or wrapped (long) — shared by the plain and
     // the reply-quote layouts so the two stay identical.
-    private var bodyLine: some View {
-        // The exact layout: the text flows FULL WIDTH, and only the LAST line reserves room for the
-        // timestamp. An HStack { text; time } instead reserved a full-height column beside the text, so
-        // EVERY line wrapped early → the big empty column on the right. Here we append an INVISIBLE inline
-        // run that mirrors the metaRow (same font/glyphs → exact same width) to the end of the text, so
-        // only the last line leaves a gap, then overlay the REAL time bottom-trailing on top of that gap.
-        (bodyText + metaPlaceholder.foregroundColor(.clear))
-            .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
-            .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+    @ViewBuilder private var bodyLine: some View {
+        if metaNeedsOwnLine {
+            // LONG MESSAGE: the timestamp gets a REAL line of its own and the text is left completely
+            // unreserved, so every line runs the full bubble width.
+            //
+            // Why this branch exists (user report + screenshot: a long paste wrapped ~55pt short on
+            // EVERY line, with a tall empty column above the timestamp): the inline invisible
+            // reservation is the right trick only when the time can actually share the last line. Once
+            // `metaNeedsOwnLine` is true — a word too long to leave room, or a hard-wrapped paste —
+            // the reservation begins with a newline, and a trailing run that starts a new line still
+            // participates in the concatenated Text's width, so the wrap column shrank by the meta's
+            // width for the whole paragraph. Reserving nothing, and giving the meta its own row, is
+            // both simpler and exactly what Signal does when the footer cannot share the last line.
+            VStack(alignment: .trailing, spacing: 2) {
+                bodyText
+                    .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                metaRow
+            }
+        } else {
+            // SHORT MESSAGE: the text flows FULL WIDTH and only the LAST line reserves room for the
+            // timestamp. An HStack { text; time } instead reserved a full-height column beside the
+            // text, so EVERY line wrapped early. Here we append an INVISIBLE inline run that mirrors
+            // the metaRow (same font/glyphs → exact same width) to the end of the text, so only the
+            // last line leaves a gap, then overlay the REAL time bottom-trailing on top of that gap.
+            (bodyText + metaPlaceholder.foregroundColor(.clear))
+                .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+        }
     }
 
     // Same as bodyLine but the TEXT fills the hugged column FIRST, so the overlaid time anchors to the
@@ -4189,11 +4209,22 @@ struct MessageBubble: View, Equatable {
     // the QUOTE can drive the bubble wider than the body: with plain bodyLine the time landed mid-bubble
     // (user report: reply timestamp not right-aligned). The frame's .infinity is clamped by the overlay's
     // offered width (= the template's hugged bubble width), so long text still wraps at the bubble cap.
-    private var bodyLineFilled: some View {
-        (bodyText + metaPlaceholder.foregroundColor(.clear))
-            .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+    @ViewBuilder private var bodyLineFilled: some View {
+        if metaNeedsOwnLine {
+            // Same own-line treatment as bodyLine — the two MUST branch identically or the template
+            // and the visible copy would measure to different heights.
+            VStack(alignment: .trailing, spacing: 2) {
+                bodyText
+                    .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                metaRow
+            }
+        } else {
+            (bodyText + metaPlaceholder.foregroundColor(.clear))
+                .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
+        }
     }
 
     // Signal's footer rule: the timestamp shares the message's LAST line when it fits, else drops to
@@ -4202,6 +4233,9 @@ struct MessageBubble: View, Equatable {
     // the bubble width), the reservation can't push it — the time then painted OVER the text (user
     // report). This detects that case deterministically (UIKit text measurement, no SwiftUI feedback)
     // and forces the time onto its own line.
+    /// True when the timestamp cannot share the message's last line — a word too long to leave room
+    /// beside it. When true, `bodyLine` gives the meta a real row of its own and reserves NOTHING
+    /// inline, so the text keeps the full bubble width on every line.
     private var metaNeedsOwnLine: Bool {
         let textAvail = maxBubbleWidth - 30   // bubble horizontal padding
         let bodyFont = UIFont.systemFont(ofSize: 17)
