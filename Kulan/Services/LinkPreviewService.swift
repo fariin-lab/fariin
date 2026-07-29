@@ -1,26 +1,38 @@
 import Foundation
+import UIKit
 
-// Open-Graph link previews, generated ON-DEVICE at display time. Nothing about the link is ever sent
-// to our server (E2EE stays intact) — each client fetches the page's OG tags itself and caches the
-// result. Bounded (https only, small byte cap, short timeout) so it can't hang or run away.
-struct LinkPreview: Equatable {
-    let url: URL
-    let title: String
-    let imageUrl: URL?
-    var host: String { url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString }
-}
-
+// Open-Graph link previews, SENDER-SIDE (Signal's model, adopted 2026-07-29 with the user's reference
+// screenshots). The sender's device fetches the page once while composing; the preview — title,
+// description, image — travels INSIDE the encrypted message. The recipient never contacts the site:
+// no IP leak to whoever runs the link, and the card renders instantly from the message itself.
+//
+// This file started as a VIEWER-side fetcher (every reader's phone pinged the URL at display time).
+// That was both the privacy leak Signal's design exists to avoid, and the reason cards often failed
+// to appear at all — sites like x.com serve an empty JS shell to in-app fetchers, so the reader saw
+// nothing. When even the sender's fetch fails, the message simply carries no preview — exactly
+// Signal's behaviour.
 actor LinkPreviewService {
     static let shared = LinkPreviewService()
 
-    private var cache: [String: LinkPreview?] = [:]   // value nil = fetched, no usable preview
-    private var inFlight: [String: Task<LinkPreview?, Never>] = [:]
+    /// A composer draft: everything the card needs, still plaintext, still local.
+    struct LinkDraft: Equatable {
+        let url: URL
+        let title: String
+        let desc: String
+        let image: UIImage?
+        var host: String { url.host?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString }
+        /// The bytes that travel (re-encoded, bounded) — nil when the page had no usable image.
+        var imageJPEG: Data? { image?.jpegData(compressionQuality: 0.75) }
+    }
 
-    func preview(for url: URL) async -> LinkPreview? {
+    private var cache: [String: LinkDraft?] = [:]     // value nil = fetched, no usable preview
+    private var inFlight: [String: Task<LinkDraft?, Never>] = [:]
+
+    func draft(for url: URL) async -> LinkDraft? {
         let key = url.absoluteString
         if let cached = cache[key] { return cached }
         if let task = inFlight[key] { return await task.value }
-        let task = Task<LinkPreview?, Never> { await Self.fetch(url) }
+        let task = Task<LinkDraft?, Never> { await Self.fetch(url) }
         inFlight[key] = task
         let result = await task.value
         inFlight[key] = nil
@@ -28,8 +40,18 @@ actor LinkPreviewService {
         return result
     }
 
-    // Fetch the first ~200 KB of the page and scrape og:title / og:image (falling back to <title>).
-    private static func fetch(_ url: URL) async -> LinkPreview? {
+    /// First https URL in a text, if any — the one the preview is built for.
+    static func firstURL(in text: String) -> URL? {
+        guard text.contains("http"),
+              let d = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        let r = NSRange(text.startIndex..., in: text)
+        return d.matches(in: text, range: r).compactMap(\.url).first { $0.scheme == "https" }
+    }
+
+    // Fetch the first ~300 KB of the page and scrape og:title / og:description / og:image
+    // (twitter:* and <title> as fallbacks). Bounded: https only, 8s timeout, image capped at 3 MB and
+    // downscaled to ≤800px before it ever touches a message.
+    private static func fetch(_ url: URL) async -> LinkDraft? {
         guard url.scheme == "https" else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue("Mozilla/5.0 (compatible; KulanBot/1.0)", forHTTPHeaderField: "User-Agent")
@@ -37,19 +59,38 @@ actor LinkPreviewService {
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               (http.mimeType ?? "").contains("html") else { return nil }
-        let html = String(decoding: data.prefix(200_000), as: UTF8.self)
+        let html = String(decoding: data.prefix(300_000), as: UTF8.self)
 
         let title = metaContent(html, property: "og:title")
             ?? metaContent(html, property: "twitter:title")
             ?? tagTitle(html)
         guard let title, !title.isEmpty else { return nil }
+        let desc = metaContent(html, property: "og:description")
+            ?? metaContent(html, property: "twitter:description")
+            ?? metaContent(html, property: "description")
+            ?? ""
 
-        var image: URL?
-        if let raw = metaContent(html, property: "og:image") ?? metaContent(html, property: "twitter:image") {
-            image = URL(string: raw, relativeTo: url)?.absoluteURL
-            if image?.scheme != "https" { image = nil }   // don't load insecure images
+        var image: UIImage?
+        if let raw = metaContent(html, property: "og:image") ?? metaContent(html, property: "twitter:image"),
+           let imgUrl = URL(string: raw, relativeTo: url)?.absoluteURL, imgUrl.scheme == "https" {
+            image = await fetchImage(imgUrl)
         }
-        return LinkPreview(url: url, title: decodeEntities(title), imageUrl: image)
+        return LinkDraft(url: url, title: decodeEntities(title), desc: decodeEntities(desc), image: image)
+    }
+
+    private static func fetchImage(_ url: URL) async -> UIImage? {
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.setValue("Mozilla/5.0 (compatible; KulanBot/1.0)", forHTTPHeaderField: "User-Agent")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              data.count <= 3 * 1024 * 1024,
+              let raw = UIImage(data: data) else { return nil }
+        // Downscale to a card-sized image so the message payload stays small.
+        let maxSide: CGFloat = 800
+        let scale = min(1, maxSide / max(raw.size.width, raw.size.height))
+        guard scale < 1 else { return raw }
+        let size = CGSize(width: raw.size.width * scale, height: raw.size.height * scale)
+        return UIGraphicsImageRenderer(size: size).image { _ in raw.draw(in: CGRect(origin: .zero, size: size)) }
     }
 
     // <meta property="og:title" content="..."> — tolerant of attribute order and name= vs property=.

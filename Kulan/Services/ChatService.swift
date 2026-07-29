@@ -327,7 +327,47 @@ enum ChatService {
 
     /// Encrypt + send a text message and bump the conversation. Throws
     /// MissingRecipientKeyError if the recipient has no key yet (never sends plaintext).
-    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = []) async throws {
+    /// Sender-fetched link preview attached to a text send (Signal's model — see LinkPreviewService).
+    struct OutgoingLinkPreview {
+        let url: String
+        let title: String
+        let desc: String
+        let imageJPEG: Data?
+    }
+
+    /// Seal + upload a composer link-preview draft for one message: text fields sealed exactly like
+    /// the caption, the image encrypted + uploaded exactly like a photo. Best-effort — a nil return
+    /// (or a failed image upload) never blocks the text itself.
+    private static func sealLinkPreview(_ p: OutgoingLinkPreview, cid: String, members: [String]?,
+                                        msgId: String) async -> [String: Any]? {
+        func seal(_ s: String) async -> String? {
+            guard !s.isEmpty else { return nil }
+            if let members { return try? await Crypto.shared.encryptForGroup(s, members: members) }
+            return try? await Crypto.shared.encryptForConversation(cid, s)
+        }
+        guard let cu = await seal(p.url) else { return nil }
+        var d: [String: Any] = ["url": cu]
+        if let ct = await seal(p.title) { d["title"] = ct }
+        if let cd = await seal(p.desc) { d["desc"] = cd }
+        if let jpeg = p.imageJPEG {
+            do {
+                let cipher: Data, meta: EncMeta
+                if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(jpeg, members: members) }
+                else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, jpeg) }
+                let ref = Storage.storage().reference().child("chat/\(cid)/\(msgId)-lp.enc")
+                let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
+                _ = try await ref.putDataAsync(cipher, metadata: sm)
+                let url = try await ref.downloadURL().absoluteString
+                // Seed the cache so the sender's own card swaps from draft to server image invisibly.
+                if let ui = UIImage(data: jpeg) { DiskImageCache.shared.store(ui, for: url) }
+                d["imageUrl"] = url
+                d["imageEnc"] = meta.asDict
+            } catch { /* the card ships without its image */ }
+        }
+        return d
+    }
+
+    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil) async throws {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         // Group path: per-member encryption + unread fan-out. 1:1 path below is untouched.
@@ -340,7 +380,7 @@ enum ChatService {
             members = snap?.data()?["users"] as? [String]
         }
         if let members {
-            try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions)
+            try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview)
             return
         }
 
@@ -389,6 +429,9 @@ enum ChatService {
         if let clientId { msg["clientId"] = clientId }   // lets the client reconcile its optimistic copy
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
+        if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: nil, msgId: msgRef.documentID) {
+            msg["linkPreview"] = lp
+        }
         batch.setData(msg, forDocument: msgRef)
         batch.updateData([
             "lastMessage": cipher,
@@ -402,7 +445,8 @@ enum ChatService {
     /// Group text send: encrypt once per member, fan out the unread increment to everyone
     /// but me. The conversation already exists (created by createGroup), so no users write.
     private static func sendGroupText(cid: String, members: [String], text t: String,
-                                      replyTo: ReplyRef?, clientId: String?, mentions: [String] = []) async throws {
+                                      replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
+                                      preview: OutgoingLinkPreview? = nil) async throws {
         let cipher = try await Crypto.shared.encryptForGroup(t, members: members)
         var replyEnc: [String: Any]?
         if let r = replyTo {
@@ -424,6 +468,9 @@ enum ChatService {
         if let clientId { msg["clientId"] = clientId }
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
+        if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: msgRef.documentID) {
+            msg["linkPreview"] = lp
+        }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": cipher,

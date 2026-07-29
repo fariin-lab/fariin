@@ -109,6 +109,21 @@ struct Message: Identifiable, Equatable {
     /// same clientId, so the row updates in place (no delete+insert blink) on confirm.
     var rowId: String { clientId ?? id }
 
+    /// A link preview that TRAVELLED WITH THE MESSAGE (Signal's model): the sender fetched it, sealed
+    /// it, and the recipient renders it without ever contacting the site. All text fields arrive
+    /// decrypted here; the image is an encrypted storage blob exactly like a photo's.
+    struct LinkPreviewData: Equatable {
+        let url: String
+        let title: String
+        let desc: String
+        let imageUrl: String?
+        let imageEnc: EncMeta?
+        var host: String {
+            URL(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? url
+        }
+    }
+    var linkPreview: LinkPreviewData? = nil
+
     /// Display-order time: the sender's TAP time when sane, else the server arrival time.
     /// Standard messenger rule — a slow-uploading photo stays ABOVE a fast text sent after it;
     /// messages never swap when the upload finishes. The 1h sanity cap ignores broken clocks.
@@ -202,7 +217,8 @@ struct Message: Identifiable, Equatable {
 
     /// Local optimistic message shown instantly before the server confirms it.
     /// `id` = clientId until the server echo (matched by clientId) replaces it.
-    init(localText: String, authorId: String, clientId: String, replyTo: ReplyRef?, sendState: MessageSendState) {
+    init(localText: String, authorId: String, clientId: String, replyTo: ReplyRef?, sendState: MessageSendState,
+         linkPreview: LinkPreviewData? = nil) {
         self.id = clientId
         self.authorId = authorId
         self.text = localText
@@ -211,6 +227,7 @@ struct Message: Identifiable, Equatable {
         self.reactions = [:]
         self.createdAt = Date()
         self.sendState = sendState
+        self.linkPreview = linkPreview   // plaintext draft — the card shows on the pending bubble too
     }
 
     /// Local optimistic ALBUM — shows the picked photos as a grid instantly before upload.
@@ -264,6 +281,24 @@ struct Message: Identifiable, Equatable {
         if let bh = data["blurhash"] as? String, !bh.isEmpty {
             let clear = crypto.decrypt(bh, cid: cid, authorId: data["authorId"] as? String ?? "")
             self.blurhash = (clear.isEmpty || clear == "…" || clear == "🔒") ? nil : clear
+        }
+        // The embedded link preview, sealed like the caption/blurhash. Sentinels (key not warm /
+        // tampered) drop the whole card rather than rendering garbage.
+        if let lp = data["linkPreview"] as? [String: Any] {
+            let author = data["authorId"] as? String ?? ""
+            func open(_ key: String) -> String {
+                let raw = lp[key] as? String ?? ""
+                guard !raw.isEmpty else { return "" }
+                let clear = crypto.decrypt(raw, cid: cid, authorId: author)
+                return (clear == "…" || clear == "🔒") ? "" : clear
+            }
+            let lpUrl = open("url")
+            if !lpUrl.isEmpty {
+                self.linkPreview = LinkPreviewData(
+                    url: lpUrl, title: open("title"), desc: open("desc"),
+                    imageUrl: lp["imageUrl"] as? String,
+                    imageEnc: (lp["imageEnc"] as? [String: Any]).flatMap(EncMeta.init(map:)))
+            }
         }
         self.callerUid = data["callerUid"] as? String
         self.callOutcome = data["callOutcome"] as? String

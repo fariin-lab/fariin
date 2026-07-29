@@ -1,46 +1,62 @@
 import SwiftUI
 
-// Compact Open-Graph card shown under a message that contains a link. Loads the preview lazily via
-// LinkPreviewService (on-device, cached); renders nothing until/unless a usable preview comes back, so
-// a plain URL with no OG tags just stays plain text.
+// The link-preview card inside a text bubble (the Messenger/Signal look the user asked for, reference
+// screenshots 2026-07-29): big image on top, then title / description / domain, tappable to open.
+// Renders ONLY what travelled inside the message (Message.LinkPreviewData) — the sender fetched and
+// sealed it; this view never contacts the site. A pending (just-sent) bubble carries the plaintext
+// draft with an UNencrypted local image key, so the card is identical before and after the server echo.
 struct LinkPreviewCard: View {
-    let url: URL
+    let preview: Message.LinkPreviewData
+    let cid: String
     let isMe: Bool
     let dark: Bool
-    @State private var preview: LinkPreview?
 
     private var fg: Color { isMe ? Theme.onAccent(dark) : (dark ? .white : .black) }
 
     var body: some View {
-        Group {
-            if let p = preview {
-                HStack(spacing: 10) {
-                    if let img = p.imageUrl {
-                        AsyncImage(url: img) { phase in
-                            if let image = phase.image { image.resizable().scaledToFill() }
-                            else { Rectangle().fill(fg.opacity(0.12)) }
-                        }
-                        .frame(width: 52, height: 52)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        VStack(alignment: .leading, spacing: 0) {
+            if let img = preview.imageUrl {
+                Group {
+                    if let enc = preview.imageEnc {
+                        SecureImageView(imageUrl: img, enc: enc, cid: cid)
+                    } else if let ui = DiskImageCache.shared.memoryImage(img) {
+                        // The pending bubble's draft image (cached locally under a draft key).
+                        Image(uiImage: ui).resizable().scaledToFill()
+                    } else {
+                        Rectangle().fill(fg.opacity(0.10))
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.title).font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(fg).lineLimit(2).multilineTextAlignment(.leading)
-                        Text(p.host).font(.system(size: 11))
-                            .foregroundStyle(fg.opacity(0.6)).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
                 }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(fg.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .transition(.opacity)
+                .frame(maxWidth: .infinity)
+                .frame(height: 140)
+                .clipped()
             }
+            VStack(alignment: .leading, spacing: 2) {
+                if !preview.title.isEmpty {
+                    Text(preview.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(fg)
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                }
+                if !preview.desc.isEmpty {
+                    Text(preview.desc)
+                        .font(.system(size: 12))
+                        .foregroundStyle(fg.opacity(0.75))
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                }
+                Text(preview.host)
+                    .font(.system(size: 11))
+                    .foregroundStyle(fg.opacity(0.55))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
-        .task(id: url) {
-            let p = await LinkPreviewService.shared.preview(for: url)
-            await MainActor.run { withAnimation(.easeIn(duration: 0.2)) { preview = p } }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(fg.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture {
+            if let u = URL(string: preview.url) { UIApplication.shared.open(u) }
         }
     }
 }

@@ -128,6 +128,11 @@ struct ThreadView: View {
     // reloads through the menu's dismissal animation — UIKit's own callbacks can't see SwiftUI menus,
     // which is how Select kept stranding the system's blur backdrop over the whole chat.
     @State private var menuActionTick = 0
+    // Composer link-preview draft (sender-side fetch, Signal's model — see LinkPreviewService). The
+    // card shows above the input the moment a pasted/typed link resolves; X suppresses that URL.
+    @State private var linkDraft: LinkPreviewService.LinkDraft?
+    @State private var suppressedLinkUrl: String?
+    @State private var linkDetectTask: Task<Void, Never>?
     @State private var bulkForward: [Message]?
     @State private var showBulkDeleteConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
@@ -2314,10 +2319,27 @@ struct ThreadView: View {
         // Show the bubble INSTANTLY (optimistic), then reconcile when the server echoes it.
         // Native: the bubble just appears (no custom spring), like a plain list insert.
         let clientId = UUID().uuidString
-        repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply, sendState: .sending))
+        // The composer's link-preview draft rides the send: the pending bubble carries the plaintext
+        // card (its image under a local draft key), and the sealed copy travels with the message.
+        let draft = linkDraft
+        linkDetectTask?.cancel()
+        linkDraft = nil
+        suppressedLinkUrl = nil
+        var pendingPreview: Message.LinkPreviewData?
+        if let d = draft {
+            var imageKey: String?
+            if let img = d.image {
+                imageKey = "lp-draft-\(clientId)"
+                DiskImageCache.shared.store(img, for: imageKey!)
+            }
+            pendingPreview = Message.LinkPreviewData(url: d.url.absoluteString, title: d.title,
+                                                    desc: d.desc, imageUrl: imageKey, imageEnc: nil)
+        }
+        repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
+                                sendState: .sending, linkPreview: pendingPreview))
         broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typing…")
         Task {
-            await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions)
+            await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft)
         }
     }
 
@@ -2551,14 +2573,22 @@ struct ThreadView: View {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
-    private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = []) async {
+    private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
+                         draft: LinkPreviewService.LinkDraft? = nil) async {
         // DURABLE: persist the send BEFORE the network call so a mid-send app kill doesn't lose the
         // message — it's re-driven on the next chat open (drainSendQueue). Removed once it lands.
+        // (A queue re-drive after an app kill sends WITHOUT the preview — the draft lives in memory
+        // only; the text always survives, which is the part that matters.)
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
                       ts: Date().timeIntervalSince1970)
         do {
+            let preview = draft.map {
+                ChatService.OutgoingLinkPreview(url: $0.url.absoluteString, title: $0.title,
+                                                desc: $0.desc, imageJPEG: $0.imageJPEG)
+            }
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
-                                           group: isGroup ? groupMembers : nil, mentions: mentions)
+                                           group: isGroup ? groupMembers : nil, mentions: mentions,
+                                           preview: preview)
             SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
         } catch {
             // Keep the message as a failed bubble (tap to retry); flag the encryption case. The queue
@@ -3154,7 +3184,61 @@ struct ThreadView: View {
     }
 
     // The reply preview now nests INSIDE the input capsule (see inputRow).
-    private var composerArea: some View { composer }
+    private var composerArea: some View {
+        composer
+            // LINK DETECTION while typing (debounced): resolve the first https link into a draft
+            // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
+            .onChange(of: input) { _, text in
+                linkDetectTask?.cancel()
+                guard let url = LinkPreviewService.firstURL(in: text) else {
+                    if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
+                    suppressedLinkUrl = nil
+                    return
+                }
+                if url.absoluteString == suppressedLinkUrl { return }
+                if url == linkDraft?.url { return }
+                linkDetectTask = Task {
+                    try? await Task.sleep(nanoseconds: 400_000_000)   // let typing settle
+                    guard !Task.isCancelled else { return }
+                    let d = await LinkPreviewService.shared.draft(for: url)
+                    guard !Task.isCancelled, let d else { return }
+                    await MainActor.run {
+                        // The text may have changed while fetching — only show a still-current link.
+                        guard LinkPreviewService.firstURL(in: input) == url else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
+                    }
+                }
+            }
+    }
+
+    // The composer's draft card (user reference: Messenger shows the preview BEFORE sending):
+    // thumb + title + description + domain, X to send without a preview.
+    private func linkDraftRow(_ d: LinkPreviewService.LinkDraft) -> some View {
+        HStack(spacing: 10) {
+            if let img = d.image {
+                Image(uiImage: img).resizable().scaledToFill()
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(d.title).font(.caption.weight(.semibold)).lineLimit(1)
+                if !d.desc.isEmpty {
+                    Text(d.desc).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text(d.host).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    suppressedLinkUrl = d.url.absoluteString
+                    linkDraft = nil
+                }
+            } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
+    }
 
     // Active-reply preview row, shown inside the input capsule above the text field.
     private func replyPreviewRow(_ r: Message) -> some View {
@@ -3391,6 +3475,12 @@ struct ThreadView: View {
                 }
                 if let e = editingMessage, !recordingHeld {
                     editPreviewRow(e)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    Divider().padding(.horizontal, 12)
+                }
+                // Link-preview draft rides the same slot as the reply preview (reference behaviour).
+                if let d = linkDraft, !recordingHeld, editingMessage == nil {
+                    linkDraftRow(d)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     Divider().padding(.horizontal, 12)
                 }
@@ -4840,8 +4930,10 @@ struct MessageBubble: View, Equatable {
             // one-line snippet keeps template and visible heights identical.
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote   // NATURAL width — measurement only (its 150pt floor applies)
-                if let link = firstLinkURL {
-                    LinkPreviewCard(url: link, isMe: isMe, dark: dark)
+                if let lp = message.linkPreview {
+                    // Only what TRAVELLED with the message renders (Signal's model) — no viewer-side
+                    // fetch, so old messages without an embedded preview stay plain links.
+                    LinkPreviewCard(preview: lp, cid: cid, isMe: isMe, dark: dark)
                 }
                 bodyLine     // natural width, wraps at the proposed bubble cap
             }
