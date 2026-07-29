@@ -1900,7 +1900,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             armSwiftUIMenuDismissGrace()
             onReactionPick(rowId, emoji)
             ReactionBarPresenter.shared.hide()
-            dismissSwiftUIMenu(forRow: rowId)
+            dismissOpenMenu()
             stopSwiftUIMenuWatch(hideBar: false)
         }
     }
@@ -1921,13 +1921,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if hideBar { ReactionBarPresenter.shared.hide() }
     }
 
-    /// Take the row's own menu down the way tapping one of its actions would. The interaction belongs to
-    /// a view SwiftUI made inside the cell, so we ask that view — `interactions` and `dismissMenu()` are
-    /// both public UIKit, the same front door the text rows use.
-    private func dismissSwiftUIMenu(forRow rowId: String) {
-        guard let ip = dataSource.indexPath(for: rowId),
-              let cell = collectionView.cellForItem(at: ip) else { return }
-        Self.contextMenuInteractions(in: cell).forEach { $0.dismissMenu() }
+    /// Take the row's menu down the way tapping one of its own actions would — `interactions` and
+    /// `dismissMenu()` are both public UIKit, the same front door either menu uses.
+    ///
+    /// THE INTERACTION IS ON THE CELL, NOT ON THE COLLECTION VIEW, and getting that wrong is why picking
+    /// an emoji appeared to do nothing (user, after the last preview). The UIKit-row path asked
+    /// `collectionView.interactions` for a UIContextMenuInteraction — but when a collection view
+    /// vends menus through `contextMenuConfigurationForItemAt`, UIKit puts the interaction on the CELL.
+    /// That array came back empty, nothing was dismissed, and the menu simply stayed up. The reaction
+    /// had in fact been written; it could not be SEEN, because a row that gains a reaction has to swap
+    /// to the SwiftUI cell that draws the badge, and reloads are held while a menu is open. So the
+    /// reaction was invisible and the menu never moved: "nothing happens".
+    ///
+    /// Walking from the collection view covers both owners at once: the cells are inside it, so this
+    /// finds an interaction UIKit put on a cell and one SwiftUI put inside a hosted cell alike. Only one
+    /// menu can be open, so asking every interaction to dismiss is asking the open one.
+    private func dismissOpenMenu() {
+        Self.contextMenuInteractions(in: collectionView).forEach { $0.dismissMenu() }
     }
 
     private static func contextMenuInteractions(in root: UIView) -> [UIContextMenuInteraction] {
@@ -2239,12 +2249,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // interaction to dismiss; it does not reach inside it.
                 onReactionPick(id, emoji)
                 ReactionBarPresenter.shared.hide()
-                // Ask the menu to close, the way tapping one of its own actions would. `interactions`
-                // and `dismissMenu()` are both public UIKit — we are requesting a dismissal through
-                // the front door, not reaching into the menu's internals.
-                collectionView.interactions
-                    .compactMap { $0 as? UIContextMenuInteraction }
-                    .forEach { $0.dismissMenu() }
+                dismissOpenMenu()
             }
         }
         // WHICH row the menu belongs to. The configuration's identifier IS the row id (see
