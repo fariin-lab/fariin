@@ -5449,22 +5449,31 @@ struct MessageBubble: View, Equatable {
                 Text("Story unavailable")
                     .font(.system(size: 12)).foregroundStyle(.tertiary)
             } else if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
-                // ~92x160 (measured from the reference): small enough to read as a story CARD,
-                // not a sent photo. Hairline stroke separates light stories from the wallpaper.
-                // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
-                // crop — the preview must show exactly what opening the story shows (6 people
-                // in the story = 6 people in the card, user rule). Threshold = the card's own
-                // aspect so a card-tall photo still fills edge-to-edge with no bars.
-                StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
-                    .frame(width: 80, height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-                    // Unique per MESSAGE (two replies can quote the same story — duplicate
-                    // hero ids glitch the transition).
-                    .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
-                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .onTapGesture { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }
+                // ACCENT BAR + CARD, the way a reply quote is built everywhere else in the app: a
+                // rounded rule on the leading edge, then the quoted thing. The story card was the one
+                // quote in the conversation that floated with no rule beside it (user's reference
+                // screenshot has one), so it did not read as a quotation at all.
+                HStack(alignment: .center, spacing: 9) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.35))
+                        .frame(width: 5, height: 140)
+                    // ~92x160 (measured from the reference): small enough to read as a story CARD,
+                    // not a sent photo. Hairline stroke separates light stories from the wallpaper.
+                    // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
+                    // crop — the preview must show exactly what opening the story shows (6 people
+                    // in the story = 6 people in the card, user rule). Threshold = the card's own
+                    // aspect so a card-tall photo still fills edge-to-edge with no bars.
+                    StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
+                        .frame(width: 80, height: 140)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+                        // Unique per MESSAGE (two replies can quote the same story — duplicate
+                        // hero ids glitch the transition).
+                        .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .onTapGesture { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }
+                }
             }
         }
         .padding(.bottom, 2)
