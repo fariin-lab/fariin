@@ -4950,10 +4950,9 @@ struct MessageBubble: View, Equatable {
                     // report: "when I reply short text the reply quote looks half, right side"). Same trap
                     // the voice bubble hit, which is why fillWidth exists.
                     replyQuoteBox(fillWidth: true)
-                    // Open-Graph card for the first link (generated on-device — see LinkPreviewService).
-                    if let link = firstLinkURL {
-                        LinkPreviewCard(url: link, isMe: isMe, dark: dark)
-                            .onTapGesture { _ = routeTappedURL(link) }
+                    // The embedded link-preview card (sender-fetched, travelled with the message).
+                    if let lp = message.linkPreview {
+                        LinkPreviewCard(preview: lp, cid: cid, isMe: isMe, dark: dark)
                     }
                     // Text + time: the invisible trailing reservation + overlaid time (Signal does the
                     // same body/footer overlap). FILLED like the quote (user report): when the QUOTE
