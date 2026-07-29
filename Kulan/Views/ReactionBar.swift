@@ -68,7 +68,12 @@ final class ReactionBarView: UIView {
         }
 
         stack.axis = .horizontal
-        stack.alignment = .center
+        // .fill, NEVER .center: the holders are plain UIViews with no intrinsic height, so under
+        // .center the stack resolved every one of them to HEIGHT ZERO. The emoji labels still drew
+        // (nothing clips), so the bar LOOKED right — but no touch can land inside a zero-height view,
+        // every tap fell through to the glass background and died there (user: "nothing happens when
+        // I tap"). .fill stretches each holder to the padded bar height, which IS the 44pt target.
+        stack.alignment = .fill
         stack.distribution = .fillEqually
         stack.spacing = 0
         stack.isLayoutMarginsRelativeArrangement = true
@@ -277,6 +282,9 @@ final class ReactionBarPresenter {
 
     /// Show the bar above `bubbleFrame` (window coordinates).
     /// - Parameters:
+    ///   - bubbleFrame: where the lifted message ENDS UP — the list computes the menu shift itself, so
+    ///     it passes the destination, not the bubble's old place in the list. This is what the bar
+    ///     positions against whenever the platter search comes up empty.
     ///   - alignTrailing: my messages align to the bubble's right edge, theirs to the left — Signal's
     ///     `horizontalEdgeAlignment`, which is what makes the bar feel attached to that bubble.
     func show(in scene: UIWindowScene,
@@ -314,8 +322,9 @@ final class ReactionBarPresenter {
         self.window = w
         self.bar = bar
         self.alignTrailing = alignTrailing
-        // Follow the lifted message while UIKit animates it into place; fall back to the bubble's own
-        // frame whenever the lifted copy cannot be found.
+        // Follow the lifted message while UIKit animates it into place; whenever the lifted copy
+        // cannot be found, fall back to the frame the caller computed — the lift's DESTINATION, so a
+        // failed search still puts the bar above where the message actually settles.
         self.anchor = { ReactionBarPresenter.liftedPreviewFrame() ?? bubbleFrame }
         reposition()
         bar.playPresentation()

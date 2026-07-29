@@ -395,6 +395,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
     private var contextMenuVisible = false                   // UIKit says a context menu is on screen
     private var contextMenuSourceId: String?                 // the row that menu lifted from
+    private var liftedBubbleFrame: CGRect?                   // where the lift ENDS (window coords) — the bar's anchor
     private var uikitReg: UICollectionView.CellRegistration<UIKitBubbleCell, String>!
     private var swipePan: UIPanGestureRecognizer!
     private weak var swipingCell: UICollectionViewCell?
@@ -2137,6 +2138,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let window = view.window else {
             return UITargetedPreview(view: bubble, parameters: params)
         }
+        // WHERE THE LIFT ENDS, recorded for the reactions bar. The bar finds the lifted copy by
+        // searching for UIKit's platter view, and when that search fails — silently, and on device it
+        // does — it fell back to the bubble's OLD frame. For a bottom message that is a place the
+        // preview just left, which is exactly the bar lying across the menu in the user's screenshot.
+        // The shift is computed right here, so the destination is a fact we own: record it, and the
+        // fallback becomes the truth instead of a stale guess.
+        liftedBubbleFrame = bubbleInWindow
         let barSpace = ReactionBarView.size(emojiCount: min(6, QuickReaction.choices.count)).height + 12
         let topLimit = window.safeAreaInsets.top + barSpace + 8
         // The composer floats over the list, and UIKit knows nothing about it — without subtracting it
@@ -2168,6 +2176,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
         var center = bubble.center
         center.y += shift
+        liftedBubbleFrame = bubbleInWindow.offsetBy(dx: 0, dy: shift)
         return UITargetedPreview(view: bubble, parameters: params,
                                  target: UIPreviewTarget(container: container, center: center))
     }
@@ -2225,7 +2234,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
            let scene = view.window?.windowScene,
            let ip = dataSource.indexPath(for: id),
            let info = reactionBarRow(id), info.canReact,
-           let frame = bubbleFrameInWindow(at: ip, id: id) {
+           // The SHIFTED frame recorded when the highlight preview was built — where the message will
+           // rest, not where it was. bubbleFrameInWindow only covers the impossible case of UIKit
+           // showing a menu without ever having asked for its highlight preview.
+           let frame = liftedBubbleFrame ?? bubbleFrameInWindow(at: ip, id: id) {
             ReactionBarPresenter.shared.show(
                 in: scene,
                 bubbleFrame: frame,
@@ -2254,11 +2266,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // simply the moment we were told the interaction is ending.
         ReactionBarPresenter.shared.hide()
         guard let animator else {
-            contextMenuVisible = false; contextMenuSourceId = nil; settleFlush(); return
+            contextMenuVisible = false; contextMenuSourceId = nil; liftedBubbleFrame = nil
+            settleFlush(); return
         }
         animator.addCompletion { [weak self] in
             self?.contextMenuVisible = false
             self?.contextMenuSourceId = nil
+            self?.liftedBubbleFrame = nil
             self?.settleFlush()   // land everything the menu held back, now that the cell is free
         }
     }
