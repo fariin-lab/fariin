@@ -2142,43 +2142,52 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // preview goes where we say, and UIKit then lays its menu out around the preview's NEW position.
         // So the bar's space is reserved by moving the message, not by fighting the menu afterwards.
         //
-        // MOVED UP AS WELL AS DOWN, and this is the correction to the first attempt. That version only
-        // ever pushed a message DOWN, on the reasoning that a low message is already fine because UIKit
-        // lifts it and puts the menu beneath. That reasoning was wrong, and the user's screenshot shows
-        // why: with a TALL bubble left where it sits, there is no room under it for the menu, so UIKit
-        // lays the menu straight over the message and the bar ends up beneath the whole pile. The fix
-        // for that case is to move the message UP, which the old rule could never do.
+        // THE SMALLEST MOVE THAT MAKES ROOM — never a move to a fixed place (user spec 2026-07-29, after
+        // testing: centre messages are right and must not change; a bottom message should rise only by
+        // what the menu actually needs, not jump to the middle; a top message should drop only enough to
+        // clear the header for the bar).
         //
-        // So the target is stated positively instead: the message's TOP goes just under the bar's
-        // space, which is the highest it can sit while leaving the bar room, and therefore the position
-        // that leaves the MOST room underneath for the menu. Applied only when the current position
-        // actually fails — either the bar has no room above, or the menu has no room below. A message
-        // that already satisfies both is not touched, because moving it would be motion for nothing.
+        // The previous version failed that. It computed a single target — top of the allowed band — and
+        // sent the message there whenever EITHER constraint was violated, so long-pressing the last
+        // message hauled it most of the way up the screen. Correct order, wrong distance, and the
+        // distance is what you feel.
+        //
+        // Both bounds are real measurements, so the movement scales with the actual menu:
+        //   topLimit    = header + the bar's own height, the highest the bubble may start
+        //   bottomLimit = the composer's top edge, the lowest anything may reach
+        //   menuRoom    = this message's menu, counted from the actions we put in it
+        // A small menu moves the message a little; a large one moves it more; a message that already
+        // satisfies both bounds is not touched at all.
         guard reservingBarSpace, let container = bubble.superview,
               let window = view.window else {
             return UITargetedPreview(view: bubble, parameters: params)
         }
         let barSpace = ReactionBarView.size(emojiCount: min(6, QuickReaction.choices.count)).height + 12
-        let safeTop = window.safeAreaInsets.top
-        let safeBottom = window.safeAreaInsets.bottom
         let height = bubble.bounds.height
-
-        let topLimit = safeTop + barSpace + 8                    // highest the bubble may start
-        let bottomLimit = window.bounds.height - safeBottom - 8  // lowest anything may reach
+        let topLimit = window.safeAreaInsets.top + barSpace + 8
+        // The composer floats over the list, and UIKit knows nothing about it — without subtracting it
+        // the menu is free to land underneath the input bar.
+        let bottomLimit = window.bounds.height - window.safeAreaInsets.bottom - composerBarH - 8
         let menuRoom = estimatedMenuHeight(at: indexPath) + 12
 
         let centerInWindow = container.convert(bubble.center, to: nil)
         let currentTop = centerInWindow.y - height / 2
         let currentBottom = centerInWindow.y + height / 2
 
-        let barFits = currentTop >= topLimit
-        let menuFits = currentBottom + menuRoom <= bottomLimit
-        guard !(barFits && menuFits) else {
+        var shift: CGFloat = 0
+        if currentTop < topLimit {
+            shift = topLimit - currentTop                            // down, just clear of the header
+        } else if currentBottom + menuRoom > bottomLimit {
+            shift = -(currentBottom + menuRoom - bottomLimit)        // up, just enough for the menu
+            // …but never so far up that the bar loses the room this whole exercise is about.
+            shift = max(shift, topLimit - currentTop)
+        }
+        guard abs(shift) > 0.5 else {
             return UITargetedPreview(view: bubble, parameters: params)   // already well placed
         }
 
         var center = bubble.center
-        center.y += (topLimit + height / 2) - centerInWindow.y
+        center.y += shift
         return UITargetedPreview(view: bubble, parameters: params,
                                  target: UIPreviewTarget(container: container, center: center))
     }
