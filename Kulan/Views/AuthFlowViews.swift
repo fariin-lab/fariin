@@ -171,7 +171,8 @@ struct AuthMethodView: View {
                 } onCompletion: { result in
                     switch result {
                     case .success(let auth):
-                        run { try await AuthService.shared.completeApple(authorization: auth) }
+                        run { try await AuthService.shared.completeApple(authorization: auth,
+                                                                         requireExistingAccount: mode == .login) }
                     case .failure:
                         break   // user cancelled the sheet — not an error worth showing
                     }
@@ -193,7 +194,7 @@ struct AuthMethodView: View {
                 .clipShape(Capsule())
 
                 Button {
-                    run { try await AuthService.shared.signInWithGoogle() }
+                    run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login) }
                 } label: {
                     // Google's brand rules also call for a white button with dark text, so the
                     // matched set costs us nothing on either company's guidelines.
@@ -251,7 +252,11 @@ struct AuthMethodView: View {
                 if !cancelled { print("[auth] sign-in failed: \(ns.domain) \(ns.code) \(error)") }
                 #endif
                 await MainActor.run {
-                    if !cancelled {
+                    if let flow = error as? AuthFlowError {
+                        // Our own crafted copy (e.g. "You haven't signed up with this account
+                        // before...") — show it verbatim.
+                        self.error = flow.errorDescription
+                    } else if !cancelled {
                         // Real failures speak like a person — never a raw NSError on the front door.
                         self.error = ns.code == 17020 ? "No internet connection. Try again."
                                                       : "Couldn't sign in. Please try again."

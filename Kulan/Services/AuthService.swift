@@ -37,7 +37,7 @@ final class AuthService: NSObject {
 
     /// The one rule every door goes through: anonymous session + new credential = LINK
     /// (keep the uid); credential already taken = sign into that existing account.
-    private func authenticate(with credential: AuthCredential) async throws {
+    private func authenticate(with credential: AuthCredential, requireExistingAccount: Bool = false) async throws {
         if let user = Auth.auth().currentUser, user.isAnonymous {
             do {
                 let result = try await user.link(with: credential)
@@ -57,6 +57,16 @@ final class AuthService: NSObject {
             }
         }
         let result = try await Auth.auth().signIn(with: credential)
+        // THE LOG-IN DOOR ONLY: this Google/Apple identity has never signed up. Social sign-in cannot
+        // ask first — Firebase has already created an empty shell account as a side effect — so roll
+        // the shell back and say so, instead of silently dropping the person into a blank app they
+        // never created (reference UX: "you haven't logged in with this account before — log in
+        // another way or sign up"). The Sign-Up door passes false and keeps today's behaviour.
+        if requireExistingAccount, result.additionalUserInfo?.isNewUser == true {
+            try? await result.user.delete()
+            try? Auth.auth().signOut()
+            throw AuthFlowError.noAccount
+        }
         uid = result.user.uid
         reportLogin()
     }
@@ -72,8 +82,9 @@ final class AuthService: NSObject {
         request.nonce = Self.sha256(nonce)
     }
 
-    func completeApple(authorization: ASAuthorization) async throws {
-        try await authenticate(with: makeAppleCredential(authorization: authorization))
+    func completeApple(authorization: ASAuthorization, requireExistingAccount: Bool = false) async throws {
+        try await authenticate(with: makeAppleCredential(authorization: authorization),
+                               requireExistingAccount: requireExistingAccount)
     }
 
     /// Build the Firebase credential from an Apple authorization. Shared by sign-in and by
@@ -118,8 +129,8 @@ final class AuthService: NSObject {
 
     private var webSession: ASWebAuthenticationSession?
 
-    func signInWithGoogle() async throws {
-        try await authenticate(with: obtainGoogleCredential())
+    func signInWithGoogle(requireExistingAccount: Bool = false) async throws {
+        try await authenticate(with: obtainGoogleCredential(), requireExistingAccount: requireExistingAccount)
     }
 
     /// Run the Google web flow and return the Firebase credential. Shared by sign-in and by
@@ -392,6 +403,7 @@ extension AuthService: ASWebAuthenticationPresentationContextProviding {
 enum AuthFlowError: LocalizedError {
     case appleFailed, googleFailed, emailTaken, emailTakenWrongPassword
     case notSignedIn, alreadyConnected, alreadyLinkedElsewhere
+    case noAccount
 
     var errorDescription: String? {
         switch self {
@@ -404,6 +416,8 @@ enum AuthFlowError: LocalizedError {
         case .alreadyConnected: return "That's already connected to this account."
         case .alreadyLinkedElsewhere:
             return "That login already belongs to a different Kulan account. Sign out and log in with it instead."
+        case .noAccount:
+            return "You haven't signed up with this account before. Go back and choose Sign Up to continue."
         }
     }
 }
