@@ -635,6 +635,7 @@ struct PrivacySettingsView: View {
     @AppStorage("priv.photo") private var privPhoto = "everyone"
     @AppStorage("priv.bio") private var privBio = "everyone"
     @AppStorage("priv.calls") private var privCalls = "everyone"
+    @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("priv.groups") private var privGroups = "everyone"
     @State private var showDefaultDisappear = false
 
@@ -674,7 +675,9 @@ struct PrivacySettingsView: View {
             }
 
             Section {
-                NavigationLink { PhoneNumberPrivacyView() } label: { Text("Phone Number") }
+                // NO PHONE NUMBER ROW. Kulan does not use phone numbers — accounts are Apple/Google/
+                // email and people are found by @handle — so a privacy control for who can see a
+                // number nobody has was answering a question the app never asks.
                 audienceRow("Last Seen & Online", key: "lastSeen", value: privLastSeen,
                             footerText: "Who can see when you're online and when you were last active.")
                 audienceRow("Profile Picture", key: "photo", value: privPhoto,
@@ -683,7 +686,16 @@ struct PrivacySettingsView: View {
                             footerText: "Who can see the few words about you.")
                 audienceRow("Calls", key: "calls", value: privCalls,
                             footerText: "Who can call you. Calls from anyone else are declined automatically.")
-                NavigationLink { MessagesPrivacyPage() } label: { Text("Messages") }
+                // Shows its value like every other row here. It was the one row with a bare title, so
+                // it read as broken next to five rows that each state their setting (user: "messages
+                // when i select everyone or same one i am not seeing").
+                NavigationLink { MessagesPrivacyPage() } label: {
+                    HStack {
+                        Text("Messages")
+                        Spacer()
+                        Text(label(privMessages)).foregroundStyle(.secondary)
+                    }
+                }
                 if Flags.groupsEnabled {
                     audienceRow("Groups", key: "groups", value: privGroups,
                                 footerText: "Who can add you to groups.")

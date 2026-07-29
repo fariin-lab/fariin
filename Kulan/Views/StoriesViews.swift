@@ -2349,7 +2349,7 @@ struct StoryViewersBottomSheet: View {
             ForEach(0..<2, id: \.self) { i in
                 Button { withAnimation(.easeInOut(duration: 0.18)) { tab = i } } label: {
                     VStack(spacing: 6) {
-                        Text(i == 0 ? "All Viewers" : "Contacts")
+                        Text(i == 0 ? "All Viewers" : "Friends")
                             .font(.subheadline.weight(tab == i ? .semibold : .regular))
                             .foregroundStyle(tab == i ? .white : .white.opacity(0.5))
                         Capsule().fill(tab == i ? Color.white : Color.clear).frame(height: 2)
