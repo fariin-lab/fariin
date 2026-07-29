@@ -656,15 +656,10 @@ struct ContactInfoView: View {
                                 // pan alongside SignalDismissHost's.
                                 .onTapGesture {
                                     let key = MediaOpenRects.key(.profile, m.id)
-                                    let present = { MediaPresentGate.present { viewerImage = m } }
-                                    if let rect = MediaOpenRects.rect(key),
-                                       let img = DiskImageCache.shared.memoryImage(url) {
-                                        SignalMediaOpen.fly(image: img, from: rect,
-                                                            sourceCornerRadius: MediaOpenRects.cornerRadius(key),
-                                                            present: present)
-                                    } else {
-                                        present()
-                                    }
+                                    // Both cache tiers, not memory only — see flyOrPresent.
+                                    SignalMediaOpen.flyOrPresent(
+                                        imageUrl: url, rectKey: key,
+                                        present: { MediaPresentGate.present { viewerImage = m } })
                                 }
                         }
                     }

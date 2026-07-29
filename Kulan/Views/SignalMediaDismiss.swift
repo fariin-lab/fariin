@@ -443,6 +443,51 @@ enum SignalMediaOpen {
             .first
     }
 
+    /// Fly out of the bubble if the media can be resolved from ANY cache tier; present plainly only if
+    /// it genuinely is not cached at all.
+    ///
+    /// THE MEMORY CACHE IS NOT A PRECONDITION, and treating it as one was a real bug (user report on
+    /// build 400: "after putting the app in the background and reopening it, tapping an image animates
+    /// from the bottom of the screen instead of from its bubble"). Every call site used to read
+    /// `DiskImageCache.memoryImage(url)` — a synchronous MEMORY-ONLY lookup — and fall back to a plain
+    /// presentation when it returned nil. But that tier is an `NSCache`, which iOS empties under memory
+    /// pressure and when the app is backgrounded, so after returning to the app the first tap on every
+    /// photo took the fallback. The image was never gone; it was one tier down, on disk, where the
+    /// bubble itself was already reading it from.
+    ///
+    /// So resolve it properly. A memory hit still flies on the same frame as the tap. A miss costs one
+    /// off-main disk read plus decode, which also promotes it back into memory, so only the first tap
+    /// after a return pays it — and it pays a frame or two, not a different animation.
+    static func flyOrPresent(imageUrl: String?,
+                             rectKey: String,
+                             clip: CGRect? = nil,
+                             present: @escaping () -> Void) {
+        guard let imageUrl, MediaOpenRects.rect(rectKey) != nil else { present(); return }
+        if let img = DiskImageCache.shared.memoryImage(imageUrl) {
+            flyFromRegistry(img, rectKey: rectKey, clip: clip, present: present)
+            return
+        }
+        // Not in memory. Ask the zero-IO disk index BEFORE going async: media that genuinely is not
+        // cached anywhere (still downloading) must open exactly as promptly as it always did, rather
+        // than paying for a disk read that was always going to come back empty.
+        guard DiskImageCache.shared.isCached(imageUrl) else { present(); return }
+        Task { @MainActor in
+            guard let img = await DiskImageCache.shared.image(for: imageUrl) else { present(); return }
+            // Re-read the rect rather than closing over the old one: a few tens of milliseconds is
+            // enough for the list to have moved, and flying from a stale rect is the "wrong area"
+            // class of bug this registry exists to prevent.
+            flyFromRegistry(img, rectKey: rectKey, clip: clip, present: present)
+        }
+    }
+
+    private static func flyFromRegistry(_ image: UIImage, rectKey: String,
+                                        clip: CGRect?, present: @escaping () -> Void) {
+        guard let rect = MediaOpenRects.rect(rectKey) else { present(); return }
+        fly(image: image, from: rect,
+            sourceCornerRadius: MediaOpenRects.cornerRadius(rectKey),
+            clip: clip, present: present)
+    }
+
     /// - Parameters:
     ///   - image: the media to fly. Videos pass their poster — Signal flies a still frame for video too,
     ///            never a layer and never a snapshot of the screen.

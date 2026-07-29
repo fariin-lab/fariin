@@ -573,13 +573,9 @@ struct MediaGalleryView: View {
         // swallowed by SwiftUI (user: "when I close an image and click again fast it doesn't work").
         let present = { MediaPresentGate.present(rawPresent) }
         let key = MediaOpenRects.key(.gallery, m.id)
-        if let rect = MediaOpenRects.rect(key),
-           let url = poster, let img = DiskImageCache.shared.memoryImage(url) {
-            SignalMediaOpen.fly(image: img, from: rect,
-                                sourceCornerRadius: MediaOpenRects.cornerRadius(key), present: present)
-        } else {
-            present()   // no live rect or undecoded thumb - plain presentation, never blocked
-        }
+        // Resolves through BOTH cache tiers — memory only was why the first tap after returning from
+        // the background slid up from the bottom instead of flying. See SignalMediaOpen.flyOrPresent.
+        SignalMediaOpen.flyOrPresent(imageUrl: poster, rectKey: key, present: present)
     }
     private func toggle(_ m: Message) {
         if selection.contains(m.id) { selection.remove(m.id) } else { selection.insert(m.id) }
