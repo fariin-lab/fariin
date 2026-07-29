@@ -3,8 +3,12 @@ import FirebaseAuth
 import FirebaseFirestore
 
 // The privacy audience system (user's reference, 2026-07-24). Each privacy item opens a
-// page with Everyone / My Contacts / No One. "My Contacts" means people you share a chat
-// with — Kulan never reads the phone book, so chats ARE the contact list. Choices are
+// page with Everyone / My Friends / No One.
+//
+// "MY FRIENDS", NOT "MY CONTACTS" (renamed 2026-07-29). The word contacts promises the phone book,
+// and Kulan has never read it — there are no phone numbers in this app at all. What it actually
+// means is "people I share a chat with", and calling those friends is both true and the only
+// reading a user can arrive at without being told. Choices are
 // mirrored locally AND published to users/{me}.privacy so OTHER clients can honor them
 // (their app hides your photo/bio/presence from non-qualified viewers; calls from
 // non-qualified callers are declined by your device).
@@ -14,7 +18,7 @@ enum Audience: String, CaseIterable {
     var label: String {
         switch self {
         case .everyone: return "Everyone"
-        case .contacts: return "My Contacts"
+        case .contacts: return "My Friends"
         case .nobody:   return "No One"
         }
     }

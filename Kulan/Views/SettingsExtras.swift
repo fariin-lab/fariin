@@ -1,9 +1,9 @@
-import SwiftUI
+﻿import SwiftUI
 import UIKit
 import FirebaseFirestore
 
 // Settings subviews. Real where the backend exists (Blocked Users, push toggle, Devices);
-// honest placeholders where it doesn't yet (Phone Number) — no fabricated data, built so
+// honest placeholders where it doesn't yet (Phone Number) â€” no fabricated data, built so
 // they can be wired up when the infra lands.
 
 private var appVersion: String {
@@ -15,7 +15,7 @@ private var appVersion: String {
 // The user's reference layout, every row REAL: Show Notifications = push registration;
 // Message Preview = whether the push shows the sender (server reads users.notifPreview);
 // Sound = bundled tones the push and in-app banner actually play (users.notifSound);
-// the in-app block drives InAppNotify. Only "New Contacts" is absent — there is no
+// the in-app block drives InAppNotify. Only "New Contacts" is absent â€” there is no
 // contact-book sync, so that event cannot exist yet.
 struct NotificationsSettingsView: View {
     @AppStorage("notif.push") private var pushOn = true
@@ -47,7 +47,7 @@ struct NotificationsSettingsView: View {
                 Toggle("Message Preview", isOn: $messagePreview)
                     .tint(.green)
                     .onChange(of: messagePreview) { _, on in
-                        // The push server reads this per recipient — OFF sends a nameless
+                        // The push server reads this per recipient â€” OFF sends a nameless
                         // "New message" instead of the sender's name.
                         Task { try? await ProfileStore.shared.setNotifPrefs(preview: on) }
                     }
@@ -144,7 +144,7 @@ struct NotificationSoundView: View {
 // MARK: - Devices
 //
 // Rewritten 2026-07-27. It used to be a "Linked Devices" page whose hero was a Link a New
-// Device button for a desktop app that does not exist — the user's word for it was "ghost".
+// Device button for a desktop app that does not exist â€” the user's word for it was "ghost".
 // It is now what Discord's Devices screen is: every phone signed in to this account, which
 // one you are holding, and a way to throw the others off. Every field on it is real.
 
@@ -190,7 +190,7 @@ struct DevicesView: View {
                         }
                         .padding(.vertical, 4)
                     } else {
-                        Text("Loading…").foregroundStyle(.secondary)
+                        Text("Loadingâ€¦").foregroundStyle(.secondary)
                     }
                 } else {
                     ForEach(others) { s in
@@ -265,7 +265,7 @@ struct DevicesView: View {
 
     private func row(_ s: DeviceSession) -> some View {
         HStack(spacing: 14) {
-            // A colored device tile — the flat grey glyph read as unfinished (user feedback,
+            // A colored device tile â€” the flat grey glyph read as unfinished (user feedback,
             // Telegram's device tiles as the reference; our green, our glyph).
             Image(systemName: "iphone")
                 .font(.system(size: 20, weight: .medium))
@@ -287,7 +287,7 @@ struct DevicesView: View {
                     }
                 }
                 Text([s.os, s.appVersion.isEmpty ? nil : "Kulan \(s.appVersion)"]
-                        .compactMap { $0 }.joined(separator: " · "))
+                        .compactMap { $0 }.joined(separator: " Â· "))
                     .font(.caption).foregroundStyle(.secondary)
                 statusLine(s)
             }
@@ -295,7 +295,7 @@ struct DevicesView: View {
         .padding(.vertical, 4)
     }
 
-    // "Active now" is the one piece of good news on this page — it gets the live green dot.
+    // "Active now" is the one piece of good news on this page â€” it gets the live green dot.
     @ViewBuilder private func statusLine(_ s: DeviceSession) -> some View {
         let text = subtitle(s)
         if text == "Active now" {
@@ -313,7 +313,7 @@ struct DevicesView: View {
         if s.isThisDevice { return "Active now" }
         let last = s.lastSeenAt.formatted(.relative(presentation: .named))
         guard let created = s.createdAt else { return "Last active \(last)" }
-        return "Last active \(last) · signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
+        return "Last active \(last) Â· signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
     }
 
     private func run(_ op: @escaping () async throws -> Void) {
@@ -351,7 +351,7 @@ struct BlockedUsersView: View {
                             Text(conv.name(for: me)).font(.body)
                             Spacer()
                             Button("Unblock") { toUnblock = conv }
-                                .buttonStyle(.borderless)   // explicit — a default Button in a List row fires on ANY row tap
+                                .buttonStyle(.borderless)   // explicit â€” a default Button in a List row fires on ANY row tap
                                 .font(.subheadline.weight(.semibold))
                                 .tint(.red)
                         }
@@ -362,7 +362,7 @@ struct BlockedUsersView: View {
         }
         .navigationTitle("Blocked Users")
         .navigationBarTitleDisplayMode(.inline)
-        // Confirm before unblocking — an accidental row tap must not silently unblock someone.
+        // Confirm before unblocking â€” an accidental row tap must not silently unblock someone.
         .alert("Unblock \(toUnblock.map { $0.name(for: me) } ?? "")?",
                isPresented: Binding(get: { toUnblock != nil }, set: { if !$0 { toUnblock = nil } })) {
             Button("Cancel", role: .cancel) {}
@@ -373,43 +373,7 @@ struct BlockedUsersView: View {
     }
 }
 
-// MARK: - Phone Number privacy
-
-struct PhoneNumberPrivacyView: View {
-    enum Audience: String, CaseIterable, Identifiable {
-        case everybody, contacts, nobody
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .everybody: return "Everybody"
-            case .contacts:  return "My Contacts"
-            case .nobody:    return "Nobody"
-            }
-        }
-    }
-    @AppStorage("privacy.phone") private var raw = Audience.nobody.rawValue
-
-    var body: some View {
-        List {
-            Section {
-                ForEach(Audience.allCases) { option in
-                    Button { raw = option.rawValue } label: {
-                        HStack {
-                            Text(option.label).foregroundStyle(.primary)
-                            Spacer()
-                            if raw == option.rawValue {
-                                Image(systemName: "checkmark").foregroundStyle(.primary)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                Text("WHO CAN SEE MY PHONE NUMBER")
-            } footer: {
-                Text("Kulan doesn't use phone numbers yet (sign-in is by username). This preference is saved for when phone numbers are added.")
-            }
-        }
-        .navigationTitle("Phone Number")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
+// DELETED HERE: PhoneNumberPrivacyView. Kulan has no phone numbers - accounts are Apple/Google/email
+// and people are found by @handle - so a page choosing who may see your number was storing a
+// preference about a field that does not exist. Its own footer admitted as much. Removed 2026-07-29
+// along with its Privacy row and its entry in settings search.

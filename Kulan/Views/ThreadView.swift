@@ -91,7 +91,6 @@ struct ThreadView: View {
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
     @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
-    @State private var showContactShare = false      // Contacts tile → share-contact picker
     @State private var showLocationShare = false     // Location tile → Select Location map
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
@@ -805,18 +804,9 @@ struct ThreadView: View {
                 }
             }
         }
-        // Share Contact picker: tap a contact → native Send/Cancel confirm → ONE encrypted contact-card
-        // message (no caption for contacts — user spec).
-        .sheet(isPresented: $showContactShare) {
-            ContactShareSheet { c in
-                Task {
-                    try? await ChatService.sendText(
-                        cid: cid,
-                        text: Message.contactMarkerText(uid: c.uid, name: c.name, photo: c.photo),
-                        group: isGroup ? groupMembers : nil)
-                }
-            }
-        }
+        // DELETED HERE: the Share Contact picker sheet, with the attach tile that opened it. Contact
+        // cards already SENT still render — Message.contactMarkerText and the card bubble are
+        // untouched, so nobody's history changes.
         // New-poll composer (groups): sends the poll as an encrypted "kulan-poll:" marker message.
         .sheet(isPresented: $showPollComposer) {
             PollComposerSheet { marker in
@@ -2206,10 +2196,12 @@ struct ThreadView: View {
                 // once Poll is added in groups) — swipe to reach them all.
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        // Order (user spec): GIF · Files · Contacts · Location · Poll (groups only).
+                        // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
+                        // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Kulan has no
+                        // phone book — you introduce someone by sharing their profile from THEIR
+                        // profile page, which is where the action still lives.
                         attachTile("sparkles", "GIF") { showGifPicker = true }
                         attachTile("doc", "Files") { showFileImporter = true }
-                        attachTile("person.crop.circle", "Contacts") { showContactShare = true }
                         attachTile("location", "Location") { showLocationShare = true }
                         if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                     }
@@ -5430,6 +5422,17 @@ struct MessageBubble: View, Equatable {
         onTapAlbum(gallery, "\(message.id)-\(i)")
     }
 
+    /// Is the story this reply points at certainly gone?
+    ///
+    /// Decided LOCALLY, with no lookup: a story lives 24 hours (StoriesService posts every one with
+    /// `expiresAt = now + 24h`), so a reply older than that cannot still have a story behind it. That
+    /// makes the test free, correct without a network round trip, and right even offline. A reply that
+    /// never captured a thumbnail is treated the same way, because there is nothing to show either.
+    private func storyReplyExpired(_ reply: ReplyRef) -> Bool {
+        if reply.storyThumbUrl?.isEmpty ?? true { return true }
+        return Date().timeIntervalSince(message.createdAt) > 24 * 3600
+    }
+
     // The BIG floating story card above the bubble (status replies render here, not in the quote box):
     // secondary caption line, then a tall rounded story thumbnail that opens the status on tap.
     @ViewBuilder private func storyReplyHeader(_ reply: ReplyRef) -> some View {
@@ -5438,7 +5441,14 @@ struct MessageBubble: View, Equatable {
             Text(isMe ? (reply.authorId == me ? "You replied to your story" : "You replied to their story")
                       : (reply.authorId == me ? "Replied to your story" : "Replied to their story"))
                 .font(.system(size: 12)).foregroundStyle(.secondary)
-            if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
+            if storyReplyExpired(reply) {
+                // EXPIRED, AND IT SAYS SO. Before, an expired story left this header as a bare "You
+                // replied to their story" line with nothing under it — the card simply vanished and the
+                // reply read as though something had failed to load. A story is a 24-hour object, so
+                // the honest thing is to state that it is gone rather than leave a hole where it was.
+                Text("Story unavailable")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)
+            } else if let thumb = reply.storyThumbUrl, !thumb.isEmpty {
                 // ~92x160 (measured from the reference): small enough to read as a story CARD,
                 // not a sent photo. Hairline stroke separates light stories from the wallpaper.
                 // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
