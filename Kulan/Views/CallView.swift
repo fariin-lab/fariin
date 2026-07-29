@@ -750,12 +750,14 @@ struct LiveCallBarBackground: View {
         GeometryReader { geo in
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
-                let phase = CGFloat(t.truncatingRemainder(dividingBy: 2.8) / 2.8)
+                let phase = CGFloat(t.truncatingRemainder(dividingBy: 2.6) / 2.6)
+                // 0.32 white, wide band: the first pass used 0.16 and was invisible on a bright
+                // screen (user: "still sees no wave"). This reads clearly without shouting.
                 Color.green.overlay(
-                    LinearGradient(colors: [.clear, .white.opacity(0.16), .clear],
+                    LinearGradient(colors: [.clear, .white.opacity(0.32), .clear],
                                    startPoint: .leading, endPoint: .trailing)
-                        .frame(width: geo.size.width * 0.6)
-                        .offset(x: -geo.size.width * 0.6 + phase * (geo.size.width * 1.6)),
+                        .frame(width: geo.size.width * 0.75)
+                        .offset(x: -geo.size.width * 0.75 + phase * (geo.size.width * 1.75)),
                     alignment: .leading
                 )
                 .clipped()
