@@ -42,4 +42,24 @@ jobs:
               comp = "MISSING (answer!)" if enc is None else ("set: exempt" if enc is False else "set: uses-encryption")
               print(f"{a['version']:>6}  {str(a.get('processingState')):<11} {comp:<16} {str(a.get('expired')):<7} {a.get('uploadedDate')}")
           print("\nInstallable = processing VALID AND compliance not MISSING.")
+
+          # WHY A VALID BUILD CAN STILL BE INVISIBLE IN THE TESTFLIGHT APP. Processing and compliance
+          # only decide whether the build is USABLE; what decides whether a tester SEES it is whether
+          # it has been given to a group. A build with no groups sits in App Store Connect looking
+          # perfectly healthy and never reaches anyone's phone, which is indistinguishable from "the
+          # upload failed" unless you ask this question.
+          print("\nWho each build is released to:")
+          for b in r.get("data", []):
+              bid, ver = b["id"], b["attributes"]["version"]
+              groups = requests.get(f"{BASE}/builds/{bid}/betaGroups", headers=H,
+                                    params={"fields[betaGroups]": "name,isInternalGroup"}).json().get("data", [])
+              names = ", ".join(
+                  f"{g['attributes'].get('name')}"
+                  f"{' (internal)' if g['attributes'].get('isInternalGroup') else ' (external)'}"
+                  for g in groups) or "NO GROUPS — nobody can see this build"
+              # External groups additionally need Beta App Review; internal ones never do.
+              rev = requests.get(f"{BASE}/builds/{bid}/betaAppReviewSubmission", headers=H,
+                                 params={"fields[betaAppReviewSubmissions]": "betaReviewState"}).json()
+              state = (rev.get("data") or {}).get("attributes", {}).get("betaReviewState", "n/a")
+              print(f"  {ver:>4}: {names}   beta-review: {state}")
           PY
