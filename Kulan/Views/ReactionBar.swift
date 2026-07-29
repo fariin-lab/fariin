@@ -199,7 +199,6 @@ final class ReactionBarPresenter {
     private var follow: CADisplayLink?
     private var anchor: (() -> CGRect?)?
     private var alignTrailing = true
-    private var followUntil: CFTimeInterval = 0
 
     var isShowing: Bool { bar != nil }
 
@@ -321,11 +320,15 @@ final class ReactionBarPresenter {
         reposition()
         bar.playPresentation()
 
-        // The menu's open animation moves the preview over ~0.4s, so the bar tracks it for that long
-        // rather than guessing a final position — "follows the selected message", as asked.
-        followUntil = CACurrentMediaTime() + 0.6
+        // FOLLOWS FOR AS LONG AS THE BAR IS UP, not for a fixed window. It used to track for 0.6s and
+        // then stop, which was survivable while the preview stayed where the bubble was — but the
+        // preview is now deliberately MOVED to make room, so it travels further and settles later.
+        // Stopping early left the bar at the position the message was leaving, which is why it ended up
+        // lying across the middle of it. Following the whole time costs one frame compare per tick,
+        // because the platter view is resolved once and cached.
         follow?.invalidate()
         let link = CADisplayLink(target: self, selector: #selector(step))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 60, preferred: 60)
         link.add(to: .main, forMode: .common)
         follow = link
     }
@@ -333,7 +336,6 @@ final class ReactionBarPresenter {
     @objc private func step() {
         guard bar != nil else { follow?.invalidate(); follow = nil; return }
         reposition()
-        if CACurrentMediaTime() > followUntil { follow?.invalidate(); follow = nil }
     }
 
     /// iMessage's stacking, top to bottom: REACTION BAR · the message · the menu.
@@ -349,68 +351,31 @@ final class ReactionBarPresenter {
     /// SHRINKS the preview until all three fit. Keeping the native menu, which is the standing
     /// instruction, means the third piece is not ours to move.
     ///
-    /// So the rule is: prefer above the message; if that would sit off-screen or ON the menu, go below
-    /// the message; if that also collides, sit clear of the menu's nearest edge. Never overlap the menu.
+    /// ALWAYS ABOVE THE MESSAGE. One rule, no branches.
+    ///
+    /// This used to hedge: above the message if it fits, otherwise below the message, otherwise on
+    /// whichever side of the menu had room. Every one of those fallbacks produces an order the user did
+    /// not ask for, and the last one put the bar UNDERNEATH the menu — bottom of the screen, wrong end
+    /// of the stack, exactly what he photographed. Hedging was never right: the bar has one correct
+    /// place, and the room for it is made before the menu is laid out, by moving the message
+    /// (see bubbleTargetedPreview). With the space reserved, a fallback is not a safety net, it is a
+    /// licence to be wrong.
     private func reposition() {
         guard let bar, let w = window, let rect = anchor?() else { return }
         let size = bar.bounds.size
         let bounds = w.bounds
-        let safeTop = w.safeAreaInsets.top
-        let menu = ReactionBarPresenter.menuFrame()
-
-        func collides(_ y: CGFloat) -> Bool {
-            guard let menu else { return false }
-            return menu.intersects(CGRect(x: 0, y: y, width: bounds.width, height: size.height))
-        }
-
-        let above = rect.minY - size.height - 12
-        let below = rect.maxY + 12
-        var y = above
-        if above < safeTop + 8 || collides(above) {
-            y = below
-            // Below is no good either — tuck against whichever side of the menu has room.
-            if below + size.height > bounds.maxY - 20 || collides(below), let menu {
-                let overMenu = menu.minY - size.height - 12
-                y = overMenu >= safeTop + 8 ? overMenu : menu.maxY + 12
-            }
-        }
-        y = max(safeTop + 8, min(y, bounds.maxY - size.height - 20))
-
+        // Clamped only so it cannot leave the screen. If this clamp ever bites, the preview shift did
+        // not have room to do its job — the answer is there, not another position here.
+        let y = max(w.safeAreaInsets.top + 8, rect.minY - size.height - 12)
         var x = alignTrailing ? rect.maxX - size.width : rect.minX
         x = max(12, min(x, bounds.width - size.width - 12))
         let frame = CGRect(x: x, y: y, width: size.width, height: size.height)
         if bar.frame != frame { bar.frame = frame }
     }
 
-    /// Where UIKit put the MENU (not the preview), so the bar can refuse to sit on it. Same bounded
-    /// search as `liftedPreviewFrame`, looking for the menu's own container instead of the platter.
-    private static weak var cachedMenu: UIView?
-
-    static func menuFrame() -> CGRect? {
-        if let v = cachedMenu, v.window != nil, v.bounds.width > 1, v.bounds.height > 1 {
-            return v.convert(v.bounds, to: nil)
-        }
-        cachedMenu = nil
-        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for w in scene.windows where !w.isHidden {
-                if let v = firstNamed(in: w, "ContextMenuListView", depth: maxSearchDepth),
-                   v.bounds.width > 1, v.bounds.height > 1 {
-                    cachedMenu = v
-                    return v.convert(v.bounds, to: nil)
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func firstNamed(in root: UIView, _ name: String, depth: Int) -> UIView? {
-        if NSStringFromClass(type(of: root)).contains(name) { return root }
-        guard depth > 0 else { return nil }
-        for sub in root.subviews {
-            if let hit = firstNamed(in: sub, name, depth: depth - 1) { return hit }
-        }
-        return nil
-    }
+    // DELETED HERE: `menuFrame()`, which located UIKit's menu so the bar could dodge it. Dodging was
+    // the wrong idea — it produced the orders the user did not want, including the bar below the menu.
+    // The bar has one place, and the room for it is made in advance by moving the message.
 
     func hide(animated: Bool = true) {
         follow?.invalidate(); follow = nil
@@ -427,7 +392,6 @@ final class ReactionBarPresenter {
         window?.isHidden = true
         window = nil
         // The menu is gone with the bar; a cached view from it would be stale next time.
-        Self.cachedMenu = nil
         Self.cachedPlatter = nil
     }
 
