@@ -1866,7 +1866,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // No row means this tick is stale — stop, but do NOT take a bar down that belongs to a UIKit row.
         guard let id = swiftUIBarRowId else { stopSwiftUIMenuWatch(hideBar: false); return }
         guard !isDisappearing else { stopSwiftUIMenuWatch(hideBar: true); return }
-        let lifted = ReactionBarPresenter.liftedPreviewFrame()
+        // Excluding our own window is what keeps this affordable at 20Hz — see liftedPreviewFrame.
+        let lifted = ReactionBarPresenter.liftedPreviewFrame(excluding: view.window)
         guard swiftUIBarShown else {
             guard let lifted else {
                 if CACurrentMediaTime() > swiftUIBarDeadline { stopSwiftUIMenuWatch(hideBar: false) }
@@ -1886,6 +1887,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         swiftUIBarShown = true
         ReactionBarPresenter.shared.show(
             in: scene,
+            hostWindow: view.window,
             bubbleFrame: frame,
             alignTrailing: info.isMe,
             selected: onReactionSelected(rowId)
@@ -2167,6 +2169,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let frame = bubble.convert(bubble.bounds, to: nil)
             ReactionBarPresenter.shared.show(
                 in: scene,
+                hostWindow: view.window,
                 bubbleFrame: frame,
                 alignTrailing: model.isMe,       // Signal aligns the bar to the bubble's own edge
                 selected: onReactionSelected(id)

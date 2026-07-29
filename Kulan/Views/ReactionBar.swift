@@ -212,14 +212,45 @@ final class ReactionBarPresenter {
     /// and shift the preview themselves (`previewWillShift`); keeping Apple's menu means we have to
     /// READ where it put the message instead.
     ///
-    /// `_UIMorphingPlatterView` is the container UIKit lifts the preview into. This walks the window
-    /// hierarchy for it by class NAME — no private API is called, only public view geometry is read —
-    /// and every caller falls back to the bubble's own frame if the lookup ever fails.
-    static func liftedPreviewFrame() -> CGRect? {
+    /// `_UIMorphingPlatterView` is the container UIKit lifts the preview into. Found by walking the
+    /// windows the MENU can be in — no private API is called, only public view geometry is read — and
+    /// every caller falls back to the bubble's own frame if the lookup ever fails.
+    ///
+    /// THIS SEARCH USED TO FREEZE THE APP ON EVERY LONG PRESS (user report on build 400: "when i long
+    /// press all the screen is frozen"), and the reason is worth keeping written down.
+    ///
+    /// It walked EVERY visible window's ENTIRE view hierarchy, and called `NSStringFromClass` — which
+    /// allocates a String — on every view it touched. The app's own window is the expensive one: the
+    /// conversation is a collection view whose cells each host a SwiftUI tree, so a full walk visits
+    /// many thousands of views and finds nothing, because the menu is never in that window. Then a
+    /// display link repeated the whole thing at 60fps for 0.6s to follow the lift. Tens of thousands of
+    /// String allocations and view visits per second, on the main thread, during the menu's own
+    /// animation. Three things fix it, all of them about not doing pointless work:
+    ///
+    ///  1. SKIP THE HOST WINDOW. The context menu is presented in its own UIWindow — the same fact
+    ///     `menuWindowDidHide` already relies on — so the one window that costs the most to search is
+    ///     the one window that can never contain the answer.
+    ///  2. Compare against a resolved class OBJECT, looked up once, instead of building a String per
+    ///     view. `NSClassFromString` is a public lookup; nothing private is called on the result.
+    ///  3. Cap the depth. The platter sits a handful of levels below its window; nothing legitimate is
+    ///     thousands deep, so a cap turns a pathological walk into a bounded one.
+    ///
+    /// The result is also cached weakly: while a menu is open the platter view does not change, so
+    /// following it costs one `convert` per tick instead of a search.
+    private static let platterClass: AnyClass? = NSClassFromString("_UIMorphingPlatterView")
+    private static weak var cachedPlatter: UIView?
+    private static let maxSearchDepth = 12
+
+    static func liftedPreviewFrame(excluding host: UIWindow? = nil) -> CGRect? {
+        if let v = cachedPlatter, v.window != nil, v.bounds.width > 1, v.bounds.height > 1 {
+            return v.convert(v.bounds, to: nil)
+        }
+        cachedPlatter = nil
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for w in scene.windows where !w.isHidden {
-                if let v = firstSubview(in: w, classNameContains: "MorphingPlatterView"),
+            for w in scene.windows where !w.isHidden && w !== host {
+                if let v = firstPlatter(in: w, depth: maxSearchDepth),
                    v.bounds.width > 1, v.bounds.height > 1 {
+                    cachedPlatter = v
                     return v.convert(v.bounds, to: nil)
                 }
             }
@@ -227,10 +258,15 @@ final class ReactionBarPresenter {
         return nil
     }
 
-    private static func firstSubview(in root: UIView, classNameContains name: String) -> UIView? {
-        if NSStringFromClass(type(of: root)).contains(name) { return root }
+    private static func firstPlatter(in root: UIView, depth: Int) -> UIView? {
+        if let cls = platterClass {
+            if root.isKind(of: cls) { return root }
+        } else if NSStringFromClass(type(of: root)).contains("MorphingPlatterView") {
+            return root   // name lookup failed (renamed in a future iOS) — fall back to the old test
+        }
+        guard depth > 0 else { return nil }
         for s in root.subviews {
-            if let hit = firstSubview(in: s, classNameContains: name) { return hit }
+            if let hit = firstPlatter(in: s, depth: depth - 1) { return hit }
         }
         return nil
     }
@@ -239,7 +275,10 @@ final class ReactionBarPresenter {
     /// - Parameters:
     ///   - alignTrailing: my messages align to the bubble's right edge, theirs to the left — Signal's
     ///     `horizontalEdgeAlignment`, which is what makes the bar feel attached to that bubble.
+    /// - Parameter hostWindow: the window the message list lives in. Excluded from the platter search,
+    ///   which is what keeps that search cheap — see liftedPreviewFrame.
     func show(in scene: UIWindowScene,
+              hostWindow: UIWindow?,
               bubbleFrame: CGRect,
               alignTrailing: Bool,
               selected: String?,
@@ -266,7 +305,9 @@ final class ReactionBarPresenter {
         self.alignTrailing = alignTrailing
         // Follow the lifted message while UIKit animates it into place; fall back to the bubble's own
         // frame whenever the lifted copy cannot be found.
-        self.anchor = { ReactionBarPresenter.liftedPreviewFrame() ?? bubbleFrame }
+        self.anchor = { [weak hostWindow] in
+            ReactionBarPresenter.liftedPreviewFrame(excluding: hostWindow) ?? bubbleFrame
+        }
         reposition()
         bar.playPresentation()
 
