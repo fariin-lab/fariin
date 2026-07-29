@@ -608,8 +608,10 @@ struct AppIconPage: View {
 
     // nil = the primary Midnight (white-on-black) icon from the asset catalog.
     private let icons: [(name: String?, label: String)] = [
-        (nil, "Midnight"), ("icon-blue", "Blue"), ("icon-ivory", "Ivory"), ("icon-chrome", "Chrome"),
+        (nil, "Midnight"), ("icon-blue", "Blue"), ("icon-black", "Black"),
+        ("icon-ivory", "Ivory"), ("icon-chrome", "Chrome"),
     ]
+    // 4 across, so five icons wrap onto a second row rather than being squeezed.
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 18), count: 4)
 
     var body: some View {

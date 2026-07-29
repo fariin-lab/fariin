@@ -54,6 +54,12 @@ targets:
             icon-blue:   { CFBundleIconFiles: [icon-blue] }
             icon-ivory:  { CFBundleIconFiles: [icon-ivory] }
             icon-chrome: { CFBundleIconFiles: [icon-chrome] }
+            # The black mark, as a PICKABLE icon. It already existed as the primary icon's dark
+            # appearance in the asset catalog, but that variant only ever swaps itself in on a dark Home
+            # Screen and can never appear in the in-app picker — so the user could not find it and
+            # reasonably concluded it had not been added. Now it is both: automatic on dark, and
+            # choosable outright.
+            icon-black:  { CFBundleIconFiles: [icon-black] }
         # Export compliance: 2026-07-24 the account owner made the determination that Kulan
         # QUALIFIES FOR THE STANDARD EXEMPTION (uses standard, publicly-available crypto —
         # libsodium — and is offered as a mass-market app; France distribution = No). That was
