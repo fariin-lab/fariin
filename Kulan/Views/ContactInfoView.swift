@@ -28,6 +28,9 @@ struct ContactInfoView: View {
     @State private var blocked = false
     @State private var loaded = false
     @State private var media: [Message] = []
+    /// How much media this chat had last time we looked (disk-backed). Decides on the very first
+    /// frame whether the All Media section exists at all — see ChatService.SharedMediaPresence.
+    @State private var mediaHint = 0
     @State private var viewerImage: Message?
     @State private var showClear = false
     @State private var showBlock = false
@@ -106,7 +109,9 @@ struct ContactInfoView: View {
         quickActions
         if source == .calls, lastCall != nil { callLogCard }
         if !isSelf { settingsCard }
-        if !media.isEmpty {
+        // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
+        // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
+        if !media.isEmpty || mediaHint > 0 {
             VStack(alignment: .leading, spacing: 8) {
                 sectionHeader("All Media")
                 mediaCard
@@ -189,8 +194,11 @@ struct ContactInfoView: View {
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
+            // The remembered count first (disk, instant), then the warm cache, then the network.
+            mediaHint = ChatService.SharedMediaPresence.count(cid)
             if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
             await load()
+            mediaHint = media.count   // a chat whose media was all deleted stops reserving the space
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
             localName = ContactNames.shared.name(for: otherUid)
             // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
@@ -622,6 +630,16 @@ struct ContactInfoView: View {
         VStack(alignment: .leading, spacing: 10) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    // Reserved space, filled: while the real thumbnails load, the row holds the same
+                    // number of quiet placeholder tiles the chat had last time. The section's height
+                    // is therefore identical before and after the load, so nothing shifts.
+                    if media.isEmpty {
+                        ForEach(0..<min(mediaHint, 12), id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.primary.opacity(0.07))
+                                .frame(width: 84, height: 84)
+                        }
+                    }
                     ForEach(media.prefix(12)) { m in
                         // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
                         if let url = m.imageUrl ?? m.thumbUrl {
