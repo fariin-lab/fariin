@@ -1507,6 +1507,19 @@ struct ChatRow: View, Equatable {
             Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
+    /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
+    /// uses, so the badge and the words always agree. Only when it was aimed at ME in a 1:1 (a badge
+    /// for my own reaction, or for two other people's in a group, is noise).
+    private var freshReactionEmoji: String? {
+        guard conv.freshReaction(me), conv.lastReactionBy != me,
+              conv.isGroup || conv.lastReactionToAuthor == me,
+              let enc = conv.lastReactionEnc else { return nil }
+        let emoji = conv.isGroup
+            ? Crypto.shared.decryptGroupCached(enc, cid: conv.id, authorId: conv.lastReactionBy)
+            : Crypto.shared.decryptCached(enc, cid: conv.id)
+        return emoji.isEmpty ? nil : emoji
+    }
+
     // "Reacted 🙏" preview when the newest event in the chat is a reaction.
     private var reactionPreview: String? {
         guard conv.freshReaction(me), let enc = conv.lastReactionEnc else { return nil }
@@ -1677,6 +1690,15 @@ struct ChatRow: View, Equatable {
                     if conv.isPinned(me) {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    }
+                    // The reaction itself, next to the preview (user reference: the heart on the right
+                    // of the row). The preview TEXT already said "Reacted ❤️ to your message"; this
+                    // makes it recognisable at a glance without reading. Same freshness rule as the
+                    // text, so the two can never disagree.
+                    if let emoji = freshReactionEmoji {
+                        Text(emoji)
+                            .font(.system(size: 17))
+                            .transition(.scale.combined(with: .opacity))
                     }
                     if unread > 0 {
                         Text("\(min(unread, 99))")
