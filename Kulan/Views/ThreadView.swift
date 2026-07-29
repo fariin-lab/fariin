@@ -1785,6 +1785,15 @@ struct ThreadView: View {
                 // emoji in ReactionRecents. Same call the menu's own emoji actions make.
                 react(m, emoji)
             },
+            // Feeds the reaction bar on SwiftUI-hosted rows (media, replies, anything already reacted
+            // to). The rule is COPIED FROM the SwiftUI menu's own "React…" condition — on the server,
+            // and not muted — so the bar and the menu item can never disagree about whether this
+            // message takes a reaction.
+            reactionBarRow: { id in
+                guard let idx = repo.indexById[id], idx < repo.items.count else { return nil }
+                let m = repo.items[idx]
+                return (isMe: m.authorId == me, canReact: m.sendState == nil && !iAmMuted)
+            },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
             // The list already decided this tap was not claimed by anything inside a bubble.
             onBackgroundTap: {

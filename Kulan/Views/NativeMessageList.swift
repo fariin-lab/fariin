@@ -109,6 +109,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // Floating reactions bar (ReactionBar.swift): my current reaction on a row, and the tap handler.
     var onReactionSelected: (String) -> String? = { _ in nil }
     var onReactionPick: (String, String?) -> Void = { _, _ in }
+    /// Whose bubble it is (bar alignment) and whether it may be reacted to at all. Needed for rows the
+    /// UIKit menu callbacks never see — see watchForSwiftUIMenu.
+    var reactionBarRow: (String) -> (isMe: Bool, canReact: Bool)? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
     // Tap on the conversation BACKGROUND (never on a bubble) -> dismiss the keyboard. Lives in UIKit so a
     // tap that lands on a bubble can never dismiss: a SwiftUI tap on the list raced the quote's own tap.
@@ -159,6 +162,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.uikitMenu = uikitMenu
         vc.onReactionSelected = onReactionSelected
         vc.onReactionPick = onReactionPick
+        vc.reactionBarRow = reactionBarRow
         vc.onBackgroundTap = onBackgroundTap
         vc.onUikitDoubleTap = onUikitDoubleTap
         vc.setComposerBarHeight(composerBarHeight)
@@ -343,8 +347,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Floating reactions bar (ReactionBar.swift), fed from SwiftUI like every other callback here.
     var onReactionSelected: (String) -> String? = { _ in nil }
     var onReactionPick: (String, String?) -> Void = { _, _ in }
+    var reactionBarRow: (String) -> (isMe: Bool, canReact: Bool)? = { _ in nil }
     var onBackgroundTap: () -> Void = {}
     private var backgroundTap: UITapGestureRecognizer!
+    // Reaction bar for SwiftUI-hosted rows — see watchForSwiftUIMenu.
+    private var swiftUIBarRowId: String?
+    private var swiftUIBarWatch: CADisplayLink?
+    private var swiftUIBarDeadline: CFTimeInterval = 0
+    private var swiftUIBarShown = false
     var onUikitDoubleTap: (String) -> Void = { _ in }
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
@@ -1613,6 +1623,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewWillDisappear(animated)
         isDisappearing = true
         shouldAnimateKeyboardChanges = false
+        // Leaving the chat with a menu open must not strand the bar in its own window over the next
+        // screen. The display link is invalidated here too, so it cannot outlive the controller.
+        stopSwiftUIMenuWatch(hideBar: true)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -1808,9 +1821,126 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         onBackgroundTap()
     }
 
+    // MARK: - Reaction bar for SwiftUI-hosted rows
+    //
+    // WHY THIS EXISTS INSTEAD OF MOVING THOSE ROWS TO THE UIKIT MENU.
+    //
+    // Photos, videos, albums, replies and any row carrying a reaction are SwiftUI cells, and they bring
+    // their own `.contextMenu`. That menu fires none of the collection view's context-menu callbacks, so
+    // `willDisplayContextMenu` never runs for them and the bar never appeared — the Phase 2 gap.
+    //
+    // The obvious fix is to give those rows the UIKit menu too. It is also the wrong one: the SwiftUI
+    // menu they use is not the flat list the text rows get. It branches on upload state, view-once,
+    // group vs 1:1, mute, the edit window, pin permission, media kind — a dozen conditions that decide
+    // Save Image, Info, Cancel Sending, Edit, Copy, Forward. Rebuilding all of that in UIKit means two
+    // copies of the same policy, and the second copy starts drifting the day someone edits one of them.
+    //
+    // So the bar becomes an OBSERVER instead. It already anchors to the lifted preview rather than to
+    // the cell (ReactionBarPresenter.liftedPreviewFrame walks for UIKit's platter view), and that works
+    // for ANY context menu, whoever presented it. All that was missing is knowing that a menu opened and
+    // which row it belongs to — and the passive long-press recogniser below already knows both. Nothing
+    // about the menus changes: same SwiftUI menu, same UIKit menu, same actions.
+    private func watchForSwiftUIMenu(at point: CGPoint) {
+        stopSwiftUIMenuWatch(hideBar: false)
+        guard !isSelecting,
+              let ip = collectionView.indexPathForItem(at: point),
+              let id = dataSource.itemIdentifier(for: ip),
+              uikitModels[id] == nil,                       // UIKit rows get the bar from the real callbacks
+              let info = reactionBarRow(id), info.canReact   // same rule the SwiftUI menu uses for "React…"
+        else { return }
+        swiftUIBarRowId = id
+        swiftUIBarShown = false
+        // If no menu materialises (the press turned into a drag, or the row has no menu at all) the
+        // watch simply expires. It must never outlive the gesture that started it.
+        swiftUIBarDeadline = CACurrentMediaTime() + 1.5
+        let link = CADisplayLink(target: self, selector: #selector(swiftUIMenuTick))
+        // 20Hz, not every frame: each tick walks the window hierarchy, and the menu's open animation
+        // takes ~0.4s, so 50ms of appearance latency is invisible while a menu the user leaves open
+        // costs a third as much to watch.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 20, preferred: 20)
+        link.add(to: .main, forMode: .common)
+        swiftUIBarWatch = link
+    }
+
+    @objc private func swiftUIMenuTick() {
+        // No row means this tick is stale — stop, but do NOT take a bar down that belongs to a UIKit row.
+        guard let id = swiftUIBarRowId else { stopSwiftUIMenuWatch(hideBar: false); return }
+        guard !isDisappearing else { stopSwiftUIMenuWatch(hideBar: true); return }
+        let lifted = ReactionBarPresenter.liftedPreviewFrame()
+        guard swiftUIBarShown else {
+            guard let lifted else {
+                if CACurrentMediaTime() > swiftUIBarDeadline { stopSwiftUIMenuWatch(hideBar: false) }
+                return
+            }
+            showSwiftUIBar(rowId: id, at: lifted)
+            return
+        }
+        // Shown: the preview going away IS the menu ending — the only end signal there is for a menu
+        // we did not present.
+        if lifted == nil { stopSwiftUIMenuWatch(hideBar: true) }
+    }
+
+    private func showSwiftUIBar(rowId: String, at frame: CGRect) {
+        guard let scene = view.window?.windowScene,
+              let info = reactionBarRow(rowId) else { return }
+        swiftUIBarShown = true
+        ReactionBarPresenter.shared.show(
+            in: scene,
+            bubbleFrame: frame,
+            alignTrailing: info.isMe,
+            selected: onReactionSelected(rowId)
+        ) { [weak self] emoji in
+            guard let self else { return }
+            // ARM THE DISMISSAL GRACE FIRST — before the reaction write, not after. Applying a reaction
+            // reloads that row, and a reload landing while a context menu is animating shut destroys the
+            // cell the menu is flying back into, which strands the system's full-screen blur with no
+            // menu on it. That is the exact bug `menuActionTick` exists for on the SwiftUI side; picking
+            // from the bar is the same event as tapping one of the menu's own actions, so it needs the
+            // same gate. Ordering matters: the gate must be up before anything can publish.
+            armSwiftUIMenuDismissGrace()
+            onReactionPick(rowId, emoji)
+            ReactionBarPresenter.shared.hide()
+            dismissSwiftUIMenu(forRow: rowId)
+            stopSwiftUIMenuWatch(hideBar: false)
+        }
+    }
+
+    /// The same grace `noteMenuActionTick` arms, reached directly: the bar is inside the controller, so
+    /// it does not need to round-trip a counter through SwiftUI to say "a menu is closing now".
+    private func armSwiftUIMenuDismissGrace() {
+        menuDismissArmedAt = Date()
+        menuDismissGraceUntil = Date().addingTimeInterval(0.6)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in self?.settleFlush() }
+    }
+
+    private func stopSwiftUIMenuWatch(hideBar: Bool) {
+        swiftUIBarWatch?.invalidate()
+        swiftUIBarWatch = nil
+        swiftUIBarRowId = nil
+        swiftUIBarShown = false
+        if hideBar { ReactionBarPresenter.shared.hide() }
+    }
+
+    /// Take the row's own menu down the way tapping one of its actions would. The interaction belongs to
+    /// a view SwiftUI made inside the cell, so we ask that view — `interactions` and `dismissMenu()` are
+    /// both public UIKit, the same front door the text rows use.
+    private func dismissSwiftUIMenu(forRow rowId: String) {
+        guard let ip = dataSource.indexPath(for: rowId),
+              let cell = collectionView.cellForItem(at: ip) else { return }
+        Self.contextMenuInteractions(in: cell).forEach { $0.dismissMenu() }
+    }
+
+    private static func contextMenuInteractions(in root: UIView) -> [UIContextMenuInteraction] {
+        var found = root.interactions.compactMap { $0 as? UIContextMenuInteraction }
+        for sub in root.subviews { found += contextMenuInteractions(in: sub) }
+        return found
+    }
+
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
         switch g.state {
         case .began:
+            // A menu may be about to open on a SwiftUI row; if it does, the bar goes up with it.
+            watchForSwiftUIMenu(at: g.location(in: collectionView))
             // A CEILING, never .distantFuture. This flag closes canLandLoad, so a press that somehow never
             // delivers .ended or .cancelled used to freeze every content update in the conversation for the
             // rest of the session with no way back â€” the same wedged-flag shape the programmatic-scroll
