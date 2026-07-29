@@ -2174,13 +2174,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let currentTop = centerInWindow.y - height / 2
         let currentBottom = centerInWindow.y + height / 2
 
+        // Each direction is clamped by the OTHER constraint, so making room for one thing can never take
+        // the room away from the other. Without the first of these, a tall message near the top was
+        // pushed down for the bar's sake and its bottom went straight into the menu's space — the user's
+        // "the selected message should NOT move into the context menu area".
         var shift: CGFloat = 0
         if currentTop < topLimit {
-            shift = topLimit - currentTop                            // down, just clear of the header
+            let spareBelow = max(0, bottomLimit - menuRoom - currentBottom)
+            shift = min(topLimit - currentTop, spareBelow)           // down, and only into free space
         } else if currentBottom + menuRoom > bottomLimit {
             shift = -(currentBottom + menuRoom - bottomLimit)        // up, just enough for the menu
-            // …but never so far up that the bar loses the room this whole exercise is about.
-            shift = max(shift, topLimit - currentTop)
+            shift = max(shift, topLimit - currentTop)                // never past the bar's own room
         }
         guard abs(shift) > 0.5 else {
             return UITargetedPreview(view: bubble, parameters: params)   // already well placed
