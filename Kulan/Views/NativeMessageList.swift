@@ -1117,6 +1117,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         if adjustment != 0 { layout.pendingContentOffsetAdjustment = adjustment }
 
+        // THE GLIDE STARTS ON THE FRAME THE ROW LANDS. It used to start in the apply's completion,
+        // which fires on a LATER runloop tick — so for a beat the screen sat on the old messages with
+        // the new bubble parked behind the composer, and only then did the slide begin. Slow motion
+        // shows exactly that staging (user's video: composer clears → nothing moves → the bubble pops
+        // in parked → THEN the slide), and it is what he reads as "it shows the other messages first,
+        // then my real message". One idempotent starter, called from both sides: the synchronous call
+        // right after apply wins on the normal path (apply on the main queue lands the snapshot
+        // synchronously when it is not animating), and the completion call is the net for an apply
+        // that deferred. The 0.6s backstop clears the gate if the animated scroll produces no
+        // end-callback (already exactly at the origin).
+        var glideStarted = false
+        let startGlide = { [weak self] in
+            guard let self, glide, !glideStarted else { return }
+            glideStarted = true
+            self.collectionView.layoutIfNeeded()
+            self.perform(.newest(animated: true))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, self.sendAnimating else { return }
+                self.sendAnimating = false
+                self.settleFlush()
+            }
+        }
+
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale
@@ -1124,15 +1147,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if let target = scrollTarget {
                 self.performScrollTarget(target)
             } else if glide {
-                self.collectionView.layoutIfNeeded()
-                self.perform(.newest(animated: true))
-                // If the animated scroll produces no end-callback (already exactly at the origin), clear
-                // the gate so coalesced refreshes still flush.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                    guard let self, self.sendAnimating else { return }
-                    self.sendAnimating = false
-                    self.settleFlush()
-                }
+                startGlide()
             } else if adjustment != 0 {
                 // A new message landed while the reader is in history. The layout has already held them
                 // still; this is the one net that checks it actually happened.
@@ -1143,6 +1158,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // can leave the reader still within the load threshold.
             DispatchQueue.main.async { [weak self] in self?.autoLoadMoreIfNeeded() }
         }
+        startGlide()   // same frame as the landed row — the completion above is only the net
 
         // Re-flow the just-inserted bubble at its FINAL cell width. UIHostingConfiguration lays a freshly
         // inserted cell's SwiftUI out at the pre-final width and does NOT re-flow it until a later update
