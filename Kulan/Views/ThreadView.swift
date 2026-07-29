@@ -4452,6 +4452,13 @@ struct MessageBubble: View, Equatable {
 
     // Reaction pills (our own design): up to 3 emoji+count capsules, my reaction tinted
     // with the brand accent, the rest neutral, and a "+N" capsule when there are more.
+    /// Does a single tap on this bubble OPEN something? Media does: the viewer, the player, the album
+    /// pager. Those bubbles must not carry a double-tap recogniser, because tap counting forces every
+    /// single tap to wait and see whether a second one follows.
+    private var opensOnTap: Bool {
+        message.isImage || message.isVideo || message.isAlbum || message.isGif
+    }
+
     @ViewBuilder private var reactionBadges: some View {
         let all = reactionCounts
         if !all.isEmpty {
@@ -4594,12 +4601,24 @@ struct MessageBubble: View, Equatable {
                     }
                     // Double-tap to quick-react. The emoji is the user's choice (Settings > Appearance >
                     // Quick Reaction), read here AND in uikitQuickReact so both row paths agree.
-                    .highPriorityGesture(TapGesture(count: 2).onEnded {
-                        guard message.sendState == nil, !restricted else { return }   // not until on server; muted can't react
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        let quick = QuickReaction.current
-                        onReact(myReaction == quick ? nil : quick)
-                    })
+                    //
+                    // NOT ON MEDIA (user 2026-07-29: "video and images please remove double tap react,
+                    // I need to open fast"). A double-tap recogniser makes every SINGLE tap wait to find
+                    // out whether a second one is coming — that wait is unavoidable, it is how tap
+                    // counting works — so on a photo or a video it sat between the tap and the viewer
+                    // opening. Text has nothing to open, so the wait costs it nothing and it keeps the
+                    // shortcut; media pays for it on every single tap, which is the common action.
+                    // Reacting to media is still there through long press, where the bar now lives.
+                    .highPriorityGesture(
+                        TapGesture(count: 2).onEnded {
+                            guard message.sendState == nil, !restricted else { return }   // not until on server; muted can't react
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            let quick = QuickReaction.current
+                            onReact(myReaction == quick ? nil : quick)
+                        },
+                        // `.subviews` = this gesture is off, the media's own tap still fires.
+                        including: opensOnTap ? .subviews : .all
+                    )
                     // SWIPE-TO-REPLY (build-285 model, restored): move the bubble via SwiftUI .offset
                     // INSIDE the cell — the cell frame never changes, so neighbors can't drift and
                     // nothing duplicates. Only SwiftUI-hosted bubbles (reply/image/video/etc.) render
