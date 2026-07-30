@@ -2029,7 +2029,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         // Shadow-friendly wrapper: the overlay shadows the container, the snapshot keeps its alpha.
+        // The snapshot MUST resize with the container — the overlay shrinks a tall message's frame to
+        // fit bar + message + menu, and without this mask the picture inside stayed original size and
+        // spilled off the screen's right edge while the menu parked on top of it (the owner's
+        // long-message screenshot, build 414). A snapshot view stretches its captured content to its
+        // bounds, so the flexible mask is the whole fix.
         src.snapshot.frame = CGRect(origin: .zero, size: src.frame.size)
+        src.snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         let container = UIView(frame: CGRect(origin: .zero, size: src.frame.size))
         container.addSubview(src.snapshot)
 

@@ -89,7 +89,9 @@ final class CMOverlay: UIView {
     private let gapY: CGFloat = 12
     private let springDuration: TimeInterval = 0.4
     private let springDamping: CGFloat = 0.8
-    private let minPreviewScale: CGFloat = 0.35
+    // Signal allows 0.1 and that is why their giant message fits with the whole menu below it —
+    // 0.35 "for readability" was too timid, a monster message needs to become a small picture.
+    private let minPreviewScale: CGFloat = 0.1
     private let deadZoneRadius: CGFloat = 40
 
     private var fingerExitedDeadZone = false
