@@ -1703,7 +1703,15 @@ struct ThreadView: View {
             return out
         }
 
+        // SIGNAL'S ORDER (owner's circled reference): Reply · Forward · Copy · Select · Info · Pin,
+        // Delete last. Our extra items slot in where they belong: Edit and Save Image after Copy.
         out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
+        if !m.isCall && !m.viewOnce {
+            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
+        }
+        if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
+            out.append(CMAction(title: "Copy", icon: "doc.on.doc") { UIPasteboard.general.string = m.text })
+        }
         if mine && !iAmMuted && !m.isImage && !m.isAudio && !m.isCall
             && !m.isFeatureMarker && !m.isGif && !m.isFile
             && m.sendState == nil
@@ -1714,28 +1722,22 @@ struct ThreadView: View {
                 inputFocused = true
             })
         }
-        if canPin {
-            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "pin") {
-                togglePin(m)
-            })
-        }
-        if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
-            out.append(CMAction(title: "Copy", icon: "doc.on.doc") { UIPasteboard.general.string = m.text })
-        }
-        if !m.isCall && !m.viewOnce {
-            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
-        }
         if m.isImage && !m.viewOnce {
             out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
                 Task { await saveImageToPhotos(m) }
             })
         }
-        if isGroup && mine && m.sendState == nil {
-            out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
-        }
         out.append(CMAction(title: "Select", icon: "checkmark.circle") {
             withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
         })
+        if isGroup && mine && m.sendState == nil {
+            out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
+        }
+        if canPin {
+            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "pin") {
+                togglePin(m)
+            })
+        }
         out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
         return out
     }

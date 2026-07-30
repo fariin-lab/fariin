@@ -96,6 +96,11 @@ final class CMOverlay: UIView {
     private var initialFingerPoint: CGPoint?
     private var dismissing = false
     private var localPan: UIPanGestureRecognizer?
+    // ARMING: for a bottom message the menu RISES into the spot where the unmoved finger already is,
+    // so a small wiggle + lift selected Reply or Pin the user never aimed at (his report). An
+    // accessory the finger started inside stays dead until the finger has been seen OUTSIDE it once.
+    private var cardArmed = false
+    private var barArmed = false
 
     init(previewView: UIView,
          sourceFrame: CGRect,
@@ -312,23 +317,26 @@ final class CMOverlay: UIView {
     /// a 40pt dead zone the location drives highlight in the card and focus in the bar.
     func fingerMoved(to windowPoint: CGPoint) {
         let p = convert(windowPoint, from: nil)
+        if !cardArmed { cardArmed = !card.frame.contains(p) }
+        if let bar, !barArmed { barArmed = !bar.frame.contains(p) }
         if !fingerExitedDeadZone {
             guard let start = initialFingerPoint else { initialFingerPoint = p; return }
             fingerExitedDeadZone = hypot(p.x - start.x, p.y - start.y) >= deadZoneRadius
             if !fingerExitedDeadZone { return }
         }
-        card.updateHighlight(at: convert(p, to: card))
-        bar?.updateFocus(at: convert(p, to: bar!))
+        if cardArmed { card.updateHighlight(at: convert(p, to: card)) }
+        if barArmed { bar?.updateFocus(at: convert(p, to: bar!)) }
     }
 
     /// Finger lifted. If it lifted over a row or an emoji, that selects; otherwise the overlay
     /// stays up and hands control to its own pan/tap recognizers for the next touch.
     func fingerEnded(at windowPoint: CGPoint) {
+        let wasArmed = (card: cardArmed, bar: barArmed, deadZone: fingerExitedDeadZone)
         installLocalPanIfNeeded()
-        guard fingerExitedDeadZone else { return }
+        guard wasArmed.deadZone else { return }
         let p = convert(windowPoint, from: nil)
-        if card.selectHighlighted(at: convert(p, to: card)) { return }
-        if bar?.selectFocused(at: convert(p, to: bar!)) == true { return }
+        if wasArmed.card, card.selectHighlighted(at: convert(p, to: card)) { return }
+        if wasArmed.bar, bar?.selectFocused(at: convert(p, to: bar!)) == true { return }
     }
 
     /// After the initiating press ends, later drags are ours (Signal swaps in a local pan too).
@@ -337,7 +345,10 @@ final class CMOverlay: UIView {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panRecognized(_:)))
         addGestureRecognizer(pan)
         localPan = pan
-        fingerExitedDeadZone = true   // the dead zone only guards the original press
+        // The dead zone and the arming only guard the ORIGINAL press — any later touch is deliberate.
+        fingerExitedDeadZone = true
+        cardArmed = true
+        barArmed = true
     }
 
     @objc private func panRecognized(_ g: UIPanGestureRecognizer) {
@@ -372,9 +383,11 @@ final class CMActionsCard: UIView {
     private let scroll = UIScrollView()
     private var rows: [CMActionRow] = []
 
-    private let rowHeight: CGFloat = 46
-    private let cardWidth: CGFloat = 250
-    private let corner: CGFloat = 13
+    // Signal's card, from the owner's side-by-side screenshots (his circled reference): icons on the
+    // LEADING edge, a slightly narrower card, big continuous corners, roomy rows.
+    private let rowHeight: CGFloat = 52
+    private let cardWidth: CGFloat = 260
+    private let corner: CGFloat = 22
 
     init(actions: [CMAction]) {
         self.actions = actions
@@ -511,12 +524,13 @@ private final class CMActionRow: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         highlight.frame = bounds
-        let margin: CGFloat = 16
-        let iconSize: CGFloat = 20
-        icon.frame = CGRect(x: bounds.width - margin - iconSize,
-                            y: (bounds.height - iconSize) / 2, width: iconSize, height: iconSize)
-        title.frame = CGRect(x: margin, y: 0,
-                             width: icon.frame.minX - margin - 8, height: bounds.height)
+        // Signal's row: icon LEADING, label after it (the owner's circled reference).
+        let margin: CGFloat = 20
+        let iconSize: CGFloat = 22
+        icon.frame = CGRect(x: margin, y: (bounds.height - iconSize) / 2,
+                            width: iconSize, height: iconSize)
+        title.frame = CGRect(x: icon.frame.maxX + 14, y: 0,
+                             width: bounds.width - icon.frame.maxX - 14 - margin, height: bounds.height)
         let hairline = 1.0 / UIScreen.main.scale
         separator.frame = CGRect(x: 0, y: bounds.height - hairline, width: bounds.width, height: hairline)
     }

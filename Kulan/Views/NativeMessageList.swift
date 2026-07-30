@@ -313,6 +313,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // One active presentation at a time. sourceView is the REAL bubble (hidden while the menu is up);
     // squeezeToken cancels a squeeze whose press ended before the 0.2s ripened.
     private var activeMenu: (overlay: CMOverlay, sourceView: UIView, keyboardWasUp: Bool)?
+    private weak var activeMenuCell: UICollectionViewCell?   // its touches are cut while the menu is up
     private var squeezeToken = 0
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
@@ -1794,7 +1795,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // holdPress is a PASSIVE observer â€” it must never block the SwiftUI context-menu press or anything else.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        g === swipePan || g === holdPress || g === customPress
+        // The custom press coexists ONLY with the passive hold observer. Letting it run with the
+        // scroll pan let the still-down finger keep scrolling the list behind the menu's blur (user:
+        // "you feel scroll jump") — exclusivity makes UIKit prevent the pan the moment the press
+        // recognizes, which is exactly Signal's behaviour.
+        if g === customPress || other === customPress {
+            return g === holdPress || other === holdPress
+        }
+        return g === swipePan || g === holdPress
     }
 
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
@@ -2043,9 +2051,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         activeMenu = (overlay, src.source, keyboardWasUp)
         contextMenuVisible = true
         contextMenuSourceId = id
-        // Kill any in-flight scroll so the chat cannot keep moving behind the overlay (Signal's reset).
+        // The pressed CELL goes touch-dead for the menu's lifetime: cutting it cancels the hosted
+        // SwiftUI tap that was still tracking this finger — without this, lifting over a photo fired
+        // its open-tap underneath the menu (user: "when long press some photo will open").
+        if let ip = dataSource.indexPath(for: id), let cell = collectionView.cellForItem(at: ip) {
+            cell.isUserInteractionEnabled = false
+            activeMenuCell = cell
+        }
+        // The scroll stays LOCKED while the menu is up (exclusivity already prevents the pressing
+        // finger's pan; this also blocks a second finger from scrolling the chat behind the blur).
         collectionView.panGestureRecognizer.isEnabled = false
-        collectionView.panGestureRecognizer.isEnabled = true
         overlay.present(in: window, startAtSqueeze: true)
     }
 
@@ -2054,6 +2069,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard let menu = activeMenu else { return }
         menu.sourceView.isHidden = false
         menu.sourceView.transform = .identity
+        activeMenuCell?.isUserInteractionEnabled = true
+        activeMenuCell = nil
+        collectionView.panGestureRecognizer.isEnabled = true
         if menu.keyboardWasUp { onMenuRestoreKeyboard() }
         activeMenu = nil
         contextMenuVisible = false
