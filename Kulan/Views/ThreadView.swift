@@ -122,6 +122,9 @@ struct ThreadView: View {
     @State private var reactionJumpEmoji = ""
     @State private var seenReactionSigs: [String: String] = [:]
     @State private var reactionSigsSeeded = false
+    /// The list's tap-to-dismiss-keyboard, held for one runloop turn so an inner tap that wants the
+    /// keyboard kept (a reply quote jump) can cancel it — see listBody.
+    @State private var pendingKeyboardDismiss = false
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
@@ -1463,10 +1466,32 @@ struct ThreadView: View {
     @ViewBuilder private func listBody(_ proxy: ScrollViewProxy) -> some View {
         nativeList
             .contentShape(Rectangle())
-            // Tap anywhere on the conversation → dismiss the keyboard. The gesture itself lives in
-            // UIKit now (NativeMessageList's `backgroundTap`), because a SwiftUI tap here could not be
-            // reliably outvoted by a tap INSIDE a hosted cell — see KeyboardSafeRects for the full
-            // story. The list decides by hit test and calls back only when the tap was not claimed.
+            // Tap anywhere on the conversation → dismiss the keyboard. This gesture
+            // lived on the deleted SwiftUI fallback list; simultaneous so bubble taps still work.
+            //
+            // …but SIMULTANEOUS means it also fires when the tap was meant for something inside a
+            // bubble, which is why tapping a reply quote with the keyboard up both jumped AND closed
+            // the keyboard (user: it must work and not close the keyboard, like Signal). The dismissal
+            // is therefore DEFERRED by one runloop turn and cancellable: anything that handles a tap
+            // itself and wants the keyboard kept (the quote jump) clears the flag in the same event,
+            // and because the cancel and the dismissal cannot race — the dismissal runs strictly after
+            // both gestures have fired — the order SwiftUI happens to deliver them in does not matter.
+            //
+            // RESTORED VERBATIM FROM 399 (owner's A/B verdict, builds 408-411): the UIKit backgroundTap
+            // replacement made the keyboard feel wrong even with its instant-close gate. This is the
+            // version whose feel he calls good; do not swap it out again without a device A/B.
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    pendingKeyboardDismiss = true
+                    DispatchQueue.main.async {
+                        guard pendingKeyboardDismiss else { return }
+                        pendingKeyboardDismiss = false
+                        inputFocused = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                        to: nil, from: nil, for: nil)
+                    }
+                }
+            )
             // Scrolled back down to the newest message → the missed messages are now seen: clear the
             // away-counter and send the (throttled) read receipt.
             .onChange(of: isAtBottom) { _, atBottom in
@@ -1730,8 +1755,9 @@ struct ThreadView: View {
             row: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
-                    // The keyboard is kept here (Signal keeps it too) — the list's tap-to-dismiss
-                    // already refused to fire, because the quote publishes a KeyboardSafeRects rect.
+                    // This tap was FOR the quote — keep the keyboard (Signal keeps it too). Cancels
+                    // the list's deferred tap-to-dismiss before it can run.
+                    pendingKeyboardDismiss = false
                     Task {
                         await repo.ensureLoaded(jid)
                         await MainActor.run {
@@ -1752,12 +1778,9 @@ struct ThreadView: View {
             uikitModelsVersion: uikitModelCache.version,
             uikitMenu: { id in uikitMenu(for: id) },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
-            // The list already decided this tap was not claimed by anything inside a bubble.
-            onBackgroundTap: {
-                inputFocused = false
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                to: nil, from: nil, for: nil)
-            },
+            // STEP 6 REMOVED (owner's verdict, builds 408-411): the UIKit backgroundTap system made
+            // the keyboard open/close feel wrong even with the instant-close gate, so tap-to-dismiss
+            // is the 399 SwiftUI deferred gesture again — see listBody.
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
             // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread
@@ -5516,10 +5539,8 @@ struct MessageBubble: View, Equatable {
                 else { onJumpTo(reply.id) }                                  // jump to the original message
             }
             // Publishes this box's window rect so the list's tap-to-dismiss refuses to begin here: the
-            // quote jumps and the keyboard stays up, like Signal. The invisible measurement copy is
-            // excluded by its caller (it would register the same id at the same place, harmlessly, but
-            // the visible one must win) — see KeyboardSafeRects.
-            .modifier(KeyboardSafeTapArea(id: "quote-\(message.id)"))
+            // (Step-6 removal: the KeyboardSafeTapArea rect-publishing is gone with the UIKit tap
+            // system; the quote keeps the keyboard via the deferred-dismiss cancel in jumpTo instead.)
         }
     }
 
