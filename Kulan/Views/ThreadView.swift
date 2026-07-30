@@ -4429,6 +4429,19 @@ struct MessageBubble: View, Equatable {
         .foregroundStyle(fg)
         .padding(.horizontal, 12).padding(.vertical, 8)
         .frame(width: width, alignment: .leading)
+        // The double-tap react that the media bubble denies itself (tap counting would sit between
+        // a single tap and the viewer opening) lives HERE instead, per the user's split: the caption
+        // opens nothing on tap, so the wait costs it nothing. Photo area = instant open, caption
+        // area = quick react — two zones, one bubble. Same body as the text bubble's double-tap.
+        .contentShape(Rectangle())
+        .highPriorityGesture(
+            TapGesture(count: 2).onEnded {
+                guard message.sendState == nil, !restricted else { return }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                let quick = QuickReaction.current
+                onReact(myReaction == quick ? nil : quick)
+            }
+        )
     }
 
     // A Text that renders IDENTICALLY to metaRow (edited? · time · tick?) but is drawn clear — used only
