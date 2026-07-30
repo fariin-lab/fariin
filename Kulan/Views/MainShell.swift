@@ -1535,6 +1535,16 @@ struct ChatRow: View, Equatable {
         }
         return conv.lastReactionToAuthor == me ? "Reacted \(emoji) to your message" : "Reacted \(emoji)"
     }
+    // Live "recording…" for the list — the voice-note flavour of typingLabel, same synced field.
+    private var recordingLabel: String? {
+        guard !conv.isBlockedByMe(me) else { return nil }
+        let recs = conv.others(me).filter { conv.recording[$0] == true }
+        guard !recs.isEmpty else { return nil }
+        if !conv.isGroup { return "recording…" }
+        let n = conv.names[recs[0]] ?? "Someone"
+        let first = n.split(separator: " ").first.map(String.init) ?? n
+        return "\(first) is recording…"
+    }
     // Live "typing…" for the list — the conv doc already syncs the typing map, so this is free.
     private var typingLabel: String? {
         guard !conv.isBlockedByMe(me) else { return nil }
@@ -1579,6 +1589,9 @@ struct ChatRow: View, Equatable {
     @ViewBuilder private var previewContent: some View {
         if conv.leaksBlocked(me) {
             previewRow("hand.raised.fill", "Blocked")
+        } else if let r = recordingLabel {
+            (Text(Image(systemName: "mic.fill")).font(.system(size: 12)) + Text(" \(r)"))
+                .font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel {
             Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if !draft.isEmpty {

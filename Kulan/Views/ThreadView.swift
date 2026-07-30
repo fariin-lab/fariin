@@ -183,7 +183,7 @@ struct ThreadView: View {
     // Typing hygiene (audit M6): onChange(of: input) can't tell a keystroke from a programmatic
     // assignment, and independent setTyping Tasks could land out of order (remote "typing…" stuck
     // for the 15s expiry). suppressNext skips one onChange; chain serializes the writes.
-    private final class TypingBox { var suppressNext = false; var chain: Task<Void, Never>? }
+    private final class TypingBox { var suppressNext = false; var chain: Task<Void, Never>?; var recordingRefresh: Timer? }
     @State private var typingBox = TypingBox()
 
     private func setInputSilently(_ s: String) {
@@ -195,6 +195,14 @@ struct ThreadView: View {
         let prev = typingBox.chain
         let c = cid
         typingBox.chain = Task { await prev?.value; await ChatService.setTyping(c, v) }
+    }
+
+    // Recording rides the same serialized chain as typing — they write the SAME field, so an
+    // out-of-order landing would stick one state over the other for the 15s expiry.
+    private func broadcastRecording(_ v: Bool) {
+        let prev = typingBox.chain
+        let c = cid
+        typingBox.chain = Task { await prev?.value; await ChatService.setRecording(c, v) }
     }
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
@@ -290,6 +298,17 @@ struct ThreadView: View {
                 }
                 .padding(.bottom, 10)
             }
+            // "Recording a voice note" indicator (their side): floats OVER the list at bottom-leading.
+            // Deliberately NOT a list row — inserting transient rows touches the inverted-list scroll
+            // machine (do-not-touch rules); an overlay moves nothing and costs nothing when absent.
+            .overlay(alignment: .bottomLeading) {
+                if repo.otherRecording, typingPref, !repo.iBlocked {
+                    RecordingBubble(dark: dark)
+                        .padding(.leading, 12).padding(.bottom, 10)
+                        .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
             .floatingBottomBar {
@@ -1062,6 +1081,9 @@ struct ThreadView: View {
             groupCallListener?.remove(); groupCallListener = nil
             AppRouter.shared.activeChatId = nil
             broadcastTyping(false)
+            // The RunLoop retains a live Timer past the view's death — without this, a locked
+            // recording carried through navigation would re-broadcast "recording" forever.
+            typingBox.recordingRefresh?.invalidate(); typingBox.recordingRefresh = nil
             // Messages that arrived while the chat was OPEN were read live but only onAppear reset
             // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
             Task { await ChatService.resetUnread(cid) }
@@ -1073,6 +1095,18 @@ struct ThreadView: View {
                 recordDrag = .zero; holdStarted = false
                 recordCancelArmed = false   // audit: a stale armed flag silently discarded the NEXT
                                             // stationary-hold voice note on release
+            }
+        }
+        // Voice-note recording indicator, sender side: isRecording is the single source of truth —
+        // it flips for every path (hold, lock, send, cancel, too-short, interruption), so no per-path
+        // wiring. While ON, refresh every 10s: receivers self-clear at 15s and a note runs longer.
+        .onChange(of: recorder.isRecording) { _, rec in
+            typingBox.recordingRefresh?.invalidate(); typingBox.recordingRefresh = nil
+            broadcastRecording(rec)
+            if rec {
+                typingBox.recordingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+                    broadcastRecording(true)
+                }
             }
         }
         .onChange(of: photoItems) { _, items in Task { await sendPickedMulti(items) } }
@@ -5668,6 +5702,34 @@ private struct ReplyStoryAnchor: ViewModifier {
 }
 
 // In-list typing indicator: a received-style bubble with three waving dots.
+// "Recording a voice note" indicator: received-style bubble, accent mic + three sound bars rising
+// and falling in turn. Our own design (owner's rule: study the references, then draw our own) —
+// the bars say "sound", where the dots would have said "typing".
+struct RecordingBubble: View {
+    let dark: Bool
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { i in
+                    Capsule().fill(Color.accentColor)
+                        .frame(width: 3, height: 14)
+                        .scaleEffect(y: animating ? 1 : 0.35)
+                        .animation(.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.15), value: animating)
+                }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(Theme.received(dark))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onAppear { animating = true }
+    }
+}
+
 struct TypingBubble: View {
     let dark: Bool
     @State private var animating = false

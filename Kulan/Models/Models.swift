@@ -361,6 +361,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var lastSender: String             // uid of who sent the last message ("" if unknown)
     var unreadCount: [String: Int]
     var typing: [String: Bool]
+    // Voice-note recording rides the SAME "typing" field, as a string value ("audio-<seconds>")
+    // instead of a Bool — old clients' boolMap reads it as not-typing and shows nothing.
+    var recording: [String: Bool]
     var mutedBy: [String: Double]      // expiry in ms
     var pinnedBy: [String: Bool]
     var archivedBy: [String: Bool]
@@ -405,6 +408,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.lastSender = data["lastSender"] as? String ?? ""
         self.unreadCount = intMap(data["unreadCount"])
         self.typing = boolMap(data["typing"])
+        self.recording = (data["typing"] as? [String: Any] ?? [:])
+            .compactMapValues { ($0 as? String)?.hasPrefix("audio") == true ? true : nil }
         self.mutedBy = doubleMap(data["mutedBy"])
         self.pinnedBy = boolMap(data["pinnedBy"])
         self.archivedBy = boolMap(data["archivedBy"])

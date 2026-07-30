@@ -56,6 +56,7 @@ final class ThreadRepository {
 
     private(set) var convLoaded = false   // first conversation-doc snapshot landed (block state is real)
     var otherTyping = false
+    var otherRecording = false       // someone is recording a voice note (string "audio…" in the typing map)
     var typingNames: [String] = []   // group: who is currently typing
     private var typingExpiry: Timer? // incoming typing self-clears after 15s — a crashed sender's flag can't stick
     var otherOnline = false
@@ -175,6 +176,7 @@ final class ThreadRepository {
                 // skip the O(N log N) rebuild.
                 if isOneToOne {
                     self.otherTyping = (d?["typing"] as? [String: Any])?[other] as? Bool ?? false
+                    self.otherRecording = ((d?["typing"] as? [String: Any])?[other] as? String)?.hasPrefix("audio") == true
                     self.armTypingExpiry()
                     if let ts = (d?["lastRead"] as? [String: Any])?[other] as? Timestamp {
                         self.otherLastReadMillis = ts.dateValue().timeIntervalSince1970 * 1000
@@ -187,6 +189,7 @@ final class ThreadRepository {
                     let names = d?["names"] as? [String: String] ?? [:]
                     let typers = others.filter { (typingMap[$0] as? Bool) == true }
                     self.otherTyping = !typers.isEmpty
+                    self.otherRecording = others.contains { (typingMap[$0] as? String)?.hasPrefix("audio") == true }
                     self.typingNames = typers.map { names[$0] ?? "Someone" }
                     self.armTypingExpiry()
                     if !others.isEmpty {
@@ -403,9 +406,12 @@ final class ThreadRepository {
     // until some other doc change. Re-armed on every snapshot where typing is (still) true.
     private func armTypingExpiry() {
         typingExpiry?.invalidate(); typingExpiry = nil
-        guard otherTyping else { return }
+        guard otherTyping || otherRecording else { return }
+        // Recording outlives 15s routinely — the sender refreshes the flag every 10s (each refresh
+        // changes the value, so a snapshot re-arms this). The expiry only catches crashed senders.
         typingExpiry = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
             self?.otherTyping = false
+            self?.otherRecording = false
             self?.typingNames = []
         }
     }

@@ -1308,6 +1308,17 @@ enum ChatService {
             .setData(["typing": [uid: typing]], merge: true)
     }
 
+    /// Voice-note recording indicator — SAME field and privacy pref as typing, so the rules and
+    /// reciprocity carry over unchanged. The ON value is a CHANGING string ("audio-<seconds>"):
+    /// receivers self-clear after 15s and a voice note outlives that, so the sender refreshes
+    /// every 10s — and only a value that actually changes the doc produces a snapshot.
+    static func setRecording(_ cid: String, _ on: Bool) async {
+        guard pref("typingIndicators") else { return }
+        let v: Any = on ? ("audio-\(Int(Date().timeIntervalSince1970))" as Any) : (false as Any)
+        try? await db.collection("conversations").document(cid)
+            .setData(["typing": [uid: v]], merge: true)
+    }
+
     /// My unread count for this conversation — read once on open (before reset) to
     /// anchor the "Unread Messages" divider.
     static func myUnread(_ cid: String) async -> Int {
