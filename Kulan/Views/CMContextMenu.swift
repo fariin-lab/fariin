@@ -393,7 +393,13 @@ final class CMActionsCard: UIView {
 
     init(actions: [CMAction]) {
         self.actions = actions
-        backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        // LIQUID GLASS on iOS 26+, exactly what makes Signal's card read as native there (the owner's
+        // zoomed side-by-side); the frosted material is only the fallback for older systems.
+        if #available(iOS 26.0, *) {
+            backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        } else {
+            backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        }
         super.init(frame: .zero)
 
         layer.cornerRadius = corner
@@ -410,8 +416,8 @@ final class CMActionsCard: UIView {
         backdrop.contentView.addSubview(scroll)
         scroll.showsVerticalScrollIndicator = false
 
-        for (i, action) in actions.enumerated() {
-            let row = CMActionRow(action: action, showsSeparator: i < actions.count - 1)
+        for action in actions {
+            let row = CMActionRow(action: action)
             rows.append(row)
             scroll.addSubview(row)
         }
@@ -485,14 +491,15 @@ private final class CMActionRow: UIView {
     let action: CMAction
     private let title = UILabel()
     private let icon = UIImageView()
-    private let separator = UIView()
     private let highlight = UIView()
+    // NO separator lines — the owner rejected them against Signal's clean glass ("u added lines
+    // thats i don't"). The rows read as one sheet; the highlight fill is the only row chrome.
 
     var isHighlighted: Bool = false {
         didSet { highlight.isHidden = !isHighlighted }
     }
 
-    init(action: CMAction, showsSeparator: Bool) {
+    init(action: CMAction) {
         self.action = action
         super.init(frame: .zero)
 
@@ -513,10 +520,6 @@ private final class CMActionRow: UIView {
         icon.contentMode = .scaleAspectFit
         addSubview(icon)
 
-        separator.backgroundColor = UIColor.separator.withAlphaComponent(0.35)
-        separator.isHidden = !showsSeparator
-        addSubview(separator)
-
         isAccessibilityElement = true
         accessibilityLabel = action.title
         accessibilityTraits = .button
@@ -533,8 +536,6 @@ private final class CMActionRow: UIView {
                             width: iconSize, height: iconSize)
         title.frame = CGRect(x: icon.frame.maxX + 14, y: 0,
                              width: bounds.width - icon.frame.maxX - 14 - margin, height: bounds.height)
-        let hairline = 1.0 / UIScreen.main.scale
-        separator.frame = CGRect(x: 0, y: bounds.height - hairline, width: bounds.width, height: hairline)
     }
 }
 
@@ -575,7 +576,12 @@ final class CMReactionBar: UIView {
 
     init(config: CMReactConfig) {
         self.config = config
-        backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        // Liquid glass on iOS 26+, same as the card and same as Signal's bar there.
+        if #available(iOS 26.0, *) {
+            backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        } else {
+            backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        }
         super.init(frame: .zero)
 
         backdrop.layer.masksToBounds = true
