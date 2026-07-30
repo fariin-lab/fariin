@@ -265,6 +265,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var keyboardWasAtNewest = false              // latched at willHide: reader was at the newest message
     private var keyboardSettlePending = false            // didHide fired mid-drag; settle at drag/decel end
     private var keyboardClosing = false                  // willHide → didHide: the per-layout glue window
+    private var keyboardUp = false                       // willShow → willHide: gates the double-tap wait
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
@@ -1514,8 +1515,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // four-shot backstop volley, atBottomForKeyboard, keyboardSessionWasAtBottom, the geometric composer
     // signal and its trailing settle. Every one of them existed to keep a target still that has stopped
     // moving.
-    @objc private func keyboardWillShow(_ note: Notification) { rideKeyboard(note) }
-    @objc private func keyboardWillHide(_ note: Notification) { rideKeyboard(note) }
+    // The `keyboardUp` writes live OUTSIDE rideKeyboard on purpose: rideKeyboard guards itself out
+    // (first land, disappearing, pop in flight), and the flag must be true whenever the keyboard is
+    // genuinely on screen, or the double-tap gate below reads stale state.
+    @objc private func keyboardWillShow(_ note: Notification) { keyboardUp = true; rideKeyboard(note) }
+    @objc private func keyboardWillHide(_ note: Notification) { keyboardUp = false; rideKeyboard(note) }
 
     private func rideKeyboard(_ note: Notification) {
         guard shouldAnimateKeyboardChanges, didFirstLand, !isDisappearing else { return }
@@ -1776,6 +1780,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return true
         }
         if g === doubleTapGesture {
+            // WITH THE KEYBOARD UP, closing it wins. The background tap is told to wait for this
+            // recognizer, so wherever a double-tap COULD begin, every single tap paid the ~0.3s
+            // double-tap timeout before the close even started — the user's "late and limp"
+            // keyboard close, felt since the tap moved to UIKit in build 400. Refusing here makes
+            // the close instant everywhere; double-tap react simply requires the keyboard to be
+            // closed first, one extra tap, which is how iMessage treats it too.
+            if keyboardUp { return false }
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
                   let id = dataSource.itemIdentifier(for: ip), uikitModels[id] != nil else { return false }
