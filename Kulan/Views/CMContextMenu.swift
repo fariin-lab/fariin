@@ -385,11 +385,12 @@ final class CMActionsCard: UIView {
     private let scroll = UIScrollView()
     private var rows: [CMActionRow] = []
 
-    // Signal's card, from the owner's side-by-side screenshots (his circled reference): icons on the
-    // LEADING edge, a slightly narrower card, big continuous corners, roomy rows.
-    private let rowHeight: CGFloat = 52
+    // The real iOS 26 native menu, measured off the owner's Signal-vs-us side-by-side (2026-07-30):
+    // corner ≈ 0.56 of the row pitch and tighter rows than our first pass — a shorter card with a
+    // bigger curve is what reads "Apple round". Icons stay on the LEADING edge.
+    private let rowHeight: CGFloat = 46
     private let cardWidth: CGFloat = 260
-    private let corner: CGFloat = 22
+    private let corner: CGFloat = 26
 
     init(actions: [CMAction]) {
         self.actions = actions
