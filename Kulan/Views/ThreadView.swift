@@ -1712,8 +1712,12 @@ struct ThreadView: View {
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
             out.append(CMAction(title: "Copy", icon: "doc.on.doc") { UIPasteboard.general.string = m.text })
         }
-        if mine && !iAmMuted && !m.isImage && !m.isAudio && !m.isCall
-            && !m.isFeatureMarker && !m.isGif && !m.isFile
+        // Edit follows the TEXT, not the type: a photo/album/video caption is sealed in the same
+        // `text` field editMessage rewrites, so any of my messages WITH a body is editable within
+        // the window. Bare media has no text to edit; view-once never re-opens for editing.
+        if mine && !iAmMuted && !m.isAudio && !m.isCall
+            && !m.isFeatureMarker && !m.viewOnce
+            && !m.text.isEmpty
             && m.sendState == nil
             && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
             out.append(CMAction(title: "Edit", icon: "pencil") {
