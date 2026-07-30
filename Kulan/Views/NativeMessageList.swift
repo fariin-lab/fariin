@@ -65,6 +65,13 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var uikitModelsVersion: Int = 0
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
+    // CUSTOM LONG-PRESS MENU (experiment — see CMContextMenu.swift). ThreadView supplies the row's
+    // actions and reaction config; the controller owns the press, the snapshot and the overlay.
+    var customMenuActions: (String) -> [CMAction] = { _ in [] }
+    var customReactConfig: (String) -> (emojis: [String], selected: String?)? = { _ in nil }
+    var onCustomReact: (String, CMReactionSelection) -> Void = { _, _ in }
+    var onMenuCloseKeyboard: () -> Bool = { false }          // closes if open; returns whether it WAS open
+    var onMenuRestoreKeyboard: () -> Void = {}
     var onReachedTop: () -> Void               // near the oldest loaded row -> page older
     var selecting: Bool = false                // selection mode â€” drives the selection-animation land gate
     // The initial scroll position: when the conversation has unread messages, the FIRST open lands with
@@ -110,6 +117,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.uikitModels = uikitModels   // BEFORE apply: measure + cell provider see the same frozen routing
         vc.uikitMenu = uikitMenu
         vc.onUikitDoubleTap = onUikitDoubleTap
+        vc.customMenuActions = customMenuActions
+        vc.customReactConfig = customReactConfig
+        vc.onCustomReact = onCustomReact
+        vc.onMenuCloseKeyboard = onMenuCloseKeyboard
+        vc.onMenuRestoreKeyboard = onMenuRestoreKeyboard
         vc.setComposerBarHeight(composerBarHeight)
         vc.setTopOverlayHeight(topOverlayHeight)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
@@ -291,6 +303,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var uikitModels: [String: UIKitBubbleModel] = [:]   // frozen routing snapshot (set before every apply)
     var uikitMenu: (String) -> UIMenu? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }
+    // CUSTOM LONG-PRESS MENU (experiment — CMContextMenu.swift). Fed from SwiftUI like every callback.
+    var customMenuActions: (String) -> [CMAction] = { _ in [] }
+    var customReactConfig: (String) -> (emojis: [String], selected: String?)? = { _ in nil }
+    var onCustomReact: (String, CMReactionSelection) -> Void = { _, _ in }
+    var onMenuCloseKeyboard: () -> Bool = { false }
+    var onMenuRestoreKeyboard: () -> Void = {}
+    private var customPress: UILongPressGestureRecognizer!   // the driver: 0.2s, streams into the overlay
+    // One active presentation at a time. sourceView is the REAL bubble (hidden while the menu is up);
+    // squeezeToken cancels a squeeze whose press ended before the 0.2s ripened.
+    private var activeMenu: (overlay: CMOverlay, sourceView: UIView, keyboardWasUp: Bool)?
+    private var squeezeToken = 0
     // Route each id was last CONFIGURED with (uikit vs SwiftUI cell). A content change that flips the
     // route needs reloadItems (re-dequeue the other cell class) â€” reconfigureItems reuses the same cell
     // instance, which can't switch renderers.
@@ -407,6 +430,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         holdPress.cancelsTouchesInView = false
         holdPress.delegate = self
         collectionView.addGestureRecognizer(holdPress)
+
+        // THE CUSTOM MENU DRIVER (experiment — CMContextMenu.swift). Signal's press: 0.2s to begin,
+        // squeeze while it ripens, then the SAME press keeps streaming into the overlay so a finger
+        // can slide onto a row or an emoji and lift to select. cancelsTouchesInView stays true (the
+        // default): once the menu ripens, the touch belongs to it, not to the row underneath.
+        customPress = UILongPressGestureRecognizer(target: self, action: #selector(handleCustomPress(_:)))
+        customPress.minimumPressDuration = 0.2
+        customPress.delegate = self
+        collectionView.addGestureRecognizer(customPress)
 
         // Off-screen sizer, in the hierarchy (0-alpha) so it inherits traits for accurate measurement.
         // CRITICAL: it must NOT reserve safe area. It's a child of this controller, and the list runs
@@ -1722,6 +1754,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let p = collectionView.convert(loc, to: cell.previewBubble)
             return cell.previewBubble.bounds.contains(p)
         }
+        if g === customPress {
+            // Only on a row that actually has a menu, and only ON its bubble — pressing the empty
+            // space beside a bubble must scroll, not lift. Never during selection, a reply swipe, or
+            // a voice scrub, and never while a menu is already up.
+            guard !isSelecting, activeMenu == nil, swipingCell == nil, !VoiceScrubState.active else { return false }
+            let loc = g.location(in: collectionView)
+            guard let ip = collectionView.indexPathForItem(at: loc),
+                  let id = dataSource.itemIdentifier(for: ip),
+                  !customMenuActions(id).isEmpty else { return false }
+            if let native = collectionView.cellForItem(at: ip) as? UIKitBubbleCell {
+                let p = collectionView.convert(loc, to: native.previewBubble)
+                return native.previewBubble.bounds.contains(p)
+            }
+            if let rect = CMBubbleRects.rect(id) {
+                return rect.contains(g.location(in: nil))
+            }
+            return true   // hosted row with no published rect yet: allow, fallback lifts the row
+        }
         guard g === swipePan else { return true }
         if isSelecting { return false }                            // selection mode: rows toggle, never reply-swipe
         if VoiceScrubState.active { return false }                 // waveform scrub owns the touch
@@ -1744,7 +1794,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // holdPress is a PASSIVE observer â€” it must never block the SwiftUI context-menu press or anything else.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        g === swipePan || g === holdPress
+        g === swipePan || g === holdPress || g === customPress
     }
 
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
@@ -1894,52 +1944,122 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         onUikitDoubleTap(id)
     }
 
-    // MODERN API (iOS 16+): UIKit calls the PLURAL method on current SDKs â€” implementing only the
-    // deprecated single-item variant meant uikit-routed rows never showed a menu at all.
-    func collectionView(_ collectionView: UICollectionView,
-                        contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
-                        point: CGPoint) -> UIContextMenuConfiguration? {
-        guard let ip = indexPaths.first else { return nil }
-        return contextMenuConfig(at: ip)
+    // DELETED HERE: the UIKit contextMenuConfiguration path (Apple's menu for uikit-routed text
+    // rows). On this branch EVERY long press goes through the custom system below — one presenter,
+    // our geometry, no Apple menu anywhere (see CMContextMenu.swift and the study memory).
+
+    // MARK: - Custom long-press menu (experiment)
+
+    /// The real bubble to hide/squeeze, an already-taken snapshot of it, and its window frame.
+    /// Snapshot BEFORE the squeeze runs, so the preview is the unsqueezed truth.
+    private func bubbleSource(at indexPath: IndexPath, id: String)
+        -> (source: UIView, snapshot: UIView, frame: CGRect)? {
+        guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
+        if let native = cell as? UIKitBubbleCell {
+            guard let snap = native.previewBubble.snapshotView(afterScreenUpdates: false) else { return nil }
+            let frame = native.previewBubble.convert(native.previewBubble.bounds, to: nil)
+            return (native.previewBubble, snap, frame)
+        }
+        // Hosted (SwiftUI) row: crop the row snapshot to the published bubble rect. The bubble draws
+        // its own rounded corners over a clear row background, so the crop needs no masking. When no
+        // rect was published yet, fall back to the whole row content.
+        if let rect = CMBubbleRects.rect(id) {
+            let inContent = cell.contentView.convert(rect, from: nil)
+            guard let snap = cell.contentView.resizableSnapshotView(from: inContent,
+                                                                    afterScreenUpdates: false,
+                                                                    withCapInsets: .zero) else { return nil }
+            return (cell.contentView, snap, rect)
+        }
+        guard let snap = cell.contentView.snapshotView(afterScreenUpdates: false) else { return nil }
+        return (cell.contentView, snap, cell.contentView.convert(cell.contentView.bounds, to: nil))
     }
 
-    func collectionView(_ collectionView: UICollectionView,
-                        contextMenuConfigurationForItemAt indexPath: IndexPath,
-                        point: CGPoint) -> UIContextMenuConfiguration? {
-        contextMenuConfig(at: indexPath)
+    @objc private func handleCustomPress(_ g: UILongPressGestureRecognizer) {
+        switch g.state {
+        case .began:
+            beginCustomMenu(at: g.location(in: collectionView))
+        case .changed:
+            activeMenu?.overlay.fingerMoved(to: g.location(in: nil))
+        case .ended, .cancelled, .failed:
+            if let menu = activeMenu {
+                menu.overlay.fingerEnded(at: g.location(in: nil))
+            } else {
+                squeezeToken &+= 1   // the press died while the squeeze ripened → no menu
+            }
+        default: break
+        }
     }
 
-    private func contextMenuConfig(at indexPath: IndexPath) -> UIContextMenuConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), uikitModels[id] != nil,
-              let menu = uikitMenu(id) else { return nil }   // SwiftUI rows: their own .contextMenu owns it
-        return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { _ in menu }
+    /// Signal's two-beat open: the press has already ripened (0.2s), now the bubble squeezes to 0.95
+    /// for 0.2s more. Finger still down at the end → present; lifted → bounce back, nothing opens.
+    private func beginCustomMenu(at loc: CGPoint) {
+        guard activeMenu == nil,
+              let ip = collectionView.indexPathForItem(at: loc),
+              let id = dataSource.itemIdentifier(for: ip),
+              let src = bubbleSource(at: ip, id: id) else { return }
+        let actions = customMenuActions(id)
+        guard !actions.isEmpty else { return }
+        interactionHoldUntil = Date().addingTimeInterval(8)   // land gate up while the menu ripens
+        squeezeToken &+= 1
+        let token = squeezeToken
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+            src.source.transform = CGAffineTransform(scaleX: 0.95, y: 0.95)
+        } completion: { _ in
+            let pressStillDown = self.customPress.state == .began || self.customPress.state == .changed
+            guard token == self.squeezeToken, pressStillDown, self.activeMenu == nil else {
+                UIView.animate(withDuration: 0.2) { src.source.transform = .identity }
+                return
+            }
+            self.presentCustomMenu(id: id, actions: actions, src: src)
+        }
     }
 
-    // Lift ONLY the bubble (rounded to its exact corner path) â€” the default would lift the whole
-    // full-width transparent cell.
-    //
-    // The bubble is inside a cell that carries the counter-flip, so its transform to the window has no net
-    // scale and UIKit's snapshot of it is upright. This is exactly why the flip is applied per cell rather
-    // than only to the collection view.
-    private func bubbleTargetedPreview(at indexPath: IndexPath) -> UITargetedPreview? {
-        guard let cell = collectionView.cellForItem(at: indexPath) as? UIKitBubbleCell else { return nil }
-        let bubble = cell.previewBubble
-        let params = UIPreviewParameters()
-        params.backgroundColor = .clear
-        if let path = bubble.lastCornerPath { params.visiblePath = path }
-        return UITargetedPreview(view: bubble, parameters: params)
+    private func presentCustomMenu(id: String, actions: [CMAction],
+                                   src: (source: UIView, snapshot: UIView, frame: CGRect)) {
+        guard let window = view.window else {
+            UIView.animate(withDuration: 0.2) { src.source.transform = .identity }
+            return
+        }
+        // Shadow-friendly wrapper: the overlay shadows the container, the snapshot keeps its alpha.
+        src.snapshot.frame = CGRect(origin: .zero, size: src.frame.size)
+        let container = UIView(frame: CGRect(origin: .zero, size: src.frame.size))
+        container.addSubview(src.snapshot)
+
+        let react = customReactConfig(id).map { cfg in
+            CMReactConfig(emojis: cfg.emojis, selected: cfg.selected) { [weak self] selection in
+                self?.onCustomReact(id, selection)
+            }
+        }
+        // My messages hug the right edge; alignment follows the bubble's own side.
+        let alignRight = src.frame.midX > window.bounds.midX
+
+        let keyboardWasUp = onMenuCloseKeyboard()
+        let overlay = CMOverlay(previewView: container, sourceFrame: src.frame,
+                                alignRight: alignRight, actions: actions, react: react) { [weak self] in
+            self?.customMenuDidEnd()
+        }
+        src.source.isHidden = true
+        src.source.transform = .identity
+        activeMenu = (overlay, src.source, keyboardWasUp)
+        contextMenuVisible = true
+        contextMenuSourceId = id
+        // Kill any in-flight scroll so the chat cannot keep moving behind the overlay (Signal's reset).
+        collectionView.panGestureRecognizer.isEnabled = false
+        collectionView.panGestureRecognizer.isEnabled = true
+        overlay.present(in: window, startAtSqueeze: true)
     }
 
-    func collectionView(_ collectionView: UICollectionView,
-                        contextMenuConfiguration configuration: UIContextMenuConfiguration,
-                        highlightPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
-        bubbleTargetedPreview(at: indexPath)
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        contextMenuConfiguration configuration: UIContextMenuConfiguration,
-                        dismissalPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
-        bubbleTargetedPreview(at: indexPath)
+    /// The overlay finished its return spring: unhide the real bubble, drop the gates, settle.
+    private func customMenuDidEnd() {
+        guard let menu = activeMenu else { return }
+        menu.sourceView.isHidden = false
+        menu.sourceView.transform = .identity
+        if menu.keyboardWasUp { onMenuRestoreKeyboard() }
+        activeMenu = nil
+        contextMenuVisible = false
+        contextMenuSourceId = nil
+        interactionHoldUntil = Date()
+        settleFlush()   // land everything the menu held back
     }
 
     // THE REAL MENU LIFETIME, from UIKit, replacing a long-press proxy that could not see it.

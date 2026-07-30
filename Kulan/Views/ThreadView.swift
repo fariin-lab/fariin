@@ -1675,6 +1675,93 @@ struct ThreadView: View {
         return UIMenu(children: items)
     }
 
+    // CUSTOM LONG-PRESS MENU (experiment — CMContextMenu.swift): ONE builder for EVERY message type.
+    // Items and conditions carried over verbatim from the SwiftUI .contextMenu this replaces. There is
+    // deliberately NO "React…" row — the floating bar above the message IS reacting, and it appears
+    // for exactly the rows customReactInfo allows; its "…" opens the same full picker.
+    private func customMenuActions(for rowId: String) -> [CMAction] {
+        guard let idx = repo.indexById[rowId], idx < repo.items.count else { return [] }
+        let m = repo.items[idx]
+        let mine = m.authorId == me
+        let canPin = !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false)
+        let isPinned = repo.pinnedMessageIds.contains(m.id)
+        var out: [CMAction] = []
+
+        // MEDIA STILL UPLOADING: not on the server yet — only Save / Cancel Sending / Select.
+        if m.sendState == .sending && (m.isImage || m.isVideo || m.isAlbum || m.isGif) {
+            if m.isImage || m.isAlbum {
+                out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
+                    Task { await saveImageToPhotos(m) }
+                })
+            }
+            out.append(CMAction(title: "Cancel Sending", icon: "xmark.circle", destructive: true) {
+                if let clientId = m.clientId { repo.removePending(clientId: clientId) }
+            })
+            out.append(CMAction(title: "Select", icon: "checkmark.circle") {
+                withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+            })
+            return out
+        }
+
+        out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
+        if mine && !iAmMuted && !m.isImage && !m.isAudio && !m.isCall
+            && !m.isFeatureMarker && !m.isGif && !m.isFile
+            && m.sendState == nil
+            && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
+            out.append(CMAction(title: "Edit", icon: "pencil") {
+                withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
+                input = m.text
+                inputFocused = true
+            })
+        }
+        if canPin {
+            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "pin") {
+                togglePin(m)
+            })
+        }
+        if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
+            out.append(CMAction(title: "Copy", icon: "doc.on.doc") { UIPasteboard.general.string = m.text })
+        }
+        if !m.isCall && !m.viewOnce {
+            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
+        }
+        if m.isImage && !m.viewOnce {
+            out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
+                Task { await saveImageToPhotos(m) }
+            })
+        }
+        if isGroup && mine && m.sendState == nil {
+            out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
+        }
+        out.append(CMAction(title: "Select", icon: "checkmark.circle") {
+            withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+        })
+        out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
+        return out
+    }
+
+    // The bar shows exactly when this row can be reacted to: on the server, and I am not muted.
+    private func customReactInfo(for rowId: String) -> (emojis: [String], selected: String?)? {
+        guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
+        let m = repo.items[idx]
+        guard m.sendState == nil, !iAmMuted, !m.isFeatureMarker else { return nil }
+        return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
+    }
+
+    private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
+        guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
+        let m = repo.items[idx]
+        switch selection {
+        case .more:
+            morePickerTarget = m
+        case .emoji(let e):
+            Task {
+                await ChatService.setReaction(cid: cid, messageId: m.id, emoji: e,
+                                              toAuthor: m.authorId, group: isGroup ? groupMembers : nil)
+            }
+        }
+    }
+
     // Double-tap quick heart on a UIKit-routed row — mirrors the SwiftUI bubble's double-tap gesture.
     private func uikitQuickReact(_ rowId: String) {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
@@ -1768,6 +1855,21 @@ struct ThreadView: View {
             uikitModelsVersion: uikitModelCache.version,
             uikitMenu: { id in uikitMenu(for: id) },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
+            // CUSTOM LONG-PRESS MENU (experiment): every row's actions, the bar's config, and the
+            // keyboard policy — close on open, restore on close, Signal's keyboardWasActive model.
+            customMenuActions: { id in customMenuActions(for: id) },
+            customReactConfig: { id in customReactInfo(for: id) },
+            onCustomReact: { id, selection in handleCustomReact(id, selection) },
+            onMenuCloseKeyboard: {
+                let wasUp = inputFocused
+                if wasUp {
+                    inputFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
+                }
+                return wasUp
+            },
+            onMenuRestoreKeyboard: { inputFocused = true },
             // STEP 6 REMOVED (owner's verdict, builds 408-411): the UIKit backgroundTap system made
             // the keyboard open/close feel wrong even with the instant-close gate, so tap-to-dismiss
             // is the 399 SwiftUI deferred gesture again — see listBody.
@@ -4562,66 +4664,12 @@ struct MessageBubble: View, Equatable {
                     // confirm + user-not-found alert are presented ONCE at the ThreadView level (via
                     // onConfirmLink/onUserNotFound) — not per bubble.
                     .environment(\.openURL, OpenURLAction { url in routeTappedURL(url) })
-                    // REAL native iOS context menu (user decision 2026-07-11): Apple handles the lift +
-                    // blur + spring. No custom overlay. Reactions live in the "React…" item (opens the
-                    // emoji picker) since Apple gives no public API to attach a reaction bar to it.
-                    .contextMenu {
-                        // MEDIA STILL UPLOADING (user spec): the message isn't on the server yet, so the
-                        // normal actions don't apply — only Save / Cancel Sending / Select.
-                        if message.sendState == .sending && (message.isImage || message.isVideo || message.isAlbum || message.isGif) {
-                            if message.isImage || message.isAlbum {
-                                Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
-                            }
-                            Button(role: .destructive) { onCancelSending(message) } label: {
-                                Label("Cancel Sending", systemImage: "xmark.circle")
-                            }
-                            Divider()
-                            Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
-                        } else {
-                        // Order (user spec): Reply · React… · Edit · Pin · Copy · Forward · Select, then
-                        // Delete/Report below a divider (Select sits ABOVE Delete, not after it).
-                        // Save Image / Info stay as context-specific items in place.
-                        Button { onReply(message) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
-                        if message.sendState == nil && !restricted {   // can't react until on server; muted members can't react
-                            Button { onReactMore(message) } label: { Label("React…", systemImage: "face.smiling") }
-                        }
-                        // Edit: text messages only — NOT a contact/location card (its "text" is a marker;
-                        // editing would corrupt the card and expose the raw payload in the composer).
-                        // GIF/file are excluded too (their text is never rendered, so an "edit" would be
-                        // invisible), and Edit only shows inside the server-enforced edit window.
-                        if isMe && !restricted && !message.isImage && !message.isAudio && !message.isCall
-                            && !message.isFeatureMarker && !message.isGif && !message.isFile
-                            && message.sendState == nil
-                            && Date().timeIntervalSince(message.createdAt) < Limits.editWindowSeconds {
-                            Button { onEdit(message) } label: { Label("Edit", systemImage: "pencil") }
-                        }
-                        if canPin {
-                            Button { onPin(message) } label: {
-                                Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
-                            }
-                        }
-                        // Copy: real text only — never a feature marker (contact/location card would put
-                        // the raw kulan-…: payload + uid/photo URL on the clipboard) and never view-once.
-                        if !message.text.isEmpty && !message.isFeatureMarker && !message.viewOnce {
-                            Button { UIPasteboard.general.string = message.text } label: { Label("Copy", systemImage: "doc.on.doc") }
-                        }
-                        // Forward: not calls, and NEVER a view-once photo (forwarding defeats view-once).
-                        if !message.isCall && !message.viewOnce {
-                            Button { onForward(message) } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                        }
-                        // Save Image: real photos only — NEVER a view-once photo (saving defeats view-once).
-                        if message.isImage && !message.viewOnce {
-                            Button { onSaveImage(message) } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
-                        }
-                        if isGroup && isMe && message.sendState == nil {
-                            Button { onInfo(message) } label: { Label("Info", systemImage: "info.circle") }
-                        }
-                        Button { onSelect(message) } label: { Label("Select", systemImage: "checkmark.circle") }
-                        Divider()
-                        // Delete for both directions - see the UIKit menu above for why Report is gone.
-                        Button(role: .destructive) { onDelete(message) } label: { Label("Delete", systemImage: "trash") }
-                        }   // end normal (non-sending) menu
-                    }
+                    // DELETED HERE (experiment): the SwiftUI .contextMenu. Long press for EVERY row is
+                    // presented by the custom system (CMContextMenu.swift) — the list snapshots this
+                    // bubble and lays out bar · message · menu itself. The items moved verbatim into
+                    // ThreadView.customMenuActions(for:). This modifier is what tells the list where
+                    // the bubble actually is, so the press lifts the BUBBLE, not the whole row.
+                    .modifier(CMBubbleRectReporter(id: message.rowId, radius: 18))
                     // Double-tap to quick-react. The emoji is the user's choice (Settings > Appearance >
                     // Quick Reaction), read here AND in uikitQuickReact so both row paths agree.
                     //
