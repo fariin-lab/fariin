@@ -385,19 +385,25 @@ final class CMActionsCard: UIView {
     private let scroll = UIScrollView()
     private var rows: [CMActionRow] = []
 
-    // The real iOS 26 native menu, measured off the owner's Signal-vs-us side-by-side (2026-07-30):
-    // corner ≈ 0.56 of the row pitch and tighter rows than our first pass — a shorter card with a
-    // bigger curve is what reads "Apple round". Icons stay on the LEADING edge.
-    private let rowHeight: CGFloat = 46
+    // Signal's OWN card numbers, from their source (kulan-signal-custom-menu-study — not measured
+    // guesses): row = body line 22 + verticalPadding 23; corner 33 under the iOS 26 glass, 12 on
+    // the frosted fallback. Width stays the owner's circled 260. Icons on the LEADING edge.
+    private let rowHeight: CGFloat = 45
     private let cardWidth: CGFloat = 260
-    private let corner: CGFloat = 26
+    private let corner: CGFloat = {
+        if #available(iOS 26.0, *) { return 33 } else { return 12 }
+    }()
 
     init(actions: [CMAction]) {
         self.actions = actions
         // LIQUID GLASS on iOS 26+, exactly what makes Signal's card read as native there (the owner's
         // zoomed side-by-side); the frosted material is only the fallback for older systems.
         if #available(iOS 26.0, *) {
-            backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+            let glass = UIGlassEffect(style: .regular)
+            // Signal's flag: the INTERACTIVE glass is the brighter smoky-gray material in the
+            // owner's reference photo — plain .regular passed the dark wallpaper straight through.
+            glass.isInteractive = true
+            backdrop = UIVisualEffectView(effect: glass)
         } else {
             backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
         }
@@ -405,8 +411,8 @@ final class CMActionsCard: UIView {
 
         layer.cornerRadius = corner
         layer.cornerCurve = .continuous
-        layer.shadowRadius = 40
-        layer.shadowOffset = CGSize(width: 0, height: 16)
+        layer.shadowRadius = 64
+        layer.shadowOffset = CGSize(width: 0, height: 32)
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOpacity = 0.2
 
