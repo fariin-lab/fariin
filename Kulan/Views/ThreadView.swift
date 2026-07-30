@@ -5395,6 +5395,14 @@ struct MessageBubble: View, Equatable {
         onTapAlbum(gallery, "\(message.id)-\(i)")
     }
 
+    // A story is a 24-hour object: no thumb, or older than a day, means the card is gone.
+    // (Restored by hand on the rollback branch: the original definition rode in an unrelated
+    // held-back commit, while the accent-rule commit that CALLS it was kept.)
+    private func storyReplyExpired(_ reply: ReplyRef) -> Bool {
+        if reply.storyThumbUrl?.isEmpty ?? true { return true }
+        return Date().timeIntervalSince(message.createdAt) > 24 * 3600
+    }
+
     // The BIG floating story card above the bubble (status replies render here, not in the quote box):
     // secondary caption line, then a tall rounded story thumbnail that opens the status on tap.
     @ViewBuilder private func storyReplyHeader(_ reply: ReplyRef) -> some View {
