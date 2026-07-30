@@ -142,14 +142,27 @@ final class CMOverlay: UIView {
         }
         bar?.onSelect = { [weak self] selection in
             guard let self, let react else { return }
-            self.dismiss(animated: true) { react.onPick(selection) }
+            // Signal's model (ContextMenuController.showEmojiSheet): the "…" full picker presents
+            // OVER the still-open menu — blur and lifted message stay behind the sheet. Only a
+            // direct emoji pick dismisses here; for .more the sheet's resolution (pick or cancel)
+            // dismisses the overlay through `current`.
+            if case .more = selection {
+                react.onPick(selection)
+            } else {
+                self.dismiss(animated: true) { react.onPick(selection) }
+            }
         }
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The one live overlay (weak — presentation adds it to the window, dismissal removes it).
+    /// The full-picker sheet resolves AFTER a .more hand-off and needs a handle back to this.
+    private(set) static weak var current: CMOverlay?
+
     // MARK: Present
 
     func present(in window: UIWindow, startAtSqueeze: Bool) {
+        CMOverlay.current = self
         frame = window.bounds
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         window.addSubview(self)

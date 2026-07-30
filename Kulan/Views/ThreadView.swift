@@ -882,7 +882,12 @@ struct ThreadView: View {
 
     private var threadContent: some View {
         threadPickers
-        .sheet(item: $morePickerTarget) { m in EmojiMorePicker { emoji in react(m, emoji) } }
+        // Signal's flow for the bar's "…": the sheet presents OVER the still-open menu blur, and
+        // its resolution — pick OR cancel — is what closes the overlay (no overlay = no-op; the
+        // old native-menu React… path reaches this same sheet with no overlay up).
+        .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
+            EmojiMorePicker { emoji in react(m, emoji) }
+        }
         .sheet(item: $reactorsTarget) { m in
             ReactorsSheet(reactions: m.reactions, nameFor: { personName($0) })
         }
