@@ -370,7 +370,7 @@ enum ChatService {
                 _ = try await ref.putDataAsync(cipher, metadata: sm)
                 let url = try await ref.downloadURL().absoluteString
                 // Seed the cache so the sender's own card swaps from draft to server image invisibly.
-                if let ui = UIImage(data: jpeg) { DiskImageCache.shared.store(ui, for: url) }
+                if let ui = UIImage(data: jpeg) { DiskImageCache.shared.store(ui, for: url, owned: true) }
                 d["imageUrl"] = url
                 d["imageEnc"] = meta.asDict
             } catch { /* the card ships without its image */ }
@@ -560,7 +560,7 @@ enum ChatService {
         let url = try await ref.downloadURL().absoluteString
         // Seed the cache with the plaintext image under its URL so when the optimistic bubble
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
-        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url) }
+        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
 
         // Caption travels INSIDE the image message (the caption is the message body) — sealed
         // exactly like a text message.
@@ -656,7 +656,7 @@ enum ChatService {
             let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
             _ = try await ref.putDataAsync(cipher, metadata: sm)
             let url = try await ref.downloadURL().absoluteString
-            if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url) }   // instant reconcile
+            if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }   // instant reconcile
             let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
             items.append(["imageUrl": url, "enc": meta.asDict, "width": Double(sz.width), "height": Double(sz.height)])
         }
@@ -739,7 +739,7 @@ enum ChatService {
                 let data = sendJPEG(raw)
                 let (cipher, meta) = try await seal(data)
                 let url = try await upload(cipher, "\(i)")
-                if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url) }
+                if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }
                 let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
                 out.append(["kind": "image", "imageUrl": url, "enc": meta.asDict,
                             "width": Double(sz.width), "height": Double(sz.height)])
@@ -749,7 +749,7 @@ enum ChatService {
                 let thumbJpeg = downscaledJPEG(thumb)
                 let (thumbCipher, thumbMeta) = try await seal(thumbJpeg)
                 let thumbUrl = try await upload(thumbCipher, "\(i)-thumb")
-                if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl) }
+                if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
                 let (vidCipher, vidMeta) = try await seal(mp4)
                 let vidUrl = try await upload(vidCipher, "\(i)-video")
                 // KEEP THE SENDER'S OWN COPY, like sendVideo does (audit). The mailman model has the
@@ -911,7 +911,7 @@ enum ChatService {
         let videoUrl = try await vRef.downloadURL().absoluteString
         let thumbUrl = try await tRef.downloadURL().absoluteString
         // Seed the cache so the optimistic bubble reconciles with no shimmer (photo parity).
-        if let ui = UIImage(data: thumbnail) { DiskImageCache.shared.store(ui, for: thumbUrl) }
+        if let ui = UIImage(data: thumbnail) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
 
         let batch = db.batch()
         var msg: [String: Any] = [
