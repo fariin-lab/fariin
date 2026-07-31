@@ -17,6 +17,8 @@ struct SetNicknameView: View {
     @State private var confirmDelete = false
     var onSave: () -> Void
 
+    static let noteLimit = 100   // shared with the profile's Notes card
+
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focus: Field?
     private enum Field { case first, last, note }
@@ -76,10 +78,18 @@ struct SetNicknameView: View {
                     TextField("Note", text: $note, axis: .vertical)
                         .lineLimit(1...5)
                         .focused($focus, equals: .note)
+                        // 100 characters (owner's spec): the profile card shows 2 lines with More,
+                        // so the note has to stay short enough to read at a glance.
+                        .onChange(of: note) { _, v in if v.count > Self.noteLimit { note = String(v.prefix(Self.noteLimit)) } }
                 } footer: {
                     // A real section footer, so it takes the system's own inset and spacing rather than
-                    // sitting under the card at a guessed padding.
-                    Text("Notes are only visible to you.")
+                    // sitting under the card at a guessed padding. The counter appears only once the
+                    // note is close to the cap, so an empty field stays clean.
+                    if note.count >= Self.noteLimit - 20 {
+                        Text("Notes are only visible to you.  \(note.count)/\(Self.noteLimit)")
+                    } else {
+                        Text("Notes are only visible to you.")
+                    }
                 }
 
                 if hasSomethingToDelete {

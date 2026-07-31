@@ -45,6 +45,10 @@ struct ContactInfoView: View {
     @State private var showRename = false
     @State private var showSounds = false
     @State private var localName: String?       // local custom name (Edit) — device-only, never sent
+    // NOTES CARD. Both flags are plain @State on a view that is rebuilt on every push, which is
+    // exactly the owner's rule: leave to the chat, come back, and the note is collapsed again.
+    @State private var noteExpanded = false
+    @State private var noteWidth: CGFloat = 0   // real rendered width; drives the More test
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
@@ -111,6 +115,7 @@ struct ContactInfoView: View {
         hero
         quickActions
         if source == .calls, lastCall != nil { callLogCard }
+        notesCard.padding(.top, 8)   // between the tiles and the settings card (owner's screenshot)
         if !isSelf { settingsCard.padding(.top, 8) }
         // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
         // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
@@ -354,6 +359,69 @@ struct ContactInfoView: View {
             } message: {
                 Text("Our team will review this account within 24 hours. \(shownName) won't be told.")
             }
+    }
+
+    /// The private note from Edit (ContactNames, device-only — nothing here is ever sent, which is
+    /// what lets the header say "only visible to you"). Read live from the store so saving the sheet
+    /// updates this card instantly.
+    private var contactNote: String {
+        ContactNames.shared.card(for: otherUid).note.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Notes card (owner's reference screenshot): icon + "Notes" + "only visible to you", the note
+    /// under it at 2 lines, and More only when there is a third line to reveal. Collapsed on every
+    /// fresh open by construction — see the @State pair.
+    @ViewBuilder private var notesCard: some View {
+        let note = contactNote
+        if !isSelf, !note.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "note.text").font(.system(size: 17))
+                    Text("Notes").font(.system(size: 17, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Text("only visible to you")
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                }
+                Text(note)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.primary)
+                    .lineLimit(noteExpanded ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Measure at the REAL rendered width: a 100-char note wraps to 2 or 3 lines
+                    // depending on the device, so guessing by character count would show More on a
+                    // note that already fits (and hide it on one that doesn't).
+                    .background(
+                        GeometryReader { g in
+                            Color.clear.onChange(of: g.size.width, initial: true) { _, w in noteWidth = w }
+                        }
+                    )
+                // Derived, never stored: editing the note re-measures on the next body run with no
+                // stale flag to clear.
+                if Self.noteExceedsTwoLines(note, width: noteWidth) {
+                    Button(noteExpanded ? "Less" : "More") {
+                        withAnimation(.easeInOut(duration: 0.2)) { noteExpanded.toggle() }
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        }
+    }
+
+    /// True when the note needs a third line at this width — the same font the card renders with.
+    private static func noteExceedsTwoLines(_ note: String, width: CGFloat) -> Bool {
+        guard width > 1, !note.isEmpty else { return false }
+        let font = UIFont.systemFont(ofSize: 16)
+        let box = CGSize(width: width, height: .greatestFiniteMagnitude)
+        let height = (note as NSString).boundingRect(
+            with: box, options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font], context: nil).height
+        return height > font.lineHeight * 2 + 1   // +1 absorbs rounding on the exact-2-line case
     }
 
     // Profile settings rows (standard order): Disappearing Messages, Sounds & Notifications,
