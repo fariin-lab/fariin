@@ -192,7 +192,9 @@ struct ContactInfoView: View {
         // Wallpaper pops back to the CHAT and posts to its ThreadView — from a story-opened profile
         // there is no chat underneath and the tap silently did nothing (audit).
         if source == .chat {
-            Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+            Button { changeWallpaper() } label: {
+                Label { Text("Change Wallpaper") } icon: { Image("ic_wallpaper").renderingMode(.template) }
+            }
         }
         // "Share Profile", not "Share Contact" — what it sends is a Kulan profile link, and there is no
         // contact card behind it (no phone book, no numbers).
@@ -498,11 +500,12 @@ struct ContactInfoView: View {
     // Verify Encryption. Wallpaper / Share / Clear / Report / Block now live in the "…" menu.
     private var settingsCard: some View {
         VStack(spacing: 0) {
-            infoRow("Disappearing Messages", "timer", value: disappearLabel) { showDisappear = true }
+            infoRow("Disappearing Messages", "ic_disappearing", value: disappearLabel) { showDisappear = true }
             rowDivider
-            infoRow("Sounds & Notifications", "bell.badge", value: muted ? "Muted" : "On") { showSounds = true }
+            // The same glyph Settings uses for its Notifications row (owner: reuse that one).
+            infoRow("Sounds & Notifications", "ic_notifications", value: muted ? "Muted" : "On") { showSounds = true }
             rowDivider
-            infoRow("Verify Encryption", "lock.fill", tint: .accentColor) { showVerify = true }
+            infoRow("Verify Encryption", "ic_verify_encryption", tint: .accentColor) { showVerify = true }
         }
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
@@ -587,8 +590,18 @@ struct ContactInfoView: View {
                          action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
-                    .foregroundStyle(tint)
+                // "ic_" names an asset-catalog glyph, anything else an SF Symbol. Same 26pt slot
+                // either way so the titles stay on one line no matter which kind a row uses.
+                Group {
+                    if icon.hasPrefix("ic_") {
+                        Image(icon).renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 21, height: 21)
+                    } else {
+                        Image(systemName: icon).font(.system(size: 17))
+                    }
+                }
+                .frame(width: 26)
+                .foregroundStyle(tint)
                 Text(title).foregroundStyle(tint)
                 Spacer()
                 if let value { Text(value).foregroundStyle(.secondary) }

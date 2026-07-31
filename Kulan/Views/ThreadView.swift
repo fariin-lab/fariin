@@ -4537,6 +4537,7 @@ struct MessageBubble: View, Equatable {
                     // SwiftUI paints link runs with the TINT, which would put blue links back on a
                     // blue bubble whatever the attributed colour says.
                     .tint(isMe ? onMyBubble : Color.accentColor)
+                    .fixedSize(horizontal: false, vertical: true)   // wrap, never ellipsis
                     .frame(maxWidth: .infinity, alignment: .leading)
                 metaRow
             }
@@ -4549,6 +4550,11 @@ struct MessageBubble: View, Equatable {
             (bodyText + metaPlaceholder.foregroundColor(.clear))
                 .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
                 .tint(isMe ? onMyBubble : Color.accentColor)   // links follow the bubble, see above
+                // NEVER truncate: take the height the wrap actually needs. Inside a self-sizing cell
+                // a Text offered slightly less width than it was measured at will drop the overflow
+                // and paint an ellipsis rather than grow, which is the "…" on a message with plenty
+                // of room below it (owner report). fixedSize makes growing the only option.
+                .fixedSize(horizontal: false, vertical: true)
                 .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
         }
     }
@@ -4568,6 +4574,7 @@ struct MessageBubble: View, Equatable {
                     // SwiftUI paints link runs with the TINT, which would put blue links back on a
                     // blue bubble whatever the attributed colour says.
                     .tint(isMe ? onMyBubble : Color.accentColor)
+                    .fixedSize(horizontal: false, vertical: true)   // wrap, never ellipsis
                     .frame(maxWidth: .infinity, alignment: .leading)
                 metaRow
             }
