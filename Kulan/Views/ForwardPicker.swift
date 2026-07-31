@@ -42,11 +42,66 @@ struct ForwardPicker: View {
     private var snippet: String {
         if messages.count > 1 { return "\(messages.count) messages" }
         let message = messages[0]
-        if message.isAlbum { return "🖼 Album" }
-        if message.isImage { return "📷 Photo" }
-        if message.isVideo { return "🎥 Video" }
-        if message.isAudio { return "🎤 Voice message" }
+        if message.isAlbum { return "Album · \(message.album.count) items" }
+        if message.isImage { return "Photo" }
+        if message.isVideo { return "Video" }
+        if message.isAudio { return "Voice message" }
+        if message.isGif { return "GIF" }
         return message.safeText   // never leak a raw kulan-…: marker (contact/location card)
+    }
+
+    // WHAT you're forwarding, visibly (owner's 416 report vs WhatsApp: "won't show what u
+    // forwarding?"): real decrypted thumbnails for media — the same SecureImageView the chat
+    // renders with — as an overlapping stack, with a quote line for text-only forwards.
+    private struct Thumb { let url: String; let enc: EncMeta?; let isVideo: Bool }
+    private var previewThumbs: [Thumb] {
+        var out: [Thumb] = []
+        for m in messages {
+            if m.isAlbum {
+                for it in m.album {
+                    out.append(Thumb(url: it.imageUrl, enc: it.enc, isVideo: it.isVideo))
+                    if out.count >= 3 { return out }
+                }
+            } else if m.isImage, let u = m.imageUrl {
+                out.append(Thumb(url: u, enc: m.enc, isVideo: false))
+            } else if m.isVideo, let t = m.thumbUrl {
+                out.append(Thumb(url: t, enc: m.thumbEnc, isVideo: true))
+            } else if m.isGif, let u = m.imageUrl {
+                out.append(Thumb(url: u, enc: nil, isVideo: false))
+            }
+            if out.count >= 3 { return out }
+        }
+        return out
+    }
+
+    @ViewBuilder private var forwardingPreview: some View {
+        let thumbs = previewThumbs
+        HStack(spacing: 12) {
+            if !thumbs.isEmpty {
+                HStack(spacing: -14) {   // overlapping stack — the reference feel, our drawing
+                    ForEach(Array(thumbs.enumerated()), id: \.offset) { i, t in
+                        SecureImageView(imageUrl: t.url, enc: t.enc, cid: sourceCid)
+                            .frame(width: 48, height: 48)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color(uiColor: .systemBackground), lineWidth: 2)
+                                if t.isVideo {
+                                    Image(systemName: "play.circle.fill").font(.system(size: 16))
+                                        .foregroundStyle(.white).shadow(radius: 2)
+                                }
+                            }
+                            .zIndex(Double(thumbs.count - i))
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Forwarding").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                Text(snippet).font(.system(size: 15)).foregroundStyle(.primary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
     }
 
     var body: some View {
@@ -73,7 +128,7 @@ struct ForwardPicker: View {
                                 .listRowSeparator(.hidden)
                             }
                         } header: {
-                            Text("Forwarding: \(snippet)").textCase(nil)
+                            forwardingPreview.textCase(nil)
                         }
                     }
                     .listStyle(.plain)
