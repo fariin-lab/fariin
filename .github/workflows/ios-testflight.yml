@@ -70,7 +70,12 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            The big one: 63 bug fixes from a second, deeper audit, plus the UI work from this week. Everything below is verified to build; almost none of it has been tested on a real phone yet, so please be rough with it.
+            This finishes the audit: the last 11 fixes on top of the 63 in the previous build. Nothing from the list is left open now except two items deliberately left alone. Verified to build, barely tested on a phone, so please be rough with it.
+
+            NEW IN THIS BUILD
+            Deleting one photo out of an album now really deletes it, everywhere it appears, instead of the photo coming back. When a message is deleted, its photo, video, voice note or file is now deleted from the server too, rather than living there forever. Signing out can no longer be undone by data that was still loading, which could briefly show the previous account's calls and stories to the next person on the phone. Tapping a story reply opens the story you actually replied to. The busy tone plays fully instead of cutting off. A dead group call's Join bar is cleared by whoever opens the empty room, instead of sitting there for hours. Answering exactly as the caller cancels no longer leaves you stuck on Reconnecting. Deleting several selected calls no longer silently skips some of them. Cancelling a story upload now cancels all of it, so the post you cancelled cannot go up anyway.
+
+            EVERYTHING BELOW IS ALSO HERE, from the previous build, in case you skipped it.
 
             FIXES THAT PROTECT YOUR DATA
             A message you deleted before it sent can no longer send itself later. Deleting a call now only deletes it from your phone, not from the other person's. Videos sent inside an album no longer disappear from your own phone after the other person watches them. Deleting a message for everyone now also clears it from both chat lists, where the text used to stay readable. If a contact gets a new phone, your chat with them repairs itself instead of showing locks forever.
