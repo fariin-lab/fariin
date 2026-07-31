@@ -6,15 +6,28 @@ import FirebaseFirestore
 import AuthenticationServices   // Sign in with Apple button (connect Apple in Account settings)
 
 // Custom-SVG row label (template asset tinted like an SF Symbol, sized to a list row).
+// ONE row style for every settings row (the owner's Signal side-by-side: ours read cramped and
+// mixed — some rows had asset icons, some plain SF labels, all at the 44pt List default).
+// Signal's rhythm: ~54pt rows, a steady 26pt icon column, 17pt text.
 private struct SettingsRowLabel: View {
     let title: String
     let image: String
+    var system = false
     init(_ title: String, _ image: String) { self.title = title; self.image = image }
+    init(_ title: String, system: String) { self.title = title; self.image = system; self.system = true }
     var body: some View {
         Label {
-            Text(title)
+            Text(title).font(.system(size: 17))
+                .padding(.vertical, 6)   // lifts the row to Signal's roomy height
         } icon: {
-            Image(image).renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22)
+            Group {
+                if system {
+                    Image(systemName: image).font(.system(size: 19))
+                } else {
+                    Image(image).renderingMode(.template).resizable().scaledToFit()
+                }
+            }
+            .frame(width: 26, height: 26)
         }
     }
 }
@@ -63,7 +76,7 @@ struct SettingsView: View {
                         SettingsRowLabel("Notifications", "ic_notifications")
                     }
                     NavigationLink { AppearanceSettingsView() } label: {
-                        Label("Appearance", systemImage: "paintbrush")
+                        SettingsRowLabel("Appearance", system: "paintbrush")
                     }
                     // NO App Icon row here: it lives inside Appearance, and one door is enough (user
                     // 2026-07-29, after seeing both). Two rows leading to the same page reads as a
@@ -75,21 +88,21 @@ struct SettingsView: View {
                         SettingsRowLabel("Privacy & Security", "ic_privacy")
                     }
                     NavigationLink { StorageDataView() } label: {
-                        Label("Storage and Data", systemImage: "externaldrive")
+                        SettingsRowLabel("Storage and Data", system: "externaldrive")
                     }
                 }
 
                 Section {
                     // My QR Code lives in the top-left toolbar button — no duplicate row here.
-                    ShareLink(item: inviteText) { Label("Invite Friends", systemImage: "person.badge.plus") }
+                    ShareLink(item: inviteText) { SettingsRowLabel("Invite Friends", system: "person.badge.plus") }
                     NavigationLink { AboutView() } label: {
-                        Label("Help & About", systemImage: "questionmark.circle")
+                        SettingsRowLabel("Help & About", system: "questionmark.circle")
                     }
                 }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .listSectionSpacing(.compact)   // tighten the dead space between blocks
+            .listSectionSpacing(20)   // Signal's steady card rhythm — .compact left the gaps uneven
             .contentMargins(.top, 4, for: .scrollContent)   // remove the big gap above the avatar
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
             .toolbar {
