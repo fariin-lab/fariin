@@ -2638,7 +2638,12 @@ struct ThreadView: View {
             ReplyRef(id: $0.id, authorId: $0.authorId,
                      text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
-        replyingTo = nil
+        // Animated, exactly like the X button does it (see the reply banner's cancel). Clearing it
+        // bare drops the banner's ~54pt out of the composer in one frame with no layout pass the
+        // list can follow, so the inverted list kept the taller composer's bottom inset and left a
+        // dead gap between the new bubble and the composer (owner: cancel lands right, send does
+        // not). Same animation on every send path below.
+        withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         typingSent = false
         // Show the bubble INSTANTLY (optimistic), then reconcile when the server echoes it.
         // Native: the bubble just appears (no custom spring), like a plain list insert.
@@ -2904,7 +2909,7 @@ struct ThreadView: View {
             pending.text = caption   // caption rides inside the image bubble
             pending.replyTo = reply
             repo.addPending(pending)
-            replyingTo = nil
+            withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         }
         do { try await ChatService.sendImage(cid: cid, data: data, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
@@ -4215,7 +4220,7 @@ struct ThreadView: View {
                                   authorId: me, clientId: clientId, sendState: .sending)
             pending.replyTo = reply
             repo.addPending(pending)
-            replyingTo = nil
+            withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         }
         do { try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
