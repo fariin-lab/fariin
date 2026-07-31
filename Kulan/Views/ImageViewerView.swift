@@ -510,7 +510,8 @@ struct ImageViewerView: View {
             // the edited copy with every modification baked in. Hidden where no send pipeline exists.
             if onSendEdited != nil {
                 barButton("scribble.variable") {
-                    if let img = loaded[current] { penEdit = PenEditWrap(image: img) }
+                    // currentImage, not loaded[current] — see the note on currentImage.
+                    if let img = currentImage { penEdit = PenEditWrap(image: img) }
                 }
             }
             Spacer()
@@ -570,14 +571,35 @@ struct ImageViewerView: View {
         }
     }
 
+    /// The photo currently on screen, resolved EXACTLY the way `realPagerPage` resolves it.
+    ///
+    /// `loaded` is filled only by the async `load(_:)` path, and that path runs only when the page
+    /// has nothing to draw. A photo already in the memory cache — the normal case, because the
+    /// bubble you just tapped decoded it — renders straight from that cache and never lands in
+    /// `loaded`. So Share, Pen and Save all read nil on a photo that is plainly on screen and did
+    /// nothing at all (owner report; Delete kept working because it needs no image).
+    private var currentImage: UIImage? {
+        if let img = loaded[current] { return img }
+        guard let m = gallery.first(where: { $0.id == current }) else { return nil }
+        return m.localImageData.flatMap(UIImage.init(data:))
+            ?? m.imageUrl.flatMap { DiskImageCache.shared.memoryImage($0) }
+    }
+
     private func share() {
-        guard let image = loaded[current] else { return }
+        guard let image = currentImage else { return }
         shareItems = [image]
     }
 
     private func save() {
         Task {
-            guard let image = loaded[current] else { await MainActor.run { saveError = true }; return }
+            // Last resort: a page still decrypting has neither, so fetch it before giving up rather
+            // than reporting a failure the user can see is wrong.
+            var resolved = currentImage
+            if resolved == nil, let m = gallery.first(where: { $0.id == current }) {
+                await load(m)
+                resolved = loaded[current]
+            }
+            guard let image = resolved else { await MainActor.run { saveError = true }; return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
             do {
