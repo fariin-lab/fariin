@@ -99,6 +99,11 @@ struct GifPickerView: View {
             }
             .navigationTitle("GIF")
             .navigationBarTitleDisplayMode(.inline)
+            // SOLID header (owner's 416 report: "can see scrolling the gifts" through the glass).
+            // iOS 26 glasses every title bar by default; on this sheet the grid slid visibly
+            // behind the X / title / chips, so the whole top reads as one opaque white card.
+            .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
                 if #available(iOS 26.0, *) {
