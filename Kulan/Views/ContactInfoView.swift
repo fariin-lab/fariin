@@ -105,25 +105,29 @@ struct ContactInfoView: View {
     }
 
     @ViewBuilder private var sections: some View {
+        // The extra .padding(.top, 8) on each block below + the container's 20 = Signal's ~28pt
+        // section rhythm (owner's circled side-by-side: ours sat tight and uneven against theirs).
         hero
         quickActions
         if source == .calls, lastCall != nil { callLogCard }
-        if !isSelf { settingsCard }
+        if !isSelf { settingsCard.padding(.top, 8) }
         // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
         // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
         if !media.isEmpty || mediaHint > 0 {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 sectionHeader("All Media")
                 mediaCard
             }
+            .padding(.top, 8)
         }
         if !isSelf && Flags.groupsEnabled {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 sectionHeader(groupsHeaderText)
                 groupsInCommonCard
             }
+            .padding(.top, 8)
         }
-        if !isSelf { dangerCard }
+        if !isSelf { dangerCard.padding(.top, 8) }
     }
 
     // Block / Report always VISIBLE at the bottom of the profile (WhatsApp pattern, user
@@ -176,7 +180,7 @@ struct ContactInfoView: View {
 
     private var coreScroll: some View {
         ScrollView {
-            VStack(spacing: 16) { sections }
+            VStack(spacing: 20) { sections }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
         }
@@ -436,7 +440,7 @@ struct ContactInfoView: View {
                     Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 14)
+            .padding(.horizontal, 16).padding(.vertical, 18)   // Signal's tall profile rows (~58pt)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
