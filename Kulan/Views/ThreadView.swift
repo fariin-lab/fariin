@@ -736,7 +736,7 @@ struct ThreadView: View {
                 if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid,
-                                    onDeleteForMe: { m in repo.hideForMe(m.id) },
+                                    onDeleteForMe: { m in deleteForMe(m) },
                                     clipProvider: { MediaOpenRects.clipRect })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
@@ -750,7 +750,7 @@ struct ThreadView: View {
                                     onSendEdited: { data, caption, viewOnce in
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     },
-                                    onDeleteForMe: { m in repo.hideForMe(m.id) },
+                                    onDeleteForMe: { m in deleteForMe(m) },
                                     clipProvider: { MediaOpenRects.clipRect })
                 }
             }
@@ -787,7 +787,7 @@ struct ThreadView: View {
                             onSendEdited: { data, caption, viewOnce in
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                             },
-                            onDeleteForMe: { m in repo.hideForMe(m.id) },
+                            onDeleteForMe: { m in deleteForMe(m) },
                             clipProvider: { MediaOpenRects.clipRect })
             // NO `.navigationTransition(.zoom)` here any more. The album viewer was the last place the
             // SYSTEM zoom transition still ran for chat media, and it is a third pipeline: it scales the
@@ -935,7 +935,8 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showPinnedSheet) {
             PinnedMessagesSheet(
-                pinned: repo.pinnedMessageIds.compactMap { id in repo.messages.first { $0.id == id } }
+                // items, not messages — same hidden-filter reason as the pin bar above.
+                pinned: repo.pinnedMessageIds.compactMap { id in repo.items.first { $0.id == id } }
                     .sorted { $0.createdAt < $1.createdAt },
                 me: me, cid: cid, title: title,
                 nameFor: { personName($0) },
@@ -1046,7 +1047,7 @@ struct ThreadView: View {
         }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
-                                       onDeleteForMe: { m in repo.hideForMe(m.id) }))
+                                       onDeleteForMe: { m in deleteForMe(m) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
@@ -1209,7 +1210,10 @@ struct ThreadView: View {
             let ids = repo.pinnedMessageIds
             let idx = min(pinIndex, ids.count - 1)
             let pid = ids[idx]
-            let msg = repo.messages.first { $0.id == pid }
+            // repo.ITEMS, not repo.messages (audit): items is the hidden-filtered list the chat
+            // renders, so a pin the user deleted "for me" kept showing its author, snippet and photo
+            // here while tapping it correctly said the message was gone.
+            let msg = repo.items.first { $0.id == pid }
             let author = msg.map { personName($0.authorId) } ?? "Pinned Message"
             HStack(spacing: 10) {
                 // Vertical count indicator (one bar per pin, current highlighted).
@@ -1793,8 +1797,15 @@ struct ThreadView: View {
 
         // SIGNAL'S ORDER (owner's circled reference): Reply · Forward · Copy · Select · Info · Pin,
         // Delete last. Our extra items slot in where they belong: Edit and Save Image after Copy.
-        out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
-        if !m.isCall && !m.viewOnce {
+        // NOT-YET-DELIVERED messages carry a local clientId, not a server doc id, so anything that
+        // stores a reference to them breaks permanently (audit): Pin wrote a phantom pin that never
+        // resolves, and Reply sealed a quote pointing at an id the other device has never seen.
+        // Edit and Info already had this guard; Reply, Forward and Pin now share it.
+        let delivered = m.sendState == nil
+        if delivered {
+            out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
+        }
+        if delivered && !m.isCall && !m.viewOnce {
             out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
@@ -1825,7 +1836,7 @@ struct ThreadView: View {
         if isGroup && mine && m.sendState == nil {
             out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
         }
-        if canPin {
+        if canPin && delivered {   // see `delivered` above — a pin on a clientId can never resolve
             out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "pin") {
                 togglePin(m)
             })
@@ -1978,7 +1989,10 @@ struct ThreadView: View {
             initialScrollId: {
                 guard unreadOnOpen > 0 else { return nil }
                 let msgs = repo.messages
-                let idx = max(0, msgs.count - unreadOnOpen)
+                // Same rule as anchorUnread: with more unread than we hold, don't pretend the oldest
+                // loaded row is the boundary (audit).
+                guard unreadOnOpen <= msgs.count else { return nil }
+                let idx = msgs.count - unreadOnOpen
                 guard idx < msgs.count else { return nil }
                 return repo.items.first { $0.id == msgs[idx].id }?.rowId
             }(),
@@ -2079,11 +2093,19 @@ struct ThreadView: View {
     private func bulkDelete(everyone: Bool) {
         let ids = selectedIds
         Task {
+            var anyRefused = false
             for id in ids {
                 guard let m = repo.items.first(where: { $0.id == id }) else { continue }
-                if everyone && m.authorId == me { await ChatService.deleteMessage(cid: cid, messageId: id) }
-                else { await MainActor.run { repo.hideForMe(id) } }
+                if everyone && m.authorId == me, m.sendState == nil {
+                    // The single-message path was fixed to SAY when the server refuses; this one
+                    // discarded the result, so a refused bulk delete left the messages in place with
+                    // no alert and the selection already dismissed as if it had worked (audit).
+                    if await !ChatService.deleteMessage(cid: cid, messageId: id) { anyRefused = true }
+                } else {
+                    await MainActor.run { deleteForMe(m) }   // also cancels unsent messages properly
+                }
             }
+            if anyRefused { await MainActor.run { showJumpToast("Some messages couldn't be deleted") } }
         }
         exitSelection()
     }
@@ -2622,6 +2644,22 @@ struct ThreadView: View {
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft)
         }
+    }
+
+    /// Delete-for-me that also CANCELS an unsent message (audit): a pending or failed text has
+    /// `id == clientId`, so hiding it locally left its durable SendQueue entry behind, and the next
+    /// chat open re-sent it — arriving under a NEW doc id the hide could never match, so a message
+    /// the user deleted was delivered to the other person and reappeared. For those, drop the queue
+    /// entry and the optimistic bubble instead. Delivered messages keep the plain local hide.
+    private func deleteForMe(_ m: Message) {
+        if m.sendState != nil {
+            if let clientId = m.clientId {
+                SendQueue.remove(clientId: clientId)
+                repo.removePending(clientId: clientId)
+            }
+            return
+        }
+        repo.hideForMe(m.id)
     }
 
     // Re-try a failed message — re-drives the SAME send path that produced it, with the SAME clientId.
@@ -3171,7 +3209,12 @@ struct ThreadView: View {
         guard !didAnchorUnread, unreadOnOpen > 0 else { return }
         let msgs = repo.messages
         guard !msgs.isEmpty else { return }
-        let idx = max(0, msgs.count - unreadOnOpen)
+        // More unread than the loaded window (40 a page) → the real boundary is further up than
+        // anything we hold, and `max(0, …)` used to clamp to the OLDEST LOADED row and label it the
+        // start of unread, which is a claim about a message that isn't the boundary at all (audit).
+        // Say nothing rather than mark the wrong message; the divider appears once enough is paged in.
+        guard unreadOnOpen <= msgs.count else { return }
+        let idx = msgs.count - unreadOnOpen
         guard idx < msgs.count else { return }
         // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
         // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
@@ -5901,7 +5944,11 @@ private struct MessageActionDialogs: ViewModifier {
                    isPresented: Binding(get: { pendingDelete != nil },
                                         set: { if !$0 { pendingDelete = nil } })) {
                 if let m = pendingDelete {
-                    if m.authorId == me {
+                    // NOT for an unsent message (audit): its id is a local clientId, so the server
+                    // call hits a doc that does not exist, is refused, and the failure alert then
+                    // claims "still there for both of you" about a message that was never delivered.
+                    // Delete for Me cancels it properly (see ThreadView.deleteForMe).
+                    if m.authorId == me, m.sendState == nil {
                         Button("Delete for Everyone", role: .destructive) {
                             Task {
                                 // Say so when the server refuses. Silence here is what made this read as

@@ -219,6 +219,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var sizerRefused = Set<String>()
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
+    // The recognizer we attached to, so it can be released again. It belongs to the NAVIGATION
+    // controller, which outlives every pushed thread, and a recognizer retains its targets — leaving
+    // this attached kept the whole controller (its cells, height cache, sizer, repository and every
+    // decrypted message) alive for the session, once per chat opened (audit).
+    private weak var hookedPopGesture: UIGestureRecognizer?
     private var scrollWorkTimer: Timer?                  // 0.1s debounce for pagination + isAtBottom writes
     private var userScrolledSinceTimer = false           // the debounced work only pages on USER scrolls
     // Every programmatic animated scroll is tracked: while one is in flight, no land may invalidate the
@@ -227,7 +232,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var programmaticScrollAnimating = false
     private var scrollAnimationWatchdog: Timer?
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window)
-    private var keyboardAnimating = false                // a keyboard-synced offset animation is in flight
+    // DEAD FLAG, kept only so the two guards below keep compiling: it is never set anywhere (audit).
+    // The keyboard-synced offset animation these guards describe no longer exists — the inverted list
+    // moves the offset by the clearance delta instead. Do NOT trust the comments at those two sites;
+    // if a future keyboard fix needs a hold, wire this flag for real rather than assuming it works.
+    private let keyboardAnimating = false
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
     private var keyboardWasAtNewest = false              // latched at willHide: reader was at the newest message
     private var keyboardSettlePending = false            // didHide fired mid-drag; settle at drag/decel end
@@ -1281,9 +1290,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !didFirstLand,
               collectionView.bounds.width > 0, collectionView.bounds.height > 0,
               !currentIds.isEmpty else { return }
-        // The landing offset is -contentInset.top, so the insets must be current BEFORE we land. Now that
-        // we own them outright (contentInsetAdjustmentBehavior = .never) nothing else will have set them
-        // for us, and the composer height and safe area can both arrive after the first apply.
+        // The landing offset is -contentInset.top, so the insets must be current BEFORE we land, and
+        // the composer height and safe area can both arrive after the first apply.
+        // (Comment corrected, audit: this claimed contentInsetAdjustmentBehavior = .never; the list
+        // reverted to .always — see the setup site — so UIKit contributes the safe-area part.)
         updateInsets()
         measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
@@ -1604,6 +1614,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         shouldAnimateKeyboardChanges = false
     }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Only once we are REALLY gone: an interactive pop that the user cancels runs
+        // willDisappear then appears again, and viewDidAppear re-hooks on the way back in.
+        unhookPopGesture()
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         isDisappearing = false
@@ -1619,8 +1636,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // transition runs against a settled layout instead of fighting a live keyboard teardown.
         if !popGestureHooked, let pop = navigationController?.interactivePopGestureRecognizer {
             pop.addTarget(self, action: #selector(popGestureChanged(_:)))
+            hookedPopGesture = pop
             popGestureHooked = true
         }
+    }
+
+    /// Release the nav controller's pop recognizer — see `hookedPopGesture`. Safe to call twice.
+    private func unhookPopGesture() {
+        hookedPopGesture?.removeTarget(self, action: nil)
+        hookedPopGesture = nil
+        popGestureHooked = false
+    }
+
+    deinit {
+        // Belt for the case the controller dies without a disappear pass.
+        hookedPopGesture?.removeTarget(self, action: nil)
     }
 
     @objc private func popGestureChanged(_ g: UIGestureRecognizer) {
@@ -1993,6 +2023,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 menu.overlay.fingerEnded(at: g.location(in: nil))
             } else {
                 squeezeToken &+= 1   // the press died while the squeeze ripened → no menu
+                // AND drop the land gate. beginCustomMenu holds it for 8s expecting the menu (or the
+                // passive 0.25s hold recognizer) to release it; a press let go between 0.20s and
+                // 0.25s hits neither, so new messages sat frozen for the full 8s (audit).
+                interactionHoldUntil = Date()
             }
         default: break
         }
