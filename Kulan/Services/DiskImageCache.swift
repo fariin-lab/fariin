@@ -119,7 +119,9 @@ final class DiskImageCache {
         io.async { [weak self] in
             guard let self else { return }
             let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-            let keys = names.filter { $0.hasSuffix(".img") }.map { String($0.dropLast(4)) }
+            // BOTH kinds seed the index — an owned photo is still "cached" for isCached's purposes.
+            let keys = names.filter { $0.hasSuffix(".\(Self.cacheExt)") || $0.hasSuffix(".\(Self.ownedExt)") }
+                .map { String($0.dropLast(4)) }
             indexLock.lock(); index.formUnion(keys); indexLock.unlock()
         }
     }
@@ -127,9 +129,32 @@ final class DiskImageCache {
     private func key(_ url: String) -> String {
         SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
     }
-    private func fileURL(_ url: String) -> URL {
-        dir.appendingPathComponent(key(url)).appendingPathExtension("img")
+    // TWO KINDS OF FILE IN ONE DIRECTORY, told apart by extension.
+    //
+    //   .img = CACHE. Re-downloadable (avatars, wallpapers, link previews, stickers). May be
+    //          trimmed by the budget, swept by Keep Media, or wiped by Clear Cache.
+    //   .own = OWNED. This phone's ONLY copy of a chat photo, the same promise VideoCache and
+    //          AudioCache already make. NEVER deleted by trim, sweep or clear.
+    //
+    // The mailman model deletes the server object once the recipient has the file, so an owned
+    // photo has nowhere to come back from. Every deleter below must skip `.own` or it is silent,
+    // permanent data loss — exactly the bug that took Clear Cache off the About screen when it was
+    // wiping voice notes.
+    private static let cacheExt = "img"
+    private static let ownedExt = "own"
+
+    private func fileURL(_ url: String, owned: Bool = false) -> URL {
+        dir.appendingPathComponent(key(url))
+            .appendingPathExtension(owned ? Self.ownedExt : Self.cacheExt)
     }
+
+    /// Where this url's bytes actually are: the owned copy wins, else the cache copy.
+    private func existingFileURL(_ url: String) -> URL {
+        let owned = fileURL(url, owned: true)
+        return FileManager.default.fileExists(atPath: owned.path) ? owned : fileURL(url)
+    }
+
+    private static func isOwned(_ u: URL) -> Bool { u.pathExtension == ownedExt }
 
     /// Synchronous MEMORY-only lookup (instant; safe on the main thread).
     func memoryImage(_ url: String) -> UIImage? {
@@ -142,7 +167,7 @@ final class DiskImageCache {
         if let m = mem.object(forKey: url as NSString) { return m }
         return await withCheckedContinuation { cont in
             read.async {
-                let f = self.fileURL(url)
+                let f = self.existingFileURL(url)
                 guard let data = try? Data(contentsOf: f), let raw = UIImage(data: data) else {
                     cont.resume(returning: nil); return
                 }
@@ -161,11 +186,14 @@ final class DiskImageCache {
 
     /// Store a decoded image in memory + persist its bytes to disk. Pass the original
     /// `data` when available to avoid a re-encode; otherwise it is JPEG-encoded.
-    func store(_ image: UIImage, data: Data? = nil, for url: String) {
+    /// `owned: true` marks this as a chat photo the phone must KEEP (see the .own note above).
+    func store(_ image: UIImage, data: Data? = nil, for url: String, owned: Bool = false) {
         mem.setObject(image, forKey: url as NSString)
         let bytes = data ?? image.jpegData(compressionQuality: 0.85)
         guard let bytes else { return }
-        let f = fileURL(url)
+        let f = fileURL(url, owned: owned)
+        // Promoting cache -> owned: drop the old .img so the photo is not stored twice.
+        if owned { try? FileManager.default.removeItem(at: fileURL(url)) }
         let k = key(url)
         io.async { [weak self] in
             // completeFileProtectionUntilFirstUserAuthentication, matching VideoCache and AudioCache.
@@ -194,7 +222,7 @@ final class DiskImageCache {
             let fm = FileManager.default
             guard let items = try? fm.contentsOfDirectory(
                 at: self.dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-            for u in items {
+            for u in items where !Self.isOwned(u) {
                 if let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
                    d < cutoff {
                     try? fm.removeItem(at: u)
@@ -211,9 +239,13 @@ final class DiskImageCache {
             guard let self else { return }
             let fm = FileManager.default
             if let items = try? fm.contentsOfDirectory(at: self.dir, includingPropertiesForKeys: nil) {
-                for u in items { try? fm.removeItem(at: u) }
+                // Clear Cache clears the CACHE. Owned chat photos survive it, the same reason the
+                // About screen's Clear Cache button was removed when it was wiping voice notes.
+                for u in items where !Self.isOwned(u) {
+                    try? fm.removeItem(at: u)
+                    self.indexRemove(u.deletingPathExtension().lastPathComponent)
+                }
             }
-            self.indexLock.lock(); self.index.removeAll(); self.indexLock.unlock()
         }
     }
 
@@ -223,6 +255,7 @@ final class DiskImageCache {
         guard let items = try? fm.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
         var files = items.compactMap { u -> (URL, Int, Date)? in
+            guard !Self.isOwned(u) else { return nil }   // owned photos are not the budget's to spend
             guard let v = try? u.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
                   let size = v.fileSize, let date = v.contentModificationDate else { return nil }
             return (u, size, date)

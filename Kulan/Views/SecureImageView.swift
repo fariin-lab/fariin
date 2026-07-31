@@ -97,7 +97,10 @@ struct SecureImageView: View {
                 // Display + memory-cache a display-BOUNDED bitmap (display-decode buckets: a 12MP photo
                 // shouldn't live as a 48MB bitmap per bubble); the ORIGINAL bytes go to disk untouched.
                 let bounded = ui.boundedForDisplay()
-                DiskImageCache.shared.store(bounded, data: clearBytes, for: imageUrl)   // decrypted, file-protected on disk
+                // owned: this is a CHAT photo, and once the mailman starts deleting server copies
+                // this file is the only one left. It must survive the 250MB trim, Keep Media and
+                // Clear Cache, exactly like VideoCache and AudioCache already do.
+                DiskImageCache.shared.store(bounded, data: clearBytes, for: imageUrl, owned: true)
                 image = bounded
             } else { failed = true }
         } catch {
