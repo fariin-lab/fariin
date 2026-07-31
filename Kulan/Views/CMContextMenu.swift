@@ -45,13 +45,20 @@ struct CMBubbleRectReporter: ViewModifier {
     func body(content: Content) -> some View {
         content.background(
             GeometryReader { g in
-                Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
-                    var r = f
-                    r.size.height += bottomOverhang
-                    CMBubbleRects.capture(id, r, radius: radius)
-                }
+                Color.clear
+                    .onChange(of: g.frame(in: .global), initial: true) { _, f in publish(f) }
+                    // A reaction ARRIVING does not move the bubble — only the overhang changes — so
+                    // the frame observer above never fires and the rect stayed at the pre-reaction
+                    // height, which is why the lift sliced a badge that had just appeared.
+                    .onChange(of: bottomOverhang) { _, _ in publish(g.frame(in: .global)) }
             }
         )
+    }
+
+    private func publish(_ f: CGRect) {
+        var r = f
+        r.size.height += bottomOverhang
+        CMBubbleRects.capture(id, r, radius: radius)
     }
 }
 

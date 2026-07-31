@@ -4372,7 +4372,10 @@ struct MessageBubble: View, Equatable {
             let len = full.distance(from: sr.lowerBound, to: sr.upperBound)
             let lo = str.index(str.startIndex, offsetByCharacters: startOff)
             let hi = str.index(lo, offsetByCharacters: len)
-            str[lo..<hi].foregroundColor = .blue
+            // WHITE on my bubble: the fill is systemBlue (or a vivid custom chat colour), so a blue
+            // link was blue-on-blue and effectively invisible (owner's screenshot). The underline
+            // still marks it as tappable. Received bubbles keep the standard blue.
+            str[lo..<hi].foregroundColor = isMe ? onMyBubble : .blue
             if let link { str[lo..<hi].link = link }
             if underline { str[lo..<hi].underlineStyle = .single }
         }
@@ -4438,6 +4441,9 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .trailing, spacing: 2) {
                 bodyText
                     .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                    // SwiftUI paints link runs with the TINT, which would put blue links back on a
+                    // blue bubble whatever the attributed colour says.
+                    .tint(isMe ? onMyBubble : Color.accentColor)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 metaRow
             }
@@ -4449,6 +4455,7 @@ struct MessageBubble: View, Equatable {
             // last line leaves a gap, then overlay the REAL time bottom-trailing on top of that gap.
             (bodyText + metaPlaceholder.foregroundColor(.clear))
                 .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                .tint(isMe ? onMyBubble : Color.accentColor)   // links follow the bubble, see above
                 .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
         }
     }
@@ -4465,12 +4472,16 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .trailing, spacing: 2) {
                 bodyText
                     .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                    // SwiftUI paints link runs with the TINT, which would put blue links back on a
+                    // blue bubble whatever the attributed colour says.
+                    .tint(isMe ? onMyBubble : Color.accentColor)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 metaRow
             }
         } else {
             (bodyText + metaPlaceholder.foregroundColor(.clear))
                 .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
+                .tint(isMe ? onMyBubble : Color.accentColor)   // links follow the bubble, see above
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .bottomTrailing) { metaRow.padding(.bottom, 1) }
         }
