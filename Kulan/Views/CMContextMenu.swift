@@ -146,6 +146,7 @@ final class CMOverlay: UIView {
         previewView.layer.shadowColor = UIColor.black.cgColor
         previewView.layer.shadowOpacity = 0
         addSubview(previewView)
+        // (shadow is driven by setPreviewShadow, which no-ops on iOS 26 the way Signal's does)
         addSubview(card)
         if let bar { addSubview(bar) }
 
@@ -207,13 +208,15 @@ final class CMOverlay: UIView {
             bar.alpha = 0
         }
 
+        // Signal's `animationDuration / 2.0` = 0.2, plain (default ease-in-out), started the moment
+        // the overlay appears — i.e. after the 0.2 press and the 0.2 squeeze, never during them.
         UIView.animate(withDuration: 0.2) {
             self.blurView.effect = UIBlurEffect(style: .regular)
             self.blurView.backgroundColor = UIColor { tc in
                 tc.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.2)
                                                : UIColor(white: 0, alpha: 0.2)
             }
-            self.previewView.layer.shadowOpacity = 0.3
+            self.setPreviewShadow(true)
         }
 
         UIView.animate(withDuration: springDuration, delay: 0,
@@ -239,6 +242,14 @@ final class CMOverlay: UIView {
         UIAccessibility.post(notification: .screenChanged, argument: card)
     }
 
+    /// Signal's `previewShadowVisible`: the lifted message drops a shadow on older systems, and none
+    /// at all on iOS 26 where the glass already separates it from the blur. Their setter returns
+    /// early under `if #available(iOS 26, *)`, so the shadow stays at the 0 it was built with.
+    private func setPreviewShadow(_ visible: Bool) {
+        if #available(iOS 26.0, *) { return }
+        previewView.layer.shadowOpacity = visible ? 0.3 : 0
+    }
+
     // MARK: Dismiss
 
     func dismiss(animated: Bool, then: (() -> Void)? = nil) {
@@ -250,15 +261,24 @@ final class CMOverlay: UIView {
             return
         }
         bar?.playDismissal(duration: 0.2)
+
+        // Signal runs the background off in its OWN plain animation, not on the spring that carries
+        // the message home. A spring overshoots and settles, and driving a blur with it makes the
+        // background wobble back in; a flat ease-out over the full 0.4 is what actually reads as
+        // Signal. The shadow rides here too, exactly as their `previewShadowVisible = false` does.
+        UIView.animate(withDuration: springDuration) {
+            self.blurView.effect = nil
+            self.blurView.backgroundColor = nil
+            self.setPreviewShadow(false)
+        }
+
+        // Same 0.4, so both land together and this one still owns the teardown.
         UIView.animate(withDuration: springDuration, delay: 0,
                        usingSpringWithDamping: springDamping, initialSpringVelocity: 1.0,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
             self.previewView.frame = self.sourceFrame
             self.card.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
             self.card.alpha = 0
-            self.blurView.effect = nil
-            self.blurView.backgroundColor = nil
-            self.previewView.layer.shadowOpacity = 0
             self.bar?.alpha = 0
         } completion: { _ in
             self.removeFromSuperview()
