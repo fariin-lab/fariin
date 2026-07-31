@@ -70,13 +70,19 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Bug-fix build: 15 fixes from a full audit of the chat list, conversation and profile pages.
+            The big one: 63 bug fixes from a second, deeper audit, plus the UI work from this week. Everything below is verified to build; almost none of it has been tested on a real phone yet, so please be rough with it.
 
-            Chat list: a stuck "typing" or "recording" label clears itself within 15 seconds. Muted chats lose their bell icon the moment the mute expires, and day labels update at midnight. Declined calls show a clean label instead of raw emoji text. Mark All Read and the Unread filter leave silently blocked chats alone, and a blocked pinned chat stays frozen in place.
+            FIXES THAT PROTECT YOUR DATA
+            A message you deleted before it sent can no longer send itself later. Deleting a call now only deletes it from your phone, not from the other person's. Videos sent inside an album no longer disappear from your own phone after the other person watches them. Deleting a message for everyone now also clears it from both chat lists, where the text used to stay readable. If a contact gets a new phone, your chat with them repairs itself instead of showing locks forever.
 
-            Conversation: old pinned messages are reachable again from the pin bar and See All. "typing" stays visible while someone composes a long message. The new-reaction badge fires only for real new reactions. Save Image now works on an album that is still uploading. Received view-once photos show their time. Call rows no longer offer a reaction bar that goes nowhere.
+            PRIVACY
+            Blocking someone now reaches everywhere: they cannot be called from the Calls tab by accident, they stop seeing stories you already posted, their missed calls stop appearing, and they can no longer tell they were blocked from how your phone answers. Signing out clears your settings so the next person on the phone does not inherit them, including one that was silently declining their calls. Strangers can no longer see photos, bios, last-seen or call buttons you limited to friends. View-once photos stop leaving a thumbnail in the chat list.
 
-            Profile: videos in All Media open the real video player. The call card says video or voice correctly, and only calls THEY made that you missed show red. Blocking someone hides the call buttons instantly. Profiles opened from a story no longer show dead Search and Wallpaper buttons. Your own profile loads its handle and bio. Groups in Common counts correctly.
+            THINGS THAT SIMPLY DID NOT WORK
+            Show Notifications stays off when you turn it off. In-App Sounds, Vibrate and Preview now do something. Opening a chat from search no longer wipes the other person's unread badge. "typing" no longer sticks forever after you send. Old pinned messages are reachable again. AirPods now work on calls you place. The app no longer keeps every chat you open in memory.
 
-            Please try: pin an old message and tap the pin bar, watch someone type a long message, open a video from a profile page, and block then unblock a test contact.
+            LOOK AND FEEL
+            The long-press menu now uses Signal's exact measurements. Links inside your blue bubbles are white and readable. A reaction is no longer sliced when you long-press. Settings and profile pages use Signal's spacing. Profiles show your private note as a Notes card, two lines with More. Tapping an avatar with no picture does nothing instead of opening an empty circle.
+
+            PLEASE TRY: place a call with AirPods in; block a test contact and check calls, stories and search; turn Show Notifications off, force-quit, reopen; send a message then immediately delete it before it sends; forward an album; and long-press a message you reacted to.
         run: fastlane beta
