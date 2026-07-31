@@ -892,7 +892,9 @@ struct ThreadView: View {
             ReactorsSheet(reactions: m.reactions, nameFor: { personName($0) })
         }
         .sheet(item: $forwardTarget) { m in
-            ForwardPicker(message: m, sourceCid: cid)
+            ForwardPicker(message: m, sourceCid: cid,
+                          onQueued: { showJumpToast($0) },
+                          onFailed: { showJumpToast("Couldn't forward some messages") })
         }
         .sheet(isPresented: $showGroupAdd) {
             AddMembersSheet(cid: cid, existing: Set(groupMembers))
@@ -904,7 +906,9 @@ struct ThreadView: View {
         }
         .sheet(isPresented: Binding(get: { bulkForward != nil }, set: { if !$0 { bulkForward = nil } })) {
             if let msgs = bulkForward {
-                ForwardPicker(messages: msgs, sourceCid: cid, onSent: { exitSelection() })
+                ForwardPicker(messages: msgs, sourceCid: cid, onSent: { exitSelection() },
+                              onQueued: { showJumpToast($0) },
+                              onFailed: { showJumpToast("Couldn't forward some messages") })
             }
         }
         .sheet(isPresented: $showPinnedSheet) {
@@ -1833,7 +1837,7 @@ struct ThreadView: View {
         let m = repo.items[idx]
         guard m.id != highlightId, m.sendState == nil,                 // delivered only
               m.replyTo == nil, m.reactions.isEmpty,
-              !m.isFeatureMarker, !m.viewOnce,
+              !m.isFeatureMarker, !m.viewOnce, !m.forwarded,           // Forwarded tag is SwiftUI-only
               !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
@@ -4697,6 +4701,17 @@ struct MessageBubble: View, Equatable {
                         .foregroundStyle(senderColor)
                         .padding(.leading, 12)
                         .onTapGesture { onTapSender(message.authorId) }
+                }
+                // "Forwarded" tag — the owner's pick (WhatsApp/Telegram behavior, our drawing):
+                // above the bubble like the group sender name, ONE insertion point for every
+                // bubble type instead of patching each content branch.
+                if message.forwarded {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 9))
+                        Text("Forwarded").font(.system(size: 11)).italic()
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(isMe ? .trailing : .leading, 12)
                 }
                 // Status reply: caption + BIG story card floating on the wallpaper ABOVE the bubble
                 // (reference look, our own take) — replaces the small in-bubble quote for status replies.

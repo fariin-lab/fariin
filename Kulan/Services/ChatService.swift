@@ -367,7 +367,7 @@ enum ChatService {
         return d
     }
 
-    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil) async throws {
+    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false) async throws {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         // Group path: per-member encryption + unread fan-out. 1:1 path below is untouched.
@@ -380,7 +380,7 @@ enum ChatService {
             members = snap?.data()?["users"] as? [String]
         }
         if let members {
-            try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview)
+            try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded)
             return
         }
 
@@ -429,6 +429,7 @@ enum ChatService {
         if let clientId { msg["clientId"] = clientId }   // lets the client reconcile its optimistic copy
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
+        if forwarded { msg["forwarded"] = true }
         if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: nil, msgId: msgRef.documentID) {
             msg["linkPreview"] = lp
         }
@@ -446,7 +447,7 @@ enum ChatService {
     /// but me. The conversation already exists (created by createGroup), so no users write.
     private static func sendGroupText(cid: String, members: [String], text t: String,
                                       replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
-                                      preview: OutgoingLinkPreview? = nil) async throws {
+                                      preview: OutgoingLinkPreview? = nil, forwarded: Bool = false) async throws {
         let cipher = try await Crypto.shared.encryptForGroup(t, members: members)
         var replyEnc: [String: Any]?
         if let r = replyTo {
@@ -468,6 +469,7 @@ enum ChatService {
         if let clientId { msg["clientId"] = clientId }
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
+        if forwarded { msg["forwarded"] = true }
         if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: msgRef.documentID) {
             msg["linkPreview"] = lp
         }
@@ -512,7 +514,7 @@ enum ChatService {
         return resized.jpegData(compressionQuality: quality) ?? data
     }
 
-    static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "") async throws {
+    static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
         let data = sendJPEG(rawData)
         var members = group
@@ -569,6 +571,7 @@ enum ChatService {
         if let replyEnc { imgMsg["replyTo"] = replyEnc }
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
         if viewOnce { imgMsg["viewOnce"] = true }           // view-once photo
+        if forwarded { imgMsg["forwarded"] = true }
         if let ui = UIImage(data: data) {                   // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
             // BlurHash: a ~28-char sketch of the photo, sealed like the caption, so the
@@ -675,7 +678,7 @@ enum ChatService {
     /// store {kind:"video", imageUrl=poster, videoUrl, videoEnc, duration}. One caption, one timestamp,
     /// one delivery status — the group never splits into separate messages.
     static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
-                               clientId: String? = nil, group: [String]? = nil) async throws {
+                               clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
         var members = group
         if members == nil, !cid.contains("_") {
@@ -740,6 +743,7 @@ enum ChatService {
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
+        if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
         // Chat-list preview: describe the mix.
         let preview: String = {
@@ -768,7 +772,7 @@ enum ChatService {
 
     /// Encrypt + send a voice note. Same E2EE pipeline as photos: the m4a bytes
     /// are sealed and the ciphertext uploaded; the server never hears the audio.
-    static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil) async throws {
+    static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
@@ -814,6 +818,7 @@ enum ChatService {
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
+        if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             // Length rides inside the marker ("🎤 Voice message · 0:53") so the chat list
@@ -837,7 +842,7 @@ enum ChatService {
     /// thumbnail rides on the message (and the chat-list preview) so bubbles render
     /// instantly without downloading the video.
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
-                          width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil) async throws {
+                          width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
@@ -882,6 +887,7 @@ enum ChatService {
             "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
+        if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "🎥 Video · " + voiceDurationLabel(duration),
@@ -905,7 +911,7 @@ enum ChatService {
 
     /// Encrypt + send a document/file. Contents are E2EE (same pipeline as photos); the file
     /// NAME is metadata stored in the clear (like image dimensions) so the bubble can label it.
-    static func sendFile(cid: String, data rawData: Data, fileName: String, clientId: String? = nil, group: [String]? = nil) async throws {
+    static func sendFile(cid: String, data rawData: Data, fileName: String, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
@@ -933,6 +939,7 @@ enum ChatService {
             "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }
+        if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "📄 File", "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
@@ -948,7 +955,7 @@ enum ChatService {
     }
 
     /// Send a GIF (a public Giphy URL — public content, so NOT E2EE; we store the url directly).
-    static func sendGif(cid: String, url: String, width: Double, height: Double, clientId: String? = nil, group: [String]? = nil) async throws {
+    static func sendGif(cid: String, url: String, width: Double, height: Double, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
@@ -967,6 +974,7 @@ enum ChatService {
             "clientTs": Date().timeIntervalSince1970 * 1000,
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
+        if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "GIF", "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
@@ -998,7 +1006,7 @@ enum ChatService {
                       let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
             } else { throw ForwardError.sourceUnavailable }
-            try await sendImage(cid: targetCid, data: bytes, caption: m.text)
+            try await sendImage(cid: targetCid, data: bytes, caption: m.text, forwarded: true)
         } else if m.isAlbum {
             // The album forwards as ONE album, grouped like the original — the owner rejected
             // WhatsApp's break-apart-into-singles ("is broke is send one by one"). Each item
@@ -1023,13 +1031,13 @@ enum ChatService {
                 }
             }
             guard !items.isEmpty else { throw ForwardError.sourceUnavailable }
-            try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text)
+            try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, forwarded: true)
         } else if m.isAudio {
             guard let s = m.audioUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await URLSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             else { throw ForwardError.sourceUnavailable }
-            try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform)
+            try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform, forwarded: true)
         } else if m.isVideo {
             // Prefer this device's copy (the server object may already be delivered+deleted).
             var bytes = VideoCache.data(for: m.id)
@@ -1046,18 +1054,18 @@ enum ChatService {
             }
             guard let thumb else { throw ForwardError.sourceUnavailable }
             try await sendVideo(cid: targetCid, video: bytes, thumbnail: thumb, duration: m.duration ?? 0,
-                                width: m.width ?? 720, height: m.height ?? 720, caption: m.text)
+                                width: m.width ?? 720, height: m.height ?? 720, caption: m.text, forwarded: true)
         } else if m.isGif {
             guard let gifUrl = m.imageUrl, !gifUrl.isEmpty else { throw ForwardError.sourceUnavailable }
-            try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200)
+            try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200, forwarded: true)
         } else if m.isFile {
             guard let s = m.fileUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await URLSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             else { throw ForwardError.sourceUnavailable }
-            try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File")
+            try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File", forwarded: true)
         } else {
-            try await sendText(cid: targetCid, text: m.text)
+            try await sendText(cid: targetCid, text: m.text, forwarded: true)
         }
     }
 

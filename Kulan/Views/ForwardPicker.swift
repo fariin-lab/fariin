@@ -1,27 +1,35 @@
 import SwiftUI
 
-// Forward a message to one or more chats. Pick chats (multi-select), tap Send, and the
-// message is re-sent into each via ChatService.forwardMessage (E2EE re-encrypts media
-// for the target chat). Excludes the source chat. Real send pipeline — no fakes.
+// Forward a message to one or more chats. Pick chats (multi-select), optionally add your own
+// text, tap Send — the sheet closes INSTANTLY (owner's pick, WhatsApp model) and the re-sends
+// run behind: each message re-encrypts for its target via ChatService.forwardMessage, then the
+// added text follows as its own message. onQueued fires a "Sent to …" toast at close;
+// onFailed reports a partial failure honestly instead of holding the sheet hostage.
 struct ForwardPicker: View {
     let messages: [Message]           // one or many (bulk forward)
     let sourceCid: String
-    var onSent: () -> Void = {}       // called after a fully-successful send (e.g. exit selection mode)
+    var onSent: () -> Void = {}       // fired at close (e.g. exit selection mode)
+    var onQueued: (String) -> Void = { _ in }   // toast label ("Sent to Adnan")
+    var onFailed: () -> Void = {}     // something didn't arrive after the background run
 
     // Single-message convenience (unchanged call sites).
-    init(message: Message, sourceCid: String, onSent: @escaping () -> Void = {}) {
-        self.messages = [message]; self.sourceCid = sourceCid; self.onSent = onSent
+    init(message: Message, sourceCid: String, onSent: @escaping () -> Void = {},
+         onQueued: @escaping (String) -> Void = { _ in }, onFailed: @escaping () -> Void = {}) {
+        self.messages = [message]; self.sourceCid = sourceCid
+        self.onSent = onSent; self.onQueued = onQueued; self.onFailed = onFailed
     }
-    init(messages: [Message], sourceCid: String, onSent: @escaping () -> Void = {}) {
-        self.messages = messages; self.sourceCid = sourceCid; self.onSent = onSent
+    init(messages: [Message], sourceCid: String, onSent: @escaping () -> Void = {},
+         onQueued: @escaping (String) -> Void = { _ in }, onFailed: @escaping () -> Void = {}) {
+        self.messages = messages; self.sourceCid = sourceCid
+        self.onSent = onSent; self.onQueued = onQueued; self.onFailed = onFailed
     }
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
     @State private var query = ""
     @State private var selected = Set<String>()
-    @State private var sending = false
-    @State private var forwardError = false
+    @State private var comment = ""
+
     private var me: String { AuthService.shared.uid ?? "" }
 
     private var people: [Conversation] {
@@ -72,25 +80,27 @@ struct ForwardPicker: View {
                 }
             }
             .searchable(text: $query, prompt: "Search")
-            .alert("Couldn't forward", isPresented: $forwardError) {
-                Button("OK", role: .cancel) {}
-            } message: { Text("Some messages didn't send. Check your connection and try again.") }
+            // Add-your-own-text (owner's pick): appears once a chat is chosen; lands as its OWN
+            // message right after the forwards, in every picked chat — never glued to a caption.
+            .safeAreaInset(edge: .bottom) {
+                if !selected.isEmpty {
+                    TextField("Add a message…", text: $comment, axis: .vertical)
+                        .lineLimit(1...3)
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                }
+            }
             .navigationTitle("Forward to…")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Send") { Task { await sendAll() } }
-                        .disabled(selected.isEmpty || sending)
+                    Button("Send") { sendAll() }
+                        .disabled(selected.isEmpty)
                         .fontWeight(.semibold)
                 }
             }
-            .overlay {
-                if sending {
-                    ProgressView().padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                }
-            }
-            .interactiveDismissDisabled(sending)
         }
     }
 
@@ -98,23 +108,35 @@ struct ForwardPicker: View {
         if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
     }
 
-    private func sendAll() async {
-        sending = true
+    private func sendAll() {
+        let targets = selected
+        let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         // Oldest first so forwarded messages land in the same order they were sent.
         let ordered = messages.sorted { $0.createdAt < $1.createdAt }
-        var sent = Set<String>()
-        for cid in selected {
-            var allOK = true
-            for m in ordered {
-                do { try await ChatService.forwardMessage(m, from: sourceCid, to: cid) }
-                catch { allOK = false }
-            }
-            if allOK { sent.insert(cid) }   // only clear a target once EVERY message reached it
+        let src = sourceCid
+        let label: String
+        if targets.count == 1, let c = repo.conversations.first(where: { targets.contains($0.id) }) {
+            label = "Sent to \(c.displayName(me))"
+        } else {
+            label = "Sent to \(targets.count) chats"
         }
-        // Drop the chats that fully succeeded — a retry after a partial failure must NOT re-forward
-        // to the ones that already received everything (that produced duplicates).
-        selected.subtract(sent)
-        sending = false
-        if selected.isEmpty { onSent(); dismiss() } else { forwardError = true }   // don't pretend it sent
+        let queued = onQueued, failed = onFailed
+        onSent()
+        dismiss()
+        queued(label)
+        Task {
+            var anyFailed = false
+            for cid in targets {
+                for m in ordered {
+                    do { try await ChatService.forwardMessage(m, from: src, to: cid) }
+                    catch { anyFailed = true }
+                }
+                if !note.isEmpty {
+                    do { try await ChatService.sendText(cid: cid, text: note) }
+                    catch { anyFailed = true }
+                }
+            }
+            if anyFailed { await MainActor.run { failed() } }
+        }
     }
 }

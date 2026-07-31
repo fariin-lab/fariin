@@ -93,6 +93,7 @@ struct Message: Identifiable, Equatable {
     var callVideo: Bool = false             // placed as a video call (older records default to voice)
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
+    var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
     var clientTs: Date? = nil               // sender's tap time (ms epoch on the wire) — display order is send order
 
     var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
@@ -305,6 +306,7 @@ struct Message: Identifiable, Equatable {
         self.callVideo = data["callVideo"] as? Bool ?? false
         self.callDuration = (data["callDuration"] as? NSNumber)?.intValue
         self.edited = data["edited"] as? Bool ?? false
+        self.forwarded = data["forwarded"] as? Bool ?? false
         self.clientId = data["clientId"] as? String
         self.enc = (data["enc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         // Each reaction is sealed by ITS reactor (the map key), so decrypt with that uid as
