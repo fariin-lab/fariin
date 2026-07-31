@@ -4763,19 +4763,13 @@ struct MessageBubble: View, Equatable {
                         // `.subviews` = this gesture is off, the media's own tap still fires.
                         including: opensOnTap ? .subviews : .all
                     )
-                    // SWIPE-TO-REPLY (build-285 model, restored): move the bubble via SwiftUI .offset
-                    // INSIDE the cell — the cell frame never changes, so neighbors can't drift and
-                    // nothing duplicates. Only SwiftUI-hosted bubbles (reply/image/video/etc.) render
-                    // MessageBubble; native text cells keep the UIKit pan. The reply arrow sits in the
-                    // vacated space (added after the offset so it stays put).
-                    .offset(x: dragX)
-                    .simultaneousGesture(replySwipeGesture)
                     // REACTIONS HANG OFF THE BUBBLE'S EDGE, not in the gap below it (user: a badge
                     // floating between two bubbles belongs to neither, so you cannot tell WHICH
                     // message was reacted to — his circled screenshots). WhatsApp and iMessage both
                     // attach it to the bubble, overlapping the corner it belongs to: trailing for my
-                    // messages, leading for theirs. The overlay rides `dragX`, so it swipes with the
-                    // bubble instead of being left behind.
+                    // messages, leading for theirs. The overlay MUST come BEFORE .offset(dragX) or it
+                    // is aligned to the un-moved layout frame and the swipe leaves it parked (the
+                    // owner's question caught exactly that: it was ordered after, so it never rode).
                     .overlay(alignment: isMe ? .bottomTrailing : .bottomLeading) {
                         reactionBadges
                             // Follows the badge's height: a taller badge hangs a little further, or it
@@ -4783,6 +4777,14 @@ struct MessageBubble: View, Equatable {
                             .offset(x: isMe ? -10 : 10, y: 13)
                             .animation(.spring(response: 0.35, dampingFraction: 0.6), value: message.reactions)
                     }
+                    // SWIPE-TO-REPLY (build-285 model, restored): move the bubble via SwiftUI .offset
+                    // INSIDE the cell — the cell frame never changes, so neighbors can't drift and
+                    // nothing duplicates. Only SwiftUI-hosted bubbles (reply/image/video/etc.) render
+                    // MessageBubble; native text cells keep the UIKit pan. The reply arrow sits in the
+                    // vacated space (added after the offset so it stays put). Applied AFTER the badge
+                    // overlay, so bubble and badge slide as one.
+                    .offset(x: dragX)
+                    .simultaneousGesture(replySwipeGesture)
                     // Reserve the overhang so the badge cannot collide with the next bubble. Measured
                     // by the sizer like any other row content, so heights stay honest.
                     // Matches the overhang above — reserve less than the badge hangs and it collides
