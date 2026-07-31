@@ -38,7 +38,9 @@ enum Theme {
     static func bg(_ dark: Bool) -> Color { dark ? Color(hex: 0x121214) : Color(hex: 0xFFFFFF) }
     static func bgSecondary(_ dark: Bool) -> Color { dark ? Color(hex: 0x121214) : Color(hex: 0xF2F2F7) }
     static func card(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xFFFFFF) }
-    static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xE9E9EB) }
+    // Light received-bubble = F2F2F2, the owner's exact pick (2026-07-31 screenshot). Must stay in
+    // lock-step with UIKitBubbleCell.receivedFill or text rows and media rows show two grays.
+    static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xF2F2F2) }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
     static func onAccent(_ dark: Bool) -> Color { dark ? .black : .white }
     // Default outgoing-bubble colour when no custom Chat Color is picked. Apple systemBlue, which is a

@@ -32,7 +32,7 @@ private enum BubblePalette {
                 blue: CGFloat(v & 0xFF) / 255, alpha: 1)
     }
     static let myFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x0A84FF) : hex(0x007AFF) }   // Theme.defaultBubble
-    static let receivedFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x26262B) : hex(0xE9E9EB) } // Theme.received
+    static let receivedFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x26262B) : hex(0xF2F2F2) } // Theme.received (owner's F2F2F2)
     static let myText = UIColor.white
     static let receivedText = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
     static let myMeta = UIColor.white.withAlphaComponent(0.7)
