@@ -388,7 +388,13 @@ struct ThreadView: View {
                 let newestBefore = arrivalState.newestCreatedAt
                 let seeded = arrivalState.seeded
                 arrivalState.seeded = true
-                if let newest = repo.items.last?.createdAt, newest > arrivalState.newestCreatedAt {
+                // The high-water ratchets on DELIVERED messages only. My optimistic bubble carries a
+                // LOCAL Date(), which runs ahead of the server stamp on a message the other person
+                // composed a moment earlier — raising the mark past it meant their message was never
+                // "fresh", so it got no read receipt and no jump count (my own regression: the two of
+                // us typing at once). sendState != nil is exactly the not-yet-delivered case.
+                if let newest = repo.items.last(where: { $0.sendState == nil })?.createdAt,
+                   newest > arrivalState.newestCreatedAt {
                     arrivalState.newestCreatedAt = newest
                 }
                 if !settled {
@@ -2608,6 +2614,11 @@ struct ThreadView: View {
         repo.addPending(Message(localText: text, authorId: me, clientId: clientId, replyTo: reply,
                                 sendState: .sending, linkPreview: pendingPreview))
         broadcastTyping(false)   // serialized with any in-flight typing write (no stuck "typing…")
+        // KILL THE KEEP-ALIVE HERE TOO. Sending clears typingSent directly, so the onChange flip
+        // branch that normally invalidates this timer never runs, and clearing the field also
+        // cancels the idle-stop that was the only other cleanup — the timer then re-broadcast
+        // "typing…" every 10s forever and the other side never saw it stop (my own regression).
+        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft)
         }
