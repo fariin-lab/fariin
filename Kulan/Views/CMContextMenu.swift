@@ -34,14 +34,21 @@ import UIKit
 }
 
 /// Publishes a bubble's window rect + corner radius for as long as it is on screen.
+/// `bottomOverhang`: the reaction badge hangs 13pt BELOW the bubble's bottom edge, and the lift
+/// crops the row snapshot to this rect — without the overhang the badge came up sliced (owner's
+/// 417 screenshot, heart cut at the bubble edge). The extension is transparent row space except
+/// the badge itself, and the menu card lays out below the EXTENDED rect, clearing the badge too.
 struct CMBubbleRectReporter: ViewModifier {
     let id: String
     let radius: CGFloat
+    var bottomOverhang: CGFloat = 0
     func body(content: Content) -> some View {
         content.background(
             GeometryReader { g in
                 Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
-                    CMBubbleRects.capture(id, f, radius: radius)
+                    var r = f
+                    r.size.height += bottomOverhang
+                    CMBubbleRects.capture(id, r, radius: radius)
                 }
             }
         )

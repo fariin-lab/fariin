@@ -4742,7 +4742,10 @@ struct MessageBubble: View, Equatable {
                     // bubble and lays out bar · message · menu itself. The items moved verbatim into
                     // ThreadView.customMenuActions(for:). This modifier is what tells the list where
                     // the bubble actually is, so the press lifts the BUBBLE, not the whole row.
-                    .modifier(CMBubbleRectReporter(id: message.rowId, radius: 18))
+                    .modifier(CMBubbleRectReporter(id: message.rowId, radius: 18,
+                                                   // reaction badge hangs 13pt below the bubble — the
+                                                   // lift must crop that deep or it slices the badge
+                                                   bottomOverhang: reactionCounts.isEmpty ? 0 : 13))
                     // Double-tap to quick-react. The emoji is the user's choice (Settings > Appearance >
                     // Quick Reaction), read here AND in uikitQuickReact so both row paths agree.
                     //
