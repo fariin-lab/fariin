@@ -869,7 +869,9 @@ struct StoryViewer: View {
         .sheet(item: $profileSheet) { g in
             NavigationStack {
                 ContactInfoView(cid: [me, g.authorUid].sorted().joined(separator: "_"),
-                                name: g.name, photoUrl: g.photoUrl, isSelf: g.authorUid == me)
+                                name: g.name, photoUrl: g.photoUrl,
+                                source: .story,   // no chat underneath → no Search/Wallpaper (audit)
+                                isSelf: g.authorUid == me)
             }
             .presentationDetents([.medium, .large])   // small profile sheet over the paused story
             .presentationDragIndicator(.visible)

@@ -10,7 +10,7 @@ import FirebaseFirestore
 // Where this profile was opened from — the action row + a call-log card adapt to it.
 // From a chat: you're already chatting, so offer Search (not Message). From the Calls
 // tab: offer Message (jump into the chat) + show the recent call with this person.
-enum ProfileSource { case chat, calls }
+enum ProfileSource { case chat, calls, story }   // story: no chat underneath → no Search, no Wallpaper
 
 struct ContactInfoView: View {
     let cid: String
@@ -172,7 +172,11 @@ struct ContactInfoView: View {
     @ViewBuilder private var moreMenuItems: some View {
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
-        Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+        // Wallpaper pops back to the CHAT and posts to its ThreadView — from a story-opened profile
+        // there is no chat underneath and the tap silently did nothing (audit).
+        if source == .chat {
+            Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+        }
         // "Share Profile", not "Share Contact" — what it sends is a Kulan profile link, and there is no
         // contact card behind it (no phone book, no numbers).
         Button { showShare = true } label: { Label("Share Profile", systemImage: "square.and.arrow.up") }
@@ -204,12 +208,16 @@ struct ContactInfoView: View {
             // The remembered count first (disk, instant), then the warm cache, then the network.
             mediaHint = ChatService.SharedMediaPresence.count(cid)
             if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
+            // LOCAL values BEFORE the network round-trips (audit): the timer row said "Off" for
+            // seconds on a slow connection — and the picker opened preselected wrong — though the
+            // repository already knew the answer.
+            disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
+            localName = ContactNames.shared.name(for: otherUid)
             // `load()` owns mediaHint from here: it is the only place that knows whether the count it
             // has is an ANSWER or a failure. Setting it from `media.count` out here zeroed the hint
             // whenever the load failed, which is how the section disappeared from a chat full of photos.
             await load()
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
-            localName = ContactNames.shared.name(for: otherUid)
             // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
             // anyone who reaches this profile can watch it, contact or not.
             if !isSelf {
@@ -322,15 +330,17 @@ struct ContactInfoView: View {
             } message: {
                 Text("This deletes the messages you sent in this chat. It can't be undone.")
             }
-            .alert("Block \(name)?", isPresented: $showBlock) {
+            // shownName, not the raw name (audit): renamed to "Mom", the button said "Block Mom"
+            // but this safety-critical confirm asked about "ayaan_99" — reads as a different person.
+            .alert("Block \(shownName)?", isPresented: $showBlock) {
                 Button("Cancel", role: .cancel) {}
                 Button("Block", role: .destructive) {
                     Task { await ChatService.setBlocked(cid, true); blocked = true }
                 }
             } message: {
-                Text("You won't be able to send messages in this chat until you unblock. \(name) won't be told they were blocked.")
+                Text("You won't be able to send messages in this chat until you unblock. \(shownName) won't be told they were blocked.")
             }
-            .alert("Report \(name)?", isPresented: $showReport) {
+            .alert("Report \(shownName)?", isPresented: $showReport) {
                 Button("Cancel", role: .cancel) {}
                 Button("Report", role: .destructive) {
                     Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
@@ -342,7 +352,7 @@ struct ContactInfoView: View {
                     }
                 }
             } message: {
-                Text("Our team will review this account within 24 hours. \(name) won't be told.")
+                Text("Our team will review this account within 24 hours. \(shownName) won't be told.")
             }
     }
 
@@ -363,8 +373,10 @@ struct ContactInfoView: View {
     // "No Groups in Common" + Add-to-a-Group only (no list) when there are none.
     private var sharedGroups: [Conversation] {
         let me = AuthService.shared.uid ?? ""
+        // Membership only — NOT isCleared (audit): swipe-deleting a quiet group's ROW while
+        // remaining a member made it vanish from "Groups in Common", contradicting the header.
         return ConversationsRepository.shared.conversations
-            .filter { $0.isGroup && $0.users.contains(otherUid) && $0.users.contains(me) && !$0.isCleared(me) }
+            .filter { $0.isGroup && $0.users.contains(otherUid) && $0.users.contains(me) }
             .sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }
     }
 
@@ -563,25 +575,31 @@ struct ContactInfoView: View {
             }
             // Native menu (pops up) instead of a custom action sheet. When ALREADY muted, the menu
             // is just "Muted until <time>" + Unmute — the durations only appear when the chat is unmuted.
-            Menu {
-                if muted {
-                    Section(muteUntilLabel) {
-                        Button("Unmute") { muted = false; mutedUntil = 0; Task { await ChatService.setMute(cid, until: 0) } }
+            // NOT on your own profile (audit): its "me_me" cid has no conversation, so picking a
+            // duration wrote a mutedBy map into a phantom server doc.
+            if !isSelf {
+                Menu {
+                    if muted {
+                        Section(muteUntilLabel) {
+                            Button("Unmute") { muted = false; mutedUntil = 0; Task { await ChatService.setMute(cid, until: 0) } }
+                        }
+                    } else {
+                        Section("Mute this chat for…") {
+                            Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
+                            Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
+                            Button("1 day") { setMuted(ChatService.muteUntil(24)) }
+                            Button("1 week") { setMuted(ChatService.muteUntil(168)) }
+                            Button("Always") { setMuted(ChatService.muteUntil(nil)) }
+                        }
                     }
-                } else {
-                    Section("Mute this chat for…") {
-                        Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
-                        Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
-                        Button("1 day") { setMuted(ChatService.muteUntil(24)) }
-                        Button("1 week") { setMuted(ChatService.muteUntil(168)) }
-                        Button("Always") { setMuted(ChatService.muteUntil(nil)) }
-                    }
+                } label: {
+                    tileLabel(muted ? "unmute" : "mute", muted ? "bell.fill" : "bell.slash.fill")
                 }
-            } label: {
-                tileLabel(muted ? "unmute" : "mute", muted ? "bell.fill" : "bell.slash.fill")
+                .tint(.primary)
             }
-            .tint(.primary)
-            if source == .chat {
+            // Only a CHAT-opened profile has the search bar to pop back to — from a story (or your
+            // own profile) this tile was a dead button wired to the default no-op (audit).
+            if source == .chat && !isSelf {
                 actionTile("search", "magnifyingglass") { onSearch() }
             }
             // "More" tile (…): the menu that used to sit in the nav bar.
@@ -716,6 +734,14 @@ struct ContactInfoView: View {
 
 
     private func load() async {
+        // Your OWN profile (opened from your story): otherUid is "" and the "me_me" cid has no
+        // conversation doc — the peer fetch below returned nil, so your @handle and bio never
+        // loaded (audit). Read them from the profile store's own record instead.
+        if isSelf {
+            if let mine = ProfileStore.shared.me { handle = mine.handle; about = mine.about }
+            loaded = true
+            return
+        }
         // Paint from Firestore's LOCAL cache first (no network): for anyone we've opened before, the
         // @handle and bio are there on the first frame, so the page doesn't shift when the server
         // fetch lands. The fetch below still runs and corrects anything stale.
@@ -742,10 +768,13 @@ struct ContactInfoView: View {
         // first frame (user: "we are sending image but when i click profile all media I am not seeing…
         // why need internet that section").
         if let local = ThreadMessageCache.shared.messages(for: cid) {
+            // Reverse the MESSAGES, then flatten (audit): reversing after flattening inverted the
+            // items INSIDE each album, so the strip visibly reshuffled when the server pass —
+            // which keeps album order — replaced this one a beat later.
             let localMedia = local
                 .filter { $0.isImage || $0.isVideo || $0.isAlbum }
-                .flatMap { $0.expandedGalleryItems(cid: cid) }
                 .reversed()                       // cache is oldest-first; this strip is newest-first
+                .flatMap { $0.expandedGalleryItems(cid: cid) }
             if !localMedia.isEmpty { media = Array(localMedia) }
         }
         // Then the server, which sees further back than the in-memory window. A FAILED load returns nil

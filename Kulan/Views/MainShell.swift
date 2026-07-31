@@ -1153,7 +1153,9 @@ struct ChatsView: View {
             }
             .sheet(item: $profileGroup) { g in
                 NavigationStack {
-                    ContactInfoView(cid: storyCid(g.authorUid), name: g.name, photoUrl: g.photoUrl)
+                    // .story source: no chat underneath → no Search/Wallpaper dead buttons (audit).
+                    ContactInfoView(cid: storyCid(g.authorUid), name: g.name, photoUrl: g.photoUrl,
+                                    source: .story)
                 }
             }
             // ONE destination type for every chat (list taps AND search results),
