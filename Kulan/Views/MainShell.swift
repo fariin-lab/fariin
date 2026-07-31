@@ -958,7 +958,13 @@ struct ChatsView: View {
         exitSelect()
     }
     private func markReadSelected() {
-        let ids = selection
+        // Skip silently-blocked chats, exactly like the tab badge, Mark All Read and the row menu
+        // (audit): markRead writes lastRead, which flips the blocked person's messages to read ticks
+        // and reveals the activity the block is hiding. Their rows show 0 unread, so nothing on
+        // screen even hints they were included.
+        let ids = selection.filter { id in
+            !(repo.conversations.first { $0.id == id }?.isBlockedByMe(me) ?? false)
+        }
         Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.resetUnread(id); await ChatService.markRead(id) } } } }
         exitSelect()
     }
@@ -1227,6 +1233,17 @@ struct ChatsView: View {
     // so we can resolve name/photo, then routes straight to it.
     private func openPendingChat() {
         guard let cid = router.pendingChatId else { return }
+        // CLOSE WHATEVER IS COVERING THIS STACK FIRST (audit). The chat is pushed onto the path
+        // underneath, so with the Archive sheet, a story cover, the compose sheet or a profile sheet
+        // up, a notification tap looked like it did nothing — and the intent is consumed below, so
+        // it never healed. This file's own comment already treats "opens somewhere hidden" as the
+        // failure to prevent.
+        showArchived = false
+        showNew = false
+        showCompose = false
+        viewerGroup = nil
+        showUploadViewer = false
+        profileGroup = nil
         // Navigate even if the conv isn't cached yet (e.g. a brand-new 1:1 opened from a
         // group member sheet) — fall back to the name/photo the caller supplied.
         let conv = repo.conversations.first(where: { $0.id == cid })
@@ -1410,7 +1427,12 @@ struct ArchivedChatsView: View {
         exitSelect()
     }
     private func markReadSelected() {
-        let ids = selection
+        // Same blocked exclusion as the main list's version (audit) — the archived list can hold
+        // silently blocked chats too, and markRead there leaks read receipts just the same.
+        let me = AuthService.shared.uid ?? ""
+        let ids = selection.filter { id in
+            !(ConversationsRepository.shared.conversations.first { $0.id == id }?.isBlockedByMe(me) ?? false)
+        }
         Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
         exitSelect()
     }

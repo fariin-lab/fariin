@@ -144,10 +144,15 @@ enum NotificationCleaner {
                 .map { $0.request.identifier }
             if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
         }
-        // Badge = total unread across the OTHER chats (this one is now read).
+        // Badge = total unread across the OTHER chats (this one is now read), counted with the SAME
+        // filter the in-app badges use (audit): a silently blocked contact's messages still increment
+        // unread, but every surface in the app shows 0 for that chat, so the springboard badge landed
+        // on a number the user could neither see nor clear — and it leaked that their messages arrive.
+        // Hidden legacy groups are excluded for the same reason.
         let me = Auth.auth().currentUser?.uid ?? ""
         let total = ConversationsRepository.shared.conversations
-            .filter { $0.id != cid }
+            .filter { $0.id != cid && !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
+                      && (Flags.groupsEnabled || !$0.isGroup) }
             .reduce(0) { $0 + $1.unread(me) }
         center.setBadgeCount(max(0, total))
     }

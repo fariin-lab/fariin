@@ -66,6 +66,10 @@ final class CallsRepository {
         let convSnap = try? await database.collection("conversations")
             .whereField("users", arrayContains: me).getDocuments()
         let convs = (convSnap?.documents ?? []).map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
+            // A silently blocked contact's activity is hidden everywhere else — frozen previews, no
+            // unread badges, no reordering — but their timed-out call still wrote a shared record,
+            // so the Calls tab showed "Missed call" and badged it red (audit).
+            .filter { !$0.isBlockedByMe(me) }
 
         // Fetch every chat's call records CONCURRENTLY (was sequential = N round-trips in
         // series). Each task builds its own CallEntry list off-main; results merged after.
@@ -93,32 +97,28 @@ final class CallsRepository {
             }
             for await chunk in group { all.append(contentsOf: chunk) }
         }
+        all.removeAll { HiddenMessages.isHidden($0.id) }   // locally deleted entries stay gone
         all.sort { $0.date > $1.date }
         await MainActor.run { self.calls = all; self.loading = false; self.hasLoaded = true; self.lastLoadedAt = Date() }
     }
 
-    // Delete one call record — remove from the UI only AFTER the server confirms, so a
-    // failed delete doesn't vanish from the list while still living on the server.
+    // DELETING A CALL IS LOCAL-ONLY (audit). A call entry IS the shared
+    // conversations/<cid>/messages/call_<id> doc — it is also the other person's history row and the
+    // call bubble in both threads. Deleting the doc from a swipe (no confirmation) destroyed THEIR
+    // record too, or, if the rules refuse a delete of a doc the other side authored, did nothing at
+    // all and the row came straight back on the next load. Every standard messenger hides call-log
+    // entries per user, which is what HiddenMessages already does for messages.
     func delete(_ entry: CallEntry) async {
-        do {
-            try await db.collection("conversations").document(entry.cid)
-                .collection("messages").document(entry.id).delete()
-            await MainActor.run { calls.removeAll { $0.id == entry.id } }
-        } catch { /* keep it in the list; the next load reconciles */ }
+        await MainActor.run {
+            HiddenMessages.hide(entry.id)
+            calls.removeAll { $0.id == entry.id }
+        }
     }
 
-    // Delete several selected call records — single batched write, UI updated only on success.
     func delete(ids: Set<String>) async {
-        let targets = await MainActor.run { calls.filter { ids.contains($0.id) } }
-        let batch = db.batch()
-        for c in targets {
-            let ref = db.collection("conversations").document(c.cid)
-                .collection("messages").document(c.id)
-            batch.deleteDocument(ref)
+        await MainActor.run {
+            for id in ids { HiddenMessages.hide(id) }
+            calls.removeAll { ids.contains($0.id) }
         }
-        do {
-            try await batch.commit()
-            await MainActor.run { calls.removeAll { ids.contains($0.id) } }
-        } catch { /* leave them; the batch failed */ }
     }
 }

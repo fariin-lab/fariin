@@ -291,14 +291,25 @@ enum MessageSearch {
                         _ = await Crypto.shared.preloadKey(c.otherUid(me))
                     }
                     let name = c.name(for: me), photo = c.photoUrl(for: me)
+                    // Silent block: the thread hides everything that arrived after the block, and the
+                    // chat list freezes at that moment — but search indexed the newest 250 docs
+                    // regardless, so a blocked person's new messages were fully readable here and
+                    // tapping one opened a thread that doesn't contain it (audit).
+                    let blockCutoff = c.isBlockedByMe(me) ? c.blockedAtMillis(me) : 0
                     return snap.documents.compactMap { doc -> SearchableMessage? in
                         let data = doc.data()
+                        // View-once is NEVER searchable — the in-chat corpus in this same file
+                        // enforces that rule; the global one didn't, so view-once captions leaked
+                        // (and stayed searchable after the single view was spent).
+                        guard (data["viewOnce"] as? Bool) != true else { return nil }
                         let author = data["authorId"] as? String ?? ""
                         let text = isGroup
                             ? Crypto.shared.decrypt(data["text"] as? String ?? "", cid: c.id, authorId: author)
                             : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: c.id)
                         guard !text.isEmpty else { return nil }
                         let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                        if blockCutoff > 0, author != me,
+                           date.timeIntervalSince1970 * 1000 > blockCutoff { return nil }
                         // Index the SAFE label, not the raw "kulan-…:" payload — contact/location
                         // cards then match and display as "Contact"/"Location", never the marker.
                         return SearchableMessage(id: doc.documentID, cid: c.id, chatName: name,

@@ -95,6 +95,11 @@ final class ConversationsRepository {
             lastPublish = Date()
             conversations = convs
             hasLoaded = true
+            // Drop anything the flush was still holding (audit): an immediate publish left an older
+            // buffered snapshot armed, and the scheduled flush then assigned it OVER this newer one —
+            // the list regressed up to 150ms and stayed wrong until the next server event, which on a
+            // quiet account can be minutes. Newest wins is the whole point of the coalescer.
+            pendingConvs = nil
         } else {
             pendingConvs = convs
             guard !flushScheduled else { return }

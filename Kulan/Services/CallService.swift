@@ -973,6 +973,13 @@ final class CallService: NSObject {
 
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
+        // ONE central block gate (audit). The profile's call tiles learned to hide while blocked, but
+        // every other dial site — the Calls tab row button, its long-press menu, New Call, Calls
+        // search — still rang a person the user had blocked. Gating here covers all of them at once
+        // and cannot be missed by a future entry point.
+        let blocked = ConversationsRepository.shared.conversations
+            .first { $0.id == ChatService.convId(me, uid) }?.isBlockedByMe(me) ?? false
+        guard !blocked else { return }
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
         startedAsVideo = video
         noteVideo()
