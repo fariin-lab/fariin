@@ -366,6 +366,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // Voice-note recording rides the SAME "typing" field, as a string value ("audio-<seconds>")
     // instead of a Bool — old clients' boolMap reads it as not-typing and shows nothing.
     var recording: [String: Bool]
+    // Stable digest of the RAW typing map. Recording's 10s refresh changes the value string without
+    // changing the parsed Bools — the chat list's 15s self-clear restarts on THIS, so a live
+    // recording never ages out while a crashed sender's stuck flag does.
+    var typingRawKey: String
     var mutedBy: [String: Double]      // expiry in ms
     var pinnedBy: [String: Bool]
     var archivedBy: [String: Bool]
@@ -412,6 +416,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.typing = boolMap(data["typing"])
         self.recording = (data["typing"] as? [String: Any] ?? [:])
             .compactMapValues { ($0 as? String)?.hasPrefix("audio") == true ? true : nil }
+        self.typingRawKey = (data["typing"] as? [String: Any] ?? [:])
+            .map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
         self.mutedBy = doubleMap(data["mutedBy"])
         self.pinnedBy = boolMap(data["pinnedBy"])
         self.archivedBy = boolMap(data["archivedBy"])

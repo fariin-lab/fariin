@@ -1456,6 +1456,13 @@ struct ChatRow: View, Equatable {
     var draft: String = ""          // unsent composer text (local-only) → "Draft:" preview
     var voiceUnplayed: Bool = false // newest incoming voice note not played yet → accent mic
 
+    // The 15s self-clear the THREAD's typing already had, applied to the row (audit HIGH: a sender
+    // whose app died mid-typing/recording labeled this row "typing…"/"recording…" FOREVER, across
+    // restarts, hiding the real preview). task(id: typingRawKey) restarts the window whenever the
+    // raw map changes — recording's 10s refresh changes its value string, so a live recording
+    // stays labeled; a stuck flag ages out like it does inside the chat.
+    @State private var activityExpired = false
+
     // Skip re-rendering a row whose conversation is unchanged, even when the parent body re-runs on
     // every snapshot (typing/unread/presence on OTHER chats). Conversation is Equatable → covers
     // lastMessage/unread/updatedAt/pinned/muted/etc.; decryption/avatars/time only recompute on change.
@@ -1495,10 +1502,12 @@ struct ChatRow: View, Equatable {
         switch s {
         case "📄 File":              return ("doc.fill", "File")
         case "GIF":                  return ("sparkles", "GIF")
-        case "📞 Missed call":       return ("phone.down.fill", "Missed call")
-        case "📞 Call":              return ("phone.fill", "Call")
-        case "📹 Missed video call": return ("video.slash.fill", "Missed video call")
-        case "📹 Video call":        return ("video.fill", "Video call")
+        case "📞 Missed call":         return ("phone.down.fill", "Missed call")
+        case "📞 Call":                return ("phone.fill", "Call")
+        case "📞 Declined call":       return ("phone.down.fill", "Declined call")
+        case "📹 Missed video call":   return ("video.slash.fill", "Missed video call")
+        case "📹 Video call":          return ("video.fill", "Video call")
+        case "📹 Declined video call": return ("video.slash.fill", "Declined video call")
         default: return nil
         }
     }
@@ -1590,10 +1599,10 @@ struct ChatRow: View, Equatable {
     @ViewBuilder private var previewContent: some View {
         if conv.leaksBlocked(me) {
             previewRow("hand.raised.fill", "Blocked")
-        } else if let r = recordingLabel {
+        } else if let r = recordingLabel, !activityExpired {
             (Text(Image(systemName: "mic.fill")).font(.system(size: 12)) + Text(" \(r)"))
                 .font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
-        } else if let t = typingLabel {
+        } else if let t = typingLabel, !activityExpired {
             Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
@@ -1733,6 +1742,13 @@ struct ChatRow: View, Equatable {
         .animation(.easeInOut(duration: 0.22), value: unread)   // smooth bold/color/badge changes
         .animation(.easeInOut(duration: 0.22), value: muted)
         .animation(.easeInOut(duration: 0.22), value: conv.isPinned(me))   // pin icon fade
+        // Restarts on every raw typing-map change (see activityExpired above); no-op for quiet rows.
+        .task(id: conv.typingRawKey) {
+            activityExpired = false
+            guard conv.typing.values.contains(true) || conv.recording.values.contains(true) else { return }
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            if !Task.isCancelled { activityExpired = true }
+        }
         .padding(.vertical, 2)
         .padding(.horizontal, 16)   // 16pt gutter moved inside the cell (row insets are now
                                     // zero) so the reorder drag preview matches the cell width
