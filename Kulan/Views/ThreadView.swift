@@ -531,8 +531,11 @@ struct ThreadView: View {
             Button {
                 // Two-stage: if there are unread messages I haven't reached yet, jump
                 // to the FIRST unread; otherwise glide to the newest message.
-                if let unread = firstUnreadId, repo.items.contains(where: { $0.id == unread }) {
-                    nativeScrollTarget = unread
+                if let unread = firstUnreadId, let row = repo.items.first(where: { $0.id == unread }) {
+                    // rowId, not doc id — the native list keys rows by clientId ?? id, and every
+                    // modern message has a clientId, so the untranslated id failed the lookup
+                    // silently and the first tap did nothing (audit finding).
+                    nativeScrollTarget = row.rowId
                     firstUnreadId = nil   // consumed → next press goes to the bottom
                 } else {
                     nativeScrollTarget = "BOTTOM"
