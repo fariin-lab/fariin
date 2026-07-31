@@ -29,7 +29,6 @@ struct GifPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var gifs: [GiphyService.Gif] = []
-    @State private var recents: [GiphyService.Gif] = []
     @State private var searchTask: Task<Void, Never>?   // debounce: don't hit Giphy on every keystroke
     @State private var category: GifCategory = .trending
 
@@ -37,9 +36,10 @@ struct GifPickerView: View {
     // has a version), drawn OUR way: our icons, accent tint, no copied glyph set. Each chip is a
     // ready-made search; Trending is the browse default.
     private enum GifCategory: CaseIterable {
-        case trending, happy, love, sad, party, thumbsUp
+        case recent, trending, happy, love, sad, party, thumbsUp
         var icon: String {
             switch self {
+            case .recent: return "clock"
             case .trending: return "flame"
             case .happy: return "face.smiling"
             case .love: return "heart"
@@ -50,7 +50,7 @@ struct GifPickerView: View {
         }
         var term: String {
             switch self {
-            case .trending: return ""
+            case .recent, .trending: return ""
             case .happy: return "happy"
             case .love: return "love"
             case .sad: return "sad"
@@ -67,28 +67,12 @@ struct GifPickerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                // RECENTLY USED — instant, local, only while browsing Trending (a search or a
-                // mood chip replaces it).
-                if !recents.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("RECENTLY USED")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 4) {
-                                ForEach(recents) { g in
-                                    AnimatedGifView(url: g.url)
-                                        .frame(width: 92, height: 92)
-                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                        .onTapGesture { pick(g) }
-                                }
-                            }
-                            .padding(.horizontal, 6)
-                        }
-                    }
-                    .padding(.top, 6)
+                // Recents live on their OWN clock tab (owner's 416 idea: heavy GIF use would let
+                // the old top row eat the whole main page). Empty state until something is sent.
+                if category == .recent, gifs.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    ContentUnavailableView("No recent GIFs", systemImage: "clock",
+                                           description: Text("GIFs you send will appear here."))
+                        .padding(.top, 40)
                 }
                 // Masonry (standard style): 2 columns, each GIF at its OWN natural aspect ratio,
                 // added to whichever column is currently shorter — no fixed card that stretches them.
@@ -133,10 +117,8 @@ struct GifPickerView: View {
                     .frame(maxWidth: .infinity)
             }
             .task {
-                // Paint INSTANTLY from what we already have (recents + the cached trending page),
-                // then refresh trending quietly behind it. The old version opened EMPTY and made
-                // every open wait for the network — the "takes a bit to load" report.
-                recents = GifRecents.all()
+                // Paint INSTANTLY from the cached trending page, then refresh quietly behind it.
+                // The old version opened EMPTY and made every open wait for the network.
                 if gifs.isEmpty, !Self.trendingCache.isEmpty { gifs = Self.trendingCache }
                 let fresh = await GiphyService.shared.search("")
                 if !fresh.isEmpty {
@@ -154,9 +136,14 @@ struct GifPickerView: View {
         dismiss()
     }
 
-    // ONE loader for every state: a typed search wins; otherwise the selected mood; Trending = "".
+    // ONE loader for every state: a typed search wins; otherwise the selected mood. Recent is
+    // local (the device's own sent list) — instant, no network; Trending = "".
     private func refresh() async {
         let q = query.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty, category == .recent {
+            gifs = GifRecents.all()
+            return
+        }
         let results = await GiphyService.shared.search(q.isEmpty ? category.term : q)
         if !Task.isCancelled { gifs = results }
     }
