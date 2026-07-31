@@ -438,7 +438,10 @@ struct ThreadView: View {
             // yanked the viewport while reading history) — pause it whenever they're away from the bottom.
             .onChange(of: isAtBottom) { _, atB in repo.readerAwayFromBottom = !atB }
             // Always default the pinned bar to the LAST (most recent) pin; tapping then cycles.
-            .onChange(of: repo.pinnedMessageIds) { _, ids in
+            // visiblePinIds, not repo.pinnedMessageIds: deleting a pin "for me" leaves the shared
+            // list untouched, so watching the raw list never fired and the bar kept a stale index
+            // (and, on the last pin, a stale height).
+            .onChange(of: visiblePinIds) { _, ids in
                 pinIndex = max(0, ids.count - 1)
                 // The bar's height is reported by a GeometryReader ON the bar — when the last pin is
                 // removed the bar unmounts and nothing reports 0, so the floating date pill stayed at
@@ -1204,10 +1207,24 @@ struct ThreadView: View {
         return d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
     }
 
+    /// Pins minus the ones I deleted "for me".
+    ///
+    /// `deleteMessage` (Delete for Everyone) drops the id from `pinnedMessageIds`, so that half
+    /// already unpins itself. Delete for Me only hides the message on THIS device, and the pin is
+    /// shared state — removing it there would yank the other person's pin too, which is the one
+    /// thing Delete for Me must never do. So the local half is filtered here instead, and the bar
+    /// disappears for me while their bar keeps working.
+    ///
+    /// Only HIDDEN ids are dropped, never merely-unloaded ones: a pin outside the loaded window
+    /// still resolves to nil and must keep showing "Tap to view" until `ensureLoaded` fills it in.
+    private var visiblePinIds: [String] {
+        repo.pinnedMessageIds.filter { !HiddenMessages.isHidden($0) }
+    }
+
     // Liquid-Glass pinned-message bar below the nav (tap to scroll to it; pin.slash to unpin).
     @ViewBuilder private var pinnedBar: some View {
-        if !repo.pinnedMessageIds.isEmpty {
-            let ids = repo.pinnedMessageIds
+        if !visiblePinIds.isEmpty {
+            let ids = visiblePinIds
             let idx = min(pinIndex, ids.count - 1)
             let pid = ids[idx]
             // repo.ITEMS, not repo.messages (audit): items is the hidden-filtered list the chat
