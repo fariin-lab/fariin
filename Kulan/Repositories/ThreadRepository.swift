@@ -312,7 +312,13 @@ final class ThreadRepository {
     private func changeSig(_ data: [String: Any]) -> String {
         let raw = (data["reactions"] as? [String: String]) ?? [:]
         let reactions = raw.keys.sorted().map { "\($0)=\(raw[$0] ?? "")" }.joined(separator: ",")
-        return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false) + "|" + reactions
+        // The ALBUM ARRAY is mutable too: deleteAlbumItem rewrites it for everyone, but the signature
+        // ignored it, so the recipient's open chat reused the cached Message with the old array and
+        // the deleted photo stayed on screen until relaunch (audit). Count + urls is enough to notice.
+        let album = (data["album"] as? [[String: Any]]) ?? []
+        let albumSig = "\(album.count):" + album.compactMap { $0["imageUrl"] as? String }.joined(separator: ",")
+        return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
+            + "|" + reactions + "|" + albumSig
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.

@@ -270,6 +270,36 @@ final class Crypto {
         return result
     }
 
+    /// KEY ROTATION RECOVERY (audit). Peer public keys were cached in memory AND on disk with no
+    /// expiry, no listener and no refetch, so a contact who reinstalls or moves to a new phone
+    /// (their per-device Keychain key does not migrate, so `initKeys` publishes a fresh pair) broke
+    /// the chat PERMANENTLY in both directions: everything we sealed used their dead key, and
+    /// everything they sent failed to open, showing the lock placeholder forever. Only signing out
+    /// cleared it. A decrypt failure now drops the cached copy once and refetches, so the next
+    /// render heals — at most one extra read per peer per rotation, and never a loop, because a
+    /// genuinely undecryptable message keeps its placeholder after the refreshed key still fails.
+    private var keyRefreshInFlight = Set<String>()
+    func refreshKeyAfterFailure(_ uid: String) {
+        guard !uid.isEmpty else { return }
+        let start: Bool = lock.withLock {
+            if keyRefreshInFlight.contains(uid) { return false }
+            keyRefreshInFlight.insert(uid)
+            return true
+        }
+        guard start else { return }
+        Task {
+            lock.withLock { pubCache.removeValue(forKey: uid) }
+            // Drop the DISK copy too (same shared dictionary persistPubKey writes), or the next cold
+            // launch would warm the dead key straight back into memory.
+            var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
+            if dict.removeValue(forKey: uid) != nil {
+                UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+            }
+            _ = await fetchKey(uid)
+            lock.withLock { _ = keyRefreshInFlight.remove(uid) }
+        }
+    }
+
     private func fetchKey(_ uid: String) async -> Bytes? {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
@@ -347,7 +377,12 @@ final class Crypto {
                                            senderPublicKey: otherPub,
                                            recipientSecretKey: sk,
                                            nonce: Bytes(nonce)),
-              let text = String(bytes: opened, encoding: .utf8) else { return "🔒" }
+              let text = String(bytes: opened, encoding: .utf8) else {
+            // Most likely their key rotated (new phone / reinstall) and ours is stale — refetch once
+            // so the next render heals instead of showing this lock forever. See refreshKeyAfterFailure.
+            refreshKeyAfterFailure(otherUid(cid))
+            return "🔒"
+        }
         return text
     }
 
@@ -475,7 +510,12 @@ final class Crypto {
         guard let fileKey = sodium.box.open(authenticatedCipherText: Bytes(wrappedKey),
                                             senderPublicKey: otherPub,
                                             recipientSecretKey: sk,
-                                            nonce: Bytes(keyNonce)) else { return nil }
+                                            nonce: Bytes(keyNonce)) else {
+            // Same key-rotation recovery the text path uses: a wrap that will not open is the
+            // signature of a stale peer key, so drop it and refetch for the next attempt.
+            refreshKeyAfterFailure(otherUid(cid))
+            return nil
+        }
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(cipher),
                                                  secretKey: fileKey,
                                                  nonce: Bytes(dataNonce)) else { return nil }

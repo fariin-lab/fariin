@@ -38,14 +38,24 @@ enum ChatService {
         if let p = me?.photoUrl, !p.isEmpty { photos[uid] = p }
         if let p = other.photoUrl, !p.isEmpty { photos[other.id] = p }
 
-        try await db.collection("conversations").document(cid).setData([
+        // SEED unreadCount/typing ONLY ON CREATION. A merge write of a MAP field writes every key in
+        // it, so doing this on every open zeroed `unreadCount.<other>` — wiping the other person's
+        // badge for messages they never read — and forced their typing flag to false. Every entry
+        // point calls this unconditionally (New Chat, @search, a kulan:// link, a contact tap), so
+        // it fired constantly (audit). Names/photos still refresh on every open, as before.
+        let ref = db.collection("conversations").document(cid)
+        let exists = (try? await ref.getDocument())?.exists ?? false
+        var seed: [String: Any] = [
             "users": [uid, other.id],
             "names": [uid: me?.name ?? "Me", other.id: other.name.isEmpty ? other.handle : other.name],
             "photos": photos,
-            "unreadCount": [uid: 0, other.id: 0],
-            "typing": [uid: false, other.id: false],
             "updatedAt": FieldValue.serverTimestamp(),
-        ], merge: true)
+        ]
+        if !exists {
+            seed["unreadCount"] = [uid: 0, other.id: 0]
+            seed["typing"] = [uid: false, other.id: false]
+        }
+        try await ref.setData(seed, merge: true)
         return cid
     }
 
@@ -398,10 +408,20 @@ enum ChatService {
         let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
         let convRef = db.collection("conversations").document(cid)
 
-        // Brand-new chat? (local check — the repo mirrors the server list). The privacy
-        // setting "Disappearing Messages for new chats" only applies to chats born here.
-        let isNewConv = await MainActor.run {
+        // Brand-new chat? The "Disappearing Messages for new chats" default applies only to chats
+        // born here. This asked the LOCAL mirror, which is EMPTY until the first conversations
+        // snapshot lands — so a send into an EXISTING chat during that window (cold start, opened
+        // straight from @search) wrote the default timer onto a conversation both people had
+        // already configured, silently, with none of the system notices setDisappear insists on
+        // (audit). Ask the server, and treat "couldn't tell" as not-new so we never flip it blind.
+        let localSaysNew = await MainActor.run {
             !ConversationsRepository.shared.conversations.contains { $0.id == cid }
+        }
+        var isNewConv = localSaysNew
+        if localSaysNew, let snap = try? await convRef.getDocument() {
+            isNewConv = !snap.exists
+        } else if localSaysNew {
+            isNewConv = false   // the check itself failed — never seed on a guess
         }
 
         // Ensure the conversation exists BEFORE the message. The rules require
@@ -585,13 +605,20 @@ enum ChatService {
             }
         }
         batch.setData(imgMsg, forDocument: msgRef)
+        // A VIEW-ONCE photo publishes NO thumbnail to the conversation doc (audit): lastImageUrl +
+        // lastImageEnc are a decryptable copy both sides keep forever, and the chat list rendered it
+        // as the row thumbnail before the recipient ever opened it and long after the single view was
+        // spent — which is the whole promise of view-once, broken. The blurhash on the line above was
+        // already exempt for exactly this reason; this path was missed.
         var convUpdate: [String: Any] = [
-            "lastMessage": "📷 Photo",
-            "lastImageUrl": url,
-            "lastImageEnc": meta.asDict,
+            "lastMessage": viewOnce ? "View-once photo" : "📷 Photo",
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
+        if !viewOnce {
+            convUpdate["lastImageUrl"] = url
+            convUpdate["lastImageEnc"] = meta.asDict
+        }
         if let members {
             for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) }
         } else {
@@ -725,6 +752,13 @@ enum ChatService {
                 if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl) }
                 let (vidCipher, vidMeta) = try await seal(mp4)
                 let vidUrl = try await upload(vidCipher, "\(i)-video")
+                // KEEP THE SENDER'S OWN COPY, like sendVideo does (audit). The mailman model has the
+                // recipient DELETE the server object once they've watched it, which is only safe
+                // because the sender kept a local copy — sendVideo stores one, this path did not, so
+                // the sender's own album video 404'd forever after the other side pressed play (and
+                // forwarding that album failed for good). Keyed by the synthetic album-child id the
+                // viewer and cache use: "<parentId>-<index>".
+                VideoCache.store(mp4, for: "\(msgRef.documentID)-\(i)")
                 out.append(["kind": "video", "imageUrl": thumbUrl, "enc": thumbMeta.asDict,
                             "videoUrl": vidUrl, "videoEnc": vidMeta.asDict, "duration": duration,
                             "width": w, "height": h])
@@ -1327,6 +1361,14 @@ enum ChatService {
         do {
             try await db.collection("conversations").document(cid)
                 .collection("messages").document(messageId).delete()
+            // Clean up what a bare doc delete leaves behind (audit):
+            // • a PIN pointing at it — pinnedMessageIds is shared state and nothing else ever
+            //   removes the id, so both people kept a dead "Tap to view" pin forever;
+            // • the conversation SUMMARY, if this was the newest message — the deleted text (and a
+            //   photo's thumbnail) stayed readable in BOTH chat lists indefinitely, which is exactly
+            //   what "delete for everyone" promises it won't.
+            await removePinnedMessage(cid, messageId)
+            await clearSummaryIfNewest(cid: cid, deletedId: messageId)
             return true
         } catch {
             #if DEBUG
@@ -1334,6 +1376,36 @@ enum ChatService {
             #endif
             return false
         }
+    }
+
+    /// After the newest message is deleted, re-point the conversation summary at whatever is now
+    /// newest (or clear it when nothing is left). Best-effort: a failure here never fails the delete.
+    private static func clearSummaryIfNewest(cid: String, deletedId: String) async {
+        let convRef = db.collection("conversations").document(cid)
+        let newest = try? await convRef.collection("messages")
+            .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
+        guard let doc = newest?.documents.first else {
+            // Nothing left at all.
+            try? await convRef.updateData([
+                "lastMessage": "", "lastSender": "",
+                "lastImageUrl": FieldValue.delete(), "lastImageEnc": FieldValue.delete(),
+            ])
+            return
+        }
+        let d = doc.data()
+        var update: [String: Any] = [
+            "lastMessage": d["text"] as? String ?? "",
+            "lastSender": d["authorId"] as? String ?? "",
+        ]
+        // Carry the new newest message's thumbnail, or drop the stale one.
+        if let u = d["imageUrl"] as? String, let e = d["enc"] as? [String: Any],
+           (d["viewOnce"] as? Bool) != true {
+            update["lastImageUrl"] = u; update["lastImageEnc"] = e
+        } else {
+            update["lastImageUrl"] = FieldValue.delete()
+            update["lastImageEnc"] = FieldValue.delete()
+        }
+        try? await convRef.updateData(update)
     }
 
     /// Remove ONE item from an album message, for everyone. Reads the RAW stored album array and
@@ -1376,9 +1448,16 @@ enum ChatService {
         let cipher = members != nil
             ? try await Crypto.shared.encryptForGroup(t, members: members!)
             : try await Crypto.shared.encryptForConversation(cid, t)
-        try await db.collection("conversations").document(cid)
-            .collection("messages").document(messageId)
+        let convRef = db.collection("conversations").document(cid)
+        try await convRef.collection("messages").document(messageId)
             .updateData(["text": cipher, "edited": true])
+        // If this WAS the newest message, the chat list still shows the pre-edit text on both
+        // phones until something else arrives (audit) — re-point the summary at the new wording.
+        let newest = try? await convRef.collection("messages")
+            .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
+        if newest?.documents.first?.documentID == messageId {
+            try? await convRef.updateData(["lastMessage": cipher])
+        }
     }
 
     /// A privacy pref (defaults ON when never set).
