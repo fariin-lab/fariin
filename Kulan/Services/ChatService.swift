@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import PDFKit
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
@@ -932,12 +933,34 @@ enum ChatService {
         let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
         _ = try await ref.putDataAsync(cipher, metadata: sm)
         let url = try await ref.downloadURL().absoluteString
+        // iMessage-style document preview (owner's reference): a PDF's first page — or an image
+        // file's own pixels — rides along as an ENCRYPTED thumbnail, the video-poster pipeline
+        // reused (thumbUrl/thumbEnc parse on every message type). Best-effort: a failed preview
+        // never fails the send; other document types keep the plain icon.
+        var thumbFields: [String: Any] = [:]
+        if let preview = documentPreviewJPEG(fileName: fileName, data: rawData) {
+            let tCipher: Data?, tMeta: EncMeta?
+            if let members {
+                (tCipher, tMeta) = (try? await Crypto.shared.encryptBytesForGroup(preview, members: members)) ?? (nil, nil)
+            } else {
+                (tCipher, tMeta) = (try? await Crypto.shared.encryptBytes(cid, preview)) ?? (nil, nil)
+            }
+            if let tCipher, let tMeta {
+                let tRef = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).filethumb.enc")
+                let tsm = StorageMetadata(); tsm.contentType = "application/octet-stream"
+                if (try? await tRef.putDataAsync(tCipher, metadata: tsm)) != nil,
+                   let tUrl = try? await tRef.downloadURL().absoluteString {
+                    thumbFields = ["thumbUrl": tUrl, "thumbEnc": tMeta.asDict]
+                }
+            }
+        }
         let batch = db.batch()
         var msg: [String: Any] = [
             "type": "file", "fileUrl": url, "fileName": fileName, "fileSize": rawData.count,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs,
         ]
+        for (k, v) in thumbFields { msg[k] = v }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
@@ -952,6 +975,32 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+    }
+
+    /// First-page render for a PDF, the pixels for an image file — nil for anything else
+    /// (those keep the plain document icon).
+    private static func documentPreviewJPEG(fileName: String, data: Data) -> Data? {
+        if fileName.lowercased().hasSuffix(".pdf") {
+            guard let doc = PDFDocument(data: data), let page = doc.page(at: 0) else { return nil }
+            let bounds = page.bounds(for: .mediaBox)
+            guard bounds.width > 0, bounds.height > 0 else { return nil }
+            let scale = 300 / max(bounds.width, bounds.height)
+            let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+            let img = UIGraphicsImageRenderer(size: size).image { ctx in
+                UIColor.white.setFill()
+                ctx.fill(CGRect(origin: .zero, size: size))
+                // PDF space is bottom-up; flip, scale, and honor a non-zero page origin.
+                ctx.cgContext.translateBy(x: 0, y: size.height)
+                ctx.cgContext.scaleBy(x: scale, y: -scale)
+                ctx.cgContext.translateBy(x: -bounds.origin.x, y: -bounds.origin.y)
+                page.draw(with: .mediaBox, to: ctx.cgContext)
+            }
+            return img.jpegData(compressionQuality: 0.8)
+        }
+        if UIImage(data: data) != nil {
+            return downscaledJPEG(data, maxDimension: 300, quality: 0.8)
+        }
+        return nil
     }
 
     /// Send a GIF (a public Giphy URL — public content, so NOT E2EE; we store the url directly).

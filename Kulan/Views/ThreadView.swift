@@ -4905,11 +4905,20 @@ struct MessageBubble: View, Equatable {
                 // long-press (context menu) and swipe-to-reply never fired on file bubbles. A tap
                 // gesture opens the file; everything else bubbles up normally.
                 HStack(spacing: 10) {
-                    // Spinner while the optimistic file is still uploading, else the document icon.
+                    // Spinner while the optimistic file is still uploading; then the iMessage-style
+                    // page preview when the sender attached one (PDF first page / image file), and
+                    // the plain document icon for every other type and for old messages.
                     if message.sendState == .sending {
                         ProgressView().progressViewStyle(.circular)
                             .tint(isMe ? onMyBubble : Color.accentColor)
                             .frame(width: 26, height: 26)
+                    } else if let t = message.thumbUrl, !t.isEmpty {
+                        SecureImageView(imageUrl: t, enc: message.thumbEnc, cid: cid)
+                            .frame(width: 44, height: 58)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
                     } else {
                         Image(systemName: "doc.fill").font(.system(size: 26))
                             .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
