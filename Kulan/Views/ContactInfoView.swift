@@ -32,6 +32,7 @@ struct ContactInfoView: View {
     /// frame whether the All Media section exists at all — see ChatService.SharedMediaPresence.
     @State private var mediaHint = 0
     @State private var viewerImage: Message?
+    @State private var viewerVideo: Message?   // videos get the PLAYER — the image viewer spun forever
     @State private var showClear = false
     @State private var showBlock = false
     @State private var showReport = false
@@ -238,6 +239,11 @@ struct ContactInfoView: View {
                 // the same pipeline as the conversation and the gallery. The story cover below still
                 // uses .zoom - stories deliberately keep the system hero transition.
                 ImageViewerView(message: msg, cid: cid, rectScope: .profile)
+            }
+            // Audit: strip videos were routed into the IMAGE viewer, which guards on imageUrl (nil
+            // for videos) and spun forever. Same player + routing the gallery uses.
+            .fullScreenCover(item: $viewerVideo) { msg in
+                VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .profile)
             }
             // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
             // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and
@@ -680,9 +686,13 @@ struct ContactInfoView: View {
                                 .onTapGesture {
                                     let key = MediaOpenRects.key(.profile, m.id)
                                     // Both cache tiers, not memory only — see flyOrPresent.
+                                    // Videos → the PLAYER (audit: they went to the image viewer,
+                                    // whose loader guards on imageUrl and spun forever).
                                     SignalMediaOpen.flyOrPresent(
                                         imageUrl: url, rectKey: key,
-                                        present: { MediaPresentGate.present { viewerImage = m } })
+                                        present: { MediaPresentGate.present {
+                                            if m.isVideo { viewerVideo = m } else { viewerImage = m }
+                                        } })
                                 }
                         }
                     }
