@@ -27,7 +27,11 @@ final class GroupCallService: ObservableObject {
     var isActive: Bool { activeCid != nil }
 
     func start(cid: String, title: String, video: Bool) async {
-        guard activeCid == nil else { return }
+        // `!connecting` too (audit): activeCid is only set AFTER connect succeeds, so a second tap
+        // during the ~0.3s before the call UI covers the button started a SECOND task on the shared
+        // room. Its connect threw "already connected", and its catch called disconnect() — which
+        // tore down the live call the first tap had just established, for everyone in it.
+        guard activeCid == nil, !connecting else { return }
         connecting = true; isVideo = video; callTitle = title
         do {
             let res = try await Functions.functions(region: "me-central1")
@@ -49,7 +53,9 @@ final class GroupCallService: ObservableObject {
             ])
         } catch {
             connecting = false
-            await disconnect()
+            // Only tear down if THIS task never established a call. Calling disconnect()
+            // unconditionally is what let a losing second task kill the winner's live room.
+            if activeCid == nil { await disconnect() }
         }
     }
 

@@ -495,6 +495,26 @@ final class StoriesRepository {
         StoryRowCache.clear()   // the next account must never see this account's story row
     }
 
+    /// Drop `uid` from the audience of every story I currently have live. Called when I block them:
+    /// the audience is written once at post time, so without this a freshly blocked person keeps
+    /// seeing (and view-receipting) my active stories until they expire.
+    func revokeAudience(for uid: String) async {
+        let me = AuthService.shared.uid ?? ""
+        guard !me.isEmpty, !uid.isEmpty else { return }
+        guard let snap = try? await db.collection("stories")
+            .whereField("authorUid", isEqualTo: me).getDocuments() else { return }
+        let now = Date()
+        for doc in snap.documents {
+            // Only live ones — expired docs are cleaned up on their own schedule.
+            if let exp = (doc.data()["expiresAt"] as? Timestamp)?.dateValue(), exp <= now { continue }
+            // ONLY the audience list. NOT the `public` flag: clearing that would pull the story from
+            // every other non-contact's profile ring as well, which is not what blocking one person
+            // means. An "Everyone" story stays public, and the blocked person is turned away at read
+            // time instead — see the block gate in publicStoryGroup.
+            try? await doc.reference.updateData(["recipientUids": FieldValue.arrayRemove([uid])])
+        }
+    }
+
     // Fetch a specific user's active PUBLIC ("Everyone") story group — powers the story ring on their
     // PROFILE, so anyone who finds them can watch. Non-contacts are allowed this read because the query
     // is constrained to `public == true`, which is exactly what the Firestore read rule gates on.
@@ -502,6 +522,16 @@ final class StoriesRepository {
     func publicStoryGroup(for uid: String, name: String, photoUrl: String?) async -> StoryGroup? {
         let me = AuthService.shared.uid ?? ""
         guard !uid.isEmpty, uid != me else { return nil }   // my own ring is handled by the tray, not the profile
+        // BLOCK GATE (audit). resolveAudience deliberately strips people I've blocked from every
+        // story I post, but an "Everyone" story also carries public == true, and this read gated
+        // only on that flag — so someone the AUTHOR blocked could still watch it from the author's
+        // profile, invisibly, because the profile viewer is anonymous and never lands in Seen-by.
+        // The block is recorded on the shared conversation doc, which both clients can read.
+        let cid = ChatService.convId(me, uid)
+        if let snap = try? await db.collection("conversations").document(cid).getDocument(),
+           ((snap.data()?["blockedBy"] as? [String: Any])?[uid] as? Bool) == true {
+            return nil   // the AUTHOR blocked me → no ring, no story
+        }
         let snap = try? await db.collection("stories")
             .whereField("authorUid", isEqualTo: uid)
             .whereField("public", isEqualTo: true)

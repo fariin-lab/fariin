@@ -803,7 +803,13 @@ final class CallService: NSObject {
         guard ringbackPlayer == nil else { return }
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
-        try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [.mixWithOthers])
+        // KEEP BLUETOOTH (audit). CallKit's didActivate sets .playAndRecord with
+        // [.allowBluetooth, .allowBluetoothA2DP], then calls straight into here — and options are
+        // REPLACED, not merged, so starting the ringback with only [.mixWithOthers] tore the HFP
+        // route down for the rest of every OUTGOING call. AirPods died the moment you dialled, while
+        // answering a call was fine, because this path only runs for the caller.
+        try? s.setCategory(.playAndRecord, mode: .voiceChat,
+                           options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
         s.isAudioEnabled = true
         s.unlockForConfiguration()
         ringbackPlayer = try? AVAudioPlayer(data: RingbackTone.wavData())
@@ -869,7 +875,10 @@ final class CallService: NSObject {
         stopTone()
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
-        try? s.setCategory(.playAndRecord, mode: .voiceChat, options: [.mixWithOthers])
+        // Same Bluetooth preservation as startRingback — this runs at the END of a call, and
+        // stripping the options here dropped the route for whatever came next.
+        try? s.setCategory(.playAndRecord, mode: .voiceChat,
+                           options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
         s.isAudioEnabled = true
         s.unlockForConfiguration()
         tonePlayer = try? AVAudioPlayer(data: data)
@@ -1121,8 +1130,13 @@ final class CallService: NSObject {
                 let d = doc.data()
                 // H3: ignore zombie ringing docs (caller crashed mid-ring) so they don't re-ring forever.
                 if let ts = (d["createdAt"] as? Timestamp)?.dateValue(), Date().timeIntervalSince(ts) > 60 { return }
-                // H4: already in a call → send this new caller a busy signal instead of dropping them silently.
-                if self.state != .idle {
+                // H4: already in a LIVE call → send this new caller a busy signal instead of dropping
+                // them silently. `.ended` is NOT a live call: it is a cosmetic 1-2s tail before idle
+                // (see finishCall), and treating it as busy meant an instant redial — or a third
+                // person calling in that window — was rejected with a busy nobody was busy for, plus
+                // a phantom missed row (audit).
+                let inLiveCall = [.outgoing, .incoming, .active, .reconnecting].contains(self.state)
+                if inLiveCall {
                     if doc.documentID != self.callId {
                         let caller = d["caller"] as? String ?? ""
                         // GLARE: we dialled each other at the same moment, so we are each other's
@@ -1142,6 +1156,12 @@ final class CallService: NSObject {
                             // would sit idle while their phone rings on alone.
                             self.recheckIncomingWhenIdle = true
                             self.endReason = .hangup
+                            // Standing down in glare is bookkeeping, not a missed call. Without
+                            // this the loser wrote a call record whose outcome reads "missed" on
+                            // the WINNER's phone — a red missed row for the person they are
+                            // connecting with a second later (audit). Same suppression the
+                            // answered-elsewhere path already uses.
+                            self.recordWritten = true
                             self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
                             return
                         }
@@ -1226,7 +1246,10 @@ final class CallService: NSObject {
         self.isCaller = false
         self.state = .incoming   // so the UI can present once answered
         Task { await refreshIceServers() }   // ensure fresh TURN before the callee builds its connection
-        markRinging()
+        // markRinging() is DEFERRED until the gate below answers (audit). Telling the caller
+        // "Ringing…" and then ending the call a round-trip later gave a blocked caller a distinct
+        // signature — ring-then-instant-decline when my app is killed, versus a silent 45s ring-out
+        // when it is open — which is exactly the tell silent blocking exists to avoid.
         watchRingingCancel(callId)   // tear down if the caller cancels before I answer
         // BLOCKED / PRIVACY. The Firestore listener path gates on both; this PUSH path gated on
         // NEITHER, so with the app killed a blocked caller — or one excluded by "No One" / "My
@@ -1234,11 +1257,17 @@ final class CallService: NSObject {
         // iOS requires reportNewIncomingCall in the same run loop as the push, so the ring genuinely
         // cannot wait on an async lookup: PushManager reports first and we end it the moment we know.
         callAllowed(from: uid) { [weak self] ok in
-            guard let self, !ok, self.state == .incoming, self.callId == callId else { return }
-            self.db.collection("calls").document(callId)
-                .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
-            self.recordWritten = true   // a blocked call leaves no trace, same as the listener path
-            self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+            guard let self, self.state == .incoming, self.callId == callId else { return }
+            guard ok else {
+                // Refuse WITHOUT ever having marked it ringing: from the caller's side this is the
+                // same silent non-answer the foreground listener path produces.
+                self.db.collection("calls").document(callId)
+                    .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
+                self.recordWritten = true   // a blocked call leaves no trace, same as the listener path
+                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+                return
+            }
+            self.markRinging()   // allowed — only now does the caller hear it ring
         }
     }
 

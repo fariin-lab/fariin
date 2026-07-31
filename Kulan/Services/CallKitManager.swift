@@ -56,7 +56,14 @@ final class CallKitManager: NSObject {
         activeUUID = uuid
         activeCallId = nil
         let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .generic, value: name))
-        controller.request(CXTransaction(action: action)) { _ in }
+        controller.request(CXTransaction(action: action)) { error in
+            // A FAILED start action (iOS refuses while a cellular call is up, etc.) means CallKit
+            // never performs the action and never activates the audio session — so the call could
+            // signal, "connect", and carry NO audio in either direction, with the error thrown away
+            // (audit). Tear it down instead of leaving a silent call standing.
+            guard error != nil else { return }
+            DispatchQueue.main.async { CallService.shared.endFromCallKit() }
+        }
         return uuid
     }
     func reportConnecting() { if let u = activeUUID { provider.reportOutgoingCall(with: u, startedConnectingAt: nil) } }
@@ -96,7 +103,19 @@ final class CallKitManager: NSObject {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.hasVideo = video
-        provider.reportNewIncomingCall(with: uuid, update: update) { _ in completion?() }
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+            // If iOS REFUSES to report it (its own block list, a Focus filter), there is no ring and
+            // no system call — but activeUUID/activeCallId were left pointing at it, so the app sat
+            // in .incoming with no UI and End could not clear it until the caller's 45s timeout
+            // (audit). Release the handles and tear our side down.
+            if error != nil {
+                DispatchQueue.main.async {
+                    if self?.activeUUID == uuid { self?.activeUUID = nil; self?.activeCallId = nil }
+                    CallService.shared.endFromCallKit()
+                }
+            }
+            completion?()
+        }
     }
 
     // Reflect a mid-call video<->voice switch in the system call UI (green pill shows the camera glyph).
@@ -115,7 +134,12 @@ final class CallKitManager: NSObject {
             CallService.shared.endFromCallKit()
             return
         }
-        controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { _ in }
+        controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { error in
+            // Same reasoning as the nil-UUID branch above: if the end action itself fails, the End
+            // button silently did nothing. Fall back to tearing our side down directly.
+            guard error != nil else { return }
+            DispatchQueue.main.async { CallService.shared.endFromCallKit() }
+        }
     }
     /// Remote hung up / call failed — clear the system UI without a user action.
     func reportEnded() {

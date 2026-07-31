@@ -1630,6 +1630,14 @@ enum ChatService {
         // (never delivered, as standard messengers do). Older history stays visible.
         if value { data["blockedAt"] = [uid: now] } else { data["blockClearedAt"] = [uid: now] }
         try? await db.collection("conversations").document(cid).setData(data, merge: true)
+        // REVOKE MY ACTIVE STORIES FROM THEM (audit). The audience is frozen into recipientUids at
+        // post time and nothing ever rewrote it, so blocking someone only affected FUTURE stories:
+        // for up to 24h they kept the ring, kept watching, and kept landing in my Seen-by. Blocking
+        // is the strongest "stop seeing me" action there is, so it has to reach back.
+        if value {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            if !other.isEmpty { await StoriesService.shared.revokeAudience(for: other) }
+        }
     }
 
     /// File an abuse report. App Store Guideline 1.2 requires users to be able to
