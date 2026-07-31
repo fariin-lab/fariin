@@ -541,7 +541,9 @@ private final class CMActionRow: UIView {
         self.action = action
         super.init(frame: .zero)
 
-        highlight.backgroundColor = UIColor.label.withAlphaComponent(0.08)
+        // Signal's own highlight fill (their `.Signal.secondaryFill`); the system token is the same
+        // idea and adapts to light/dark on its own.
+        highlight.backgroundColor = .secondarySystemFill
         highlight.isHidden = true
         addSubview(highlight)
 
@@ -566,7 +568,18 @@ private final class CMActionRow: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        highlight.frame = bounds
+        // HIGHLIGHT GEOMETRY, verbatim from Signal's row (`isHighlighted` didSet): on iOS 26 the
+        // fill is `bounds.insetBy(dx: 10, dy: 1)` with capsule corners, so it reads as a pill inset
+        // from the card's edges; older systems fill the whole row square. Ours was full-bounds and
+        // square everywhere, which is the edge-to-edge block in the owner's side-by-side.
+        if #available(iOS 26.0, *) {
+            highlight.frame = bounds.insetBy(dx: 10, dy: 1)
+            highlight.layer.cornerRadius = highlight.bounds.height / 2   // = their .capsule()
+            highlight.layer.cornerCurve = .continuous
+        } else {
+            highlight.frame = bounds
+            highlight.layer.cornerRadius = 0
+        }
         // Signal's row metrics verbatim (ContextMenuActionsAccessory.ContextMenuActionRow): icon
         // LEADING, and both margin and icon size step up on iOS 26 the way theirs do.
         let margin: CGFloat
