@@ -114,16 +114,21 @@ struct ForwardPicker: View {
         // Oldest first so forwarded messages land in the same order they were sent.
         let ordered = messages.sorted { $0.createdAt < $1.createdAt }
         let src = sourceCid
-        let label: String
-        if targets.count == 1, let c = repo.conversations.first(where: { targets.contains($0.id) }) {
-            label = "Sent to \(c.displayName(me))"
-        } else {
-            label = "Sent to \(targets.count) chats"
-        }
         let queued = onQueued, failed = onFailed
         onSent()
         dismiss()
-        queued(label)
+        // Telegram model (owner's 416 report: "i still land on where i sent from"): forwarding to
+        // ONE chat lands you IN that chat — watching your forward arrive IS the confirmation, so no
+        // toast there. Several chats can't all be landed in → stay put, the toast confirms instead.
+        // Same route a banner tap uses; MainShell foregrounds Chats and pushes.
+        if targets.count == 1, let cid = targets.first,
+           let c = repo.conversations.first(where: { $0.id == cid }) {
+            AppRouter.shared.pendingChatName = c.displayName(me)
+            AppRouter.shared.pendingChatPhoto = c.displayPhoto(me)
+            AppRouter.shared.pendingChatId = cid
+        } else {
+            queued("Sent to \(targets.count) chats")
+        }
         Task {
             var anyFailed = false
             for cid in targets {
