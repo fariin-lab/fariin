@@ -52,6 +52,10 @@ struct ContactInfoView: View {
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
+    // A REAL photo is on screen (not the letter fallback). The tap gate used to be "url isn't
+    // empty", which is a different thing: a removed or stale url still shows the letter, and
+    // tapping it opened an empty grey circle (owner's screenshot).
+    @State private var heroHasPhoto = false
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
@@ -573,7 +577,8 @@ struct ContactInfoView: View {
                     .frame(width: 100, height: 100)
                     .opacity(publicStory != nil && !showProfilePhoto ? 1 : 0)
                     .animation(.easeOut(duration: 0.2), value: publicStory != nil)
-                AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88)
+                AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88,
+                           onPhotoResolved: { heroHasPhoto = $0 })
                     // The viewer IS this avatar while open — hide the original so the morph reads
                     // as one circle leaving and returning, not a copy floating over it.
                     .opacity(showProfilePhoto ? 0 : 1)
@@ -584,7 +589,8 @@ struct ContactInfoView: View {
             // list: the viewer grows out of this avatar and the drag-down rides back into it.
             .matchedTransitionSource(id: "profile-story", in: mediaNS)
             .onTapGesture {
-                let hasPhoto = gatedPhotoUrl?.isEmpty == false
+                // What the eye sees, not what the url says — no picture means nothing to open.
+                let hasPhoto = heroHasPhoto
                 // Both a story AND a photo → ASK which one (WhatsApp's "Select an action"). A single
                 // tap can't serve both, and silently preferring the story is what made the profile
                 // photo unreachable. With only one of them available, go straight there.

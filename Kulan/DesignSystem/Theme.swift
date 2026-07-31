@@ -132,13 +132,19 @@ struct AvatarView: View {
     let name: String
     var photoUrl: String?
     var size: CGFloat = 48
+    /// Reports whether a REAL photo is on screen, as opposed to the letter fallback. A non-empty
+    /// photoUrl is NOT the same thing: a removed or stale url still loads nothing, and a caller that
+    /// trusted the string made the avatar "openable" into an empty circle (owner's screenshot).
+    var onPhotoResolved: ((Bool) -> Void)?
 
     @State private var image: UIImage?
 
-    init(name: String, photoUrl: String? = nil, size: CGFloat = 48) {
+    init(name: String, photoUrl: String? = nil, size: CGFloat = 48,
+         onPhotoResolved: ((Bool) -> Void)? = nil) {
         self.name = name
         self.photoUrl = photoUrl
         self.size = size
+        self.onPhotoResolved = onPhotoResolved
         // FIRST-FRAME seed from the synchronous memory cache: without it every AvatarView
         // renders the letter fallback for a beat before .task loads the (already cached)
         // photo — the "blink" on the call screen's big 180pt avatar made it obvious.
@@ -167,6 +173,8 @@ struct AvatarView: View {
         .clipShape(Circle())
         .animation(.easeOut(duration: 0.25), value: image != nil)   // cross-fade in on load (no blink)
         .task(id: photoUrl) { await load() }
+        // Fires on the first frame (memory-cache seed) and again when a load resolves or fails.
+        .onChange(of: image != nil, initial: true) { _, has in onPhotoResolved?(has) }
     }
 
     private func load() async {
