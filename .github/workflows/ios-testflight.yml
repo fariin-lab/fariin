@@ -70,24 +70,19 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            This finishes the audit: the last 11 fixes on top of the 63 in the previous build. Nothing from the list is left open now except two items deliberately left alone. Verified to build, barely tested on a phone, so please be rough with it.
+            A round of fixes from your own reports, plus the profile icons you sent. Verified to build, not tested on a phone, so please be rough with it.
 
-            NEW IN THIS BUILD
-            Deleting one photo out of an album now really deletes it, everywhere it appears, instead of the photo coming back. When a message is deleted, its photo, video, voice note or file is now deleted from the server too, rather than living there forever. Signing out can no longer be undone by data that was still loading, which could briefly show the previous account's calls and stories to the next person on the phone. Tapping a story reply opens the story you actually replied to. The busy tone plays fully instead of cutting off. A dead group call's Join bar is cleared by whoever opens the empty room, instead of sitting there for hours. Answering exactly as the caller cancels no longer leaves you stuck on Reconnecting. Deleting several selected calls no longer silently skips some of them. Cancelling a story upload now cancels all of it, so the post you cancelled cannot go up anyway.
+            THINGS THAT DID NOTHING WHEN TAPPED
+            In the photo viewer, Save Image, Share and the pen all work again. They were reading the photo from the wrong place, so on a picture that was already loaded they quietly did nothing while Delete kept working.
 
-            EVERYTHING BELOW IS ALSO HERE, from the previous build, in case you skipped it.
+            PINS
+            Deleting a pinned message now clears the pin bar. Delete for Everyone already did this; Delete for Me left a dead "Tap to view" pin behind. Your pin disappears without touching the other person's.
 
-            FIXES THAT PROTECT YOUR DATA
-            A message you deleted before it sent can no longer send itself later. Deleting a call now only deletes it from your phone, not from the other person's. Videos sent inside an album no longer disappear from your own phone after the other person watches them. Deleting a message for everyone now also clears it from both chat lists, where the text used to stay readable. If a contact gets a new phone, your chat with them repairs itself instead of showing locks forever.
-
-            PRIVACY
-            Blocking someone now reaches everywhere: they cannot be called from the Calls tab by accident, they stop seeing stories you already posted, their missed calls stop appearing, and they can no longer tell they were blocked from how your phone answers. Signing out clears your settings so the next person on the phone does not inherit them, including one that was silently declining their calls. Strangers can no longer see photos, bios, last-seen or call buttons you limited to friends. View-once photos stop leaving a thumbnail in the chat list.
-
-            THINGS THAT SIMPLY DID NOT WORK
-            Show Notifications stays off when you turn it off. In-App Sounds, Vibrate and Preview now do something. Opening a chat from search no longer wipes the other person's unread badge. "typing" no longer sticks forever after you send. Old pinned messages are reachable again. AirPods now work on calls you place. The app no longer keeps every chat you open in memory.
+            BUBBLES AND SPACING
+            A message no longer cuts off with dots when there is clearly room below it. Sending a file no longer makes its bubble jump size when the upload lands, and an uploading PDF now shows its page straight away. Sending a reply no longer leaves a gap between the message and the keyboard; cancelling always worked, sending did not.
 
             LOOK AND FEEL
-            The long-press menu now uses Signal's exact measurements. Links inside your blue bubbles are white and readable. A reaction is no longer sliced when you long-press. Settings and profile pages use Signal's spacing. Profiles show your private note as a Notes card, two lines with More. Tapping an avatar with no picture does nothing instead of opening an empty circle.
+            The long-press blur now closes exactly like Signal, as a plain fade rather than riding the spring, and the lifted message drops no shadow on iOS 26 the way Signal does. On the profile, the Notes card's More now sits at the end of the second line instead of taking a third. New icons for Verify Encryption, Disappearing Messages, Change Wallpaper, and Sounds and Notifications now matches the Settings one.
 
-            PLEASE TRY: place a call with AirPods in; block a test contact and check calls, stories and search; turn Show Notifications off, force-quit, reopen; send a message then immediately delete it before it sends; forward an album; and long-press a message you reacted to.
+            PLEASE TRY on the 13 Pro Max especially: send a long message and check it wraps instead of showing dots; send a file and watch the bubble while it uploads; reply to a message and send it, then look at the space above the keyboard; pin a message then delete it; open a photo and tap Save, Share and the pen.
         run: fastlane beta
