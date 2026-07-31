@@ -175,8 +175,11 @@ final class ThreadRepository {
                 // message) but never change which messages are visible — update directly,
                 // skip the O(N log N) rebuild.
                 if isOneToOne {
-                    self.otherTyping = (d?["typing"] as? [String: Any])?[other] as? Bool ?? false
-                    self.otherRecording = ((d?["typing"] as? [String: Any])?[other] as? String)?.hasPrefix("audio") == true
+                    // Typing = Bool true (older builds) OR the "text-<seconds>" refresh string —
+                    // the changing value is what re-arms the 15s expiry during a long composing burst.
+                    let tv = (d?["typing"] as? [String: Any])?[other]
+                    self.otherTyping = tv as? Bool == true || (tv as? String)?.hasPrefix("text") == true
+                    self.otherRecording = (tv as? String)?.hasPrefix("audio") == true
                     self.armTypingExpiry()
                     if let ts = (d?["lastRead"] as? [String: Any])?[other] as? Timestamp {
                         self.otherLastReadMillis = ts.dateValue().timeIntervalSince1970 * 1000
@@ -187,7 +190,9 @@ final class ThreadRepository {
                     let others = (d?["users"] as? [String] ?? []).filter { $0 != uid }
                     let typingMap = d?["typing"] as? [String: Any] ?? [:]
                     let names = d?["names"] as? [String: String] ?? [:]
-                    let typers = others.filter { (typingMap[$0] as? Bool) == true }
+                    let typers = others.filter {
+                        (typingMap[$0] as? Bool) == true || (typingMap[$0] as? String)?.hasPrefix("text") == true
+                    }
                     self.otherTyping = !typers.isEmpty
                     self.otherRecording = others.contains { (typingMap[$0] as? String)?.hasPrefix("audio") == true }
                     self.typingNames = typers.map { names[$0] ?? "Someone" }

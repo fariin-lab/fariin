@@ -183,11 +183,19 @@ struct ThreadView: View {
     // Typing hygiene (audit M6): onChange(of: input) can't tell a keystroke from a programmatic
     // assignment, and independent setTyping Tasks could land out of order (remote "typing…" stuck
     // for the 15s expiry). suppressNext skips one onChange; chain serializes the writes.
-    private final class TypingBox { var suppressNext = false; var chain: Task<Void, Never>?; var recordingRefresh: Timer? }
+    private final class TypingBox {
+        var suppressNext = false
+        var chain: Task<Void, Never>?
+        var recordingRefresh: Timer?
+        var typingRefresh: Timer?   // keeps a >15s composing burst alive on the other side
+    }
     @State private var typingBox = TypingBox()
 
     private func setInputSilently(_ s: String) {
-        typingBox.suppressNext = true
+        // Arm the skip ONLY when the assignment will actually fire an onChange — assigning the same
+        // value fires nothing, and the stranded flag then swallowed the FIRST real keystroke's
+        // typing broadcast on every chat open with an empty draft (audit).
+        if input != s { typingBox.suppressNext = true }
         input = s
     }
 
@@ -441,12 +449,9 @@ struct ThreadView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { reactionJumpId = nil }
                 }
             }
-            .onChange(of: repo.otherTyping) { _, t in
-                // Typing indicator appears while at the bottom → reveal it (the reference auto-scrolls for
-                // a typing indicator only when the reader was at the bottom). proxy.scrollTo was a NO-OP
-                // on the native list — this intent never actually executed.
-                if t && isAtBottom { nativeScrollTarget = "BOTTOM" }
-            }
+            // (Removed, audit: the typing auto-scroll "revealed" an in-list typing bubble that does
+            // not exist — typing lives in the HEADER only — and the loose 44pt at-bottom test yanked
+            // a near-bottom reader to exact bottom on every typing flip, revealing nothing.)
             // Keyboard opening: if I was already at the bottom, keep the newest messages pinned right
             // above the keyboard. The list's inset pin covers this at the UIKit level; this explicit
             // glide is the belt-and-suspenders for cases where focus lands before the keyboard frame —
@@ -512,10 +517,18 @@ struct ThreadView: View {
         for m in repo.items where m.authorId == me && !m.reactions.isEmpty {
             let sig = m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
             sigs[m.id] = sig
-            // Changed since we last looked, and the change is someone ELSE's reaction.
-            if let old = seenReactionSigs[m.id], old != sig,
-               let theirs = m.reactions.first(where: { $0.key != me })?.value {
-                arrived = (m.id, theirs)
+            // Changed since we last looked, and the change is someone ELSE's reaction. Diff against
+            // the OLD map: only an entry that is NEW or CHANGED counts — the old "any non-mine
+            // reaction exists" test fired on removals and could name the wrong emoji (audit).
+            if let old = seenReactionSigs[m.id], old != sig {
+                var oldMap: [String: String] = [:]
+                for pair in old.split(separator: ",") {
+                    let kv = pair.split(separator: "=", maxSplits: 1)
+                    if kv.count == 2 { oldMap[String(kv[0])] = String(kv[1]) }
+                }
+                if let fresh = m.reactions.first(where: { $0.key != me && oldMap[$0.key] != $0.value }) {
+                    arrived = (m.id, fresh.value)
+                }
             }
         }
         let seeding = !reactionSigsSeeded
@@ -1093,9 +1106,15 @@ struct ThreadView: View {
             groupCallListener?.remove(); groupCallListener = nil
             AppRouter.shared.activeChatId = nil
             broadcastTyping(false)
+            // Keep the local flag in step with the broadcast we just sent — leaving it true meant a
+            // quick return from an in-chat push never re-broadcast typing for the whole next burst
+            // (the now != typingSent gate never tripped) (audit).
+            typingSent = false
             // The RunLoop retains a live Timer past the view's death — without this, a locked
             // recording carried through navigation would re-broadcast "recording" forever.
+            // Same for the typing keep-alive.
             typingBox.recordingRefresh?.invalidate(); typingBox.recordingRefresh = nil
+            typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
             // Messages that arrived while the chat was OPEN were read live but only onAppear reset
             // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
             Task { await ChatService.resetUnread(cid) }
@@ -1231,7 +1250,15 @@ struct ThreadView: View {
                             if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
                         } label: { Label("Unpin", systemImage: "pin.slash") }
                     }
-                    Button { showPinnedSheet = true } label: { Label("See All", systemImage: "list.bullet") }
+                    Button {
+                        // Load EVERY pin before the sheet builds — its list resolves against the
+                        // loaded window, and out-of-window pins silently vanished from See All
+                        // (audit). ensureLoaded is a no-op for pins already in the window.
+                        Task {
+                            for id in repo.pinnedMessageIds { await repo.ensureLoaded(id) }
+                            await MainActor.run { showPinnedSheet = true }
+                        }
+                    } label: { Label("See All", systemImage: "list.bullet") }
                 } label: {
                     // Upright pin in a bordered circle (reference: image-2 style).
                     Image(systemName: "pin").font(.system(size: 15, weight: .semibold))
@@ -1247,7 +1274,16 @@ struct ThreadView: View {
             .liquidGlass(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .onTapGesture {
-                if let id = msg?.id { flashAndScroll(id) }   // native list: jump+flash (proxy.scrollTo was a no-op)
+                // A pin older than the loaded window resolved nil here, so the very bar that said
+                // "Tap to view" did nothing (audit). Same ensureLoaded pattern as the sheet's onTap;
+                // for in-window pins ensureLoaded is a no-op and this stays instant.
+                Task {
+                    await repo.ensureLoaded(pid)
+                    await MainActor.run {
+                        if repo.items.contains(where: { $0.id == pid }) { flashAndScroll(pid) }
+                        else { showJumpToast("Pinned message was deleted") }
+                    }
+                }
                 if ids.count > 1 { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
             }
             // 20pt = the nav bar's own button inset on iOS 26 (the glass back-button circle's leading
@@ -1796,7 +1832,9 @@ struct ThreadView: View {
     private func customReactInfo(for rowId: String) -> (emojis: [String], selected: String?)? {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
-        guard m.sendState == nil, !iAmMuted, !m.isFeatureMarker else { return nil }
+        // No bar on call/system rows (audit): they render no reaction badges, so a picked emoji
+        // wrote server-side and was visible to NOBODY on either device.
+        guard m.sendState == nil, !iAmMuted, !m.isFeatureMarker, !m.isCall, !m.isSystem else { return nil }
         return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
     }
 
@@ -2799,6 +2837,22 @@ struct ThreadView: View {
 
     // Save a chat photo to the camera roll (decrypts if needed) with a success haptic.
     @MainActor private func saveImageToPhotos(_ m: Message) async {
+        // A still-UPLOADING album keeps its bytes in localAlbum — the single-image paths below are
+        // all nil for it, so the menu's Save Image silently did nothing (audit). Save its photos
+        // (video items skipped) with one shared authorization pass.
+        if !m.localAlbum.isEmpty {
+            let images = m.localAlbum.enumerated()
+                .filter { i, _ in !(m.localAlbumIsVideo.indices.contains(i) && m.localAlbumIsVideo[i]) }
+                .compactMap { UIImage(data: $0.element) }
+            guard !images.isEmpty else { return }
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else { return }
+            try? await PHPhotoLibrary.shared().performChanges {
+                for image in images { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+            }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            return
+        }
         var ui: UIImage?
         if let local = m.localImageData { ui = UIImage(data: local) }
         else if let s = m.imageUrl {
@@ -3779,6 +3833,14 @@ struct ThreadView: View {
                 if now != typingSent {
                     typingSent = now
                     broadcastTyping(now)   // serialized — writes can't land out of order
+                    // Receivers self-clear at 15s and composing produces no doc changes — the 10s
+                    // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
+                    typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+                    if now {
+                        typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+                            broadcastTyping(true)
+                        }
+                    }
                 }
                 // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
                 // in the field), so a parked draft doesn't show "typing…" forever on the other side.
@@ -3788,6 +3850,7 @@ struct ThreadView: View {
                         guard typingSent else { return }
                         typingSent = false
                         broadcastTyping(false)
+                        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
                     }
                     typingIdleStop = work
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
@@ -5077,7 +5140,7 @@ struct MessageBubble: View, Equatable {
                     .font(.system(size: 18, weight: .semibold))
                 Text(viewed ? "Viewed" : "Photo")
                     .font(.system(size: 15, weight: .medium)).italic(viewed)
-                if isMe { metaRow }   // time on EVERY bubble
+                metaRow   // time on EVERY bubble — the received pill was the one exception (audit)
             }
             .foregroundStyle((isMe ? onMyBubble : (dark ? Color.white : .black)).opacity(viewed ? 0.6 : 1))
             .padding(.horizontal, 15).padding(.vertical, 11)

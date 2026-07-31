@@ -1386,8 +1386,13 @@ enum ChatService {
 
     static func setTyping(_ cid: String, _ typing: Bool) async {
         guard pref("typingIndicators") else { return }   // privacy: don't broadcast typing
+        // ON is a CHANGING string ("text-<seconds>") like recording's, not `true`: receivers
+        // self-clear after 15s and only a value that changes the doc produces a snapshot, so a
+        // >15s composing burst went silent on the other side (audit). Receivers accept Bool true
+        // (older builds' writes) OR the "text" prefix.
+        let v: Any = typing ? ("text-\(Int(Date().timeIntervalSince1970))" as Any) : (false as Any)
         try? await db.collection("conversations").document(cid)
-            .setData(["typing": [uid: typing]], merge: true)
+            .setData(["typing": [uid: v]], merge: true)
     }
 
     /// Voice-note recording indicator — SAME field and privacy pref as typing, so the rules and

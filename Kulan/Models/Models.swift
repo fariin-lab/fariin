@@ -413,7 +413,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.lastImageEnc = (data["lastImageEnc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         self.lastSender = data["lastSender"] as? String ?? ""
         self.unreadCount = intMap(data["unreadCount"])
-        self.typing = boolMap(data["typing"])
+        // Typing = Bool true (older builds) OR the "text-<seconds>" refresh string senders now write.
+        self.typing = (data["typing"] as? [String: Any] ?? [:])
+            .compactMapValues { ($0 as? Bool) == true || ($0 as? String)?.hasPrefix("text") == true ? true : nil }
         self.recording = (data["typing"] as? [String: Any] ?? [:])
             .compactMapValues { ($0 as? String)?.hasPrefix("audio") == true ? true : nil }
         self.typingRawKey = (data["typing"] as? [String: Any] ?? [:])
