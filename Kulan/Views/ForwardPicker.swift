@@ -34,6 +34,7 @@ struct ForwardPicker: View {
     private var snippet: String {
         if messages.count > 1 { return "\(messages.count) messages" }
         let message = messages[0]
+        if message.isAlbum { return "🖼 Album" }
         if message.isImage { return "📷 Photo" }
         if message.isVideo { return "🎥 Video" }
         if message.isAudio { return "🎤 Voice message" }
