@@ -554,7 +554,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     }
     func isPinned(_ me: String) -> Bool { pinnedBy[me] ?? false }
     /// Manual order for pinned chats; defaults to recency so never-moved pins stay sensible.
-    func pinRank(_ me: String) -> Double { pinOrder[me] ?? updatedAtMillis }
+    /// FROZEN recency (audit): the raw fallback let a silently-blocked pinned chat jump to the top
+    /// of the pinned block on each of their messages — exactly the activity the freeze hides.
+    func pinRank(_ me: String) -> Double { pinOrder[me] ?? displayUpdatedAt(me) }
     func isArchived(_ me: String) -> Bool { archivedBy[me] ?? false }
     /// "delete for me" until a newer message arrives (parity with RN Db.isCleared).
     func isCleared(_ me: String) -> Bool { updatedAtMillis <= (clearedAt[me] ?? 0) }

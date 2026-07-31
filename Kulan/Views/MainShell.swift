@@ -33,7 +33,9 @@ struct MainShell: View {
         let me = AuthService.shared.uid ?? ""
         guard !me.isEmpty else { return 0 }
         return chatsRepo.conversations.filter {
-            !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me) && $0.unread(me) > 0
+            !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
+                && (Flags.groupsEnabled || !$0.isGroup)   // audit: a hidden legacy group badged a list that refused to show it
+                && $0.unread(me) > 0
         }.count
     }
 
@@ -653,10 +655,12 @@ struct ChatsView: View {
         return StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt)
     }
 
-    // Mark every (non-archived) unread chat as read.
+    // Mark every (non-archived) unread chat as read. Same filter as the tab badge — including
+    // the blocked exclusion the badge always had: marking a silently-blocked chat read sent the
+    // blocked person read receipts, revealing the block-hidden activity (audit).
     private func markAllRead() {
         let ids = repo.conversations
-            .filter { !$0.isCleared(me) && !$0.isArchived(me) && $0.unread(me) > 0 }
+            .filter { !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me) && $0.unread(me) > 0 }
             .map(\.id)
         Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
     }
@@ -781,7 +785,9 @@ struct ChatsView: View {
             }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
-                case 1: return c.unread(me) > 0
+                // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
+                // chat appeared under Unread with no badge and a zero tab count).
+                case 1: return !c.isBlockedByMe(me) && c.unread(me) > 0
                 case 2: return c.isGroup
                 default: return true
                 }
@@ -909,7 +915,9 @@ struct ChatsView: View {
 
     // System action list for a chat row's context menu (HIG order + SF Symbols).
     @ViewBuilder private func chatMenu(_ conv: Conversation) -> some View {
-        if conv.unread(me) > 0 {
+        // Blocked-aware like the row badge (audit: the menu offered "Read" — which would leak read
+        // receipts to the blocked person — for a chat whose row displays zero unread).
+        if !conv.isBlockedByMe(me) && conv.unread(me) > 0 {
             Button {
                 // Full parity with opening the chat: reset MY counter, send read receipts,
                 // and drop its delivered notifications + fix the app badge.
@@ -1055,15 +1063,18 @@ struct ChatsView: View {
                             if chatFilter == 0 {
                                 // First run: an empty list must TEACH the next step, not dead-end
                                 // (big-app pattern) — find people, share your QR, invite friends.
+                                // With stories opted out the row is unmounted but storiesRowHeight
+                                // keeps its initial value — the empty state floated ~175pt too low
+                                // (audit). Pad only for a row that actually exists.
                                 emptyWelcome
-                                    .padding(.top, storiesRowHeight + 24)
+                                    .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
                             } else {
                                 // Per-filter copy — the Groups filter was showing the Unread text.
                                 ContentUnavailableView(
                                     chatFilter == 2 ? "No groups yet" : "No unread chats",
                                     systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
                                     description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
-                                    .padding(.top, storiesRowHeight + 24)
+                                    .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
                                     .allowsHitTesting(false)
                             }
                         }
@@ -1463,6 +1474,12 @@ struct ChatRow: View, Equatable {
     // stays labeled; a stuck flag ages out like it does inside the chat.
     @State private var activityExpired = false
 
+    // Time-driven repaint (audit): `muted` and `timeStr` read the clock at render, and this row is
+    // Equatable on conv alone — so a lapsed 1-hour mute kept its bell-slash indefinitely and a row
+    // from yesterday kept showing "14:03" instead of "Yesterday". The tick task below sleeps to the
+    // nearest deadline (mute expiry or just past midnight), flips this, and re-arms.
+    @State private var clockTick = false
+
     // Skip re-rendering a row whose conversation is unchanged, even when the parent body re-runs on
     // every snapshot (typing/unread/presence on OTHER chats). Conversation is Equatable → covers
     // lastMessage/unread/updatedAt/pinned/muted/etc.; decryption/avatars/time only recompute on change.
@@ -1521,8 +1538,10 @@ struct ChatRow: View, Equatable {
     /// uses, so the badge and the words always agree. Only when it was aimed at ME in a 1:1 (a badge
     /// for my own reaction, or for two other people's in a group, is noise).
     private var freshReactionEmoji: String? {
+        // Aimed at ME everywhere, groups included — the old `isGroup ||` escape badged Alice
+        // reacting to Bob on MY row, exactly the noise this comment forbids (audit).
         guard conv.freshReaction(me), conv.lastReactionBy != me,
-              conv.isGroup || conv.lastReactionToAuthor == me,
+              conv.lastReactionToAuthor == me,
               let enc = conv.lastReactionEnc else { return nil }
         let emoji = conv.isGroup
             ? Crypto.shared.decryptGroupCached(enc, cid: conv.id, authorId: conv.lastReactionBy)
@@ -1673,6 +1692,7 @@ struct ChatRow: View, Equatable {
     var body: some View {
         // 56pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
         HStack(spacing: 12) {
+            let _ = clockTick   // dependency: the tick task's flip must re-evaluate muted/timeStr
             // Rule: a story ring must NOT enlarge the row — the photo shrinks a hair
             // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
             AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
@@ -1748,6 +1768,24 @@ struct ChatRow: View, Equatable {
             guard conv.typing.values.contains(true) || conv.recording.values.contains(true) else { return }
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if !Task.isCancelled { activityExpired = true }
+        }
+        // The clock tick (see clockTick above): wake at mute expiry / just past midnight, repaint.
+        .task(id: conv.mutedBy[me] ?? 0) {
+            while !Task.isCancelled {
+                let nowMs = Date().timeIntervalSince1970 * 1000
+                var deadlines: [Double] = []
+                let mute = conv.mutedBy[me] ?? 0
+                if mute > nowMs { deadlines.append(mute) }
+                if let midnight = Calendar.current.nextDate(after: Date(),
+                                                            matching: DateComponents(hour: 0, minute: 0, second: 5),
+                                                            matchingPolicy: .nextTime) {
+                    deadlines.append(midnight.timeIntervalSince1970 * 1000)
+                }
+                guard let next = deadlines.min() else { return }
+                try? await Task.sleep(nanoseconds: UInt64(max(1, (next - nowMs) / 1000) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                clockTick.toggle()
+            }
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 16)   // 16pt gutter moved inside the cell (row insets are now
