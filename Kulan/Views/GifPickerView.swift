@@ -31,6 +31,34 @@ struct GifPickerView: View {
     @State private var gifs: [GiphyService.Gif] = []
     @State private var recents: [GiphyService.Gif] = []
     @State private var searchTask: Task<Void, Never>?   // debounce: don't hit Giphy on every keystroke
+    @State private var category: GifCategory = .trending
+
+    // The mood row — the standard GIF-picker categories (Giphy's own concept, every big messenger
+    // has a version), drawn OUR way: our icons, accent tint, no copied glyph set. Each chip is a
+    // ready-made search; Trending is the browse default.
+    private enum GifCategory: CaseIterable {
+        case trending, happy, love, sad, party, thumbsUp
+        var icon: String {
+            switch self {
+            case .trending: return "flame"
+            case .happy: return "face.smiling"
+            case .love: return "heart"
+            case .sad: return "cloud.rain"
+            case .party: return "party.popper"
+            case .thumbsUp: return "hand.thumbsup"
+            }
+        }
+        var term: String {
+            switch self {
+            case .trending: return ""
+            case .happy: return "happy"
+            case .love: return "love"
+            case .sad: return "sad"
+            case .party: return "party"
+            case .thumbsUp: return "thumbs up"
+            }
+        }
+    }
 
     // The last trending page, kept for the app's lifetime: the picker PAINTS INSTANTLY on reopen
     // (user: "when I tap GIF it takes a bit late to load") and refreshes quietly behind it.
@@ -39,8 +67,9 @@ struct GifPickerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                // RECENTLY USED — instant, local, only while browsing (a search replaces it).
-                if !recents.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
+                // RECENTLY USED — instant, local, only while browsing Trending (a search or a
+                // mood chip replaces it).
+                if !recents.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("RECENTLY USED")
                             .font(.system(size: 12, weight: .semibold))
@@ -72,14 +101,16 @@ struct GifPickerView: View {
                 }
                 .padding(6)
             }
+            // The mood row pins under the title; the grid scrolls beneath it. Search stays at the
+            // bottom (native iOS 26 placement — the owner's pick over the reference's top bar).
+            .safeAreaInset(edge: .top, spacing: 0) { categoryRow }
             .searchable(text: $query, prompt: "Search GIFs")
-            .onChange(of: query) { _, q in
+            .onChange(of: query) { _, _ in
                 searchTask?.cancel()
                 searchTask = Task {
                     try? await Task.sleep(nanoseconds: 300_000_000)   // 300ms debounce
                     if Task.isCancelled { return }
-                    let results = await GiphyService.shared.search(q)
-                    if !Task.isCancelled { gifs = results }
+                    await refresh()
                 }
             }
             .navigationTitle("GIF")
@@ -110,7 +141,7 @@ struct GifPickerView: View {
                 let fresh = await GiphyService.shared.search("")
                 if !fresh.isEmpty {
                     Self.trendingCache = fresh
-                    if query.trimmingCharacters(in: .whitespaces).isEmpty { gifs = fresh }
+                    if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
                 }
             }
         }
@@ -121,6 +152,47 @@ struct GifPickerView: View {
         GifRecents.note(g)
         onPick(g)
         dismiss()
+    }
+
+    // ONE loader for every state: a typed search wins; otherwise the selected mood; Trending = "".
+    private func refresh() async {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        let results = await GiphyService.shared.search(q.isEmpty ? category.term : q)
+        if !Task.isCancelled { gifs = results }
+    }
+
+    private var categoryRow: some View {
+        HStack(spacing: 4) {
+            ForEach(GifCategory.allCases, id: \.self) { c in
+                Button {
+                    guard category != c else { return }
+                    category = c
+                    searchTask?.cancel()
+                    if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                        searchTask = Task { await refresh() }
+                    } else {
+                        query = ""   // clearing re-runs the loader through onChange, under this mood
+                    }
+                } label: {
+                    Image(systemName: c.icon)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(category == c ? Color.accentColor : Color.secondary)
+                        .frame(maxWidth: .infinity).frame(height: 36)
+                        .background {
+                            if category == c {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.14))
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        // Opaque under the pinned row, or the grid shows through while scrolling beneath it.
+        .background(Color(uiColor: .systemBackground))
+        .animation(.easeInOut(duration: 0.15), value: category)
     }
 
     // Split the results into 2 balanced columns: each GIF goes to the currently-shorter column
