@@ -405,14 +405,15 @@ final class CMActionsCard: UIView {
     private let scroll = UIScrollView()
     private var rows: [CMActionRow] = []
 
-    // Signal's OWN card numbers, from their source (kulan-signal-custom-menu-study — not measured
-    // guesses): row = body line 22 + verticalPadding 23; corner 33 under the iOS 26 glass, 12 on
-    // the frosted fallback. Width stays the owner's circled 260. Icons on the LEADING edge.
+    // SIGNAL'S OWN CARD NUMBERS, read from ContextMenuActionsAccessory.swift — no measurements,
+    // no rounding of our own. Row = body line (~22) + their verticalPadding 23. maxWidth 250,
+    // corner 33 / vMargin 10 under the iOS 26 glass, 12 / 0 on the frosted fallback.
+    // The ONE deliberate divergence stays ours: NO hairline separators (owner rejected them).
     private let rowHeight: CGFloat = 45
-    private let cardWidth: CGFloat = 260
-    // Breathing room above the first row and below the last (owner's 417 screenshot: with corner 33
-    // and no separators, Reply and Delete sat flush against the card's rounded edges).
-    private let verticalInset: CGFloat = 8
+    private let cardWidth: CGFloat = 250
+    private let verticalInset: CGFloat = {
+        if #available(iOS 26.0, *) { return 10 } else { return 0 }
+    }()
     private let corner: CGFloat = {
         if #available(iOS 26.0, *) { return 33 } else { return 12 }
     }()
@@ -559,13 +560,17 @@ private final class CMActionRow: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         highlight.frame = bounds
-        // Signal's row: icon LEADING, label after it (the owner's circled reference).
-        let margin: CGFloat = 20
-        let iconSize: CGFloat = 22
+        // Signal's row metrics verbatim (ContextMenuActionsAccessory.ContextMenuActionRow): icon
+        // LEADING, and both margin and icon size step up on iOS 26 the way theirs do.
+        let margin: CGFloat
+        let iconSize: CGFloat
+        if #available(iOS 26.0, *) { margin = 24; iconSize = 24 } else { margin = 16; iconSize = 20 }
+        let iconSpacing: CGFloat = 12
         icon.frame = CGRect(x: margin, y: (bounds.height - iconSize) / 2,
                             width: iconSize, height: iconSize)
-        title.frame = CGRect(x: icon.frame.maxX + 14, y: 0,
-                             width: bounds.width - icon.frame.maxX - 14 - margin, height: bounds.height)
+        title.frame = CGRect(x: icon.frame.maxX + iconSpacing, y: 0,
+                             width: bounds.width - icon.frame.maxX - iconSpacing - margin,
+                             height: bounds.height)
     }
 }
 
