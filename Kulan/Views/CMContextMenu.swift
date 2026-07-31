@@ -403,6 +403,9 @@ final class CMActionsCard: UIView {
     // the frosted fallback. Width stays the owner's circled 260. Icons on the LEADING edge.
     private let rowHeight: CGFloat = 45
     private let cardWidth: CGFloat = 260
+    // Breathing room above the first row and below the last (owner's 417 screenshot: with corner 33
+    // and no separators, Reply and Delete sat flush against the card's rounded edges).
+    private let verticalInset: CGFloat = 8
     private let corner: CGFloat = {
         if #available(iOS 26.0, *) { return 33 } else { return 12 }
     }()
@@ -454,14 +457,14 @@ final class CMActionsCard: UIView {
         backdrop.frame = bounds
         scroll.frame = bounds
         for (i, row) in rows.enumerated() {
-            row.frame = CGRect(x: 0, y: CGFloat(i) * rowHeight, width: bounds.width, height: rowHeight)
+            row.frame = CGRect(x: 0, y: verticalInset + CGFloat(i) * rowHeight, width: bounds.width, height: rowHeight)
         }
-        scroll.contentSize = CGSize(width: bounds.width, height: CGFloat(rows.count) * rowHeight)
+        scroll.contentSize = CGSize(width: bounds.width, height: CGFloat(rows.count) * rowHeight + verticalInset * 2)
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
         // Taller than the allowance → the card caps its height and the rows scroll inside it.
-        let natural = CGFloat(rows.count) * rowHeight
+        let natural = CGFloat(rows.count) * rowHeight + verticalInset * 2
         let maxH = size.height > 0 ? size.height : natural
         return CGSize(width: cardWidth, height: min(natural, maxH))
     }
