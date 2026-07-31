@@ -70,7 +70,15 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            This finishes the audit: the last 11 fixes on top of the 63 in the previous build. Nothing from the list is left open now except two items deliberately left alone. Verified to build, barely tested on a phone, so please be rough with it.
+            HOTFIX for build 421/422. One mistake of mine caused three of the things you just reported.
+
+            Reacting has to lock the emoji with your contact's key before saving it. A change I made last night cleared that key from memory every time any old message failed to unlock, which happens constantly while you scroll. With the key gone, reacting saved nothing at all, so double-tap and the long-press reaction bar both looked dead. The same wipe made photos fail to unlock for a moment, which is the flashing you saw when swiping pictures, and it stopped pin notices from sending.
+
+            Fixed: the key is never cleared now. It refreshes by fetching and replacing, once per contact per app launch, so a contact who changes phone still repairs itself and nothing else is disturbed.
+
+            Also: pinning when you already have 3 pinned messages used to do nothing silently. It now tells you to unpin one first. Your test chat is at 3, which is why Pin looked broken.
+
+            Please check: react by double-tap and from the long-press bar, swipe through photos and watch for flashing, and unpin one message then pin another.
 
             NEW IN THIS BUILD
             Deleting one photo out of an album now really deletes it, everywhere it appears, instead of the photo coming back. When a message is deleted, its photo, video, voice note or file is now deleted from the server too, rather than living there forever. Signing out can no longer be undone by data that was still loading, which could briefly show the previous account's calls and stories to the next person on the phone. Tapping a story reply opens the story you actually replied to. The busy tone plays fully instead of cutting off. A dead group call's Join bar is cleared by whoever opens the empty room, instead of sitting there for hours. Answering exactly as the caller cancels no longer leaves you stuck on Reconnecting. Deleting several selected calls no longer silently skips some of them. Cancelling a story upload now cancels all of it, so the post you cancelled cannot go up anyway.
