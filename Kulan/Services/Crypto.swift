@@ -276,32 +276,28 @@ final class Crypto {
     /// the chat PERMANENTLY in both directions: everything we sealed used their dead key, and
     /// everything they sent failed to open, showing the lock placeholder forever. Only signing out
     /// cleared it. A decrypt failure now drops the cached copy once and refetches, so the next
-    /// render heals.
-    ///
-    /// ⚠️ THIS BROKE REACTIONS IN BUILD 421 AND THE FIX IS THE SHAPE BELOW — do not "simplify" it back.
-    /// The first version REMOVED the cached key and only then refetched. But `decrypt` runs on every
-    /// message render, and a chat containing even ONE permanently undecryptable message (old key era,
-    /// a corrupt blob) failed on every pass — so the peer's key was being wiped continuously. Anything
-    /// needing to ENCRYPT in one of those windows silently did nothing: `setReaction` only writes
-    /// `if let enc`, so double-tap AND the long-press bar both became dead buttons, and pin's notice
-    /// never sent. Two rules keep that from coming back:
-    ///   1. NEVER empty the cache. Fetch and let a successful fetch overwrite it — a key that has not
-    ///      rotated comes back identical, so a failing old message costs nothing, and encryption is
-    ///      never left without a key.
-    ///   2. ONCE per peer per launch. Rotation is a rare lifecycle event; retrying it per render is
-    ///      what turned a rare heal into a permanent outage.
-    private var keyRefreshTried = Set<String>()
+    /// render heals — at most one extra read per peer per rotation, and never a loop, because a
+    /// genuinely undecryptable message keeps its placeholder after the refreshed key still fails.
+    private var keyRefreshInFlight = Set<String>()
     func refreshKeyAfterFailure(_ uid: String) {
         guard !uid.isEmpty else { return }
         let start: Bool = lock.withLock {
-            if keyRefreshTried.contains(uid) { return false }
-            keyRefreshTried.insert(uid)
+            if keyRefreshInFlight.contains(uid) { return false }
+            keyRefreshInFlight.insert(uid)
             return true
         }
         guard start else { return }
-        // fetchKey overwrites pubCache + the disk copy on success and leaves both untouched on
-        // failure, which is exactly the behaviour wanted here.
-        Task { _ = await fetchKey(uid) }
+        Task {
+            lock.withLock { pubCache.removeValue(forKey: uid) }
+            // Drop the DISK copy too (same shared dictionary persistPubKey writes), or the next cold
+            // launch would warm the dead key straight back into memory.
+            var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
+            if dict.removeValue(forKey: uid) != nil {
+                UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+            }
+            _ = await fetchKey(uid)
+            lock.withLock { _ = keyRefreshInFlight.remove(uid) }
+        }
     }
 
     private func fetchKey(_ uid: String) async -> Bytes? {

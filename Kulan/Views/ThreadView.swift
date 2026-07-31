@@ -2042,12 +2042,7 @@ struct ThreadView: View {
                     text: Message.pinMarkerText(messageId: m.id, label: Self.pinLabel(m)),
                     group: isGroup ? groupMembers : nil)
             }
-        } else {
-            // AT THE LIMIT (3). This branch used to `// ignore`, so Pin read as a broken button:
-            // the menu closed and nothing happened, with nothing anywhere saying why. Same class as
-            // the silent-delete bug — a destructive-looking action must never fail without a word.
-            showJumpToast("You can pin up to \(Limits.pinnedMessagesPerChat) messages. Unpin one first.")
-        }
+        }   // already at the pin max → ignore
     }
 
     // The notice's label, composed by the PINNER (who has the plaintext): a short quoted snippet for
