@@ -237,7 +237,10 @@ struct ContactInfoView: View {
             disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
             // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
             // anyone who reaches this profile can watch it, contact or not.
-            if !isSelf {
+            // NOT while Stories are turned off (audit): Settings promises "you will no longer be
+            // able to share or view stories" and the chat list already draws no rings, but this page
+            // still showed one, played the story, and wrote a view receipt to the author.
+            if !isSelf, !UserDefaults.standard.bool(forKey: "storiesOptedOut") {
                 // SEED SYNCHRONOUSLY from the already-loaded story tray first, so for anyone whose
                 // story we know about the ring is there on the FIRST frame instead of blinking in
                 // after the network round-trip. The fetch below then covers non-contacts (public
@@ -553,8 +556,13 @@ struct ContactInfoView: View {
     // MARK: - Sections
 
     // Their privacy audience, honored by MY client: am I allowed their photo/bio/calls?
-    // "Contact" = we share a real conversation (opened from a chat always qualifies).
-    private var iAmContact: Bool { source == .chat || PrivacyPrefs.isContact(otherUid) }
+    // "Contact" = we share a real conversation — which is what PrivacyPrefs.isContact tests
+    // (a 1:1 with an actual last message). The old `source == .chat ||` shortcut treated ARRIVING
+    // from a chat as proof, but a brand-new empty chat opened from an @handle search is also
+    // "from a chat", so a stranger who never exchanged a word saw a My-Friends-only photo, bio and
+    // live call tiles (audit). The callee-side call gate already used the message-history rule, so
+    // the two disagreed.
+    private var iAmContact: Bool { PrivacyPrefs.isContact(otherUid) }
     private var gatedPhotoUrl: String? {
         PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? photoUrl : nil
     }

@@ -256,6 +256,12 @@ struct DeleteAccountView: View {
             await Push.unregister()
             await DeviceRegistry.shared.removeThisDevice()   // and drop our row in Settings › Devices
             try? Auth.auth().signOut()
+            // WIPE THE DEVICE COPY TOO (audit). The comment above justified skipping this to protect
+            // the encryption key — but SessionWipe never touches the Keychain key (wipeIdentity only
+            // clears the in-memory copy), which is exactly why plain Sign Out can call it. What was
+            // actually left behind was everything else: decrypted messages, unsent drafts, nicknames,
+            // cached voice notes and videos, all readable by whoever signs up next on this phone.
+            SessionWipe.wipeAccountData()
             dismiss()
             onDeleted()
         } catch {

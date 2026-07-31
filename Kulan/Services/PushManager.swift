@@ -83,6 +83,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     // FCM rotation token → save it so the Cloud Function can target this device.
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         guard let token = fcmToken, let uid = Auth.auth().currentUser?.uid else { return }
+        // HONOR THE TOGGLE (audit): turning Show Notifications off unregisters the tokens, but this
+        // delegate fires on every launch and token rotation and put them straight back, so pushes
+        // resumed at the next cold start while the switch still read OFF.
+        guard UserDefaults.standard.object(forKey: "notif.push") as? Bool ?? true else { return }
         Firestore.firestore().collection("users").document(uid)
             .setData(["fcmTokens": FieldValue.arrayUnion([token])], merge: true)
         // Also on this device's own row, so signing it out from another phone can strip
@@ -101,14 +105,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // draws its own instead. Anything that is not a chat keeps the system banner — there is
         // nothing for ours to route to.
         guard let cid else { return [.banner, .sound, .badge] }
-        await MainActor.run {
-            InAppBannerCenter.shared.show(cid: cid, title: content.title, body: content.body)
+        // THE THREE IN-APP TOGGLES ARE READ HERE (audit). They were only ever read by
+        // InAppNotify.process, whose feed was removed, so Settings > Notifications > In-App Sounds /
+        // Vibrate / Preview did nothing at all: the banner appeared and the tone played regardless,
+        // and vibrate could never fire. This is the surviving foreground path, so it owns them.
+        let d = UserDefaults.standard
+        let wantPreview = d.object(forKey: "notif.inAppPreview") as? Bool ?? true
+        let wantSound = d.object(forKey: "notif.inAppSound") as? Bool ?? true
+        let wantVibrate = d.object(forKey: "notif.inAppVibrate") as? Bool ?? true
+        if wantPreview {
+            await MainActor.run {
+                InAppBannerCenter.shared.show(cid: cid, title: content.title, body: content.body)
+            }
+        }
+        if wantVibrate {
+            await MainActor.run { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
         }
         // Play the chat's CHOSEN message sound (real, foreground) and suppress the system push
         // sound. Background pushes still use the server payload's sound (per-chat sound there is
         // a follow-up). "None" → silent banner.
         let sound = SoundStore.sound(cid, .message)
-        guard sound.id != "none" else { return [.badge] }
+        guard wantSound, sound.id != "none" else { return [.badge] }
         await MainActor.run { SoundPlayer.shared.play(sound) }
         return [.badge]
     }
@@ -172,7 +189,10 @@ enum Push {
 
     /// Ask for permission, then register with APNs (FCM token follows via the delegate).
     /// Safe to call on every launch once signed in — iOS only prompts once.
+    /// Respects the user's own Show Notifications switch: boot calls this unconditionally, so
+    /// without the check a launch re-registered a device the user had deliberately turned off.
     static func register() {
+        guard UserDefaults.standard.object(forKey: "notif.push") as? Bool ?? true else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
             guard granted else { return }
             DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }

@@ -14,6 +14,12 @@ enum HiddenMessages {
         cache.insert(id)
         UserDefaults.standard.set(cache.joined(separator: " "), forKey: "hiddenMessages")
     }
+    /// Sign-out: the stored key is cleared by SessionWipe, but this in-memory copy would keep
+    /// hiding the previous account's ids until relaunch.
+    static func clear() {
+        cache.removeAll()
+        UserDefaults.standard.removeObject(forKey: "hiddenMessages")
+    }
 }
 
 /// Live messages for one conversation. Loads a bounded WINDOW (most-recent page)

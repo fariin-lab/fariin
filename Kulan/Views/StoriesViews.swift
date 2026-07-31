@@ -245,6 +245,11 @@ enum StoryPrefs {
         lock.lock(); cache[key] = s; lock.unlock()   // update cache synchronously → instant reads
         UserDefaults.standard.set(s.joined(separator: " "), forKey: key)
     }
+    /// Sign-out: SessionWipe clears the stored keys, but this in-memory mirror would keep serving
+    /// the previous account's hidden authors / seen items / likes until the app restarts (audit).
+    static func dropCaches() {
+        lock.lock(); cache.removeAll(); lock.unlock()
+    }
     static func isHidden(_ uid: String) -> Bool { set("hiddenStories").contains(uid) }
     static func toggleHidden(_ uid: String) {
         var s = set("hiddenStories"); if s.contains(uid) { s.remove(uid) } else { s.insert(uid) }; save("hiddenStories", s)

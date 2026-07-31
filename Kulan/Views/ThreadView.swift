@@ -1319,8 +1319,12 @@ struct ThreadView: View {
         // Reciprocal (my audience isn't "No One") AND their audience allows me (in a chat
         // together we're contacts, so only their "No One" hides it — defense in depth on
         // top of their client not publishing at all).
+        // contactOfMine was hardcoded true — "we're in a chat together" — but an EMPTY chat opened
+        // from an @handle search is also a chat, so a stranger saw a My-Friends-only last-seen in
+        // the header (audit). Ask the same message-history rule the profile page uses.
         if PrivacyPrefs.mine("lastSeen") != .nobody && lastSeenPref,
-           PrivacyPrefs.allows(repo.otherPrivacy, "lastSeen", contactOfMine: true) {
+           PrivacyPrefs.allows(repo.otherPrivacy, "lastSeen",
+                               contactOfMine: PrivacyPrefs.isContact(otherUid)) {
             if repo.otherOnline { return "online" }
             if let la = repo.otherLastActive {
                 let f = RelativeDateTimeFormatter(); f.unitsStyle = .short

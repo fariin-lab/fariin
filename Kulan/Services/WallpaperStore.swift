@@ -103,7 +103,11 @@ struct GradientWallpaperView: View {
         if let img = g.image() {
             Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
         } else {
-            GradientWallpaperView(g: g, dark: dark)
+            // The actual gradient, which is what the doc above promises. This branch used to return
+            // GradientWallpaperView(g:dark:) — itself, with identical inputs — so any theme whose
+            // bundled image failed to load would recurse until the app died (audit). Latent while
+            // the files ship, fatal the day one goes missing.
+            LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
         }
     }
 }

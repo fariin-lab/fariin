@@ -148,7 +148,14 @@ struct GroupInfoView: View {
             }
             if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
         }
-        .sheet(isPresented: $showAllMedia) { SharedMediaGridView(cid: cid, media: media) }
+        // MediaGalleryView, like the 1:1 profile (audit): SharedMediaGridView renders only items with
+        // an imageUrl, so group VIDEOS vanished from the grid entirely, and any that were reachable
+        // opened in the image viewer — the endless-spinner routing already fixed on the profile page.
+        .sheet(isPresented: $showAllMedia) {
+            NavigationStack {
+                MediaGalleryView(cid: cid, title: conv?.title ?? "Group", photoUrl: conv?.avatarUrl)
+            }
+        }
         .fullScreenCover(isPresented: $showCall) { GroupCallView() }
     }
 
@@ -552,12 +559,28 @@ struct GroupMemberSheet: View {
         Task { try? await ChatService.muteMember(cid: cid, uid: member.id, name: member.name, seconds: seconds); dismiss() }
     }
 
+    /// Their audience map, applied the same way ContactInfoView applies it. Sharing a group is not
+    /// the same as being a contact, so the "My Friends" test is the real message-history one.
+    private var gatedMemberPhoto: String? {
+        guard let p = profile else { return nil }
+        return PrivacyPrefs.allows(p.privacy, "photo",
+                                   contactOfMine: PrivacyPrefs.isContact(member.id)) ? p.photoUrl : nil
+    }
+    private var gatedMemberAbout: String? {
+        guard let p = profile else { return nil }
+        return PrivacyPrefs.allows(p.privacy, "bio",
+                                   contactOfMine: PrivacyPrefs.isContact(member.id)) ? p.about : nil
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     VStack(spacing: 10) {
-                        AvatarView(name: member.name, photoUrl: profile?.photoUrl, size: 88)
+                        // Honor THEIR audience settings, like the 1:1 profile does (audit): this
+                        // sheet showed a member's photo and bio to every fellow group member even
+                        // when they had set those to "No One" / "My Friends".
+                        AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 88)
                         Text(member.name).font(.title2.weight(.bold))
                         if let h = profile?.handle, !h.isEmpty {
                             Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
@@ -568,7 +591,7 @@ struct GroupMemberSheet: View {
                                 .background(Color.accentColor.opacity(0.15), in: Capsule())
                                 .foregroundStyle(Color.accentColor)
                         }
-                        if let a = profile?.about, !a.isEmpty {
+                        if let a = gatedMemberAbout, !a.isEmpty {
                             Text(a).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                     }
