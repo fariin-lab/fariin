@@ -123,19 +123,22 @@ struct ContactInfoView: View {
         if !isSelf { settingsCard.padding(.top, 8) }
         // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
         // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
+        // A HEADED section gets Signal's taller run-up: their header inset is
+        // `defaultSpacingBetweenSections (20) + 12` above the title, so 12 on top of this
+        // container's 20 — where a plain card keeps the 8 used elsewhere on the page.
         if !media.isEmpty || mediaHint > 0 {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeader("All Media")
                 mediaCard
             }
-            .padding(.top, 8)
+            .padding(.top, 12)
         }
         if !isSelf && Flags.groupsEnabled {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeader(groupsHeaderText)
                 groupsInCommonCard
             }
-            .padding(.top, 8)
+            .padding(.top, 12)
         }
         if !isSelf { dangerCard.padding(.top, 8) }
     }
@@ -157,10 +160,15 @@ struct ContactInfoView: View {
         .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
-    // Bold grouped-list section title above a card (standard grouped-list style).
+    /// Section title above a card, with SIGNAL'S OWN numbers (OWSTableViewController2, fetched and
+    /// read — not measured off a screenshot): `defaultHeaderFont` = dynamicTypeHeadlineClamped, i.e.
+    /// headline (17pt semibold), in the primary label colour; and a section WITH a card background
+    /// gets `cellHInnerMargin * 0.5` = 8pt of extra leading on top of the 16pt page margin, so the
+    /// title sits 24pt from the edge — 8pt further in than the card itself. Their gap down to the
+    /// card is 10pt, which this page already used.
     private func sectionHeader(_ title: String) -> some View {
-        Text(title).font(.subheadline.weight(.semibold))
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
+        Text(title).font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8)
     }
     private var groupsHeaderText: String {
         let n = sharedGroups.count
