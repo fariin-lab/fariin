@@ -290,6 +290,11 @@ struct ManageStoragePage: View {
                 t += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             }
         }
+        // STORY MEDIA counts too (audit). It lives in the app's 1 GB persistent URLCache, which none
+        // of the rows measured — so a heavy story watcher saw "Zero KB" everywhere and a greyed-out
+        // Clear Cache while up to a gigabyte sat on disk. Clear Cache already empties it, so counting
+        // it here is what makes the number honest AND the button reachable.
+        t += URLCache.shared.currentDiskUsage
         tmpBytes = t
     }
 }

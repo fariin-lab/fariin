@@ -150,6 +150,16 @@ enum SoundStore {
         let stored = sound.customPath.map { "custom:\($0)" } ?? sound.id
         UserDefaults.standard.set(stored, forKey: key(cid, kind))
     }
+    /// Any chat carrying a custom message/call tone. "Reset All Notifications" promises to undo
+    /// every custom notification setting but only ever unmuted, and it was disabled whenever
+    /// nothing was muted — so a chat with a custom sound could not be reset at all (audit).
+    static var hasAnyCustom: Bool {
+        UserDefaults.standard.dictionaryRepresentation().keys.contains { $0.hasPrefix("sound_") }
+    }
+    static func clearAllCustom() {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("sound_") { d.removeObject(forKey: k) }
+    }
 
     // Save an imported audio file into app support and return its stored path.
     static func importCustom(from url: URL) -> String? {

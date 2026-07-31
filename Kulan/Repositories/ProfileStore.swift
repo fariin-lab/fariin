@@ -147,7 +147,10 @@ final class ProfileStore {
         try? await Storage.storage().reference().child("profiles/\(uid).jpg").delete()
         // Clear my private sub-records (story seen-state + distribution lists) — Firestore
         // does not cascade subcollection deletes, so wipe them before the parent doc.
-        for sub in ["storyContexts", "storyLists"] {
+        // `devices` included (audit): it holds this account's push and VoIP tokens plus hardware
+        // ids, and Firestore does not cascade, so a "permanently deleted" account was leaving those
+        // records behind under a deleted parent doc.
+        for sub in ["storyContexts", "storyLists", "devices"] {
             if let docs = try? await db.collection("users").document(uid).collection(sub).getDocuments() {
                 for d in docs.documents { try? await d.reference.delete() }
             }

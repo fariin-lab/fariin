@@ -29,9 +29,16 @@ struct WallpaperPickerSheet: View {
     @State private var original: ChatWallpaper
     @State private var originalColor: ChatColorSpec?
 
+    /// Did this chat have its OWN wallpaper when the sheet opened, or was it inheriting the
+    /// all-chats default? `wallpaper(for:)` answers with the resolved value either way, so cancelling
+    /// used to write that resolved value back as a per-chat pick — pinning today's default onto a
+    /// chat that had no override, and losing the difference between "none set" and "set to this"
+    /// (audit). Recorded here so the cancel path can restore the real state.
+    private let hadOwnWallpaper: Bool
     init(cid: String, globalOnly: Bool = false) {
         self.cid = cid
         self.globalOnly = globalOnly
+        self.hadOwnWallpaper = WallpaperStore.shared.hasOverride(for: cid)
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
         _original = State(initialValue: cur)
@@ -120,7 +127,10 @@ struct WallpaperPickerSheet: View {
         // until Apply. Closing without Apply reverts both to the originals.
         .onDisappear {
             if !committed {
-                store.set(original, for: cid)
+                // Restore the REAL previous state: a chat that was inheriting the default goes back
+                // to inheriting it, instead of gaining a per-chat copy of it (see hadOwnWallpaper).
+                if hadOwnWallpaper { store.set(original, for: cid) }
+                else { store.clearOverride(for: cid) }
                 colorStore.set(originalColor, for: cid)
             }
         }

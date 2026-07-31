@@ -1322,6 +1322,10 @@ enum ChatService {
         }()
         try? await convRef.setData([
             "lastMessage": marker,
+            // Clear lastSender (audit): it kept naming whoever sent the previous real message, so if
+            // that was me the chat row drew MY delivery ticks beside "Missed call" — a call record
+            // is not my message and has no sent/read state. Empty suppresses them via lastIsMine.
+            "lastSender": "",
             "updatedAt": FieldValue.serverTimestamp(),
         ], merge: true)
         // Keep the Calls tab (list + missed badge) live — the history repo has no listener.

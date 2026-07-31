@@ -139,6 +139,9 @@ struct RootView: View {
             Task {   // background refresh + key self-heal, off the boot path
                 await ProfileStore.shared.loadMine()
                 await Crypto.shared.publishPublicKey()
+                // Send anything an app kill left queued, whatever chat it belongs to — the queue's
+                // own contract. Until now it only re-drove when that exact chat was reopened.
+                await SendQueue.drainAll()
             }
             return
         }
@@ -157,6 +160,7 @@ struct RootView: View {
         if ready {
             Push.register(); Push.saveVoipToken()   // notifications + VoIP token now that we're signed in
             DeviceRegistry.shared.start()
+            Task { await SendQueue.drainAll() }   // queued sends from a previous run (see drainAll)
         }
         phase = ready ? .main : .onboarding
     }

@@ -1065,7 +1065,14 @@ struct UsernameEditView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { handle = ChatService.sanitizeHandle(draft); dismiss() }.fontWeight(.semibold)
+                Button("Done") { handle = ChatService.sanitizeHandle(draft); dismiss() }
+                    .fontWeight(.semibold)
+                    // An EMPTY (or too-short) draft was accepted here and only rejected later by
+                    // Save, which then failed with a validation message for a field the user was no
+                    // longer looking at — and name and bio edits could not be saved at all until a
+                    // username was retyped. There is no "remove username" outcome, so block it here
+                    // where the field is still on screen (audit).
+                    .disabled(ChatService.sanitizeHandle(draft).count < 3)
             }
         }
         .onAppear { draft = handle; focused = true }

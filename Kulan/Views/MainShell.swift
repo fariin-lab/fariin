@@ -285,6 +285,18 @@ struct CallsView: View {
                                     pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
                                 }
                             )
+                            // In edit mode the row's own buttons stayed live, so tapping the name or
+                            // avatar pushed a profile and the round button dialled — instead of
+                            // selecting the row. The chat list got this exact fix; this list didn't.
+                            .disabled(selecting)
+                            .overlay {
+                                if selecting {
+                                    Color.clear.contentShape(Rectangle()).onTapGesture {
+                                        if selection.contains(run.id) { selection.remove(run.id) }
+                                        else { selection.insert(run.id) }
+                                    }
+                                }
+                            }
                             .tag(run.id)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
@@ -660,7 +672,9 @@ struct ChatsView: View {
     // blocked person read receipts, revealing the block-hidden activity (audit).
     private func markAllRead() {
         let ids = repo.conversations
-            .filter { !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me) && $0.unread(me) > 0 }
+            .filter { !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
+                      && (Flags.groupsEnabled || !$0.isGroup)   // the clause the badge has; see above
+                      && $0.unread(me) > 0 }
             .map(\.id)
         Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
     }

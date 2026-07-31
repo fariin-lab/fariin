@@ -78,7 +78,9 @@ struct NotificationsSettingsView: View {
                         if resetting { Spacer(); ProgressView() }
                     }
                 }
-                .disabled(resetting || mutedCount == 0)
+                // Enabled when ANY customization exists, not just a mute (audit): a chat with a
+                // custom tone and nothing muted left this greyed out, in exactly the case it is for.
+                .disabled(resetting || (mutedCount == 0 && !SoundStore.hasAnyCustom))
             } footer: {
                 Text("Undo all custom notification settings for your chats.")
             }
@@ -89,7 +91,7 @@ struct NotificationsSettingsView: View {
             Button("Cancel", role: .cancel) {}
             Button("Reset", role: .destructive) { Task { await resetAll() } }
         } message: {
-            Text("Every muted chat goes back to normal notifications.")
+            Text("Every muted chat goes back to normal notifications, and custom chat sounds return to the default.")
         }
     }
 
@@ -99,6 +101,7 @@ struct NotificationsSettingsView: View {
         for c in ConversationsRepository.shared.conversations where c.isMuted(me, now: now) {
             await ChatService.setMute(c.id, until: 0)
         }
+        SoundStore.clearAllCustom()   // per-chat message/call tones — "ALL custom settings"
         resetting = false
     }
 }

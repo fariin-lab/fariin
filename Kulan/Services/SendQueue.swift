@@ -62,6 +62,39 @@ enum SendQueue {
         return load().values.filter { $0.cid == cid }.sorted { $0.createdAt < $1.createdAt }
     }
 
+    /// Re-drive EVERY queued send, whatever chat it belongs to. The header above promises a message
+    /// survives an app kill and goes out "on the next launch", but the only drain was per-chat, on
+    /// chat open — so a message actually sat unsent until the user happened to reopen that exact
+    /// conversation, with no visual trace (the optimistic bubble is memory-only), meaning they had
+    /// no reason to (audit). Called once at launch, after sign-in.
+    ///
+    /// Skips the chat currently on screen: ThreadView drains that one itself, with its optimistic
+    /// bubble. `alreadySent` still guards against re-sending anything that landed before the kill.
+    @MainActor
+    static func drainAll() async {
+        let open = AppRouter.shared.activeChatId
+        let entries = allPending().filter { $0.cid != open }
+        for e in entries {
+            if await alreadySent(cid: e.cid, clientId: e.clientId) { remove(clientId: e.clientId); continue }
+            let reply: ReplyRef? = e.replyId.map {
+                ReplyRef(id: $0, authorId: e.replyAuthor ?? "", text: e.replyText ?? "")
+            }
+            do {
+                // group: nil → sendText resolves members from the conversation doc itself.
+                try await ChatService.sendText(cid: e.cid, text: e.text, replyTo: reply,
+                                               clientId: e.clientId, group: nil, mentions: e.mentions)
+                remove(clientId: e.clientId)
+            } catch {
+                // Still offline / still refused: leave it queued for the next launch.
+            }
+        }
+    }
+
+    private static func allPending() -> [Entry] {
+        lock.lock(); defer { lock.unlock() }
+        return load().values.sorted { $0.createdAt < $1.createdAt }
+    }
+
     /// True if a message with this clientId already exists on the server (the send DID land before the
     /// app died) — so we must NOT re-send it.
     static func alreadySent(cid: String, clientId: String) async -> Bool {

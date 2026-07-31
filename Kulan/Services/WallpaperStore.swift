@@ -204,6 +204,12 @@ enum ChatWallpapers {
         version &+= 1                                           // observed → live re-render
     }
 
+    /// Does this chat have its OWN stored pick (vs inheriting the all-chats default)?
+    /// The picker needs the raw answer, which `wallpaper(for:)` hides behind its fallback.
+    func hasOverride(for cid: String) -> Bool {
+        UserDefaults.standard.string(forKey: Self.key(cid)) != nil
+    }
+
     /// Remove the per-chat pick so this chat follows the all-chats default again.
     func clearOverride(for cid: String) {
         cache[cid] = nil
