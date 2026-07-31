@@ -1636,7 +1636,7 @@ enum ChatService {
         // is the strongest "stop seeing me" action there is, so it has to reach back.
         if value {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            if !other.isEmpty { await StoriesService.shared.revokeAudience(for: other) }
+            if !other.isEmpty { await StoriesRepository.shared.revokeAudience(for: other) }
         }
     }
 
