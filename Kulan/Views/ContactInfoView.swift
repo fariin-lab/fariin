@@ -402,7 +402,23 @@ struct ContactInfoView: View {
                     Text("only visible to you")
                         .font(.system(size: 14)).foregroundStyle(.secondary)
                 }
-                Text(note)
+                // Derived, never stored: editing the note re-measures on the next body run with no
+                // stale flag to clear.
+                let overflows = Self.noteExceedsTwoLines(note, width: noteWidth)
+                Group {
+                    if overflows && !noteExpanded {
+                        // "More" RIDES THE END OF LINE 2 rather than taking a line of its own (owner:
+                        // "more button Follow line 2 dont make line 3"). SwiftUI cannot place a Button
+                        // inside wrapped text, so it is concatenated as a text run and the block below
+                        // takes the tap. The note is pre-trimmed to the longest prefix that still
+                        // leaves room for the tail, so the label always lands ON the second line
+                        // instead of being pushed off by the system's own truncation.
+                        Text(Self.noteCollapsedPrefix(note, width: noteWidth) + "… ")
+                            + Text("More").foregroundStyle(Color.accentColor).fontWeight(.semibold)
+                    } else {
+                        Text(note)
+                    }
+                }
                     .font(.system(size: 16))
                     .foregroundStyle(.primary)
                     .lineLimit(noteExpanded ? nil : 2)
@@ -416,11 +432,15 @@ struct ContactInfoView: View {
                             Color.clear.onChange(of: g.size.width, initial: true) { _, w in noteWidth = w }
                         }
                     )
-                // Derived, never stored: editing the note re-measures on the next body run with no
-                // stale flag to clear.
-                if Self.noteExceedsTwoLines(note, width: noteWidth) {
-                    Button(noteExpanded ? "Less" : "More") {
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard overflows else { return }
                         withAnimation(.easeInOut(duration: 0.2)) { noteExpanded.toggle() }
+                    }
+                // Expanded: "Less" keeps its own row — there is no truncated line for it to ride.
+                if overflows && noteExpanded {
+                    Button("Less") {
+                        withAnimation(.easeInOut(duration: 0.2)) { noteExpanded = false }
                     }
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
@@ -442,6 +462,36 @@ struct ContactInfoView: View {
             with: box, options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: font], context: nil).height
         return height > font.lineHeight * 2 + 1   // +1 absorbs rounding on the exact-2-line case
+    }
+
+    /// The longest prefix of `note` that still fits two lines once "… More" is appended.
+    ///
+    /// Without this the system truncates to fill both lines and the appended label has nowhere to
+    /// go but a third line, which is the exact thing being avoided. Binary search over a note capped
+    /// at 100 characters is ~7 measurements. The tail is measured SEMIBOLD, the weight it renders
+    /// at, so the reserved room is never short.
+    private static func noteCollapsedPrefix(_ note: String, width: CGFloat) -> String {
+        guard width > 1 else { return note }
+        let font = UIFont.systemFont(ofSize: 16)
+        let limit = font.lineHeight * 2 + 1
+        func fits(_ count: Int) -> Bool {
+            let s = NSMutableAttributedString(string: String(note.prefix(count)) + "… ",
+                                              attributes: [.font: font])
+            s.append(NSAttributedString(string: "More",
+                                        attributes: [.font: UIFont.systemFont(ofSize: 16, weight: .semibold)]))
+            return s.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                  options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                  context: nil).height <= limit
+        }
+        let full = note.count
+        if fits(full) { return note }
+        var lo = 0, hi = full
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if fits(mid) { lo = mid } else { hi = mid - 1 }
+        }
+        // Trim a dangling space so the ellipsis sits flush against the last word.
+        return String(note.prefix(lo)).trimmingCharacters(in: .whitespaces)
     }
 
     // Profile settings rows (standard order): Disappearing Messages, Sounds & Notifications,
