@@ -34,7 +34,10 @@ struct ForwardPicker: View {
 
     private var people: [Conversation] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let list = repo.conversations.filter { ((Flags.groupsEnabled && $0.isGroup) || !$0.otherUid(me).isEmpty) && $0.id != sourceCid && (Flags.groupsEnabled || !$0.isGroup) }
+        // The SOURCE chat is offered too (owner's 416 report: "app won't show him to send since am
+        // sending from he's chat") — forwarding back into the same chat re-surfaces an old photo,
+        // and the references both allow it.
+        let list = repo.conversations.filter { ((Flags.groupsEnabled && $0.isGroup) || !$0.otherUid(me).isEmpty) && (Flags.groupsEnabled || !$0.isGroup) }
         return (q.isEmpty ? list : list.filter { $0.displayName(me).lowercased().contains(q) })
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
@@ -176,11 +179,14 @@ struct ForwardPicker: View {
         // ONE chat lands you IN that chat — watching your forward arrive IS the confirmation, so no
         // toast there. Several chats can't all be landed in → stay put, the toast confirms instead.
         // Same route a banner tap uses; MainShell foregrounds Chats and pushes.
-        if targets.count == 1, let cid = targets.first,
-           let c = repo.conversations.first(where: { $0.id == cid }) {
-            AppRouter.shared.pendingChatName = c.displayName(me)
-            AppRouter.shared.pendingChatPhoto = c.displayPhoto(me)
-            AppRouter.shared.pendingChatId = cid
+        if targets.count == 1, let cid = targets.first {
+            // Forwarding back into the chat you're standing in needs no navigation and no toast —
+            // the sheet closes and the forward lands in front of you.
+            if cid != src, let c = repo.conversations.first(where: { $0.id == cid }) {
+                AppRouter.shared.pendingChatName = c.displayName(me)
+                AppRouter.shared.pendingChatPhoto = c.displayPhoto(me)
+                AppRouter.shared.pendingChatId = cid
+            }
         } else {
             queued("Sent to \(targets.count) chats")
         }
