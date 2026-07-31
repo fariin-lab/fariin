@@ -99,6 +99,77 @@ enum ChatService {
         return ref.documentID
     }
 
+    // MARK: - Media upload (the one path everything encrypted goes through)
+
+    /// Upload encrypted bytes to `path` and return the download URL.
+    ///
+    /// **`putFile`, not `putData`**, for three reasons that all bite hardest on a weak connection:
+    /// the bytes stop sitting in RAM (a 100MB video was held as plaintext AND as a second encrypted
+    /// copy at the same time), GTMSessionUploadFetcher persists FILE-backed uploads so it can
+    /// restore one after the app is reopened, and the upload becomes a real task rather than a
+    /// handle we throw away.
+    ///
+    /// **It does NOT resume from a byte offset, and cannot.** Firebase's iOS SDK sets the upload
+    /// chunk size to `LLONG_MAX`, so nothing is ever chunked and there is no offset to resume from
+    /// (firebase-ios-sdk issue 10137). A dropped upload starts over. What this adds is that it
+    /// starts over BY ITSELF with jittered backoff instead of failing the send, and keeps going for
+    /// the grace period iOS grants after the user leaves the app.
+    static func uploadEncrypted(_ bytes: Data, to path: String,
+                                contentType: String = "application/octet-stream") async throws -> String {
+        let ref = Storage.storage().reference().child(path)
+        let meta = StorageMetadata(); meta.contentType = contentType
+
+        // Staged on disk, protected at rest, and removed on EVERY exit path (success, throw,
+        // cancellation). A leaked temp file is a sealed copy of a private message sitting in tmp.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-\(UUID().uuidString).enc")
+        try bytes.write(to: tmp, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let bg = await beginUploadAssertion()
+        defer { Task { @MainActor in endUploadAssertion(bg) } }
+
+        var attempt = 0
+        while true {
+            do {
+                _ = try await ref.putFileAsync(from: tmp, metadata: meta)
+                return try await ref.downloadURL().absoluteString
+            } catch {
+                attempt += 1
+                guard attempt < 4, !Task.isCancelled, isRetryableUpload(error) else { throw error }
+                await Backoff.sleep(attempt: attempt, base: 2, cap: 30)
+            }
+        }
+    }
+
+    /// A refusal is not a network problem. Retrying an unauthorized or over-quota upload only burns
+    /// the user's data and delays the error they actually need to see, so those fail immediately.
+    /// Anything we cannot identify is treated as transport and retried.
+    private static func isRetryableUpload(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == StorageErrorDomain else { return true }
+        switch StorageErrorCode(rawValue: ns.code) {
+        case .unauthorized, .unauthenticated, .quotaExceeded, .cancelled, .objectNotFound: return false
+        default: return true
+        }
+    }
+
+    /// Holds the app awake for the short grace period iOS grants after the user leaves, so
+    /// backgrounding mid-send does not kill the upload outright.
+    @MainActor private static func beginUploadAssertion() -> UIBackgroundTaskIdentifier {
+        var id: UIBackgroundTaskIdentifier = .invalid
+        id = UIApplication.shared.beginBackgroundTask(withName: "kulan-media-upload") {
+            // iOS is about to reclaim it; ending it ourselves avoids the watchdog kill.
+            if id != .invalid { UIApplication.shared.endBackgroundTask(id); id = .invalid }
+        }
+        return id
+    }
+
+    @MainActor private static func endUploadAssertion(_ id: UIBackgroundTaskIdentifier) {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+    }
+
     /// Upload a group avatar (plain image, like profile photos). Stored under the existing
     /// `profiles/` Storage path (so no rule change) keyed by cid, then set as the conv avatarUrl.
     /// Admin-gated by the conversation update rule (avatarUrl isn't a non-admin field).
@@ -365,10 +436,7 @@ enum ChatService {
                 let cipher: Data, meta: EncMeta
                 if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(jpeg, members: members) }
                 else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, jpeg) }
-                let ref = Storage.storage().reference().child("chat/\(cid)/\(msgId)-lp.enc")
-                let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-                _ = try await ref.putDataAsync(cipher, metadata: sm)
-                let url = try await ref.downloadURL().absoluteString
+                let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgId)-lp.enc")
                 // Seed the cache so the sender's own card swaps from draft to server image invisibly.
                 if let ui = UIImage(data: jpeg) { DiskImageCache.shared.store(ui, for: url, owned: true) }
                 d["imageUrl"] = url
@@ -554,10 +622,7 @@ enum ChatService {
         }
 
         let msgRef = convRef.collection("messages").document()
-        let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).enc")
-        let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-        _ = try await ref.putDataAsync(cipher, metadata: sm)
-        let url = try await ref.downloadURL().absoluteString
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).enc")
         // Seed the cache with the plaintext image under its URL so when the optimistic bubble
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
         if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
@@ -652,10 +717,7 @@ enum ChatService {
                 let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
                 try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
             }
-            let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID)-\(i).enc")
-            let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-            _ = try await ref.putDataAsync(cipher, metadata: sm)
-            let url = try await ref.downloadURL().absoluteString
+            let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID)-\(i).enc")
             if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }   // instant reconcile
             let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
             items.append(["imageUrl": url, "enc": meta.asDict, "width": Double(sz.width), "height": Double(sz.height)])
@@ -724,10 +786,7 @@ enum ChatService {
             return r
         }
         func upload(_ cipher: Data, _ suffix: String) async throws -> String {
-            let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID)-\(suffix).enc")
-            let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-            _ = try await ref.putDataAsync(cipher, metadata: sm)
-            return try await ref.downloadURL().absoluteString
+            try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID)-\(suffix).enc")
         }
 
         var out: [[String: Any]] = []
@@ -831,10 +890,7 @@ enum ChatService {
         // and a belt in case reconcile timing differs). VoiceMessageView.load() checks both.
         AudioCache.store(data, for: msgRef.documentID)
         if let clientId { AudioCache.store(data, for: clientId) }
-        let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).m4a.enc")
-        let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-        _ = try await ref.putDataAsync(cipher, metadata: sm)
-        let url = try await ref.downloadURL().absoluteString
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc")
 
         // Encrypt the reply snippet the same way as the conversation (group vs 1:1).
         var replyEnc: [String: Any]?
@@ -903,13 +959,10 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
         let msgRef = convRef.collection("messages").document()
-        let vRef = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).mp4.enc")
-        let tRef = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).thumb.enc")
-        let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-        _ = try await vRef.putDataAsync(vidCipher, metadata: sm)
-        _ = try await tRef.putDataAsync(thCipher, metadata: sm)
-        let videoUrl = try await vRef.downloadURL().absoluteString
-        let thumbUrl = try await tRef.downloadURL().absoluteString
+        // The clip first: if it fails, the retry has not already spent the user's data on a poster
+        // for a video that is not going to arrive.
+        let videoUrl = try await uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc")
+        let thumbUrl = try await uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
         // Seed the cache so the optimistic bubble reconciles with no shimmer (photo parity).
         if let ui = UIImage(data: thumbnail) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
 
@@ -963,10 +1016,7 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
         let msgRef = convRef.collection("messages").document()
-        let ref = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).file.enc")
-        let sm = StorageMetadata(); sm.contentType = "application/octet-stream"
-        _ = try await ref.putDataAsync(cipher, metadata: sm)
-        let url = try await ref.downloadURL().absoluteString
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc")
         // iMessage-style document preview (owner's reference): a PDF's first page — or an image
         // file's own pixels — rides along as an ENCRYPTED thumbnail, the video-poster pipeline
         // reused (thumbUrl/thumbEnc parse on every message type). Best-effort: a failed preview
@@ -980,10 +1030,9 @@ enum ChatService {
                 (tCipher, tMeta) = (try? await Crypto.shared.encryptBytes(cid, preview)) ?? (nil, nil)
             }
             if let tCipher, let tMeta {
-                let tRef = Storage.storage().reference().child("chat/\(cid)/\(msgRef.documentID).filethumb.enc")
-                let tsm = StorageMetadata(); tsm.contentType = "application/octet-stream"
-                if (try? await tRef.putDataAsync(tCipher, metadata: tsm)) != nil,
-                   let tUrl = try? await tRef.downloadURL().absoluteString {
+                // Still best-effort: a missing document preview must never fail the file send.
+                if let tUrl = try? await uploadEncrypted(
+                    tCipher, to: "chat/\(cid)/\(msgRef.documentID).filethumb.enc") {
                     thumbFields = ["thumbUrl": tUrl, "thumbEnc": tMeta.asDict]
                 }
             }
