@@ -257,8 +257,16 @@ struct CallsView: View {
         Task { await repo.delete(ids: r.ids) }   // a grouped row deletes ALL calls in the run
     }
     private func deleteSelectedCalls() {
-        // Selection holds run ids — expand each to every record inside its run.
-        let ids = Set(shownRuns.filter { selection.contains($0.id) }.flatMap { $0.ids })
+        // A run's id is its NEWEST entry's id, and runs are regrouped live — a call ending mid-
+        // selection (recordCall force-reloads the repo), or a change of filter/search, gives that
+        // run a new id. Matching only against the CURRENT runs then silently dropped those rows
+        // while the toolbar still said "N Selected", so Delete removed fewer than it promised.
+        // Falling back to the id itself covers a run whose grouping moved under us (audit).
+        var ids = Set<String>()
+        for id in selection {
+            if let run = shownRuns.first(where: { $0.id == id }) { ids.formUnion(run.ids) }
+            else { ids.insert(id) }   // the run regrouped; its newest entry id is still a real record
+        }
         Task { await repo.delete(ids: ids) }
         selecting = false; selection = []
     }

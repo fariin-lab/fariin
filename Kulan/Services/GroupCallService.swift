@@ -72,6 +72,10 @@ final class GroupCallService: ObservableObject {
 
     private func disconnect() async {
         let cid = activeCid
+        // "I am the only one left" is also true when I JOINED an empty room — which is exactly the
+        // case a stale doc creates (the last member force-quit, so nothing ever wrote active:false
+        // and the Join bar stayed up for hours). Clearing it here means the first person to find the
+        // room empty heals it for everyone, instead of the 4h age cap being the only cure (audit).
         let wasLast = room.remoteParticipants.isEmpty   // I'm the only one → end the call for the group
         await room.disconnect()
         if let cid, wasLast {

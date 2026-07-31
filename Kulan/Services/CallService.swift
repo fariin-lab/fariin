@@ -892,7 +892,10 @@ final class CallService: NSObject {
     private func playEndTone(_ reason: EndReason) {
         stopRingback()
         switch reason {
-        case .declined, .busy: playTone(RingbackTone.busyData(), loops: 3)   // ~4s busy signal
+        // TWO full busy cycles (2s), which is what the 1.8s stop in finishCall actually allows.
+        // `loops: 3` claimed "~4s" and was cut off less than halfway through, so the comment and the
+        // code disagreed about the one thing a caller hears when they are declined (audit).
+        case .declined, .busy: playTone(RingbackTone.busyData(), loops: 1)
         case .failed, .hangup, .missed: playTone(RingbackTone.endedData(), loops: 0)
         case .none: break
         }
@@ -1338,7 +1341,17 @@ final class CallService: NSObject {
                 pc.setLocalDescription(answerSdp) { _ in
                     var data: [String: Any] = ["answer": ["sdp": answerSdp.sdp, "type": "answer"], "status": "active"]
                     data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
-                    ref.updateData(data)
+                    // ONLY IF IT IS STILL RINGING (audit). answer() removes the cancel watcher and
+                    // then waits on the mic prompt and TURN; a caller who cancels inside that window
+                    // writes status:"ended", and this unconditional write used to overwrite it — so
+                    // the callee never learned, sat on "Reconnecting…" for ~20s, and left the call
+                    // doc stuck as "active" forever. A transaction keeps the ended state.
+                    ref.firestore.runTransaction({ txn, _ -> Any? in
+                        guard let snap = try? txn.getDocument(ref),
+                              (snap.data()?["status"] as? String) == "ringing" else { return nil }
+                        txn.updateData(data, forDocument: ref)
+                        return nil
+                    }, completion: { _, _ in })
                 }
             }
         }
@@ -1529,7 +1542,7 @@ final class CallService: NSObject {
         let reason = endReason
         if !localUser, reason != .none {
             playEndTone(reason)
-            let toneDur = (reason == .declined || reason == .busy) ? 1.8 : 0.6
+            let toneDur = (reason == .declined || reason == .busy) ? 2.0 : 0.6   // matches loops: 1
             DispatchQueue.main.asyncAfter(deadline: .now() + toneDur) {
                 self.stopTone()
                 if clearCallKit { CallKitManager.shared.reportEnded() }

@@ -3266,7 +3266,15 @@ struct ThreadView: View {
         let repo = StoriesRepository.shared
         let active = (repo.others + [repo.mine].compactMap { $0 })
             .first { $0.authorUid == authorId && $0.stories.contains { $0.id == storyId } }
-        if let active { storyToOpen = active } else { statusUnavailable = true }
+        guard var group = active else { statusUnavailable = true; return }
+        // OPEN THE STORY THAT WAS ACTUALLY REPLIED TO (audit). The viewer positions each author's
+        // bucket at its first UNSEEN item, so with several active stories a reply quote opened a
+        // different one — losing the very context ("what did I reply to?") the tap is asking for.
+        // The quote is a deep link to ONE item, so hand the viewer exactly that item.
+        if let one = group.stories.first(where: { $0.id == storyId }) {
+            group.stories = [one]
+        }
+        storyToOpen = group
     }
 
     private func sendPicked(_ item: PhotosPickerItem?) async {
@@ -5575,17 +5583,29 @@ struct MessageBubble: View, Equatable {
     // Now every item's aspect goes in, the solver returns exact frames, and they are placed absolutely.
     // Stacks cannot express this: a row's height depends on the ratios of the items IN it, so the
     // arrangement is solved first and laid out second.
+    /// REAL album indices still visible to me. "Delete for Me" on one photo hides the synthetic
+    /// "<messageId>-<index>" id, and every gallery honors that (expandedGalleryItems) — the chat's
+    /// own grid was the last place the deleted photo still showed (audit). The solver keeps working
+    /// on a plain 0..<count list; only the mapping back to the real item changes.
+    private var visibleAlbumIndices: [Int] {
+        let count = message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count
+        guard message.localAlbum.isEmpty else { return Array(0..<count) }   // optimistic: nothing hidden yet
+        return (0..<count).filter { !HiddenMessages.isHidden("\(message.id)-\($0)") }
+    }
+
     @ViewBuilder private var albumGrid: some View {
-        let n = max(message.localAlbum.isEmpty ? message.album.count : message.localAlbum.count, 2)
+        let visible = visibleAlbumIndices
+        let n = max(visible.count, 2)
         let shown = min(n, 10)   // Telegram's album ceiling; anything beyond rides a "+N" on the last tile
-        let sizes = (0 ..< shown).map { CGSize(width: albumAspect($0), height: 1) }
+        let sizes = (0 ..< shown).map { CGSize(width: albumAspect(visible[safe: $0] ?? $0), height: 1) }
         // A square box: the width is the bubble's, and the height only bounds the hand-tuned 2/3/4
         // arrangements, exactly as Telegram bounds them.
         let solved = MediaGroupLayout.solve(itemSizes: sizes,
                                             maxSize: CGSize(width: albumWidth, height: albumWidth))
         ZStack(alignment: .topLeading) {
             ForEach(solved.tiles, id: \.index) { tile in
-                albumTile(tile.index, tile.rect.width, tile.rect.height,
+                // tile.index is a DISPLAY slot; everything below wants the real album index.
+                albumTile(visible[safe: tile.index] ?? tile.index, tile.rect.width, tile.rect.height,
                           extra: tile.index == shown - 1 ? n - shown : 0)
                     .offset(x: tile.rect.minX, y: tile.rect.minY)
             }

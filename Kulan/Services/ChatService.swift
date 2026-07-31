@@ -1363,8 +1363,18 @@ enum ChatService {
             return await deleteAlbumItem(cid: cid, parentId: String(messageId[..<dash]), index: index)
         }
         do {
-            try await db.collection("conversations").document(cid)
-                .collection("messages").document(messageId).delete()
+            // Read the doc BEFORE deleting it: once it's gone there is no way to know which Storage
+            // objects belonged to it, and nothing else in the app ever deletes chat media (audit).
+            // "Delete for everyone" and the disappearing timer both promise the content is gone, so
+            // the ciphertext should not outlive the message it belonged to.
+            let ref = db.collection("conversations").document(cid).collection("messages").document(messageId)
+            let blobs = mediaStorageURLs(in: (try? await ref.getDocument())?.data())
+            try await ref.delete()
+            // Best-effort, AFTER the doc is gone: a failure here must never turn a successful delete
+            // into a reported failure, and an already-missing object is not an error worth surfacing.
+            for u in blobs {
+                try? await Storage.storage().reference(forURL: u).delete()
+            }
             // Clean up what a bare doc delete leaves behind (audit):
             // • a PIN pointing at it — pinnedMessageIds is shared state and nothing else ever
             //   removes the id, so both people kept a dead "Tap to view" pin forever;
@@ -1380,6 +1390,29 @@ enum ChatService {
             #endif
             return false
         }
+    }
+
+    /// Every Storage object a message doc owns: photo, video + its poster, voice note, file, each
+    /// album item (and each album video's own poster), and a sealed link-preview image. Reads the RAW
+    /// doc so it covers types the client model may not expose.
+    private static func mediaStorageURLs(in data: [String: Any]?) -> [String] {
+        guard let d = data else { return [] }
+        var out: [String] = []
+        for key in ["imageUrl", "videoUrl", "thumbUrl", "audioUrl", "fileUrl"] {
+            if let s = d[key] as? String, s.hasPrefix("http") { out.append(s) }
+        }
+        if let album = d["album"] as? [[String: Any]] {
+            for it in album {
+                for key in ["imageUrl", "videoUrl"] {
+                    if let s = it[key] as? String, s.hasPrefix("http") { out.append(s) }
+                }
+            }
+        }
+        if let lp = d["linkPreview"] as? [String: Any], let s = lp["imageUrl"] as? String,
+           s.hasPrefix("http") { out.append(s) }
+        // A GIF is a public Giphy url we never uploaded — deleting it is not ours to do.
+        if (d["type"] as? String) == "gif" { return [] }
+        return out
     }
 
     /// After the newest message is deleted, re-point the conversation summary at whatever is now
@@ -1423,11 +1456,19 @@ enum ChatService {
             guard var album = snap.data()?["album"] as? [[String: Any]], album.indices.contains(index) else {
                 return false
             }
-            album.remove(at: index)
+            let removed = album.remove(at: index)
             if album.isEmpty {
-                try await ref.delete()
-            } else {
-                try await ref.updateData(["album": album])
+                // Last item: the whole message goes, and with it the pin/summary cleanup and the
+                // Storage sweep that deleteMessage owns.
+                return await deleteMessage(cid: cid, messageId: parentId)
+            }
+            try await ref.updateData(["album": album])
+            // The removed item's own objects (photo, or a video plus its poster) are now orphaned —
+            // nothing else would ever delete them. Best effort, after the write lands.
+            for key in ["imageUrl", "videoUrl"] {
+                if let s = removed[key] as? String, s.hasPrefix("http") {
+                    try? await Storage.storage().reference(forURL: s).delete()
+                }
             }
             return true
         } catch {
@@ -1717,6 +1758,12 @@ enum ChatService {
     }
 }
 
+extension Array {
+    /// Bounds-checked read. Used where a DISPLAY slot is mapped back to a real album index and the
+    /// two lists can differ in length (an item hidden by "Delete for Me").
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
 /// An album is ONE message holding N media items. Anywhere media is listed ITEM BY ITEM (the All Media
 /// grid, the profile strip) an album must be EXPANDED into per-item synthetic Messages - with the SAME
 /// "<messageId>-<index>" ids the chat's album tiles register in MediaOpenRects, so tapping an item
@@ -1726,7 +1773,13 @@ enum ChatService {
 extension Message {
     func expandedGalleryItems(cid: String) -> [Message] {
         guard isAlbum else { return [self] }
-        return album.enumerated().compactMap { i, it in
+        return album.enumerated().compactMap { i, it -> Message? in
+            // "Delete for Me" on ONE album photo stores this synthetic id, but nothing consulted
+            // HiddenMessages per item, so the photo stayed everywhere and came back on relaunch —
+            // a destructive button that silently did nothing (audit). Honored here covers the All
+            // Media grid, the profile strip and the group media page in one place; the chat's own
+            // album grid applies the same test where it builds its tiles.
+            if HiddenMessages.isHidden("\(id)-\(i)") { return nil }
             if it.isVideo {
                 guard let vurl = it.videoUrl, let venc = it.videoEnc else { return nil }
                 let d: [String: Any] = ["type": "video", "videoUrl": vurl, "enc": venc.asDict,

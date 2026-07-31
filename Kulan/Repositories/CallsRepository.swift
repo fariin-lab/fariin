@@ -37,8 +37,14 @@ final class CallsRepository {
     var hasLoaded = false   // false until the first load finishes -> drives the skeleton
     private var lastLoadedAt: Date?
 
+    /// Bumped by reset(). A load that was already in flight when the account changed must NOT
+    /// publish its results afterwards — it would repaint the previous account's call log for the
+    /// next person, and the 30s TTL then blocked the correcting reload (audit).
+    private var generation = 0
+
     /// Sign-out/delete: drop the previous account's call log.
     func reset() {
+        generation &+= 1
         calls = []
         hasLoaded = false
         loading = false
@@ -57,6 +63,7 @@ final class CallsRepository {
         }
         guard proceed else { return }
         guard let me = Auth.auth().currentUser?.uid else { await MainActor.run { loading = false; hasLoaded = true }; return }
+        let myGeneration = await MainActor.run { generation }   // see `generation`
         let database = db
 
         // Safety net: never leave the shimmer skeleton up forever if a query stalls on bad network.
@@ -99,7 +106,11 @@ final class CallsRepository {
         }
         all.removeAll { HiddenMessages.isHidden($0.id) }   // locally deleted entries stay gone
         all.sort { $0.date > $1.date }
-        await MainActor.run { self.calls = all; self.loading = false; self.hasLoaded = true; self.lastLoadedAt = Date() }
+        await MainActor.run {
+            // The account changed while this was in flight → drop the results on the floor.
+            guard self.generation == myGeneration else { return }
+            self.calls = all; self.loading = false; self.hasLoaded = true; self.lastLoadedAt = Date()
+        }
     }
 
     // DELETING A CALL IS LOCAL-ONLY (audit). A call entry IS the shared

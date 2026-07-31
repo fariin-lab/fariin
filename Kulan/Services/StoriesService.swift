@@ -111,18 +111,29 @@ final class StoriesService {
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
+                self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
                 guard self.currentUploadToken == token else { return }   // a newer post owns the state now
                 self.uploading = false; self.uploadingImage = nil; self.uploadTask = nil; self.uploadError = failure
             }
         }
+        if let t = uploadTask { queuedUploads.append(t) }   // cancellable as part of the chain
     }
     private var currentUploadToken: UUID?
 
     @MainActor func cancelUpload() {
         currentUploadToken = nil   // invalidate any in-flight completion so it can't clobber a later post
+        // Cancel the WHOLE chain, not just the newest task (audit). Posts queue behind each other,
+        // so with A uploading and B queued, cancelling only B left A to finish and POST — while the
+        // X the user tapped was sitting on B's image, so they watched the thing they cancelled go
+        // up. Cancelling every queued task makes the button mean what it says.
+        for t in queuedUploads { t.cancel() }
+        queuedUploads.removeAll()
         uploadTask?.cancel(); uploadTask = nil
         uploading = false; uploadingImage = nil
     }
+    /// Every post task still in the queue (including the one currently uploading), so cancel can
+    /// reach all of them. Entries are dropped as they finish.
+    private var queuedUploads: [Task<Void, Never>] = []
 
     // Snapshot contacts on the MAIN actor (live-mutated there) and resolve the audience:
     //  • included non-empty -> only those; • excluded non-empty -> everyone minus those; • else everyone.
@@ -752,6 +763,10 @@ final class StoriesRepository {
 
         let nextExpiry = all.map(\.expiresAt).min()
         await MainActor.run {
+            // The account changed while this rebuild was awaiting profile fetches → publishing now
+            // would repaint the previous account's story row for the next person, right after
+            // reset() cleared it (audit). reset() nils listeningUid, so this is the test.
+            guard self.listeningUid == me else { return }
             for (u, p) in profiles where cachedProfiles[u] == nil { profileCache[u] = p }
             // Apply the freshest watermark to each group so a rebuild can never REGRESS a ring
             // to unseen while the view write is still in flight (H8, watermark edition).
