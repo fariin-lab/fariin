@@ -684,29 +684,30 @@ struct ChatsView: View {
         // The system's own row highlight cannot get stuck this way, and it is also what makes the swipe
         // actions behave properly, since UIKit owns the whole cell interaction instead of splitting it
         // between a Button and the swipe platter.
-        Group {
+        // ONE structure for both modes (owner's report: entering Select cross-faded TWO copies of
+        // every row — the old if-selecting/else swap changed the row's structural identity, so
+        // SwiftUI faded the plain-label copy in over the Button copy instead of sliding one row).
+        // The Button stays permanently; Select mode just disables it and lays a tap-catcher on top,
+        // so the native edit-mode indent slides the single row smoothly.
+        //
+        // A Button that pushes onto the same path, NOT a NavigationLink — because a
+        // NavigationLink row draws the disclosure chevron and there is no API to turn it off
+        // (user: "remove the arrow in chat list"). The link ALSO set the List's selection, and
+        // SwiftUI never cleared it on the way back; fixed in the two onChange handlers on the List.
+        Button {
+            path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
+                                   photo: conv.displayPhoto(me)))
+        } label: {
+            chatListRowLabel(conv)
+        }
+        .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
+        .disabled(selecting)   // edit mode: the push is off; the overlay owns the tap
+        .overlay {
             if selecting {
-                chatListRowLabel(conv)
-                    .contentShape(Rectangle())
+                // Whole row toggles, like Mail and Telegram (taps on a Button's content were
+                // otherwise swallowed and only the checkbox worked).
+                Color.clear.contentShape(Rectangle())
                     .onTapGesture { toggleSelection(conv.id) }
-            } else {
-                // A Button that pushes onto the same path, NOT a NavigationLink — because a
-                // NavigationLink row draws the disclosure chevron and there is no API to turn it off
-                // (user: "remove the arrow in chat list"). This is what the row originally did; it was
-                // changed to a NavigationLink to chase the stuck grey row, and the note on the List below
-                // records what that actually was: the link ALSO sets the List's selection, and SwiftUI
-                // never clears it on the way back. That is fixed where it belongs, in the two onChange
-                // handlers on the List, so the reason to keep a link here is gone.
-                //
-                // Same destination, same ChatTarget value, same navigationDestination — only the accessory
-                // and the row's selection side-effect disappear.
-                Button {
-                    path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
-                                           photo: conv.displayPhoto(me)))
-                } label: {
-                    chatListRowLabel(conv)
-                }
-                .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
             }
         }
         .tag(conv.id)
