@@ -390,9 +390,14 @@ struct ContactInfoView: View {
         let note = contactNote
         if !isSelf, !note.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "note.text").font(.system(size: 17))
-                    Text("Notes").font(.system(size: 17, weight: .semibold))
+                // Matched to the settings rows below it (Disappearing Messages / Sounds / Verify):
+                // same 14pt gap, same 26pt icon column, and the title in the SAME plain body font —
+                // it was 17pt semibold, which read as a heading rather than a row label (owner:
+                // "Notes is looks bold and big, use the font size disappearing message uses").
+                HStack(spacing: 14) {
+                    Image("ic_notes").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 21, height: 21).frame(width: 26)
+                    Text("Notes")
                     Spacer(minLength: 8)
                     Text("only visible to you")
                         .font(.system(size: 14)).foregroundStyle(.secondary)
