@@ -549,7 +549,9 @@ struct ContactInfoView: View {
             }
             // Your OWN profile: no call-yourself buttons, and NO message-self yet (opening a self-chat crashed —
             // that's the upcoming "My Space" feature, built separately). Friends keep video/voice.
-            if !isSelf && canCallThem {
+            // `!blocked` (audit): tapping Block then the voice tile one inch above it still rang the
+            // blocked person — the tiles only checked THEIR privacy, never my own block.
+            if !isSelf && canCallThem && !blocked {
                 actionTile("video", "video.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) }
                 actionTile("voice", "phone.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) }
             }
@@ -602,10 +604,19 @@ struct ContactInfoView: View {
                     Text(call.date.formatted(.dateTime.month(.abbreviated).day().year()))
                         .font(.subheadline).foregroundStyle(.secondary)
                     HStack(spacing: 10) {
-                        Image(systemName: call.mine ? "phone.arrow.up.right" : "phone.arrow.down.left")
-                            .foregroundStyle(call.missed ? .red : .secondary)
-                        Text(call.missed ? "Missed voice call"
-                                         : (call.mine ? "Outgoing voice call" : "Incoming voice call"))
+                        // Direction + kind from the entry itself (audit: this card hardcoded "voice
+                        // call" for video calls, and used raw `missed` — my own unanswered outgoing
+                        // call showed as a red "Missed". missedIncoming is the standard rule the
+                        // Calls tab already follows.)
+                        Image(systemName: call.missedIncoming
+                              ? (call.video ? "video.slash.fill" : "phone.down.fill")
+                              : (call.mine ? "phone.arrow.up.right" : "phone.arrow.down.left"))
+                            .foregroundStyle(call.missedIncoming ? .red : .secondary)
+                        Text({
+                            let kind = call.video ? "video call" : "voice call"
+                            if call.missedIncoming { return "Missed \(kind)" }
+                            return call.mine ? "Outgoing \(kind)" : "Incoming \(kind)"
+                        }())
                         Spacer()
                         Text(call.date.formatted(date: .omitted, time: .shortened))
                             .foregroundStyle(.secondary)
