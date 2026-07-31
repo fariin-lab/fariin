@@ -810,8 +810,30 @@ final class CallService: NSObject {
         ringbackPlayer?.numberOfLoops = -1
         ringbackPlayer?.prepareToPlay()
         ringbackPlayer?.play()
+        armRingbackWatchdog()
     }
-    private func stopRingback() { ringbackPlayer?.stop(); ringbackPlayer = nil }
+    private func stopRingback() {
+        ringbackWatchdog?.invalidate(); ringbackWatchdog = nil
+        ringbackPlayer?.stop(); ringbackPlayer = nil
+    }
+
+    // The ringback must SURVIVE call-setup session churn: WebRTC's audio unit and CallKit both
+    // reconfigure the audio session seconds into an outgoing call, and an interrupted AVAudioPlayer
+    // stops silently — loops = -1 cannot save it (owner's report: one ring, then silence forever).
+    // Same resume-don't-restart rule as audioSessionActivated, applied CONTINUOUSLY: a stalled
+    // player is nudged with play() on the same instance (no restart-from-zero blip); only a wedged
+    // one that refuses play() is rebuilt. Runs only while the call is still .outgoing.
+    private var ringbackWatchdog: Timer?
+    private func armRingbackWatchdog() {
+        ringbackWatchdog?.invalidate()
+        ringbackWatchdog = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self, state == .outgoing, let p = ringbackPlayer else { return }
+            if !p.isPlaying, p.play() == false {
+                ringbackPlayer = nil
+                startRingback()
+            }
+        }
+    }
 
     // Called by CallKit the instant it activates the audio session. The ringback starts at startCall
     // (deliberate: immediate, Signal-verified) but the session may not be live yet then — on some
