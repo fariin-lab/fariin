@@ -176,79 +176,26 @@ struct MediaGalleryView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        // THE TRACK IS GLASS, THE SELECTED PILL IS UNTOUCHED (user 2026-07-29: "only the bar make
-        // liquid glass, don't touch active bar").
+        // NOTHING ELSE. The previous version wrapped this in a hand-made glass capsule, and to let
+        // that capsule show through it ERASED the control's background images — which is what took
+        // the active-tab indicator away (owner 2026-07-31: "Active tab Is gone… is looks like liquid
+        // glass but is not really"). Both complaints had the same cause: a fake glass surface can
+        // only be seen by removing the real one, and the selected pill is drawn as part of that real
+        // surface. Signal's All Media uses the stock control for exactly this reason.
         //
-        // Glass alone would have done nothing visible: the segmented control paints its own opaque
-        // track, so anything behind it is simply covered. So the control's track is made transparent
-        // and the glass goes where it used to be. Only the TRACK is cleared — the selected segment is
-        // drawn separately by the system and is left exactly as it is, which is the part he said works.
-        .background(ClearSegmentedTrack())
-        // 48pt tall (user spec 2026-07-29). The height is set on the BAR — the glass capsule — rather
-        // than on the segmented control, whose own height the system owns; the control centres inside
-        // it. So the bar is exactly 48 and the selected pill keeps the size iOS gives it, which is the
-        // part he asked not to touch.
-        .frame(height: Self.tabBarHeight)
-        .background(Color.clear.liquidGlass(Capsule(style: .continuous)))
+        // Left alone, iOS 26 renders this control in the system material — the same real thing the
+        // back button gets, because it comes from the OS rather than from us — and draws, sizes and
+        // animates the selected segment itself. Height is the system's too: forcing 48 was part of
+        // the same hand-built bar.
         .padding(.horizontal, 16)
-        .padding(.top, 2)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 
-    private static let tabBarHeight: CGFloat = 48
-
-    /// Makes ONE segmented control's track transparent, by reaching that instance rather than through
-    /// `UISegmentedControl.appearance()`. The app has three segmented pickers (here, Add Story, and the
-    /// chat list filter) and the appearance proxy would strip the track from all of them.
-    ///
-    /// If the control is ever not found, nothing happens and the bar keeps the system's own track — the
-    /// failure mode is "looks like it did before", not a broken bar.
-    private struct ClearSegmentedTrack: UIViewRepresentable {
-        func makeUIView(context: Context) -> UIView {
-            let probe = UIView()
-            probe.isUserInteractionEnabled = false
-            probe.backgroundColor = .clear
-            return probe
-        }
-
-        func updateUIView(_ probe: UIView, context: Context) {
-            // Async: on the first pass this probe is not in the hierarchy yet, so the sibling control
-            // it needs to find does not exist to be found.
-            DispatchQueue.main.async {
-                guard let host = Self.enclosingHost(of: probe),
-                      let seg = Self.firstSegmentedControl(in: host) else { return }
-                // THE UNSELECTED TRACK ONLY. `backgroundColor` alone did not empty it — the control also
-                // draws a track image of its own, which sat over the glass and left the bar looking like
-                // a flat grey capsule. Clearing the `.normal` background and the dividers removes the
-                // track; the SELECTED segment is a separate state and is deliberately not touched, so
-                // the active pill keeps exactly the appearance iOS gives it.
-                let empty = UIImage()
-                seg.backgroundColor = .clear
-                seg.setBackgroundImage(empty, for: .normal, barMetrics: .default)
-                seg.setBackgroundImage(empty, for: .highlighted, barMetrics: .default)
-                seg.setDividerImage(empty,
-                                    forLeftSegmentState: .normal, rightSegmentState: .normal,
-                                    barMetrics: .default)
-            }
-        }
-
-        /// Nearest ancestor that contains a segmented control somewhere beneath it.
-        private static func enclosingHost(of view: UIView) -> UIView? {
-            var v: UIView? = view.superview
-            while let current = v {
-                if firstSegmentedControl(in: current) != nil { return current }
-                v = current.superview
-            }
-            return nil
-        }
-
-        private static func firstSegmentedControl(in root: UIView) -> UISegmentedControl? {
-            if let s = root as? UISegmentedControl { return s }
-            for sub in root.subviews {
-                if let hit = firstSegmentedControl(in: sub) { return hit }
-            }
-            return nil
-        }
-    }
+    // (Deleted: ClearSegmentedTrack. It reached into the segmented control and erased its background
+    // images so a hand-made glass capsule behind it could show — which is what removed the active-tab
+    // indicator, since iOS draws the selected pill as part of that same surface. Nothing replaces it:
+    // the stock control already renders in the system material.)
 
     // Swipe left/right to move between tabs, using the NATIVE paging TabView rather than a hand-rolled
     // drag gesture: it carries the interactive rubber-banding, the velocity handling and the correct
