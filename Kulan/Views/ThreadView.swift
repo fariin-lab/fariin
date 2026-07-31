@@ -2541,6 +2541,11 @@ struct ThreadView: View {
             var pending = Message(localFileName: name, fileSize: data.count, authorId: me,
                                   clientId: clientId, sendState: .sending)
             pending.localMediaURL = retryURL.path
+            // The preview is computed on THIS device (documentPreviewJPEG is a pure local render of
+            // a PDF's first page / an image file's pixels), so the pending bubble can show the exact
+            // tile the echo will carry. Without it the bubble was a 26pt spinner while sending and a
+            // 44x58 page tile once it landed, so it visibly resized mid-send (owner report).
+            pending.localImageData = ChatService.documentPreviewJPEG(fileName: name, data: data)
             repo.addPending(pending)
         }
         do {
@@ -5073,10 +5078,26 @@ struct MessageBubble: View, Equatable {
                     // Spinner while the optimistic file is still uploading; then the iMessage-style
                     // page preview when the sender attached one (PDF first page / image file), and
                     // the plain document icon for every other type and for old messages.
-                    if message.sendState == .sending {
-                        ProgressView().progressViewStyle(.circular)
-                            .tint(isMe ? onMyBubble : Color.accentColor)
-                            .frame(width: 26, height: 26)
+                    // ONE tile size per file, before and after the send lands. The local preview is
+                    // checked FIRST so an uploading PDF already shows its page at the same 44x58 the
+                    // echo will use; a file with no preview keeps the 26pt slot in both states. Only
+                    // the spinner moves between them, so the bubble never resizes mid-send.
+                    if let d = message.localImageData, let ui = UIImage(data: d) {
+                        Image(uiImage: ui).resizable().scaledToFill()
+                            .frame(width: 44, height: 58)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+                            .overlay {
+                                if message.sendState == .sending {
+                                    ZStack {
+                                        Color.black.opacity(0.25)
+                                        ProgressView().progressViewStyle(.circular).tint(.white)
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                }
+                            }
                     } else if let t = message.thumbUrl, !t.isEmpty {
                         SecureImageView(imageUrl: t, enc: message.thumbEnc, cid: cid)
                             .frame(width: 44, height: 58)
@@ -5084,9 +5105,14 @@ struct MessageBubble: View, Equatable {
                             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+                    } else if message.sendState == .sending {
+                        ProgressView().progressViewStyle(.circular)
+                            .tint(isMe ? onMyBubble : Color.accentColor)
+                            .frame(width: 26, height: 26)
                     } else {
                         Image(systemName: "doc.fill").font(.system(size: 26))
                             .foregroundStyle(isMe ? onMyBubble : Color.accentColor)
+                            .frame(width: 26, height: 26)   // same slot the spinner used
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(message.fileName ?? "Document")

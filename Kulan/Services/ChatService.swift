@@ -1013,7 +1013,9 @@ enum ChatService {
 
     /// First-page render for a PDF, the pixels for an image file — nil for anything else
     /// (those keep the plain document icon).
-    private static func documentPreviewJPEG(fileName: String, data: Data) -> Data? {
+    /// Internal, not private: the optimistic file bubble calls this too, so the tile it shows while
+    /// uploading is byte-for-byte the one the echo will carry and the bubble never changes size.
+    static func documentPreviewJPEG(fileName: String, data: Data) -> Data? {
         if fileName.lowercased().hasSuffix(".pdf") {
             guard let doc = PDFDocument(data: data), let page = doc.page(at: 0) else { return nil }
             let bounds = page.bounds(for: .mediaBox)
