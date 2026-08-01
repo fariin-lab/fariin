@@ -1800,6 +1800,19 @@ struct ThreadView: View {
         let isPinned = repo.pinnedMessageIds.contains(m.id)
         var out: [CMAction] = []
 
+        // A TOMBSTONE has no content, so nothing that acts on content applies: no react, reply,
+        // forward, copy, edit, pin or save. Offering them would produce empty copies and quotes of a
+        // message that no longer exists. Clearing it from your own side is the only thing left.
+        if m.deleted {
+            out.append(CMAction(title: "Delete for Me", icon: "trash", destructive: true) {
+                deleteForMe(m)
+            })
+            out.append(CMAction(title: "Select", icon: "checkmark.circle") {
+                selecting = true; selectedIds = [m.id]
+            })
+            return out
+        }
+
         // MEDIA STILL UPLOADING: not on the server yet — only Save / Cancel Sending / Select.
         if m.sendState == .sending && (m.isImage || m.isVideo || m.isAlbum || m.isGif) {
             if m.isImage || m.isAlbum {
@@ -4661,7 +4674,7 @@ struct MessageBubble: View, Equatable {
         .contentShape(Rectangle())
         .highPriorityGesture(
             TapGesture(count: 2).onEnded {
-                guard message.sendState == nil, !restricted else { return }
+                guard message.sendState == nil, !restricted, !message.deleted else { return }
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 let quick = QuickReaction.current
                 onReact(myReaction == quick ? nil : quick)
@@ -4940,7 +4953,7 @@ struct MessageBubble: View, Equatable {
                     // Reacting to media is still there through long press, where the bar now lives.
                     .highPriorityGesture(
                         TapGesture(count: 2).onEnded {
-                            guard message.sendState == nil, !restricted else { return }   // not until on server; muted can't react
+                            guard message.sendState == nil, !restricted, !message.deleted else { return }   // not until on server; muted can't react
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             let quick = QuickReaction.current
                             onReact(myReaction == quick ? nil : quick)
@@ -5062,7 +5075,22 @@ struct MessageBubble: View, Equatable {
     }
 
     @ViewBuilder private var content: some View {
-        if message.isAudio {
+        // TOMBSTONE FIRST, ahead of every type test. The content fields are stripped server-side, so
+        // a deleted photo would otherwise fall into the image branch with no url and draw an empty
+        // grey box. The slashed circle and the italic are what make it read as "removed" rather than
+        // as a message that failed to load.
+        if message.deleted {
+            HStack(spacing: 6) {
+                Image(systemName: "trash.slash").font(.system(size: 13))
+                Text(isMe ? "You deleted this message" : "This message was deleted")
+                    .font(.system(size: 16)).italic()
+                metaRow
+            }
+            .foregroundStyle(isMe ? onMyBubble.opacity(0.75) : Color.secondary)
+            .padding(.horizontal, 15).padding(.vertical, 10)
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+        } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
             // inside a 158-wide frame narrower than the waveform, so it can NEVER widen the bubble. The real

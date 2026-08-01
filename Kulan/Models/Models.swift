@@ -93,6 +93,11 @@ struct Message: Identifiable, Equatable {
     var callVideo: Bool = false             // placed as a video call (older records default to voice)
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
+    /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
+    /// was here and removed, the way WhatsApp and Signal do it, instead of a message silently
+    /// vanishing and leaving the other person wondering what they missed. The content is stripped
+    /// server-side and the media is deleted from Storage, so what remains is a few bytes of marker.
+    var deleted: Bool = false
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
     var clientTs: Date? = nil               // sender's tap time (ms epoch on the wire) — display order is send order
 
@@ -306,6 +311,7 @@ struct Message: Identifiable, Equatable {
         self.callVideo = data["callVideo"] as? Bool ?? false
         self.callDuration = (data["callDuration"] as? NSNumber)?.intValue
         self.edited = data["edited"] as? Bool ?? false
+        self.deleted = data["deleted"] as? Bool ?? false
         self.forwarded = data["forwarded"] as? Bool ?? false
         self.clientId = data["clientId"] as? String
         self.enc = (data["enc"] as? [String: Any]).flatMap(EncMeta.init(map:))

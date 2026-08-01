@@ -1445,7 +1445,35 @@ enum ChatService {
                 return true
             }
             let blobs = mediaStorageURLs(in: snap?.data())
-            try await ref.delete()
+
+            // TOMBSTONE, not a hole. The document survives carrying `deleted`, with every content
+            // field stripped, so both sides see that something was here and was removed instead of a
+            // message silently vanishing and leaving the other person wondering what they missed.
+            // This is what WhatsApp and Signal both do.
+            //
+            // Costs nothing to keep: the MEDIA is still deleted from Storage below, and Storage is
+            // where the money is. What remains is a few bytes of marker in a document that already
+            // existed.
+            //
+            // Falls back to the hard delete if the server refuses the update, so a rules setup that
+            // only permits deletes still behaves exactly as it does today rather than failing.
+            var tombstoned = false
+            do {
+                var strip: [String: Any] = ["deleted": true, "text": "", "enc": FieldValue.delete()]
+                for k in ["imageUrl", "videoUrl", "thumbUrl", "audioUrl", "fileUrl", "album",
+                          "fileName", "fileSize", "waveform", "duration", "blurhash", "linkPreview",
+                          "poll", "locationCard", "contactCard", "replyTo", "reactions",
+                          "videoEnc", "thumbEnc", "viewOnce", "mentions"] {
+                    strip[k] = FieldValue.delete()
+                }
+                try await ref.updateData(strip)
+                tombstoned = true
+            } catch {
+                #if DEBUG
+                print("[deleteMessage] tombstone refused, falling back to hard delete: \(error)")
+                #endif
+            }
+            if !tombstoned { try await ref.delete() }
             // Best-effort, AFTER the doc is gone: a failure here must never turn a successful delete
             // into a reported failure, and an already-missing object is not an error worth surfacing.
             for u in blobs {
@@ -1506,8 +1534,12 @@ enum ChatService {
             return
         }
         let d = doc.data()
+        // The tombstone is still the newest message now that deleting keeps the document, and its
+        // text is empty, which would leave the chat list showing a blank line. A plaintext marker
+        // instead, the same way "GIF" and "📷 Photo" already ride this field un-encrypted.
+        let deletedNewest = d["deleted"] as? Bool == true
         var update: [String: Any] = [
-            "lastMessage": d["text"] as? String ?? "",
+            "lastMessage": deletedNewest ? "This message was deleted" : (d["text"] as? String ?? ""),
             "lastSender": d["authorId"] as? String ?? "",
         ]
         // Carry the new newest message's thumbnail, or drop the stale one.
