@@ -409,7 +409,9 @@ struct StoriesRow: View {
                 }
                 // NATIVE context menu (build 181 look): My Story menu, lifting just the rounded card.
                 .contextMenu {
-                    Button { onCompose() } label: { Label("Add Story", systemImage: "plus") }
+                    Button { onCompose() } label: {
+                        Label { Text("Add Story") } icon: { Image("ic_stories").renderingMode(.template) }
+                    }
                     Button { if let m = repo.mine, !m.stories.isEmpty { onOpen(m) } }
                         label: { Label("Posted Stories", systemImage: "circle.dashed") }
                 } preview: {

@@ -772,7 +772,10 @@ struct ChatsView: View {
             Button {
                 Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
             } label: {
-                Label(conv.isPinned(me) ? "Unpin" : "Pin", systemImage: "pin")
+                Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
+                    conv.isPinned(me) ? Image(systemName: "pin.slash")
+                                      : Image("ic_pin_menu").renderingMode(.template)
+                }
             }
             .tint(.orange)
         }
@@ -860,7 +863,9 @@ struct ChatsView: View {
             Button { showArchived = true } label: { Label("Archive", systemImage: "archivebox") }
             // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
             if !storiesOptedOut {
-                Button { showCompose = true } label: { Label("Add Story", systemImage: "plus.circle") }
+                Button { showCompose = true } label: {
+                    Label { Text("Add Story") } icon: { Image("ic_stories").renderingMode(.template) }
+                }
             }
         } label: {
             // Plain three-lines filter glyph (no inner circle) — Apple moved off the
@@ -975,7 +980,10 @@ struct ChatsView: View {
             Button("Mute Always") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) } }
         } label: { Label("Mute", systemImage: "bell.slash") }
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
-            Label(conv.isPinned(me) ? "Unpin" : "Pin", systemImage: "pin")
+            Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
+                    conv.isPinned(me) ? Image(systemName: "pin.slash")
+                                      : Image("ic_pin_menu").renderingMode(.template)
+                }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
             Label("Archive", systemImage: "archivebox")

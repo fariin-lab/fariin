@@ -1288,7 +1288,8 @@ struct ThreadView: View {
                     } label: { Label("See All", systemImage: "list.bullet") }
                 } label: {
                     // Upright pin in a bordered circle (reference: image-2 style).
-                    Image(systemName: "pin").font(.system(size: 15, weight: .semibold))
+                    Image("ic_pin_bar").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 17, height: 17)
                         .foregroundStyle(.primary)
                         .frame(width: 34, height: 34)
                         .overlay(Circle().strokeBorder(.primary.opacity(0.35), lineWidth: 1.5))
@@ -1765,7 +1766,8 @@ struct ThreadView: View {
         }
         let isPinned = repo.pinnedMessageIds.contains(m.id)
         items.append(UIAction(title: isPinned ? "Unpin" : "Pin",
-                              image: UIImage(systemName: isPinned ? "pin.slash" : "pin")) { _ in
+                              image: isPinned ? UIImage(systemName: "pin.slash")
+                                             : UIImage(named: "ic_pin_menu")?.withRenderingMode(.alwaysTemplate)) { _ in
             togglePin(m)
         })
         items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
@@ -1873,7 +1875,7 @@ struct ThreadView: View {
             out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
         }
         if canPin && delivered {   // see `delivered` above — a pin on a clientId can never resolve
-            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "pin") {
+            out.append(CMAction(title: isPinned ? "Unpin" : "Pin", icon: isPinned ? "pin.slash" : "ic_pin_menu") {
                 togglePin(m)
             })
         }
@@ -2425,9 +2427,9 @@ struct ThreadView: View {
                         // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Kulan has no
                         // phone book — you introduce someone by sharing their profile from THEIR
                         // profile page, which is where the action still lives.
-                        attachTile("sparkles", "GIF") { showGifPicker = true }
-                        attachTile("doc", "Files") { showFileImporter = true }
-                        attachTile("location", "Location") { showLocationShare = true }
+                        attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
+                        attachTile("ic_file", "Files") { showFileImporter = true }
+                        attachTile("ic_location", "Location") { showLocationShare = true }
                         if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                     }
                     .padding(.horizontal, 16)
@@ -2500,7 +2502,16 @@ struct ThreadView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
             VStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(.primary)
+                // "ic_" names one of our own drawings; anything else is an SF Symbol.
+                Group {
+                    if icon.hasPrefix("ic_") {
+                        Image(icon).renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 22, height: 22)
+                    } else {
+                        Image(systemName: icon).font(.system(size: 20, weight: .medium))
+                    }
+                }
+                    .foregroundStyle(.primary)
                     .frame(width: 76, height: 50)
                     .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass capsule
                 Text(label).font(.footnote.weight(.medium)).foregroundStyle(.primary)

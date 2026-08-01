@@ -575,7 +575,9 @@ private final class CMActionRow: UIView {
         title.textColor = color
         addSubview(title)
 
+        // An SF Symbol name, or one of the app's own assets when we have drawn our own glyph.
         icon.image = UIImage(systemName: action.icon)
+            ?? UIImage(named: action.icon)?.withRenderingMode(.alwaysTemplate)
         icon.tintColor = color
         icon.contentMode = .scaleAspectFit
         addSubview(icon)
