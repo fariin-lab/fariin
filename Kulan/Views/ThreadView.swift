@@ -1804,9 +1804,11 @@ struct ThreadView: View {
         // forward, copy, edit, pin or save. Offering them would produce empty copies and quotes of a
         // message that no longer exists. Clearing it from your own side is the only thing left.
         if m.deleted {
-            out.append(CMAction(title: "Delete for Me", icon: "trash", destructive: true) {
-                deleteForMe(m)
-            })
+            // The SAME Delete action as any other message, so its dialog offers both: Delete for Me
+            // clears the marker from your side only, and Delete for Everyone (yours, sent) removes
+            // the marker itself from both. A second delete on a tombstone is a hard delete, since
+            // there is no content left to protect and the owner asked for the trace gone too.
+            out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 selecting = true; selectedIds = [m.id]
             })

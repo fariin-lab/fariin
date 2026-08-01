@@ -1457,23 +1457,32 @@ enum ChatService {
             //
             // Falls back to the hard delete if the server refuses the update, so a rules setup that
             // only permits deletes still behaves exactly as it does today rather than failing.
-            var tombstoned = false
-            do {
-                var strip: [String: Any] = ["deleted": true, "text": "", "enc": FieldValue.delete()]
-                for k in ["imageUrl", "videoUrl", "thumbUrl", "audioUrl", "fileUrl", "album",
-                          "fileName", "fileSize", "waveform", "duration", "blurhash", "linkPreview",
-                          "poll", "locationCard", "contactCard", "replyTo", "reactions",
-                          "videoEnc", "thumbEnc", "viewOnce", "mentions"] {
-                    strip[k] = FieldValue.delete()
+            // SECOND delete on a tombstone removes it outright. The first leaves the marker so the
+            // other person knows something was here; deleting that marker is the owner saying they
+            // want the trace gone too, and there is no content left to protect by then.
+            let alreadyTombstone = snap?.data()?["deleted"] as? Bool == true
+
+            var markedDeleted = false
+            if !alreadyTombstone {
+                do {
+                    var strip: [String: Any] = ["deleted": true, "text": "", "enc": FieldValue.delete()]
+                    for k in ["imageUrl", "videoUrl", "thumbUrl", "audioUrl", "fileUrl", "album",
+                              "fileName", "fileSize", "waveform", "duration", "blurhash", "linkPreview",
+                              "poll", "locationCard", "contactCard", "replyTo", "reactions",
+                              "videoEnc", "thumbEnc", "viewOnce", "mentions"] {
+                        strip[k] = FieldValue.delete()
+                    }
+                    try await ref.updateData(strip)
+                    markedDeleted = true
+                } catch {
+                    #if DEBUG
+                    print("[deleteMessage] tombstone refused, falling back to hard delete: \(error)")
+                    #endif
                 }
-                try await ref.updateData(strip)
-                tombstoned = true
-            } catch {
-                #if DEBUG
-                print("[deleteMessage] tombstone refused, falling back to hard delete: \(error)")
-                #endif
             }
-            if !tombstoned { try await ref.delete() }
+            // Nothing marked means either this WAS already a marker, or the server refused the flag.
+            // Either way the document goes.
+            if !markedDeleted { try await ref.delete() }
             // Best-effort, AFTER the doc is gone: a failure here must never turn a successful delete
             // into a reported failure, and an already-missing object is not an error worth surfacing.
             for u in blobs {
