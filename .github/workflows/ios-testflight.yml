@@ -70,17 +70,23 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Five fixes, all from your reports today. Different screens, nothing shared between them, so if one is wrong the others are not involved.
+            The video controls are rebuilt. I read Signal's own code for these rather than copying the picture, and a few things in there were worth following.
 
-            Opening a profile photo is one movement now instead of a jump. Closing was always right; opening skipped its animation because the picture was being drawn already finished. The X in the corner works too. It was there the whole time but could not be pressed, because it was being drawn into a strip it did not belong to.
+            There is a proper control bar now: back fifteen, play, forward fifteen, in one glass pill. Before this there was nothing to press. Play was only a tap on the video and skipping was only a double tap on one side of the screen, which you had to already know about.
 
-            The Media, Files, Voice, Links row on the All Media page is now the flat dark bar you asked for instead of the bright glass one. It is still Apple's control underneath, only recoloured, so the active tab cannot go missing the way it did last time.
+            Skipping is fifteen seconds, and double tapping the sides is fifteen now too, so the button and the gesture move the video by the same amount. On clips of thirty seconds or less the skip buttons are hidden, because jumping a quarter of a short clip only makes you miss it. That is Signal's rule.
 
-            Select Chats no longer dims the list. Names, previews and avatars keep the brightness they had before you tapped Edit.
+            The number on the right counts down to zero instead of showing the length again.
 
-            GIFs can be kept. Hold any GIF and choose Add to Favourites, and they get their own star tab. In Recent you can also hold one and remove it.
+            Also in this build:
 
-            Search in Settings shows the app's own icons, so a result looks like the row it takes you to.
+            Twelve of your icons are in, taken straight from the files you sent. Pin in the menus and in the pin bar, the plus sheet's GIF, files and location, Add Story, the Chats and Unread items in the long press menus, Invite Friends, call sound, mute, and the mute tile on a profile.
 
-            PLEASE TRY: open a profile photo and watch how it grows, then press the X. Tap Edit on the chat list and check nothing goes dark. Hold a GIF and favourite it, then find it under the star. Search anything in Settings.
+            Double tap to react on a view once photo works again. It was lost when I stepped the app back, not because it was wrong.
+
+            The calls list no longer dims when you tap Edit, matching the fix the chat list got.
+
+            PLEASE TRY: open a long video and a short one, and check the skip buttons appear on the long one only. Press each control. Then look over the new icons anywhere you spot them.
+
+            NOT FIXED YET: the controls still take a moment to appear when a photo or video opens. I know exactly why and the fix is written, but it needs testing on a phone rather than a compiler, so it is going in on its own next.
         run: fastlane beta
