@@ -4338,17 +4338,59 @@ struct SelectableRow: ViewModifier {
 
 // Upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
 // frosted-material pinwheel) — one consistent look for photo / album / video uploads.
+/// The upload spinner, rebuilt on Signal's, read from their CircularProgressView and
+/// CVAttachmentProgressView rather than eyeballed.
+///
+/// The difference is that theirs is in TWO phases, and ours was one. A constant arc spinning at a
+/// constant speed reads as a generic "busy" marker. Theirs begins as nothing and OPENS into a half
+/// circle while it turns, so the first second says "this has just started" before it settles into
+/// waiting. That opening is the part that makes it feel like the upload rather than like a spinner.
+///
+///   • Phase one, 1s, ease in: the stroke grows from 0 to half the circle while rotating 270°.
+///   • Phase two, 1s per turn, linear, forever: that half circle spins.
+///
+/// Their numbers, not approximations of them.
+///
+/// It stays INDETERMINATE on purpose. Firebase's `putFileAsync` reports no byte progress, so a
+/// filling ring would be a lie about something we cannot measure. Signal shows exactly this
+/// spinner in their own `unknownProgress` state, which is the honest one here.
 struct UploadingRing: View {
-    @State private var spin = false
+    @State private var trimEnd: CGFloat = 0
+    @State private var rotation: Double = 0
+
+    private static let phaseOne: Double = 1     // stroke grows and does its initial turn
+    private static let phaseTwo: Double = 1     // one full revolution, repeated
+
     var body: some View {
         ZStack {
-            Circle().fill(.black.opacity(0.5)).frame(width: 46, height: 46)
-            Circle().trim(from: 0, to: 0.3)
+            // Their background is a blurred circle with a hairline border and a soft shadow, not a
+            // flat black disc — so it sits ON the photo instead of punching a hole in it.
+            Circle().fill(.ultraThinMaterial)
+                .overlay(Circle().stroke(.white.opacity(0.1), lineWidth: 1))
+                .shadow(color: .black.opacity(0.32), radius: 24)
+                .frame(width: 46, height: 46)
+            Circle().trim(from: 0, to: trimEnd)
                 .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 .frame(width: 26, height: 26)
-                .rotationEffect(.degrees(spin ? 360 : 0))
+                // -90 puts the arc's start at the top; the rest is the animated turn.
+                .rotationEffect(.degrees(rotation - 90))
         }
-        .onAppear { withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) { spin = true } }
+        .onAppear { start() }
+    }
+
+    private func start() {
+        withAnimation(.easeIn(duration: Self.phaseOne)) {
+            trimEnd = 0.5
+            rotation = 270
+        }
+        // Phase two takes over exactly where phase one ended, so the turn never stutters: it
+        // continues from 270 rather than restarting, which is what their baking the end state into
+        // the layer before removing the first animations achieves.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.phaseOne) {
+            withAnimation(.linear(duration: Self.phaseTwo).repeatForever(autoreverses: false)) {
+                rotation = 270 + 360
+            }
+        }
     }
 }
 
