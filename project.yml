@@ -47,17 +47,49 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        # Alternate app icons (Settings > Appearance > App Icon). Primary stays the asset
+        # catalog; these are loose PNGs in Resources/AltIcons, referenced by base name.
+        CFBundleIcons:
+          CFBundleAlternateIcons:
+            # ONE MARK, SEVERAL GROUNDS. The tri-arrow icons that used to live here (blue/ivory/chrome)
+            # were the PREVIOUS logo, kept around after the speech bubble replaced it; the user asked
+            # for them gone (2026-07-29). Every icon below is the current bubble, composited from the
+            # black master onto a flat ground, so the set cannot drift from the brand.
+            #
+            # Black already existed as the primary icon's dark APPEARANCE in the asset catalog, but that
+            # variant only swaps itself in on a dark Home Screen and can never show in the in-app
+            # picker — so the user could not find it and reasonably concluded it was never added. It is
+            # both now: automatic on dark, and choosable outright.
+            icon-black:    { CFBundleIconFiles: [icon-black] }
+            icon-graphite: { CFBundleIconFiles: [icon-graphite] }
+            icon-indigo:   { CFBundleIconFiles: [icon-indigo] }
+            icon-emerald:  { CFBundleIconFiles: [icon-emerald] }
+            icon-crimson:  { CFBundleIconFiles: [icon-crimson] }
+            icon-sand:     { CFBundleIconFiles: [icon-sand] }
+        # Export compliance: 2026-07-24 the account owner made the determination that Kulan
+        # QUALIFIES FOR THE STANDARD EXEMPTION (uses standard, publicly-available crypto —
+        # libsodium — and is offered as a mass-market app; France distribution = No). That was
+        # answered in ASC for build 363, and Apple's own dialog directs declaring it in the plist
+        # so every future build auto-clears instead of sitting "Missing Compliance". Hence:
         ITSAppUsesNonExemptEncryption: false
+        # NOTE: this is the owner's export-compliance declaration. If the app's crypto or its
+        # distribution (e.g. enabling France, or a stricter reading of E2EE as non-exempt) changes,
+        # revisit this — the earlier stance treated E2EE as NON-exempt (would be `true` + an
+        # ITSEncryptionExportComplianceCode issued by ASC).
         NSPhotoLibraryUsageDescription: "Kulan needs photo access so you can send pictures in chats."
         NSPhotoLibraryAddUsageDescription: "Kulan needs permission to save photos to your camera roll."
         NSCameraUsageDescription: "Kulan needs camera access so you can take photos in chats."
         NSMicrophoneUsageDescription: "Kulan needs microphone access so you can send voice messages."
         NSFaceIDUsageDescription: "Kulan uses Face ID to unlock the app."
+        NSLocationWhenInUseUsageDescription: "Kulan needs your location so you can share it in chats."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         CFBundleURLTypes:
           - CFBundleURLName: com.kulan.messenger
             CFBundleURLSchemes: [kulan]
+          # Google sign-in OAuth redirect (the reversed client id from GoogleService-Info).
+          - CFBundleURLName: com.kulan.messenger.google
+            CFBundleURLSchemes: [com.googleusercontent.apps.522284693527-teio4ph7vaedv5s59l3u589sjdfnavt2]
         UIBackgroundModes: [voip, audio]
     settings:
       base:

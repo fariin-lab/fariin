@@ -2,7 +2,7 @@ import SwiftUI
 
 // Shimmering skeleton placeholders. Shown ONLY while there's no data yet (first cold
 // load); once content is cached it renders instantly, so this never flashes on warm
-// loads — the Signal "always-stable, never-blank" feel. Design-neutral: each skeleton
+// loads — an always-stable, never-blank feel. Design-neutral: each skeleton
 // mirrors the real row's shape so nothing jumps when the real content arrives.
 
 // Shimmering gray that fills its frame — the building block for every skeleton, and
@@ -12,8 +12,10 @@ struct SkeletonFill: View {
     @State private var phase: CGFloat = -1
 
     var body: some View {
-        let base = scheme == .dark ? Color.white.opacity(0.09) : Color.black.opacity(0.07)
-        let highlight = scheme == .dark ? Color.white.opacity(0.16) : Color.white.opacity(0.65)
+        // Opaque system greys — a REAL skeleton block that's clearly visible on any background
+        // (including over a chat wallpaper), not a near-transparent tint that vanished.
+        let base = scheme == .dark ? Color(.systemGray5) : Color(.systemGray4)
+        let highlight = scheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.55)
         base.overlay(
             GeometryReader { geo in
                 LinearGradient(colors: [.clear, highlight, .clear],
@@ -69,11 +71,14 @@ struct ChatListSkeleton: View {
     // Slightly varied preview widths read as a natural list, not identical bars.
     private let widths: [CGFloat] = [220, 150, 240, 120, 200, 170, 230, 140, 190]
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(widths.indices, id: \.self) { i in ChatRowSkeleton(previewWidth: widths[i]) }
-            Spacer(minLength: 0)
+        // A ScrollView (not a bare VStack) so a `.searchable` search bar reserves its space
+        // ABOVE the rows — a plain stack let the search bar float over the first rows.
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(widths.indices, id: \.self) { i in ChatRowSkeleton(previewWidth: widths[i]) }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .scrollDisabled(true)
     }
 }
 
@@ -99,11 +104,14 @@ struct CallRowSkeleton: View {
 
 struct CallListSkeleton: View {
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(0..<10, id: \.self) { _ in CallRowSkeleton() }
-            Spacer(minLength: 0)
+        // ScrollView so `.searchable` places the search bar above the rows instead of
+        // overlapping them (user report: skeleton overlapped the "Search calls" bar).
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(0..<12, id: \.self) { _ in CallRowSkeleton() }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .scrollDisabled(true)
     }
 }
 

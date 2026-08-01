@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AVFoundation
+import UIKit   // app-lifecycle notification (foreground backstop for the background camera)
 import CoreMedia
 import WebRTC
 import FirebaseAuth
@@ -16,6 +17,34 @@ import FirebaseFunctions
 final class CallService: NSObject {
     static let shared = CallService()
 
+    private var lifecycleObserved = false
+    private func observeLifecycleIfNeeded() {
+        guard !lifecycleObserved else { return }
+        lifecycleObserved = true
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.appWillEnterForeground()
+        }
+        // SECOND SHOT at taking the system PiP down, once the app is fully ACTIVE. AVKit can ignore a
+        // stop request fired at willEnterForeground (the scene is not active yet), which left Apple's
+        // window up next to our own FloatingCallWindow — the two-PiP report, again. Idempotent no-op
+        // when nothing is up.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { _ in
+            CallPiPController.shared.stopSystemPiP()
+        }
+        // The camera is driven by what the CAPTURE SESSION actually does, not by the app lifecycle.
+        // See the "Background camera" section below for why.
+        NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification,
+                                               object: nil, queue: .main) { [weak self] note in
+            self?.captureInterrupted(note)
+        }
+        NotificationCenter.default.addObserver(forName: AVCaptureSession.interruptionEndedNotification,
+                                               object: nil, queue: .main) { [weak self] note in
+            self?.captureInterruptionEnded(note)
+        }
+    }
+
     // .reconnecting = the media path dropped mid-call; we're trying to recover it.
     enum State: Equatable { case idle, outgoing, incoming, active, reconnecting, ended }
 
@@ -26,20 +55,46 @@ final class CallService: NSObject {
         didSet {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
+            if state == .outgoing, cameraOn {
+                // Outgoing VIDEO call: ringback through the LOUDSPEAKER — you're looking at
+                // your preview at arm's length, not holding the phone to your ear.
+                isSpeaker = true; wantsSpeaker = true
+                try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+            }
             if state == .active {
-                if cameraOn { isSpeaker = true }   // video calls default to speakerphone (like FaceTime)
+                // Video calls default to speakerphone. startedAsVideo covers the CALLEE: cameraOn is
+                // set on the answer paths, and this also holds if that ever changes — they're watching
+                // video at arm's length either way, so audio must go loud.
+                // (This comment used to describe a "camera-off-on-answer model". That is WRONG: three
+                // sites set cameraOn = isVideoCall on answer. Corrected so it stops misleading.)
+                if cameraOn || startedAsVideo { isSpeaker = true; wantsSpeaker = true }
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
+                startRouteObservation()   // smart speaker button: track where audio actually goes
+                observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
+                startHeartbeat()             // prove we're alive; detect a force-quit on the other side
+                updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
+                wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
+                cameraPausedByBackground = false; stopPausedCameraRetry()
                 calleeRinging = false; recordWritten = false; minimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
-                cameraOn = false; remoteCameraOn = false; usingFrontCamera = true
+                cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
+                usingFrontCamera = true; startedAsVideo = false; everVideo = false
+                isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
+                updateInCallScreenBehavior() // proximity off + allow sleep again
+                // Glare: I stood down so the other side's call could win. Re-arm the listener now that
+                // I am genuinely idle — their doc is unchanged, so only a fresh snapshot will ring me.
+                if recheckIncomingWhenIdle {
+                    recheckIncomingWhenIdle = false
+                    observeIncoming()
+                }
             }
         }
     }
@@ -55,13 +110,80 @@ final class CallService: NSObject {
     private var ringbackPlayer: AVAudioPlayer?
     private var tonePlayer: AVAudioPlayer?       // busy / ended one-shot tones
     private var localAudioTrack: RTCAudioTrack?
-    // Video (1:1). Each side controls its OWN camera independently (Signal/Zoom-style): no
+    // Video (1:1). Each side controls its OWN camera independently: no
     // permission — turning your camera on just sends your video and the other side sees it. The
     // video layout shows whenever EITHER camera is on.
     var cameraOn = false            // is MY camera sending
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
+    var remoteMuted = false         // is THEIR mic muted (from the `muted` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
+    /// STICKY: true from the first moment a camera came on, and it stays true for the rest of the call
+    /// even if both cameras go off again. It drives the auto-hiding controls: a call that has been a
+    /// video call keeps behaving like one, so the controls do not start reappearing permanently just
+    /// because someone closed their camera for a minute. Cleared only when the call ends.
+    private(set) var everVideo = false
+    /// Latch `everVideo`. It must be called from EVERY place a camera can come on, not just the mid-call
+    /// toggle path: a call PLACED or ANSWERED as video sets `cameraOn` directly at setup and never goes
+    /// through `setMyCamera`/`applyVideoAudioPolicy`. Latching only there left the flag false for the
+    /// person who ANSWERED — their tap-to-hide-the-controls did nothing while the caller's worked, which
+    /// is exactly what two phones showed.
+    private func noteVideo() { if cameraOn || remoteCameraOn { everVideo = true } }
+    /// Whatever is on the BIG screen right now — which is what the floating PiP window must show when you
+    /// leave the app. The PiP was hard-wired to the remote feed, so after tapping the tile to swap
+    /// yourself fullscreen, leaving the app put the OTHER person in the floating window: the big screen
+    /// showed one feed and the PiP the other. `isLocalExpanded` is the same state the layout uses, so the
+    /// two can never disagree again.
+    var bigScreenTrack: RTCVideoTrack? { isLocalExpanded ? localVideoTrack : remoteVideoTrack }
+
+    /// The WHOLE call layout for a floating window — big feed plus corner tile, like FaceTime — so the
+    /// floating window is the call screen in miniature instead of one lone feed. Both follow the same
+    /// `isLocalExpanded` swap the call screen uses. A track is offered only while that camera is
+    /// actually SENDING (the track object lingers after someone turns their camera off); when it is
+    /// not, the slot carries that person's name and photo instead, so a switched-off camera shows who
+    /// it is rather than a black rectangle or an empty corner.
+    struct PiPFeeds {
+        var big: RTCVideoTrack?
+        var tile: RTCVideoTrack?
+        var mirrorBig = false
+        var mirrorTile = false
+        var bigName = ""
+        var bigPhotoUrl: String?
+        var tileName = ""
+        var tilePhotoUrl: String?
+        var showsTile = false
+    }
+    /// My own name and photo, for whichever slot is showing MY switched-off camera.
+    var myName: String { ProfileStore.shared.me?.name ?? "You" }
+    var myPhotoUrl: String? { ProfileStore.shared.me?.photoUrl }
+
+    var pipFeeds: PiPFeeds {
+        var f = PiPFeeds()
+        if isLocalExpanded {
+            f.big = cameraOn ? localVideoTrack : nil
+            f.mirrorBig = usingFrontCamera
+            f.bigName = myName; f.bigPhotoUrl = myPhotoUrl
+            f.tile = remoteCameraOn ? remoteVideoTrack : nil
+            f.tileName = otherName; f.tilePhotoUrl = otherPhotoUrl
+        } else {
+            f.big = remoteCameraOn ? remoteVideoTrack : nil
+            f.bigName = otherName; f.bigPhotoUrl = otherPhotoUrl
+            f.tile = cameraOn ? localVideoTrack : nil
+            f.mirrorTile = usingFrontCamera
+            f.tileName = myName; f.tilePhotoUrl = myPhotoUrl
+        }
+        // The tile belongs to the connected video call, not to a live camera: it stays put with a photo
+        // in it when that camera is off. Before the call connects there is only the self-preview.
+        f.showsTile = isVideo && (state == .active || state == .reconnecting)
+        return f
+    }
+
+    private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
     var usingFrontCamera = true
+    // Video layout state — owned HERE so minimize/restore keeps the user's big/small choice and PiP
+    // tile position (CallView is destroyed by the cover on minimize; its @State reset every time).
+    var isLocalExpanded = false
+    var pipOffset = CGSize.zero
+    var pipBase = CGSize.zero
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
     private var videoCapturer: RTCCameraVideoCapturer?
@@ -131,6 +253,28 @@ final class CallService: NSObject {
         if !servers.isEmpty { fetchedIceServers = servers }
     }
 
+    /// Make sure we have a real TURN list BEFORE building a peer connection, without ever holding a call
+    /// hostage to a slow network.
+    ///
+    /// Both call paths used to fire `Task { await refreshIceServers() }` and then build the connection on
+    /// the very next line, so the fetch almost never won that race and `config` fell back to STUN-only —
+    /// exactly the CGNAT/mobile-data case the TURN relay exists for, and the likeliest cause of "the first
+    /// call after opening the app doesn't connect".
+    ///
+    /// Returns instantly when the list is already warm (the common case: `observeIncoming` fetches at
+    /// launch), so this costs nothing except on a genuinely cold start. On timeout we proceed with the
+    /// STUN fallback rather than fail the call — a call that might not traverse beats no call at all — and
+    /// the in-flight fetch is left running so the NEXT call is warm either way.
+    private func awaitIceServers(timeout: Double = 2.0) async {
+        if fetchedIceServers != nil { return }
+        let fetch = Task { await self.refreshIceServers() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while fetchedIceServers == nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        _ = fetch   // deliberately NOT cancelled: let it finish and warm the next call
+    }
+
     // Audio session is owned by CallKit (manual mode) — see CallKitManager.
 
     private func makePeerConnection() -> RTCPeerConnection? {
@@ -145,7 +289,27 @@ final class CallService: NSObject {
         // frames, no camera). This makes a mid-call camera toggle a pure track-enable with NO
         // renegotiation (which is fragile + glare-prone) and no black-remote-on-re-toggle bugs.
         addLocalVideo(to: connection)
+        applyDataSaver(to: connection)
         return connection
+    }
+
+    // Use Less Data (Settings > Storage and Data > Calls): cap the sender bitrates when
+    // the saver is active on the current network. Audio ~24 kbps still sounds fine for
+    // speech; video drops to 300 kbps at half resolution.
+    private func applyDataSaver(to connection: RTCPeerConnection?) {
+        guard let connection, UseLessDataPage.activeNow else { return }
+        for sender in connection.senders {
+            let params = sender.parameters
+            for enc in params.encodings {
+                if sender.track?.kind == "audio" {
+                    enc.maxBitrateBps = NSNumber(value: 24_000)
+                } else if sender.track?.kind == "video" {
+                    enc.maxBitrateBps = NSNumber(value: 300_000)
+                    enc.scaleResolutionDownBy = NSNumber(value: 2.0)
+                }
+            }
+            sender.parameters = params
+        }
     }
 
     // MARK: - Video tracks / capture
@@ -167,30 +331,98 @@ final class CallService: NSObject {
     // Ask for camera access, then feed frames into the local track (off the main thread). Without
     // the access check the capturer can silently never produce frames -> black video on both ends.
     private func startCameraCapture() {
+        // Register BEFORE the first frame: an outgoing video call captures while still ringing, so
+        // waiting for .active would miss a backgrounding during the ring.
+        observeLifecycleIfNeeded()
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted, let self else { return }
             DispatchQueue.global(qos: .userInitiated).async { self.startCapture(front: self.usingFrontCamera) }
         }
     }
 
-    // Pick the camera + a ~720p format and start feeding frames into the local track.
+    // How hot the phone is decides how hard we drive the camera. Nothing watched this before, so a long
+    // video call just cooked until iOS interrupted the capture session outright — and lowering the frame
+    // rate is Apple's DOCUMENTED way to earn a system-pressure interruption back, which means without
+    // this the camera could stay dark for the rest of the call. Numbers, not a curve: the point is to
+    // back off well before the OS has to.
+    private var thermalCaps: (fps: Int, height: Int) {
+        switch ProcessInfo.processInfo.thermalState {
+        case .critical: return (15, 480)
+        case .serious:  return (20, 540)
+        default:        return (30, 720)
+        }
+    }
+    private var thermalObserver: NSObjectProtocol?
+    private var appliedThermalFps = 30
+    private func observeThermalIfNeeded() {
+        guard thermalObserver == nil else { return }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, cameraOn, !cameraPausedByBackground, videoCapturer != nil else { return }
+                // Only restart when the cap actually MOVED — a restart costs a ~200ms black frame on
+                // the other side, so reacting to every notification would be worse than the heat.
+                guard thermalCaps.fps != appliedThermalFps else { return }
+                let front = usingFrontCamera
+                videoCapturer?.stopCapture { [weak self] in
+                    DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: front) }
+                }
+        }
+    }
+
+    // Pick the camera + a format and start feeding frames into the local track.
     private func startCapture(front: Bool) {
         guard let capturer = videoCapturer else { return }
         let position: AVCaptureDevice.Position = front ? .front : .back
         let devices = RTCCameraVideoCapturer.captureDevices()
         guard let device = devices.first(where: { $0.position == position }) ?? devices.first else { return }
         let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
-        let target = 720
+        let caps = thermalCaps
         let format = formats.min(by: {
             let d1 = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
             let d2 = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-            return abs(Int(d1.height) - target) < abs(Int(d2.height) - target)
+            return abs(Int(d1.height) - caps.height) < abs(Int(d2.height) - caps.height)
         })
         guard let format else { return }
-        let fps = min(30, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
-        capturer.startCapture(with: device, format: format, fps: fps)
+        let fps = min(caps.fps, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
+        appliedThermalFps = caps.fps
+        allowBackgroundCamera(on: capturer.captureSession)
+        capturer.startCapture(with: device, format: format, fps: fps) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                // Only claim video once the session is REALLY running. `cams` was published purely from
+                // intent, so a start that never succeeded (most visibly a video call answered from the
+                // lock screen, where the camera cannot start and no interruption is posted either) left
+                // the other side staring at a BLACK full-screen video with a running timer, forever.
+                guard self.cameraOn, self.inLiveCall else { return }
+                if capturer.captureSession.isRunning {
+                    if self.cameraPausedByBackground { self.resumeCameraIfReallyBack() }
+                } else if !self.cameraPausedByBackground {
+                    self.cameraPausedByBackground = true
+                    self.localVideoTrack?.isEnabled = false   // avatar, never a black rectangle
+                    self.broadcastCameraState()
+                    self.startPausedCameraRetry()
+                }
+            }
+        }
         // Observed @Observable state must be written on main (this runs on a background queue).
-        DispatchQueue.main.async { self.usingFrontCamera = front }
+        DispatchQueue.main.async { self.usingFrontCamera = front; self.observeThermalIfNeeded() }
+    }
+
+    // Lets the capture session survive backgrounding, so leaving the app does not black out my video
+    // for the other side. Apple requires this to be set BEFORE the session starts running, which is
+    // why it sits immediately above startCapture — and re-applied on every start, because a camera
+    // flip stops and reconfigures the session underneath us.
+    //
+    // `isMultitaskingCameraAccessSupported` is the system's own answer, not a version check: it is
+    // true here because we link iOS 18+ and declare `voip` in UIBackgroundModes (project.yml). If it
+    // ever goes false the assignment is refused anyway, and the interruption path below covers us.
+    // Apple also requires an ACTIVE PiP window for the frames to keep coming (CallPiPController).
+    private func allowBackgroundCamera(on session: AVCaptureSession) {
+        guard session.isMultitaskingCameraAccessSupported,
+              !session.isMultitaskingCameraAccessEnabled else { return }
+        session.beginConfiguration()
+        session.isMultitaskingCameraAccessEnabled = true
+        session.commitConfiguration()
     }
 
     func toggleCamera() { setMyCamera(on: !cameraOn) }
@@ -198,14 +430,15 @@ final class CallService: NSObject {
     func switchCamera() {
         guard cameraOn, let capturer = videoCapturer else { return }
         let next = !usingFrontCamera
+        usingFrontCamera = next   // flip the mirror IMMEDIATELY; the UI masks the ~200ms restart with a blur
         // Stop the running capture BEFORE starting the other camera — restarting a live
-        // RTCCameraVideoCapturer in place can freeze/black the local feed on flip.
+        // capturer in place can freeze/black the local feed on flip.
         capturer.stopCapture { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: next) }
         }
     }
 
-    // MARK: - Camera (each side controls its OWN camera, Signal-style — no permission handshake)
+    // MARK: - Camera (each side controls its OWN camera — no permission handshake)
 
     // Turn MY camera on/off. The video m-line was negotiated at call setup, so this is a pure
     // track-enable + capture start/stop — NO renegotiation. Broadcast my state so the other side
@@ -213,15 +446,55 @@ final class CallService: NSObject {
     private func setMyCamera(on: Bool) {
         guard state == .active || state == .reconnecting else { return }
         cameraOn = on
+        // Turning my own camera off while I am the one FULL SCREEN would leave the big view showing my
+        // switched-off camera and push the other person into the corner. Go back to the normal layout.
+        // Mirror of the same rule for their camera in handleRemoteCallState.
+        if !on, isLocalExpanded { isLocalExpanded = false }
+        // An explicit toggle overrides any pause. Without this, a camera turned off and on again while
+        // paused left the flag set, and its `!cameraPausedByBackground` guard then swallowed the NEXT
+        // real interruption — so the other side would have been left on a frozen frame.
+        cameraPausedByBackground = false
+        stopPausedCameraRetry()
         localVideoTrack?.isEnabled = on
-        if on {
-            if !isSpeaker { toggleSpeaker() }   // video defaults to speakerphone, like FaceTime
-            startCameraCapture()
-        } else {
-            videoCapturer?.stopCapture()
-        }
+        if on { startCameraCapture() } else { videoCapturer?.stopCapture() }
+        applyVideoAudioPolicy()
         CallKitManager.shared.updateHasVideo(on)
         broadcastCameraState()
+        updateInCallScreenBehavior()   // video showing ↔ keep-awake / proximity
+    }
+
+    /// The ONE place that decides how call audio is routed and tuned for the current set of live
+    /// cameras. Every event that can change that set calls this: my own toggle and THEIRS arriving over
+    /// Firestore.
+    ///
+    /// It exists because those two were not symmetric. `setMyCamera` did route + mode + CallKit + screen
+    /// work; `handleRemoteCallState` did almost none. Three separate bugs came out of that one gap:
+    ///  • whoever turned their camera off FIRST was stranded on loudspeaker for the rest of the call —
+    ///    the earpiece restore only ran on the local toggle path, and it no-ops while the other camera
+    ///    is still on, so it never ran again for that person once THEIR camera went off too.
+    ///  • turning my camera on force-overrode the output to the built-in speaker even while the user was
+    ///    wearing AirPods, contradicting "external devices always win" three lines away in updateAudioRoute.
+    ///  • their camera turning on flipped MY proximity sensor off (updateInCallScreenBehavior gates on
+    ///    audioRoute == .earpiece) while leaving me on the earpiece — a live screen against the cheek.
+    private func applyVideoAudioPolicy() {
+        let session = AVAudioSession.sharedInstance()
+        let videoShowing = cameraOn || remoteCameraOn
+        noteVideo()   // both camera paths (mine and theirs) meet here
+        // Echo cancellation follows what the audio is actually DOING, not who owns the camera:
+        // .videoChat is tuned for the loudspeaker, .voiceChat for the earpiece. The wrong one is the
+        // hear-your-own-voice bug.
+        try? session.setMode(videoShowing ? .videoChat : .voiceChat)
+        // An external device ALWAYS wins. Never yank audio out of someone's AirPods.
+        guard audioRoute != .external else { return }
+        if videoShowing {
+            isSpeaker = true
+            wantsSpeaker = true            // survives CallKit re-activating and resetting the route
+            try? session.overrideOutputAudioPort(.speaker)
+        } else {
+            isSpeaker = false
+            wantsSpeaker = false           // without this, updateAudioRoute re-asserts loudspeaker forever
+            try? session.overrideOutputAudioPort(.none)
+        }
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
@@ -230,25 +503,298 @@ final class CallService: NSObject {
         db.collection("calls").document(id).updateData(["cams.\(me)": cameraOn])
     }
 
+    // MARK: - Screen behavior during calls
+    // Voice call held to the ear → PROXIMITY sensor blanks the screen (no cheek-mutes/hangups).
+    // Video showing (either side) → screen NEVER dims/locks (SleepBlocker) and proximity stays OFF.
+    func updateInCallScreenBehavior() {
+        let inCall = state == .active || state == .reconnecting
+        let videoShowing = cameraOn || remoteCameraOn
+        let proximity = inCall && !videoShowing && audioRoute == .earpiece
+        let keepAwake = inCall && videoShowing
+        DispatchQueue.main.async {   // UIDevice + SleepBlocker are main-actor
+            UIDevice.current.isProximityMonitoringEnabled = proximity
+            if keepAwake { SleepBlocker.shared.add("call-video") }
+            else { SleepBlocker.shared.remove("call-video") }
+        }
+    }
+
+    // MARK: - Background camera (leaving the app keeps your video going, like WhatsApp)
+    //
+    // OLD BEHAVIOUR, and why it changed: we used to stop the capturer on didEnterBackground and
+    // broadcast cams=false, because iOS suspended the session anyway and the other side was left
+    // staring at a FROZEN last frame. iOS 18 opened background capture to any app with `voip` in
+    // UIBackgroundModes (we have it) via AVCaptureSession.isMultitaskingCameraAccessEnabled, so
+    // stopping ourselves is now the ONLY thing preventing the WhatsApp behaviour.
+    //
+    // We no longer guess. The app lifecycle no longer touches the camera at all; we react to what the
+    // SESSION reports:
+    //   • multitasking access working + PiP up -> no interruption -> video keeps flowing. They see me.
+    //   • not working (PiP never started, PiP stashed, another app grabbed the camera) -> the session
+    //     is interrupted -> disable the track and broadcast cams=false, so they get the avatar rather
+    //     than a freeze. That is exactly the old behaviour, now reached only when actually needed.
+    // Self-correcting either way, which is why there is no "does this device support it" branch.
+    //
+    // `cameraOn` stays true throughout as the INTENT, so the UI and the resume path know to restore.
+    private(set) var cameraPausedByBackground = false
+
+    // Anywhere the camera may legitimately be running. Wider than .active on purpose: an OUTGOING
+    // video call is already capturing while it rings, and backgrounding during the ring must be
+    // handled too.
+    private var inLiveCall: Bool { state != .idle && state != .ended }
+
+    // Interruptions that mean "no camera frames". Audio-only reasons must NOT touch the video track.
+    private func isVideoInterruption(_ reason: AVCaptureSession.InterruptionReason) -> Bool {
+        switch reason {
+        case .videoDeviceNotAvailableInBackground,
+             .videoDeviceNotAvailableWithMultipleForegroundApps,
+             .videoDeviceNotAvailableDueToSystemPressure,
+             .videoDeviceInUseByAnotherClient:
+            return true
+        default:
+            return false   // .audioDeviceInUseByAnotherClient and anything new: leave video alone
+        }
+    }
+
+    private func captureInterrupted(_ note: Notification) {
+        // Only OUR capture session, and only reasons that actually stop video frames.
+        guard let session = note.object as? AVCaptureSession,
+              session === videoCapturer?.captureSession,
+              let raw = note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int,
+              let reason = AVCaptureSession.InterruptionReason(rawValue: raw),
+              isVideoInterruption(reason) else { return }
+        guard inLiveCall, cameraOn, !cameraPausedByBackground else { return }
+        cameraPausedByBackground = true
+        localVideoTrack?.isEnabled = false   // stop sending, so they get the avatar and not a frozen face
+        broadcastCameraState()
+        startPausedCameraRetry()             // some interruptions never post an "ended" — see below
+    }
+
+    private func captureInterruptionEnded(_ note: Notification) {
+        // MUST filter by session, exactly like captureInterrupted does. This notification is posted for
+        // EVERY AVCaptureSession in the process, and StoryCameraView runs its own. Without this, the
+        // story camera ending its interruption would resume the CALL camera and announce cams=true
+        // while our session was still interrupted, putting the other side on a frozen frame.
+        guard let session = note.object as? AVCaptureSession,
+              session === videoCapturer?.captureSession else { return }
+        resumeCameraIfReallyBack()
+    }
+
+    // The single resume path. Trusts the SESSION, never a flag: `isInterrupted` and `isRunning` are the
+    // system's own answer, so this is safe to call speculatively from anywhere and cannot announce video
+    // we are not actually producing.
+    private func resumeCameraIfReallyBack() {
+        // The user may have hung up or turned the camera off while it was interrupted — re-check the
+        // intent instead of blindly restoring.
+        guard inLiveCall, cameraOn, let session = videoCapturer?.captureSession else { return }
+        // Still interrupted: do NOT clear the flag and do NOT claim video. Announcing cams=true here
+        // was the bug that put the other side on a frozen frame AND swallowed the real resume later.
+        guard !session.isInterrupted else { return }
+        // Apple preserves the startRunning intent across an interruption as long as we never called
+        // stopRunning, so the session resumes itself. Restart only if it genuinely did not.
+        if !session.isRunning { startCameraCapture(); return }   // its own start will resume us
+        stopPausedCameraRetry()
+        guard cameraPausedByBackground || localVideoTrack?.isEnabled == false else { return }
+        cameraPausedByBackground = false
+        localVideoTrack?.isEnabled = true
+        broadcastCameraState()   // they see my video come back
+    }
+
+    // Some interruptions never post an "ended". The documented example is thermal/system pressure, whose
+    // recovery Apple expects the app to earn by lowering the frame rate (we do not, yet — see the audit),
+    // and it fires in the FOREGROUND, where no app-lifecycle backstop can ever run. Camera-stolen-by-
+    // another-app is the same shape. So while paused we re-check the session on a timer; the check is
+    // cheap and self-cancels. Without this the camera stays dark and cams=false for the rest of the call.
+    private var pausedCameraRetry: Timer?
+    private func startPausedCameraRetry() {
+        guard pausedCameraRetry == nil else { return }
+        pausedCameraRetry = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard inLiveCall, cameraOn, cameraPausedByBackground else { stopPausedCameraRetry(); return }
+            resumeCameraIfReallyBack()
+        }
+    }
+    private func stopPausedCameraRetry() {
+        pausedCameraRetry?.invalidate()
+        pausedCameraRetry = nil
+    }
+
+    // Backstop only. If an interruption ended without its notification (or one never fired), returning
+    // to the foreground must never leave the camera dark while the intent says it is on. Note it does
+    // NOT force the flag first: resumeCameraIfReallyBack decides from the session, so a still-interrupted
+    // session correctly does nothing here rather than announcing video that does not exist.
+    func appWillEnterForeground() {
+        resumeCameraIfReallyBack()
+        // TAKE THE SYSTEM PiP DOWN OURSELVES. Nothing here ever did, and iOS only dismisses a PiP window
+        // on return by itself when that window is in its NORMAL state. Fling it to the screen edge and
+        // iOS STASHES it instead — parked, not dismissed, and it survives the app coming forward. Our own
+        // FloatingCallWindow then appears because the call is minimised, and the user is looking at two
+        // floating windows, one of which is Apple's and outside our control (user report 2026-07-27).
+        //
+        // Unconditional and idempotent: stopSystemPiP no-ops when nothing is up, so there is no state to
+        // get wrong here. Exactly one floating window can exist from this point.
+        CallPiPController.shared.stopSystemPiP()
+    }
+
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
     // reveal/hide it). Their track keeps arriving; `remoteCameraOn` gates whether we render it.
     private func handleRemoteCallState(_ d: [String: Any]) {
+        notePeerHeartbeat(d)
+        // Their mute state. Never signalled before, so muting was completely invisible to the other
+        // person: they just heard silence, indistinguishable from a network stall. Our own GROUP call
+        // UI already draws a mic-slash for remote participants, so 1:1 was the odd one out.
+        if let m = d["muted"] as? [String: Bool], let mutedNow = m[otherUid], mutedNow != remoteMuted {
+            remoteMuted = mutedNow
+        }
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
             remoteCameraOn = on
+            // Their video is what the swapped layout is BUILT ON: expanded means my feed is fullscreen
+            // and theirs is in the tile. If they kill their camera while we are swapped, that tile has
+            // nothing to draw and hides itself - taking the tap target with it and stranding me
+            // fullscreen on my own face with no way back. Un-swap instead, so their avatar returns to
+            // the big view and I go back to the corner, which is the layout for "their camera is off".
+            if on == false, isLocalExpanded { isLocalExpanded = false }
+            applyVideoAudioPolicy()        // SAME handling as my own toggle — see applyVideoAudioPolicy
+            updateInCallScreenBehavior()   // their video appearing/leaving flips keep-awake/proximity
         }
     }
 
     // MARK: - In-call controls
     func toggleMute() {
         isMuted.toggle()
-        localAudioTrack?.isEnabled = !isMuted
+        localAudioTrack?.isEnabled = !(isMuted || isHeld)
+        CallKitManager.shared.setMuted(isMuted)   // lock-screen/system UI stays in sync
+        broadcastMuteState()
     }
+
+    /// CallKit put us on hold (almost always: a normal cellular call arrived). Go genuinely quiet and
+    /// say so, instead of leaving them with silence they cannot distinguish from a broken connection.
+    /// `isMuted` is untouched, so unholding restores the user's OWN choice rather than guessing.
+    private(set) var isHeld = false
+    func setHeld(_ held: Bool) {
+        guard isHeld != held else { return }
+        isHeld = held
+        localAudioTrack?.isEnabled = !(isMuted || isHeld)
+        broadcastMuteState()
+    }
+
+    // What the other side needs to know is simply "can they hear me right now", which is mute OR hold.
+    private func broadcastMuteState() {
+        guard let id = callId else { return }
+        db.collection("calls").document(id).updateData(["muted.\(me)": isMuted || isHeld])
+    }
+
+    // MARK: - Peer liveness (force-quit detection)
+    //
+    // Force-quitting the app runs NOTHING: no terminate hook exists, so no "ended" is ever written and
+    // the other phone sits on a frozen last frame until its own 30s ICE give-up. There is no Firestore
+    // equivalent of onDisconnect, so the only client-side answer is for each side to prove it is alive.
+    //
+    // Deliberately a plain changing NUMBER, not a serverTimestamp: we never compare their clock to ours,
+    // only note LOCALLY when the value last changed. That makes clock skew irrelevant.
+    //
+    // It only ends the call when BOTH signals agree — their beat stopped AND our own ICE already
+    // dropped us into .reconnecting. A stalled Firestore listener alone must never kill a healthy call.
+    private var heartbeatTimer: Timer?
+    private var lastPeerBeatAt: Date?
+    private var lastPeerBeatValue: Double = 0
+
+    private func startHeartbeat() {
+        guard heartbeatTimer == nil else { return }
+        lastPeerBeatAt = Date()
+        writeHeartbeat()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.writeHeartbeat()
+            self?.checkPeerLiveness()
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate(); heartbeatTimer = nil
+        lastPeerBeatAt = nil; lastPeerBeatValue = 0
+    }
+
+    private func writeHeartbeat() {
+        guard let id = callId, state == .active || state == .reconnecting else { return }
+        db.collection("calls").document(id).updateData(["hb.\(me)": Date().timeIntervalSince1970])
+    }
+
+    private func notePeerHeartbeat(_ d: [String: Any]) {
+        guard let hb = d["hb"] as? [String: Any],
+              let v = (hb[otherUid] as? NSNumber)?.doubleValue, v != lastPeerBeatValue else { return }
+        lastPeerBeatValue = v
+        lastPeerBeatAt = Date()
+    }
+
+    private func checkPeerLiveness() {
+        guard state == .reconnecting, let last = lastPeerBeatAt else { return }
+        guard Date().timeIntervalSince(last) > 15 else { return }
+        endReason = .failed
+        hangUp()   // ~15s instead of frozen for 30s+
+    }
+    // The user's EXPLICIT speaker choice. CallKit/WebRTC re-activate the audio session at
+    // connect/answer and reset the route to the earpiece — which used to silently erase a speaker
+    // tap made during "Calling…" (the "speaker sometimes doesn't work" bug). Intent is remembered
+    // here and re-asserted whenever the system resets the route out from under it.
+    private var wantsSpeaker = false
+
     func toggleSpeaker() {
         isSpeaker.toggle()
+        wantsSpeaker = isSpeaker
         // Use AVAudioSession directly — CallKit owns the session in manual mode and
         // RTCAudioSession.lockForConfiguration() can deadlock when called while CallKit
         // is also configuring the session (e.g. right after answer/connect).
         try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
+    }
+
+    // MARK: - Audio route awareness (smart speaker button)
+
+    // Where call audio is coming out right now. With no external device the speaker button is a
+    // plain earpiece/speaker toggle; with AirPods/Bluetooth/wired around, the button shows the
+    // live route and opens the NATIVE route picker instead (system behavior).
+    enum AudioRoute { case earpiece, speaker, external }
+    var audioRoute: AudioRoute = .earpiece
+    var externalAudioAvailable = false
+    private var routeObserver: NSObjectProtocol?
+
+    func startRouteObservation() {
+        guard routeObserver == nil else { return }
+        updateAudioRoute()
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.updateAudioRoute()
+        }
+    }
+
+    private func updateAudioRoute() {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs
+        if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
+        else if outputs.contains(where: { $0.portType == .builtInReceiver }) || outputs.isEmpty { audioRoute = .earpiece }
+        else { audioRoute = .external }
+        updateInCallScreenBehavior()
+        // The user asked for speaker but a system reset (CallKit re-activation at connect, WebRTC
+        // reconfigure) bounced the route back to the earpiece → RE-ASSERT the choice. External devices
+        // (AirPods/car) always win — never fight a real device route.
+        if wantsSpeaker, audioRoute == .earpiece {
+            try? session.overrideOutputAudioPort(.speaker)
+            // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
+            return
+        }
+        // Keep the toggle state honest no matter WHAT moved the route (picker, AirPods
+        // connecting mid-call, CallKit) — the button highlight reads from this.
+        isSpeaker = audioRoute == .speaker
+        // Manual earpiece choice / external route: intent follows reality so we don't re-assert later.
+        // NOT while video is showing, though. Clearing it unconditionally meant plugging in AirPods
+        // destroyed the speakerphone intent a video call had set, so UNPLUGGING them later landed the
+        // call on the EARPIECE — a video call held at arm's length with the audio in the earpiece,
+        // because the re-assert branch above had nothing left to re-assert.
+        if audioRoute == .external, !(cameraOn || remoteCameraOn) { wantsSpeaker = false }
+        // Any external playback device around? Bluetooth headsets surface as available INPUTS
+        // during a playAndRecord call; a currently-external route obviously counts too.
+        let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
+                                                  .headphones, .headsetMic, .carAudio]
+        let hasExternalInput = (session.availableInputs ?? []).contains { external.contains($0.portType) }
+        externalAudioAvailable = hasExternalInput || audioRoute == .external
     }
 
     // Ringback the CALLER hears while waiting (generated tone, looped). Ensure the
@@ -267,13 +813,32 @@ final class CallService: NSObject {
     }
     private func stopRingback() { ringbackPlayer?.stop(); ringbackPlayer = nil }
 
-    // Called by CallKit the instant it activates the audio session. Until this fires the session is
-    // dead (CallKit owns it), so the ringback started at startCall was silent. Restart it fresh on
-    // the live session — but only while we're still the caller waiting for an answer (outgoing).
+    // Called by CallKit the instant it activates the audio session. The ringback starts at startCall
+    // (deliberate: immediate, Signal-verified) but the session may not be live yet then — on some
+    // devices the early player is SILENT until this fires, on others it is already audible. The old
+    // unconditional stop+start covered the silent case but gave the audible case a hear-it, cut,
+    // hear-it-again stutter on every call (user report). RESUME, don't restart: an already-playing
+    // player is left alone; a silent/stalled one is nudged with play() on the same instance (no
+    // restart-from-zero blip); only a wedged player that refuses play() is rebuilt.
     func audioSessionActivated() {
-        guard state == .outgoing else { return }
-        stopRingback()
+        ringbackFallback?.invalidate(); ringbackFallback = nil
+        guard state == .outgoing else { return }   // ringback plays for the whole wait, not only once they ring
+        // The session is live NOW. Nothing was started before this point (see beginOutgoingMedia), so
+        // this is the FIRST and ONLY start: audible, from the top, with nothing to cut.
+        guard ringbackPlayer == nil else { return }
         startRingback()
+    }
+
+    /// Belt for the case CallKit never activates the session (activation failure, or a device that
+    /// simply does not call back): after a short wait, start the ringback anyway rather than leave the
+    /// caller in silence. Cancelled the moment a real activation arrives.
+    private var ringbackFallback: Timer?
+    private func armRingbackFallback() {
+        ringbackFallback?.invalidate()
+        ringbackFallback = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
+            guard let self, state == .outgoing, ringbackPlayer == nil else { return }
+            startRingback()
+        }
     }
 
     // One-shot call-progress tone (busy/declined or ended). Same audio-session nudge
@@ -319,6 +884,9 @@ final class CallService: NSObject {
         noAnswerWork?.cancel(); noAnswerWork = nil
         iceRestartWork?.cancel(); iceRestartWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
+        // A pending ringback fallback must die with the call, or a call that ends inside its 1.2s
+        // window would start a ringback nothing is left to stop.
+        ringbackFallback?.invalidate(); ringbackFallback = nil
     }
 
     // MARK: - Reconnection (bad / lost connection)
@@ -384,6 +952,8 @@ final class CallService: NSObject {
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
+        startedAsVideo = video
+        noteVideo()
         isCaller = true
         otherUid = uid
         otherName = name
@@ -392,11 +962,29 @@ final class CallService: NSObject {
         CallKitManager.shared.startOutgoing(name: name)   // native call UI + audio session
         CallKitManager.shared.reportConnecting()
 
-        Task { await refreshIceServers() }   // fresh TURN creds before we build the connection
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
             guard granted else { self.hangUp(); return }   // no mic -> don't start a dead call
-            self.startRingback()        // caller hears "ring… ring…" right away, like a real phone
+            // TURN creds must be in hand BEFORE makePeerConnection reads `config` — see awaitIceServers.
+            Task { @MainActor in
+                await self.awaitIceServers()
+                guard self.state == .outgoing else { return }   // cancelled while we waited
+                self.beginOutgoingMedia(to: uid)
+            }
+        }
+    }
+
+    // The media half of startCall, split out so the TURN wait can sit between the mic prompt and here.
+    private func beginOutgoingMedia(to uid: String) {
+            // RINGBACK IS STARTED BY THE AUDIO SESSION, NOT HERE (2026-07-29). Starting it at this
+            // point plays into a session CallKit has not activated yet: on some devices that is silent,
+            // on others briefly audible — and every scheme that then corrected it on activation was
+            // either a stutter (stop+start) or a permanent silence (leave-a-"playing"-but-mute-player
+            // alone; AVAudioPlayer reports isPlaying = true even when the session was dead, which is the
+            // bug the user heard: one blip, then nothing for the rest of the call). One start, on a live
+            // session, is the only version with no failure mode. `armRingbackFallback` covers the case
+            // where activation never comes, so the caller can never sit in true silence either.
+            self.armRingbackFallback()
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
             let ref = self.db.collection("calls").document()
             self.callId = ref.documentID
@@ -413,7 +1001,7 @@ final class CallService: NSObject {
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
                         "offer": ["sdp": sdp.sdp, "type": "offer"],
-                        "cams": [self.me: self.cameraOn],   // seed my camera state (Signal-style per-side)
+                        "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]) { [weak self] err in
                         guard let self else { return }
@@ -435,7 +1023,6 @@ final class CallService: NSObject {
                     }
                 }
             }
-        }
     }
 
     private func ensureMicPermission(_ done: @escaping (Bool) -> Void) {
@@ -457,9 +1044,36 @@ final class CallService: NSObject {
         ringingWatcher?.remove()
         ringingWatcher = db.collection("calls").document(id).addSnapshotListener { [weak self] snap, _ in
             guard let self, let d = snap?.data() else { return }
+            // GHOST-CALL GUARD: a VoIP push can ring this phone because its push token is still listed under a
+            // DIFFERENT account (a sign-out cleanup that didn't complete). If the call's callee is NOT the
+            // account currently signed in HERE, it isn't for us — end it so it stops ringing. Self-heals stale
+            // tokens no matter why the token wasn't removed. Only when `me` is known (auth restored), so a
+            // legit call is never killed during a cold launch before auth loads.
+            if !self.me.isEmpty, self.state == .incoming,
+               let callee = d["callee"] as? String, !callee.isEmpty, callee != self.me {
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                self.remoteEnded(reason: .hangup)   // ends the CallKit ring on this device
+                return
+            }
             if (d["status"] as? String) == "ended", self.state == .incoming {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
                 self.remoteEnded(reason: EndReason(rawValue: d["endReason"] as? String ?? "") ?? .hangup)
+                return
+            }
+            // ANSWERED ELSEWHERE. `voipTokens` is an array and every signed-in device of mine rings, but
+            // this watcher only ever handled "ended" and a callee mismatch — "active" matched neither, so
+            // the OTHER phones kept ringing forever after I picked up on one. This watcher is removed the
+            // moment THIS device answers (see completeAnswer), so still being .incoming while the doc says
+            // active means someone else took it. Stop ringing without touching the doc: the device that
+            // answered owns the call now, and writing anything here would fight it.
+            if (d["status"] as? String) == "active", self.state == .incoming {
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                // No tone (localUser: true) — I did answer, just on my other phone — and no doc write,
+                // which would fight the device that owns the call now. recordWritten is forced so we do
+                // NOT log a missed call: the answering device writes the real record for this same
+                // callId, and ours would overwrite it with "missed".
+                self.recordWritten = true
+                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
             }
         }
     }
@@ -481,8 +1095,41 @@ final class CallService: NSObject {
                 // H4: already in a call → send this new caller a busy signal instead of dropping them silently.
                 if self.state != .idle {
                     if doc.documentID != self.callId {
+                        let caller = d["caller"] as? String ?? ""
+                        // GLARE: we dialled each other at the same moment, so we are each other's
+                        // "incoming call while busy" and both sides sent busy — killing BOTH calls and
+                        // leaving two Missed rows in one chat. Break the tie on the only thing both
+                        // phones already agree on: the two uids. Lower uid keeps its outgoing call and
+                        // busies the other; higher uid gives up its own so the survivor can ring here.
+                        if self.state == .outgoing, !caller.isEmpty, caller == self.otherUid {
+                            if self.me < caller {
+                                self.db.collection("calls").document(doc.documentID)
+                                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+                                return
+                            }
+                            // I lose: cancel MY outgoing call, then re-arm the incoming listener once we
+                            // are actually idle. Re-arming is required, not optional — their doc does not
+                            // change when I stand down, so no further snapshot would ever arrive and I
+                            // would sit idle while their phone rings on alone.
+                            self.recheckIncomingWhenIdle = true
+                            self.endReason = .hangup
+                            self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+                            return
+                        }
                         self.db.collection("calls").document(doc.documentID)
                             .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+                        // A busy call left NO trace on this phone: the caller got a Missed row, I got
+                        // nothing and never learned they tried. Log it here (same deterministic doc id
+                        // the caller uses, same "missed" outcome, so the two writes agree).
+                        if !caller.isEmpty {
+                            let cid = [self.me, caller].sorted().joined(separator: "_")
+                            let isVideo = (d["type"] as? String) == "video"
+                            Task {
+                                await ChatService.recordCall(cid: cid, callId: doc.documentID,
+                                                             callerUid: caller, outcome: "missed",
+                                                             video: isVideo, durationSec: 0)
+                            }
+                        }
                     }
                     return
                 }
@@ -491,6 +1138,17 @@ final class CallService: NSObject {
                 let cid = [self.me, caller].sorted().joined(separator: "_")
                 self.db.collection("conversations").document(cid).getDocument { cs, _ in
                     let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
+                    // Calls privacy (Settings > Privacy > Calls): "No One" declines everything;
+                    // "My Contacts" requires a real conversation with the caller. The caller
+                    // sees declined — same signal as a manual decline, nothing leaks.
+                    let audience = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.calls") ?? "") ?? .everyone
+                    let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
+                    let callsAllowed = audience == .everyone || (audience == .contacts && isContact)
+                    if !callsAllowed {
+                        self.db.collection("calls").document(doc.documentID)
+                            .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
+                        return
+                    }
                     guard !blocked, self.state == .idle else { return }
                     self.callId = doc.documentID
                     self.otherUid = caller
@@ -499,11 +1157,16 @@ final class CallService: NSObject {
                     self.otherPhotoUrl = photo.isEmpty ? nil : photo
                     self.isCaller = false
                     let isVideoCall = (d["type"] as? String == "video")
-                    self.cameraOn = isVideoCall                             // answering a video call turns my camera on
+                    // Camera-on-answer model (user choice): accepting a video call opens MY camera immediately —
+                    // both sides see each other the instant the call connects.
+                    self.cameraOn = isVideoCall
+                    self.startedAsVideo = isVideoCall
+                    self.noteVideo()
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
                     self.state = .incoming
-                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName, video: isVideoCall)
+                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
+                                                        video: isVideoCall, callerUid: caller)
                     self.markRinging()
                     self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
                 }
@@ -524,7 +1187,9 @@ final class CallService: NSObject {
             }
             return
         }
-        self.cameraOn = video   // a video call = my camera on when I answer
+        self.cameraOn = video   // camera-on-answer model: accepting a video call opens my camera immediately
+        self.startedAsVideo = video
+        self.noteVideo()
         self.callId = callId
         self.otherName = name
         self.otherUid = uid
@@ -534,6 +1199,32 @@ final class CallService: NSObject {
         Task { await refreshIceServers() }   // ensure fresh TURN before the callee builds its connection
         markRinging()
         watchRingingCancel(callId)   // tear down if the caller cancels before I answer
+        // BLOCKED / PRIVACY. The Firestore listener path gates on both; this PUSH path gated on
+        // NEITHER, so with the app killed a blocked caller — or one excluded by "No One" / "My
+        // Contacts" — rang straight through, which is the exact situation blocking is for.
+        // iOS requires reportNewIncomingCall in the same run loop as the push, so the ring genuinely
+        // cannot wait on an async lookup: PushManager reports first and we end it the moment we know.
+        callAllowed(from: uid) { [weak self] ok in
+            guard let self, !ok, self.state == .incoming, self.callId == callId else { return }
+            self.db.collection("calls").document(callId)
+                .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
+            self.recordWritten = true   // a blocked call leaves no trace, same as the listener path
+            self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+        }
+    }
+
+    /// Blocked + Calls-privacy gate, shared by both incoming paths so they cannot drift apart again.
+    private func callAllowed(from caller: String, completion: @escaping (Bool) -> Void) {
+        guard !caller.isEmpty, !me.isEmpty else { completion(true); return }
+        let cid = [me, caller].sorted().joined(separator: "_")
+        db.collection("conversations").document(cid).getDocument { [weak self] cs, _ in
+            guard let self else { return }
+            let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
+            let audience = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.calls") ?? "") ?? .everyone
+            let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
+            let allowed = !blocked && (audience == .everyone || (audience == .contacts && isContact))
+            DispatchQueue.main.async { completion(allowed) }
+        }
     }
 
     func answer() {
@@ -556,7 +1247,8 @@ final class CallService: NSObject {
                     guard let self else { return }
                     guard let d = snap?.data(),
                           let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
-                    self.cameraOn = (d["type"] as? String == "video")
+                    self.startedAsVideo = (d["type"] as? String == "video")
+                    self.cameraOn = self.startedAsVideo   // accepting a video call opens the camera
                     if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
                     self.completeAnswer(ref: ref, offerSdp: sdp)
                 }
@@ -565,7 +1257,17 @@ final class CallService: NSObject {
     }
 
     // Build the answering peer connection from the caller's offer, publish the answer + my camera state.
+    // The TURN wait sits HERE rather than in answer(), because this is the one place that builds the
+    // peer connection and so the last point at which `config` can still pick up real relay servers.
     private func completeAnswer(ref: DocumentReference, offerSdp: String) {
+        Task { @MainActor in
+            await self.awaitIceServers()
+            guard self.state == .active else { return }   // ended while we waited
+            self.buildAnswer(ref: ref, offerSdp: offerSdp)
+        }
+    }
+
+    private func buildAnswer(ref: DocumentReference, offerSdp: String) {
         pc = makePeerConnection()   // cameraOn is already known → the local video track is added if it's a video call
         guard let pc else { hangUp(); return }
         let remote = RTCSessionDescription(type: .offer, sdp: offerSdp)
@@ -577,7 +1279,7 @@ final class CallService: NSObject {
                 guard let answerSdp else { return }
                 pc.setLocalDescription(answerSdp) { _ in
                     var data: [String: Any] = ["answer": ["sdp": answerSdp.sdp, "type": "answer"], "status": "active"]
-                    data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (Signal-style per-side)
+                    data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
                     ref.updateData(data)
                 }
             }
@@ -600,9 +1302,11 @@ final class CallService: NSObject {
                 return
             }
 
-            // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…".
+            // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…". (The ringback
+            // tone is already playing since startCall — the LABEL is the honest reachability signal.)
             if self.isCaller, d["ringingAt"] != nil, !self.calleeRinging, self.state == .outgoing {
                 self.calleeRinging = true
+                self.startRingback()   // no-op if already playing (guard); safety for CallKit restarts
             }
             // Caller applies the answer once it arrives → connected.
             if self.isCaller, let answer = d["answer"] as? [String: String], let sdp = answer["sdp"],
@@ -639,7 +1343,7 @@ final class CallService: NSObject {
                 self.appliedRemoteRestart = v
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
-            // The other side's camera on/off (Signal-style per-side, no permission).
+            // The other side's camera on/off (per-side, no permission).
             self.handleRemoteCallState(d)
         }
         listeners.append(l)
@@ -655,6 +1359,9 @@ final class CallService: NSObject {
     }
 
     func flushPendingCandidates() {
+        // Always on MAIN: called from SDP completions (WebRTC thread) while Firestore listeners (main)
+        // append to pendingRemoteCandidates - the unsynchronized mix raced/lost candidates.
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.flushPendingCandidates() }; return }
         guard let pc, pc.remoteDescription != nil, !pendingRemoteCandidates.isEmpty else { return }
         let pending = pendingRemoteCandidates
         pendingRemoteCandidates = []
@@ -689,6 +1396,7 @@ final class CallService: NSObject {
     // those candidate writes hit a non-existent parent → rule-denied + lost. Buffer local candidates
     // until the doc exists, then flush.
     private var callDocCreated = false
+    private var recheckIncomingWhenIdle = false   // glare: I stood down, re-arm the ring listener at idle
     private var localCandidateBuffer: [[String: Any]] = []
     private func flushLocalCandidates() {
         guard let col = myCandidatesCollection, !localCandidateBuffer.isEmpty else { return }
@@ -718,15 +1426,22 @@ final class CallService: NSObject {
             endReason = connectedDate != nil ? .hangup : (isCaller ? .missed : .declined)
         }
         // Write a call record into the chat (once). Each side writes its own row.
-        if !recordWritten, !otherUid.isEmpty {
+        // callId != nil matters: denying the mic on an OUTGOING call hangs up before the call doc is
+        // ever created, and the `callId ?? UUID()` fallback below then wrote a phantom "Missed call" row
+        // under a random id - for a call that was never placed, and undedupable against the other side.
+        if !recordWritten, !otherUid.isEmpty, callId != nil {
             recordWritten = true
             let connected = connectedDate != nil
             let dur = connected ? Int(Date().timeIntervalSince(connectedDate!)) : 0
             let callerUidVal = isCaller ? me : otherUid
-            let outcome = connected ? "answered" : "missed"
+            // A DECLINE is not a miss. endReason was already known here and simply never reached the
+            // record, so deliberately rejecting a call wrote "missed" — which the chat row then renders
+            // red as "Missed call · Tap to call back" on the phone of the person who chose to decline it.
+            let outcome = connected ? "answered" : (endReason == .declined ? "declined" : "missed")
             let cid = [me, otherUid].sorted().joined(separator: "_")
             let cidCallId = callId ?? UUID().uuidString
-            Task { await ChatService.recordCall(cid: cid, callId: cidCallId, callerUid: callerUidVal, outcome: outcome, durationSec: dur) }
+            let video = startedAsVideo   // capture before the idle reset clears it
+            Task { await ChatService.recordCall(cid: cid, callId: cidCallId, callerUid: callerUidVal, outcome: outcome, video: video, durationSec: dur) }
         }
         if updateRemote, let id = callId {
             db.collection("calls").document(id).updateData(["status": "ended", "endReason": endReason.rawValue])
@@ -734,6 +1449,17 @@ final class CallService: NSObject {
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil
+        // The route observer was installed on the first .active call and NEVER removed, so it lived for
+        // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
+        // screen behaviour — with no call in progress at all.
+        if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
+        if let obs = thermalObserver { NotificationCenter.default.removeObserver(obs); thermalObserver = nil }
+        stopHeartbeat()
+        // The camera used to keep capturing through the whole 1-2s .ended tail, because teardown only
+        // happened at .idle. Nobody can see those frames; stop them the moment the call is over.
+        videoCapturer?.stopCapture()
+        localVideoTrack?.isEnabled = false
+        stopPausedCameraRetry()
         pc?.close()
         pc = nil
         callId = nil
@@ -772,9 +1498,14 @@ extension CallService: RTCPeerConnectionDelegate {
             "sdpMLineIndex": candidate.sdpMLineIndex,
             "sdpMid": candidate.sdpMid as Any,
         ]
-        // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
-        if callDocCreated, let col = myCandidatesCollection { col.addDocument(data: data) }
-        else { localCandidateBuffer.append(data) }
+        // MAIN hop: this fires on WebRTC's signaling thread, but callDocCreated/localCandidateBuffer
+        // are also touched from Firestore callbacks (main). Unsynchronized access raced — a candidate
+        // generated at the wrong instant could be dropped (lost connectivity path) or crash.
+        DispatchQueue.main.async {
+            // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
+            if self.callDocCreated, let col = self.myCandidatesCollection { col.addDocument(data: data) }
+            else { self.localCandidateBuffer.append(data) }
+        }
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         DispatchQueue.main.async {

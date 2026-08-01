@@ -25,6 +25,7 @@ final class PlayerView: UIView {
     private let cacheManager: CacheManager
 
     private var observation: NSKeyValueObservation?
+    private var sizeObservation: NSKeyValueObservation?
 
     // MARK: - Initializers
     override init(frame: CGRect) {
@@ -37,6 +38,7 @@ final class PlayerView: UIView {
 
     deinit {
         observation = nil
+        sizeObservation = nil
         player = nil
     }
 
@@ -55,7 +57,10 @@ final class PlayerView: UIView {
             case .success(let url):
                 self?.setupPlayer(url)
             case .failure(let error):
+                // Never leave the viewer on an eternal spinner: AVPlayer streams https mp4s
+                // fine, so a cache failure falls back to playing the remote URL directly.
                 print(error)
+                DispatchQueue.main.async { self?.setupPlayer(validatedUrl) }
             }
         }
     }
@@ -66,6 +71,9 @@ final class PlayerView: UIView {
 
 private extension PlayerView {
     func setupPlayer(_ url: URL) {
+        // Stories are sound-on media: .playback plays through the ringer
+        // switch. The default (.soloAmbient) muted every story video on a silenced phone.
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
         self.player?.replaceCurrentItem(with: nil)
         self.player?.replaceCurrentItem(with: .init(url: url))
 
@@ -84,6 +92,17 @@ private extension PlayerView {
         self.getVideoLength(videoURL: url)
         self.playerLayer.player = self.player
         self.playerLayer.videoGravity = .resizeAspectFill
+        // Fill vs fit decided by aspect, like photos (ImageLoader.decideContentMode): a landscape/
+        // wide video hard-cropped by an unconditional fill lost most of its frame — FIT those
+        // (black bars), keep tall videos edge-to-edge. presentationSize is 0 until the item is
+        // ready, so observe it once and default to fill.
+        sizeObservation = player?.currentItem?.observe(\.presentationSize, options: [.new, .initial]) { [weak self] item, _ in
+            let s = item.presentationSize
+            guard let self, s.width > 0, s.height > 0 else { return }
+            let screen = UIScreen.main.bounds
+            let fills = s.height / s.width >= screen.height / screen.width - 0.02
+            DispatchQueue.main.async { self.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect }
+        }
         self.playerLayer.backgroundColor = UIColor.black.cgColor
         playerLayer.removeFromSuperlayer()
         self.contentView.layer.addSublayer(self.playerLayer)
@@ -141,6 +160,35 @@ private extension PlayerView {
             name: .replaceCurrentItem,
             object: nil
         )
+        // Host asks (on story swipe-up) for the CURRENT video frame so the morph card shows where
+        // the video actually is, not its first-frame poster. object = the story's previewUrl key.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(captureCurrentFrameObserver(_:)),
+            name: Notification.Name("captureStoryFrame"),
+            object: nil
+        )
+    }
+
+    // Grab the frame at the current playback time and cache it under the story's previewUrl, so
+    // StorySnapshotCache-backed cards show it. Only the ACTIVE, advanced video responds (others are
+    // stopped/at zero). Fails silently → the card keeps its poster fallback.
+    @objc func captureCurrentFrameObserver(_ note: Notification) {
+        guard let urlStr = note.object as? String,
+              state == .started,
+              let item = player?.currentItem else { return }
+        let time = item.currentTime()
+        guard time.seconds > 0.05 else { return }   // still on frame 0 → the poster is already correct
+        let gen = AVAssetImageGenerator(asset: item.asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1080, height: 1920)
+        gen.requestedTimeToleranceBefore = CMTime(seconds: 0.25, preferredTimescale: 600)
+        gen.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
+        gen.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cg, _, result, _ in
+            guard result == .succeeded, let cg else { return }
+            let img = UIImage(cgImage: cg)
+            DispatchQueue.main.async { StoryCompositeCache.store(img, for: urlStr) }
+        }
     }
 
     @objc
@@ -162,6 +210,7 @@ private extension PlayerView {
     func replaceCurrentItemObserver() {
         self.player?.replaceCurrentItem(with: nil)
         self.observation = nil
+        self.sizeObservation = nil
         self.player = nil
     }
 }

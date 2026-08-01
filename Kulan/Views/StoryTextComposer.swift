@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Text story (Instagram/WhatsApp-style): a gradient background + centered text, rendered
+// Text story (modern style): a gradient background + centered text, rendered
 // to a 9:16 image and posted through the SAME story pipeline as a photo. Tap the palette
 // to cycle backgrounds; type; Share. No new backend — it's just an image.
 struct StoryTextComposer: View {
@@ -8,7 +8,7 @@ struct StoryTextComposer: View {
     var onClose: () -> Void
 
     @State private var text = ""
-    private let charLimit = 700   // WhatsApp-style text-status cap
+    private let charLimit = 700   // text-status cap
     @State private var bgIndex = 0
     @FocusState private var focused: Bool
     @State private var showDiscard = false
@@ -30,7 +30,7 @@ struct StoryTextComposer: View {
 
     var body: some View {
             ZStack {
-                // Full-bleed gradient background. Tapping it toggles the keyboard (WhatsApp: tap to
+                // Full-bleed gradient background. Tapping it toggles the keyboard (tap to
                 // dismiss and see the full text, tap again to edit) — was stuck open with no way out.
                 gradient(bgIndex).ignoresSafeArea()
                     .animation(.easeInOut(duration: 0.35), value: bgIndex)   // smooth background cycle
@@ -58,7 +58,7 @@ struct StoryTextComposer: View {
                         .padding(.horizontal, 28)
                 }
 
-                // Top controls: close (X) left, palette right. Send docks bottom-right (Instagram-style).
+                // Top controls: close (X) left, palette right. Send docks bottom-right (modern style).
                 VStack {
                     HStack(spacing: 10) {
                         Button { if trimmed.isEmpty { onClose() } else { focused = false; showDiscard = true } }
@@ -125,7 +125,7 @@ struct StoryTextComposer: View {
     private func circle(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .liquidGlass(Circle())                      // non-interactive glass: its touch-tracking was
             .contentShape(Circle())                     // intermittently eating the Button tap ("sometimes works")

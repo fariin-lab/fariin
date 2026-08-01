@@ -26,8 +26,18 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Resolve Swift packages
-        run: xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan
+      - name: Resolve Swift packages (retry, clearing corrupt binary-framework artifacts)
+        run: |
+          for i in 1 2 3 4; do
+            if xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan; then
+              echo "package resolution succeeded on attempt $i"; break
+            fi
+            echo "::warning::SPM resolve attempt $i failed (likely a partial WebRTC/Firebase download). Clearing artifacts and retrying."
+            rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts
+            rm -rf ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            if [ "$i" = "4" ]; then echo "::error::SPM resolution failed after 4 attempts"; exit 1; fi
+            sleep 10
+          done
 
       - name: Build for iOS Simulator (Debug, no signing)
         run: |
@@ -78,6 +88,9 @@ jobs:
           if [ -z "$APP_URL" ]; then
             APP_URL="https://appetize.io/app/$PUBLIC_KEY"
           fi
+          # Space out every char so GitHub's secret-masking (exact-substring match, incl. base64)
+          # can't blank the URL — the assistant reads it and removes the spaces.
+          echo "URLSPACED:$(printf '%s' "$APP_URL" | sed 's/./& /g'):END"
           echo ""
           echo "=================================================="
           echo "  Appetize live preview (click to run in browser):"

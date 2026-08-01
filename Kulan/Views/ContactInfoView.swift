@@ -2,7 +2,7 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-// Telegram-style profile screen: hero avatar, quick-action tiles, bio card, and a
+// Modern-style profile screen: hero avatar, quick-action tiles, bio card, and a
 // shared-media card. Real where the data exists (name/@handle, mute, block, clear,
 // shared media, bio); honest "coming soon" for features not built yet (calls live
 // on a separate branch; in-chat search isn't built). No fabricated data — the title
@@ -18,158 +18,499 @@ struct ContactInfoView: View {
     let photoUrl: String?
     var source: ProfileSource = .chat
     var isSelf: Bool = false   // your OWN profile (opened from your own story) → no call-yourself buttons
+    var onSearch: () -> Void = {}   // "search" tile → pop back to the chat and open in-chat search
 
     @State private var handle = ""
     @State private var about = ""
+    @State private var targetPrivacy: [String: String] = [:]   // their audience map (users doc)
     @State private var muted = false
+    @State private var mutedUntil: Double = 0   // millis; drives the "Muted until <time>" menu header
     @State private var blocked = false
     @State private var loaded = false
     @State private var media: [Message] = []
+    /// How much media this chat had last time we looked (disk-backed). Decides on the very first
+    /// frame whether the All Media section exists at all — see ChatService.SharedMediaPresence.
+    @State private var mediaHint = 0
     @State private var viewerImage: Message?
     @State private var showClear = false
     @State private var showBlock = false
     @State private var showReport = false
     @State private var showShare = false
-    @State private var showCallSoon = false
-    @State private var showSearchSoon = false
-    @State private var showVideoSoon = false
     @State private var openChat = false
     @State private var showAllMedia = false
-    @State private var showMuteOptions = false
+    @State private var showVerify = false
     @State private var showDisappear = false
     @State private var disappearSeconds = 0
-    @State private var pendingDisappear: Int?   // chosen timer awaiting the "for both of you" confirm
+    @State private var showRename = false
+    @State private var showSounds = false
+    @State private var localName: String?       // local custom name (Edit) — device-only, never sent
+    @State private var showAddGroup = false
+    @State private var openGroup: Conversation?
+    @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
+    @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
+    @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
+    @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
+    @State private var showAvatarChoice = false     // has BOTH a story and a photo → ask which to open
+    // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
+    // drag-down close shrinks back into it.
+    @Namespace private var mediaNS
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
+
+    // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name. Read
+    // the observable store DIRECTLY (not the async-loaded @State), so the nickname shows immediately —
+    // no 2s flash of the old name on open.
+    /// Every story in their group already watched → the ring goes grey instead of coloured, same rule
+    /// as the chat list and the stories row.
+    private var storyAllSeen: Bool {
+        guard let g = publicStory, !g.stories.isEmpty else { return false }
+        return !StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt).contains(false)
+    }
+
+    /// Re-seed from the repository after the viewer closes: markSeenLocally advanced the group's
+    /// watermark there, and reassigning `publicStory` is what re-evaluates the ring.
+    private func refreshStorySeen() {
+        if let known = StoriesRepository.shared.others.first(where: { $0.authorUid == otherUid }),
+           !known.stories.isEmpty {
+            publicStory = known
+        }
+    }
+
+    private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
     private var dark: Bool { scheme == .dark }
-    private var cardColor: Color { dark ? Color(hex: 0x1C1C1E) : Color(hex: 0xF2F2F7) }
+    // Native grouped-list card color: WHITE in light, 0x1C1C1E in dark — the exact
+    // fill iOS Settings uses for its rows. It sits on `pageBackground` (grey/black) so
+    // the cards pop, instead of the old flat grey-on-white look.
+    private var cardColor: Color { Color(uiColor: .secondarySystemGroupedBackground) }
+    // The grouped-list page behind the cards (light grey / true black), like Settings.
+    private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     private var otherUid: String {
         let me = AuthService.shared.uid ?? ""
         return cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
     }
 
+    // Split into layers so the type-checker doesn't time out on one giant modifier chain.
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                hero
-                quickActions
-                if source == .calls, lastCall != nil { callLogCard }
-                if !about.isEmpty { bioCard }
-                if !media.isEmpty { mediaCard }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
-        }
-        .navigationTitle("")   // name + @handle already show in the hero below
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)   // show nav bar (back + title) below the notch
-        .toolbar(.hidden, for: .tabBar)           // hide the Chats/Calls/Settings bar — match
-                                                  // the chat-opened profile (was still showing
-                                                  // when opened from the Calls tab)
-        .navigationBarBackButtonHidden(false)
-        .task {
-            await load()
-            disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
-        }
-        .fullScreenCover(item: $viewerImage) { msg in ImageViewerView(message: msg, cid: cid) }
-        .sheet(isPresented: $showAllMedia) { SharedMediaGridView(cid: cid, media: media) }
-        .sheet(isPresented: $showShare) { ActivityView(items: [shareText]) }
-        // Options for the "Disappearing Messages" row (was a dead button — no dialog was attached).
-        .confirmationDialog("Disappearing Messages", isPresented: $showDisappear, titleVisibility: .visible) {
-            Button("Off")     { requestDisappear(0) }
-            Button("1 Day")   { requestDisappear(86_400) }
-            Button("1 Week")  { requestDisappear(604_800) }
-            Button("1 Month") { requestDisappear(2_592_000) }
-            Button("1 Year")  { requestDisappear(31_536_000) }
-            Button("Cancel", role: .cancel) {}
-        }
-        // Turning it ON destroys history for BOTH people — never on a single accidental tap.
-        .alert("Turn on disappearing messages?", isPresented: Binding(
-            get: { pendingDisappear != nil },
-            set: { if !$0 { pendingDisappear = nil } }
-        )) {
-            Button("Cancel", role: .cancel) { pendingDisappear = nil }
-            Button("Turn On") { if let s = pendingDisappear { applyDisappear(s); pendingDisappear = nil } }
-        } message: {
-            Text("New messages in this chat will be deleted for both you and \(name) after \(ChatService.disappearLabel(pendingDisappear ?? 86_400)). \(name) will see that you turned this on.")
-        }
-        .alert("Clear your messages?", isPresented: $showClear) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
-                Task { await ChatService.clearMyMessages(cid); media = await ChatService.sharedMedia(cid) }
-            }
-        } message: {
-            Text("This deletes the messages you sent in this chat. It can't be undone.")
-        }
-        .alert("Block \(name)?", isPresented: $showBlock) {
-            Button("Cancel", role: .cancel) {}
-            Button("Block", role: .destructive) {
-                Task { await ChatService.setBlocked(cid, true); blocked = true }
-            }
-        } message: {
-            Text("You won't be able to send messages in this chat until you unblock. \(name) won't be told they were blocked.")
-        }
-        .alert("Report \(name)?", isPresented: $showReport) {
-            Button("Cancel", role: .cancel) {}
-            Button("Report", role: .destructive) {
-                Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
-            }
-            Button("Report and Block", role: .destructive) {
-                Task {
-                    await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                    await ChatService.setBlocked(cid, true); blocked = true
+        withAlerts
+            // In-place viewer (Telegram model, user request): the photo grows OUT of the avatar
+            // circle and closes back INTO it — never a page. An overlay (not a cover) so the
+            // profile stays visible behind and the drag can melt the white away.
+            .overlay {
+                if showProfilePhoto {
+                    ProfilePhotoViewer(name: shownName, photoUrl: gatedPhotoUrl ?? "",
+                                       sourceFrame: avatarFrame, isPresented: $showProfilePhoto)
                 }
             }
-        } message: {
-            Text("Our team will review this account within 24 hours. \(name) won't be told.")
+    }
+
+    @ViewBuilder private var sections: some View {
+        hero
+        quickActions
+        if source == .calls, lastCall != nil { callLogCard }
+        if !isSelf { settingsCard }
+        // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
+        // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
+        if !media.isEmpty || mediaHint > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("All Media")
+                mediaCard
+            }
         }
-        .alert("Voice calls", isPresented: $showCallSoon) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("Voice calling is coming soon.") }
-        .alert("Search", isPresented: $showSearchSoon) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("In-chat search is coming soon.") }
-        .alert("Video calls", isPresented: $showVideoSoon) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("Video calling is coming soon.") }
-        .navigationDestination(isPresented: $openChat) {
-            ThreadView(cid: cid, title: name, photoUrl: photoUrl)
+        if !isSelf && Flags.groupsEnabled {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader(groupsHeaderText)
+                groupsInCommonCard
+            }
+        }
+        if !isSelf { dangerCard }
+    }
+
+    // Block / Report always VISIBLE at the bottom of the profile (WhatsApp pattern, user
+    // decision) — a user who feels unsafe must see the way out, not hunt a "..." menu.
+    private var dangerCard: some View {
+        VStack(spacing: 0) {
+            if blocked {
+                infoRow("Unblock \(shownName)", "checkmark.circle", chevron: false) {
+                    Task { await ChatService.setBlocked(cid, false); blocked = false }
+                }
+            } else {
+                infoRow("Block \(shownName)", "nosign", tint: .red, chevron: false) { showBlock = true }
+            }
+            rowDivider
+            infoRow("Report \(shownName)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
+        }
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    // Bold grouped-list section title above a card (standard grouped-list style).
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title).font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
+    }
+    private var groupsHeaderText: String {
+        let n = sharedGroups.count
+        return n == 0 ? "No Groups in Common" : "\(n) Group\(n == 1 ? "" : "s") in Common"
+    }
+
+    // Nav bar trailing: just Edit (rename). The "…" More menu is a quick-action tile (below).
+    @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
+        if !isSelf && !showProfilePhoto {   // no Edit floating over the open photo
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Edit") { showRename = true }.tint(.primary)
+            }
         }
     }
 
-    private var disappearLabel: String {
-        disappearSeconds == 0 ? "Off" : ChatService.disappearLabel(disappearSeconds)
+    // The "More" tile's menu: housekeeping only. Block/Report moved OUT to the always-visible
+    // dangerCard at the bottom of the page (WhatsApp pattern, user decision).
+    @ViewBuilder private var moreMenuItems: some View {
+        // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
+        // person has both a story and a photo, so a menu duplicate would be clutter.)
+        Button { changeWallpaper() } label: { Label("Change Wallpaper", systemImage: "paintpalette") }
+        // "Share Profile", not "Share Contact" — what it sends is a Kulan profile link, and there is no
+        // contact card behind it (no phone book, no numbers).
+        Button { showShare = true } label: { Label("Share Profile", systemImage: "square.and.arrow.up") }
+        Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
     }
-    // Turning ON asks first (it deletes for both people); turning OFF is always safe → applies directly.
-    private func requestDisappear(_ s: Int) {
-        guard s != disappearSeconds else { return }
-        if s == 0 { applyDisappear(0) } else { pendingDisappear = s }
-    }
-    private func applyDisappear(_ s: Int) {
-        disappearSeconds = s
-        Task { await ChatService.setDisappear(cid, seconds: s) }
-    }
-    private var disappearRow: some View {
-        Button { showDisappear = true } label: {
-            HStack {
-                Label("Disappearing Messages", systemImage: "timer")
-                Spacer()
-                Text(disappearLabel).foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+
+    private var coreScroll: some View {
+        ScrollView {
+            VStack(spacing: 16) { sections }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+        }
+        .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        // Keep the nav bar visible always: toggling it hidden while the photo viewer opens
+        // shrank the scroll's top inset, which jumped the whole page UP (user report). The
+        // viewer's own full-screen backdrop covers the bar, so no toggle is needed.
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
+        // Hide the back chevron while the photo viewer is open so it doesn't float over the photo.
+        // We hide the ITEMS, never the bar itself — toggling bar visibility changes the scroll
+        // inset, which is what used to jump the whole page.
+        .navigationBarBackButtonHidden(showProfilePhoto)
+        .toolbar { navTrailing }
+        .task {
+            // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
+            // re-entry); the async load() then refreshes it.
+            // The remembered count first (disk, instant), then the warm cache, then the network.
+            mediaHint = ChatService.SharedMediaPresence.count(cid)
+            if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
+            // `load()` owns mediaHint from here: it is the only place that knows whether the count it
+            // has is an ANSWER or a failure. Setting it from `media.count` out here zeroed the hint
+            // whenever the load failed, which is how the section disappeared from a chat full of photos.
+            await load()
+            disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
+            localName = ContactNames.shared.name(for: otherUid)
+            // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
+            // anyone who reaches this profile can watch it, contact or not.
+            if !isSelf {
+                // SEED SYNCHRONOUSLY from the already-loaded story tray first, so for anyone whose
+                // story we know about the ring is there on the FIRST frame instead of blinking in
+                // after the network round-trip. The fetch below then covers non-contacts (public
+                // stories that were never in our tray).
+                if publicStory == nil,
+                   let known = StoriesRepository.shared.others.first(where: { $0.authorUid == otherUid }),
+                   !known.stories.isEmpty {
+                    publicStory = known
+                }
+                if let fresh = await StoriesRepository.shared.publicStoryGroup(
+                    for: otherUid, name: shownName, photoUrl: gatedPhotoUrl) {
+                    publicStory = fresh
+                }
+                // else: keep the tray-seeded group (a contacts-only story is still watchable here)
             }
-            .padding(14)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    // Sheets, full-screen covers and pushes.
+    private var withSheets: some View {
+        coreScroll
+            .fullScreenCover(item: $viewerImage) { msg in
+                // No system .zoom: SignalMediaOpen flies the tapped thumb (see the strip's tap),
+                // the same pipeline as the conversation and the gallery. The story cover below still
+                // uses .zoom - stories deliberately keep the system hero transition.
+                ImageViewerView(message: msg, cid: cid, rectScope: .profile)
+            }
+            // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
+            // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and
+            // NO extra background wrapper) — the previous isPresented + nested `if let` + black
+            // `.background(...ignoresSafeArea())` version couldn't be closed cleanly: that wrapper sat
+            // over the library's swipe-down pan, which is the gesture that dismisses it.
+            // anonymous: we don't write a view record (a non-contact may not have write access to the
+            // author's story views).
+            .fullScreenCover(item: $storyViewerGroup) { g in
+                // ownSwipeDismiss:FALSE + the native zoom transition = the identical close to a story
+                // opened from the chat list: drag down, hold it part way, release and it springs back
+                // into the avatar it came from. With `true` the library's own pan ran instead, which
+                // is why closing here felt like a different (and worse) gesture.
+                // anonymous: FALSE. With `true` the view was never recorded — not on the server and
+                // not even in the local seen flags (markSeenItem bails on anonymous) — so watching a
+                // story from a profile left the ring showing "unseen" forever. Viewing here counts
+                // exactly like viewing from the chat list. For a non-contact the server write may be
+                // refused by rules; that's non-fatal and the local watermark still updates.
+                StoryViewer(group: g, anonymous: false, ownSwipeDismiss: false,
+                            onClose: { storyViewerGroup = nil; refreshStorySeen() })
+                    .navigationTransition(.zoom(sourceID: "profile-story", in: mediaNS))
+            }
+            .navigationDestination(isPresented: $showAllMedia) {
+                MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
+            }
+            // "Go to Chat" from the gallery: drop the gallery with animations DISABLED, in the same runloop
+            // ThreadView drops this profile, so the whole branch collapses instantly to the conversation —
+            // the profile is never rendered (SwiftUI's boolean nav can't animate a multi-level pop cleanly).
+            .onReceive(NotificationCenter.default.publisher(for: .goToMessage)) { _ in
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { showAllMedia = false }
+            }
+            .navigationDestination(item: $openGroup) { g in
+                let me = AuthService.shared.uid ?? ""
+                ThreadView(cid: g.id, title: g.displayName(me), photoUrl: g.displayPhoto(me))
+            }
+            .navigationDestination(isPresented: $openChat) {
+                ThreadView(cid: cid, title: name, photoUrl: photoUrl)
+            }
+            .navigationDestination(isPresented: $showVerify) {
+                VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
+            }
+            .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
+            .sheet(isPresented: $showRename) {
+                // The editor owns the whole card now (first/last/note + delete); this just re-reads
+                // the resulting display name for the header.
+                SetNicknameView(uid: otherUid, profileName: name, photoUrl: photoUrl) {
+                    localName = ContactNames.shared.name(for: otherUid)
+                }
+            }
+            .sheet(isPresented: $showDisappear) {
+                DisappearingMessagesView(cid: cid, current: disappearSeconds) { s in
+                    disappearSeconds = s
+                    Task { await ChatService.setDisappear(cid, seconds: s) }
+                }
+            }
+            .sheet(isPresented: $showShare) { SendContactSheet(contactText: shareText) }
+            .sheet(isPresented: $showAddGroup) {
+                AddToGroupView(contactUid: otherUid, contactName: shownName, contactPhoto: photoUrl)
+                    .presentationDetents([.medium, .large])   // small sheet by default (user request)
+            }
+    }
+
+    // Menus, dialogs and the rename alert.
+    private var withAlerts: some View {
+        withSheets
+            .alert("Clear your messages?", isPresented: $showClear) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear", role: .destructive) {
+                    // A refusal here must not blank the strip — only a real answer replaces it.
+                    Task {
+                        await ChatService.clearMyMessages(cid)
+                        if let fresh = await ChatService.sharedMedia(cid) { media = fresh; mediaHint = fresh.count }
+                    }
+                }
+            } message: {
+                Text("This deletes the messages you sent in this chat. It can't be undone.")
+            }
+            .alert("Block \(name)?", isPresented: $showBlock) {
+                Button("Cancel", role: .cancel) {}
+                Button("Block", role: .destructive) {
+                    Task { await ChatService.setBlocked(cid, true); blocked = true }
+                }
+            } message: {
+                Text("You won't be able to send messages in this chat until you unblock. \(name) won't be told they were blocked.")
+            }
+            .alert("Report \(name)?", isPresented: $showReport) {
+                Button("Cancel", role: .cancel) {}
+                Button("Report", role: .destructive) {
+                    Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
+                }
+                Button("Report and Block", role: .destructive) {
+                    Task {
+                        await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
+                        await ChatService.setBlocked(cid, true); blocked = true
+                    }
+                }
+            } message: {
+                Text("Our team will review this account within 24 hours. \(name) won't be told.")
+            }
+    }
+
+    // Profile settings rows (standard order): Disappearing Messages, Sounds & Notifications,
+    // Verify Encryption. Wallpaper / Share / Clear / Report / Block now live in the "…" menu.
+    private var settingsCard: some View {
+        VStack(spacing: 0) {
+            infoRow("Disappearing Messages", "timer", value: disappearLabel) { showDisappear = true }
+            rowDivider
+            infoRow("Sounds & Notifications", "bell.badge", value: muted ? "Muted" : "On") { showSounds = true }
+            rowDivider
+            infoRow("Verify Encryption", "lock.fill", tint: .accentColor) { showVerify = true }
+        }
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    // Groups this contact and I both belong to. "N Groups in Common" + Add-to-a-Group + the list;
+    // "No Groups in Common" + Add-to-a-Group only (no list) when there are none.
+    private var sharedGroups: [Conversation] {
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations
+            .filter { $0.isGroup && $0.users.contains(otherUid) && $0.users.contains(me) && !$0.isCleared(me) }
+            .sorted { $0.displayName(me).lowercased() < $1.displayName(me).lowercased() }
+    }
+
+    private var groupsInCommonCard: some View {
+        let me = AuthService.shared.uid ?? ""
+        let groups = sharedGroups
+        return VStack(alignment: .leading, spacing: 0) {
+            // Bigger "+" in a grey circle (matches the group-avatar rows below), not a tiny glyph.
+            Button { showAddGroup = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
+                        .frame(width: 36, height: 36)   // the standard contact-row avatar size (.thirtySix)
+                        .background(Circle().fill(Color(.systemGray5)))   // LIGHT grey (user request; grey4 was too dark)
+                    Text("Add to a Group").foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            ForEach(groups) { g in
+                rowDivider
+                Button { openGroup = g } label: {
+                    HStack(spacing: 12) {
+                        AvatarView(name: g.displayName(me), photoUrl: g.displayPhoto(me), size: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(g.displayName(me)).foregroundStyle(.primary)
+                            Text(g.memberCountLabel).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private func setMuted(_ until: Double) {
+        muted = true; mutedUntil = until
+        Task { await ChatService.setMute(cid, until: until) }
+    }
+    // "Muted until 1:12 PM" (today) / "Muted until 9 Jul, 1:12 PM" (later) / "Muted always" (standard).
+    private var muteUntilLabel: String {
+        let secs = mutedUntil / 1000
+        if secs > Date().addingTimeInterval(3600 * 24 * 365 * 5).timeIntervalSince1970 { return "Muted always" }
+        let date = Date(timeIntervalSince1970: secs)
+        let t = Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(date: .abbreviated, time: .shortened)
+        return "Muted until \(t)"
+    }
+
+    // "Change Wallpaper" (from the "…" menu): pop back to the chat, then open the wallpaper picker.
+    private func changeWallpaper() {
+        let target = cid
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            NotificationCenter.default.post(name: .openChatWallpaper, object: target)
+        }
+    }
+
+    // One tappable row: icon, title, optional trailing value, chevron. `tint` colors icon+title.
+    private func infoRow(_ title: String, _ icon: String, value: String? = nil,
+                         tint: Color = .primary, chevron: Bool = true,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 17)).frame(width: 26)
+                    .foregroundStyle(tint)
+                Text(title).foregroundStyle(tint)
+                Spacer()
+                if let value { Text(value).foregroundStyle(.secondary) }
+                if chevron {
+                    Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.primary)
     }
 
+    private var rowDivider: some View { Divider().padding(.leading, 56) }
+
+    // Compact in the row (8h / 10m / 1w); the picker inside shows the full text.
+    private var disappearLabel: String {
+        disappearSeconds == 0 ? "Off" : ChatService.disappearShortLabel(disappearSeconds)
+    }
     // MARK: - Sections
+
+    // Their privacy audience, honored by MY client: am I allowed their photo/bio/calls?
+    // "Contact" = we share a real conversation (opened from a chat always qualifies).
+    private var iAmContact: Bool { source == .chat || PrivacyPrefs.isContact(otherUid) }
+    private var gatedPhotoUrl: String? {
+        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? photoUrl : nil
+    }
+    private var gatedAbout: String {
+        PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) ? about : ""
+    }
+    private var canCallThem: Bool {
+        PrivacyPrefs.allows(targetPrivacy, "calls", contactOfMine: iAmContact)
+    }
 
     private var hero: some View {
         VStack(spacing: 6) {
-            AvatarView(name: name, photoUrl: photoUrl, size: 88)
-            Text(name).font(.title.weight(.bold))
+            ZStack {
+                // Story ring (Instagram/WhatsApp pattern): a colored gradient ring means this person has
+                // an active public story — tap the avatar to watch it instead of opening the photo.
+                //
+                // ALWAYS RENDERED, only faded: the ring is wider than the avatar, so rendering it
+                // conditionally resized this ZStack (88 → 100) the moment the async story lookup
+                // landed — the page visibly re-arranged itself a beat after opening. Reserving the
+                // space (same trick as the @handle line below) means the ring can only fade in, and
+                // nothing ever moves.
+                Circle()
+                    .stroke(storyAllSeen
+                            ? AnyShapeStyle(Color.secondary.opacity(0.5))     // watched → quiet grey
+                            : AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
+                                                           startPoint: .topLeading, endPoint: .bottomTrailing)),
+                            lineWidth: 3)
+                    .frame(width: 100, height: 100)
+                    .opacity(publicStory != nil && !showProfilePhoto ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: publicStory != nil)
+                AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88)
+                    // The viewer IS this avatar while open — hide the original so the morph reads
+                    // as one circle leaving and returning, not a copy floating over it.
+                    .opacity(showProfilePhoto ? 0 : 1)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
+            }
+            .contentShape(Circle())
+            // Hero source for the story's native zoom close, exactly like the story row in the chat
+            // list: the viewer grows out of this avatar and the drag-down rides back into it.
+            .matchedTransitionSource(id: "profile-story", in: mediaNS)
+            .onTapGesture {
+                let hasPhoto = gatedPhotoUrl?.isEmpty == false
+                // Both a story AND a photo → ASK which one (WhatsApp's "Select an action"). A single
+                // tap can't serve both, and silently preferring the story is what made the profile
+                // photo unreachable. With only one of them available, go straight there.
+                if publicStory != nil, hasPhoto { showAvatarChoice = true }
+                else if let s = publicStory { storyViewerGroup = s }
+                else if hasPhoto { showProfilePhoto = true }
+            }
+            // Attached HERE, on the hero, not on the outer chain that already carries three alerts:
+            // stacking presentations on one view is what made the Edit Photo sheet never appear.
+            // Bottom sheet, not confirmationDialog: on iOS 26 the system dialog anchors itself to the
+            // avatar as a little callout bubble, and the user wants a sheet from the bottom.
+            .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
+                SheetAction("View profile photo") { showProfilePhoto = true },
+                SheetAction("View story") { storyViewerGroup = publicStory },
+            ])
+            Text(shownName).font(.title.weight(.bold))
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
             // height change was the up/down "jump" when opening a profile from Calls (cold
@@ -177,13 +518,26 @@ struct ContactInfoView: View {
             Text(handle.isEmpty ? " " : "@\(handle)")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .frame(minHeight: 20)
+            // Bio shown as centered text under the handle (like a group's description under the member
+            // count) — not a labeled "bio" card.
+            if !gatedAbout.isEmpty {
+                Text(gatedAbout)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32).padding(.top, 2)
+                    // A bio is variable height, so it can't be pre-reserved like the @handle line.
+                    // The cache above removes the shift entirely for profiles we've seen; on a genuine
+                    // first-ever open this makes it ease in rather than snap.
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
+        .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
 
     // Context-aware row. From Calls: Message (open the chat) leads. From a chat: Search
-    // trails (you're already here). Video is an honest "coming soon"; Voice always calls.
+    // trails (pops back and opens the in-chat search bar). Video and Voice call live.
     private var quickActions: some View {
         HStack(spacing: 12) {
             if source == .calls {
@@ -191,67 +545,40 @@ struct ContactInfoView: View {
             }
             // Your OWN profile: no call-yourself buttons, and NO message-self yet (opening a self-chat crashed —
             // that's the upcoming "My Space" feature, built separately). Friends keep video/voice.
-            if !isSelf {
+            if !isSelf && canCallThem {
                 actionTile("video", "video.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) }
                 actionTile("voice", "phone.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) }
             }
-            // Native menu (pops up) instead of a custom action sheet.
+            // Native menu (pops up) instead of a custom action sheet. When ALREADY muted, the menu
+            // is just "Muted until <time>" + Unmute — the durations only appear when the chat is unmuted.
             Menu {
-                if muted { Button("Unmute") { muted = false; Task { await ChatService.setMute(cid, until: 0) } } }
-                Button("1 hour") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(1)) } }
-                Button("8 hours") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(8)) } }
-                Button("1 day") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(24)) } }
-                Button("1 week") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(168)) } }
-                Button("Always") { muted = true; Task { await ChatService.setMute(cid, until: ChatService.muteUntil(nil)) } }
+                if muted {
+                    Section(muteUntilLabel) {
+                        Button("Unmute") { muted = false; mutedUntil = 0; Task { await ChatService.setMute(cid, until: 0) } }
+                    }
+                } else {
+                    Section("Mute this chat for…") {
+                        Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
+                        Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
+                        Button("1 day") { setMuted(ChatService.muteUntil(24)) }
+                        Button("1 week") { setMuted(ChatService.muteUntil(168)) }
+                        Button("Always") { setMuted(ChatService.muteUntil(nil)) }
+                    }
+                }
             } label: {
                 tileLabel(muted ? "unmute" : "mute", muted ? "bell.fill" : "bell.slash.fill")
             }
             .tint(.primary)
             if source == .chat {
-                actionTile("search", "magnifyingglass") { showSearchSoon = true }
+                actionTile("search", "magnifyingglass") { onSearch() }
             }
-            moreMenu
+            // "More" tile (…): the menu that used to sit in the nav bar.
+            if !isSelf {
+                Menu { moreMenuItems } label: { tileLabel("more", "ellipsis") }.tint(.primary)
+            }
         }
     }
 
-    private var moreMenu: some View {
-        Menu {
-            // Auto-delete (disappearing messages) — native submenu, Off up to 1 year.
-            // Goes through requestDisappear: enabling always confirms first (this menu was
-            // exactly the accidental-tap path that silently wiped a chat's history).
-            Menu {
-                Button("Off") { requestDisappear(0) }
-                Button("1 Day") { requestDisappear(86_400) }
-                Button("1 Week") { requestDisappear(604_800) }
-                Button("1 Month") { requestDisappear(2_592_000) }
-                Button("1 Year") { requestDisappear(31_536_000) }
-            } label: { Label("Disappearing Messages", systemImage: "timer") }
-
-            Button { showShare = true } label: {
-                Label("Share Contact", systemImage: "square.and.arrow.up")
-            }
-
-            Divider()
-
-            // Clear is a normal (non-red) action; only Block is destructive/red.
-            Button { showClear = true } label: {
-                Label("Clear my messages", systemImage: "trash")
-            }
-            Button(role: .destructive) { showReport = true } label: {
-                Label("Report \(name)", systemImage: "flag")
-            }
-            if blocked {
-                Button { Task { await ChatService.setBlocked(cid, false); blocked = false } } label: {
-                    Label("Unblock", systemImage: "hand.raised.slash")
-                }
-            } else {
-                Button(role: .destructive) { showBlock = true } label: {
-                    Label("Block \(name)", systemImage: "hand.raised")
-                }
-            }
-        } label: { tileLabel("more", "ellipsis") }
-            .tint(.primary)
-    }
 
     // Shareable contact link (opens/starts a chat with this user in Kulan).
     private var shareText: String {
@@ -283,7 +610,10 @@ struct ContactInfoView: View {
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(cardColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // 24, matching every other card on this screen (the sections below, the action tiles, the
+                // media card). This one was left at 14, so it sat directly above a 24 card with visibly
+                // tighter corners - the mismatch the user circled. `.continuous` is the Apple curve.
+                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             }
         }
     }
@@ -304,54 +634,103 @@ struct ContactInfoView: View {
         }
     }
 
-    private var bioCard: some View {
-        Text(about)
-            .font(.body)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
 
     private var mediaCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(media.prefix(12)) { m in
-                        if let url = m.imageUrl {
-                            SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
+                    // Reserved space, filled: while the real thumbnails load, the row holds the same
+                    // number of quiet placeholder tiles the chat had last time. The section's height
+                    // is therefore identical before and after the load, so nothing shifts.
+                    if media.isEmpty {
+                        ForEach(0..<min(mediaHint, 12), id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.primary.opacity(0.07))
                                 .frame(width: 84, height: 84)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .onTapGesture { viewerImage = m }
+                        }
+                    }
+                    ForEach(media.prefix(12)) { m in
+                        // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
+                        if let url = m.imageUrl ?? m.thumbUrl {
+                            SecureImageView(imageUrl: url, enc: m.imageUrl != nil ? m.enc : m.thumbEnc, cid: cid)
+                                .frame(width: 84, height: 84)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                // Own namespace — the chat and All Media register these same ids.
+                                .modifier(MediaRectReporter(id: m.id, scope: .profile))
+                                // OPEN LIKE THE CHAT: fly the thumb's media out of its tile (one
+                                // pipeline, every entry point), falling back to a plain presentation.
+                                // The system .zoom here scaled the whole cover AND ran its own dismiss
+                                // pan alongside SignalDismissHost's.
+                                .onTapGesture {
+                                    let key = MediaOpenRects.key(.profile, m.id)
+                                    // Both cache tiers, not memory only — see flyOrPresent.
+                                    SignalMediaOpen.flyOrPresent(
+                                        imageUrl: url, rectKey: key,
+                                        present: { MediaPresentGate.present { viewerImage = m } })
+                                }
                         }
                     }
                 }
             }
-            Button("See All") { showAllMedia = true }
-                .font(.subheadline.weight(.medium))
-                .tint(.primary)
+            HStack {
+                Text("See All").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
+            }
         }
         .padding(14)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
+        // Tap anywhere on the CARD (See All row / background) → the full media page. The thumbnails'
+        // own tap wins over this for their area, so a photo tap opens just that photo.
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .onTapGesture { showAllMedia = true }
     }
 
     // MARK: - Logic
 
-    private func toggleMute() {
-        muted.toggle()
-        let v = muted
-        Task { await ChatService.setMuted(cid, v) }
-    }
 
     private func load() async {
-        if let p = await ProfileStore.shared.fetch(otherUid) { handle = p.handle; about = p.about }
+        // Paint from Firestore's LOCAL cache first (no network): for anyone we've opened before, the
+        // @handle and bio are there on the first frame, so the page doesn't shift when the server
+        // fetch lands. The fetch below still runs and corrects anything stale.
+        if handle.isEmpty, about.isEmpty, let c = await ProfileStore.shared.cachedPeer(otherUid) {
+            handle = c.handle; about = c.about; targetPrivacy = c.privacy
+        }
+        if let p = await ProfileStore.shared.fetch(otherUid) {
+            handle = p.handle; about = p.about; targetPrivacy = p.privacy
+        }
         if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
            let d = snap.data() {
             let me = AuthService.shared.uid ?? ""
             let muteUntil = ((d["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue ?? 0
             muted = muteUntil > Date().timeIntervalSince1970 * 1000
+            mutedUntil = muteUntil
             blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
         }
-        media = await ChatService.sharedMedia(cid)
+        // LOCAL FIRST, THE WAY SIGNAL DOES IT. Signal's media gallery is a query over its own message
+        // database, so it renders offline and instantly; it never asks the network for something it has
+        // already received. Kulan has no SQLite store, but it does keep this chat's decrypted messages
+        // in memory — that cache is what lets the conversation paint before the push transition
+        // finishes, and you reach this profile BY WAY OF that conversation, so it is warm exactly when
+        // you need it. Reading media out of it costs nothing, needs no connection, and answers on the
+        // first frame (user: "we are sending image but when i click profile all media I am not seeing…
+        // why need internet that section").
+        if let local = ThreadMessageCache.shared.messages(for: cid) {
+            let localMedia = local
+                .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                .flatMap { $0.expandedGalleryItems(cid: cid) }
+                .reversed()                       // cache is oldest-first; this strip is newest-first
+            if !localMedia.isEmpty { media = Array(localMedia) }
+        }
+        // Then the server, which sees further back than the in-memory window. A FAILED load returns nil
+        // and is ignored — it must never empty a strip that local knowledge already filled.
+        if let fresh = await ChatService.sharedMedia(cid) {
+            media = fresh
+            mediaHint = fresh.count   // authoritative: a chat whose media was deleted stops reserving
+        } else if !media.isEmpty {
+            mediaHint = media.count   // offline, but we know what we have
+        }
         loaded = true
     }
 }
@@ -385,7 +764,145 @@ struct SharedMediaGridView: View {
             .navigationTitle("Shared Media")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .fullScreenCover(item: $viewer) { ImageViewerView(message: $0, cid: cid) }
+            // `.album` scope: this grid registers no rects either, so the close falls back honestly
+            // instead of flying to a chat bubble hidden behind this sheet.
+            .fullScreenCover(item: $viewer) { ImageViewerView(message: $0, cid: cid, rectScope: .album) }
         }
+    }
+}
+
+// In-place profile-photo viewer (tap the hero avatar). Telegram model, per the user's request:
+// the circle GROWS out of the avatar, stays a circle the whole time, and closes back INTO the
+// avatar — never presented as a page/cover. While the finger holds and moves the photo (or
+// swipes down), the white theme backdrop melts away with drag distance so the profile shows
+// through behind; release far enough closes into the avatar, otherwise it springs back.
+// Chat media keeps its own always-black viewer — that's for real photos, this is a portrait.
+// Profile photos are plain URLs (not E2EE) served from the same DiskImageCache AvatarView
+// fills, so it opens instantly.
+private struct ProfilePhotoViewer: View {
+    /// Real window safe-area insets. The photo viewer draws full-bleed (its container ignores the safe
+    /// area), so SwiftUI reports zero insets inside it and chrome has to be positioned from these.
+    private var winInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .max(by: { $0.top < $1.top }) ?? .zero
+    }
+
+    let name: String
+    let photoUrl: String
+    let sourceFrame: CGRect          // the hero avatar, in global coords — morph start AND end
+    @Binding var isPresented: Bool
+    @State private var image: UIImage?
+    @State private var progress: CGFloat = 0   // 0 = sitting on the avatar, 1 = open in the center
+    @State private var drag: CGSize = .zero
+    @State private var zoom: CGFloat = 1
+    @State private var closing = false
+
+    // Solid page when open and resting; the DRAG is what melts the white (fully, not partially).
+    private var backdropOpacity: Double {
+        let dist = Double(sqrt(drag.width * drag.width + drag.height * drag.height))
+        return Double(progress) * max(0, 1 - dist / 260)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let origin = geo.frame(in: .global).origin
+            // Signal's exact sizing: AvatarViewController pins its CircleView to the view width minus
+            // 48 (24pt inset each side), with no upper cap — so on a wide phone the circle keeps
+            // growing instead of stopping at an arbitrary maximum, which is what our `min(…, 360)` did.
+            let d = geo.size.width - 48
+            // Interpolate the circle between the avatar's frame and the screen center.
+            let size = sourceFrame.width + (d - sourceFrame.width) * progress
+            let srcX = sourceFrame.midX - origin.x, srcY = sourceFrame.midY - origin.y
+            let x = srcX + (geo.size.width / 2 - srcX) * progress + drag.width
+            let y = srcY + (geo.size.height / 2 - srcY) * progress + drag.height
+            ZStack {
+                Color(.systemBackground).opacity(backdropOpacity).ignoresSafeArea()
+                    .onTapGesture { close() }
+                Group {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFill()
+                    } else {
+                        Color(.secondarySystemFill)   // placeholder keeps the morph shape while loading
+                    }
+                }
+                .frame(width: size, height: size)
+                .clipShape(Circle())   // round from first frame to last — it never becomes a page
+                .scaleEffect(zoom)
+                .position(x: x, y: y)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { if !closing { zoom = max(1, $0) } }
+                        .onEnded { _ in withAnimation(.spring(duration: 0.3)) { zoom = 1 } }
+                )
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { if zoom == 1, !closing, progress == 1 { drag = $0.translation } }
+                        .onEnded { v in
+                            guard zoom == 1, !closing else { return }
+                            // Signal's rule, matched exactly (MediaInteractiveDismiss): progress is the
+                            // straight-line distance over distanceToCompletion = 88, and `.ended`
+                            // finishes whenever `percentComplete > 0` — ANY real movement closes it,
+                            // cancel is effectively unreachable. Ours demanded 120pt before it would
+                            // let go, which is why closing felt like work next to theirs.
+                            let dist = sqrt(v.translation.width * v.translation.width
+                                            + v.translation.height * v.translation.height)
+                            if dist > 0 { close() }
+                            else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
+                        }
+                )
+            }
+            // Just the X (user spec): no name label — the photo is the subject, and the page's own
+            // back/Edit chrome is hidden while this is open so nothing else floats over it.
+            .overlay {
+                // ABSOLUTE placement from the true screen top, measured against Signal's own profile
+                // photo viewer: their close button's centre sits ~10pt below the safe-area top (69pt on
+                // a Dynamic Island device), hard against the 16pt leading margin.
+                //
+                // Padding was the wrong tool twice here. This overlay's container is neither the full
+                // screen nor safe-area-aligned, so `.padding(.top, 8)` put the button at ~121pt and
+                // adding winInsets.top on top of that pushed it to ~174pt - both far below Signal's
+                // 69pt. A GeometryReader that ignores the safe area gives a coordinate space whose
+                // origin IS the screen corner, so .position needs no assumptions about the container.
+                GeometryReader { _ in
+                    Button { close() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
+                            .liquidGlass(Circle(), interactive: true)   // other full-screen close button
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    // .position places the CENTRE. `winInsets.top + 10` therefore put the button's TOP
+                    // edge 14pt ABOVE the safe area (centre 10 below it, minus half of 48), which is
+                    // inside the status bar - the overlap the user reported. The safe-area top is exactly
+                    // the line chrome must not cross, so the button's top edge goes 8pt below it and the
+                    // centre follows: inset + 8 + half the button.
+                    .position(x: 16 + 24, y: winInsets.top + 8 + 24)
+                }
+                .ignoresSafeArea()
+                .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
+                .animation(.easeOut(duration: 0.15), value: drag == .zero)
+            }
+        }
+        .onAppear { withAnimation(.spring(duration: 0.38, bounce: 0.15)) { progress = 1 } }
+        .task {
+            if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
+            guard let url = URL(string: photoUrl),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let ui = UIImage(data: data) else { return }
+            DiskImageCache.shared.store(ui, data: data, for: photoUrl)
+            image = ui
+        }
+    }
+
+    // Close = the reverse morph: progress and drag animate home TOGETHER, so the circle flies
+    // from wherever the finger left it straight back into the avatar, shrinking as it goes.
+    // The overlay is removed only after the animation lands (the hidden avatar swaps back in).
+    private func close() {
+        guard !closing else { return }
+        closing = true
+        withAnimation(.spring(duration: 0.34, bounce: 0.12)) { progress = 0; drag = .zero; zoom = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { isPresented = false }
     }
 }

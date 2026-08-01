@@ -3,20 +3,19 @@ import Foundation
 // Generates standard call-progress tones as in-memory WAV data — no bundled assets.
 // Ringback: what the caller hears while waiting ("ring… ring…"). Busy: declined /
 // unavailable. Ended: a short descending two-beep when a connected call hangs up.
-// These mirror the call-state sounds big apps (WhatsApp/Signal) play.
+// These mirror the call-state sounds big messaging apps play.
 enum RingbackTone {
-    // Ringback (440+480 Hz). Tighter, more continuous cadence than the US standard
-    // (2s ring / 4s silence) — a 4s gap feels like the call went dead. We use 1.8s on /
-    // 1.2s off (3s cycle) so the caller hears a steady "ringing" while waiting, like
-    // WhatsApp. Looped forever by the player.
+    // Ringback (440+480 Hz), Signal-style cadence, user-tuned 2026-07-22: 1.8s ring / 3.4s quiet
+    // (5.2s cycle). The old 1.2s gap rang again too soon and sounded like one constant noise
+    // instead of a phone ringing. Looped forever by the player.
     static func wavData(sampleRate: Int = 8000) -> Data {
-        let cycle = 3.0
+        let cycle = 5.2
         let total = Int(Double(sampleRate) * cycle)   // one cadence cycle, looped by the player
         var samples = [Int16](repeating: 0, count: total)
         for i in 0..<total {
             let t = Double(i) / Double(sampleRate)
             let phase = t.truncatingRemainder(dividingBy: cycle)
-            if phase < 1.8 {   // 1.8s on, 1.2s off
+            if phase < 1.8 {   // 1.8s on, 3.4s off
                 let v = (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t)) / 2
                 samples[i] = Int16(max(-1, min(1, v)) * 11000)
             }

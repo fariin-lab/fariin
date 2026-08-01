@@ -13,6 +13,9 @@ struct KulanApp: App {
                 .tint(.primary)   // monochrome: no iOS system-blue anywhere
                 .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
                 .onOpenURL { url in handleDeepLink(url) }
+                // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
+                // resolve — put them back on the default rather than leave them with a broken icon.
+                .task { RetiredAppIcons.resetIfInUse() }
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await PresenceService.set(online: phase == .active) }
@@ -20,8 +23,17 @@ struct KulanApp: App {
     }
 
     // kulan://u/<handle> — open (or start) a chat with that user.
+    // kulan://g/<code>   — open the "Join group" sheet for an invite link.
     private func handleDeepLink(_ url: URL) {
-        guard url.scheme == "kulan", url.host == "u" else { return }
+        guard url.scheme == "kulan" else { return }
+        if url.host == "g" {
+            guard Flags.groupsEnabled else { return }
+            let code = url.pathComponents.last(where: { $0 != "/" }) ?? ""
+            guard !code.isEmpty else { return }
+            AppRouter.shared.pendingInviteCode = code
+            return
+        }
+        guard url.host == "u" else { return }
         let handle = url.pathComponents.last(where: { $0 != "/" }) ?? ""
         guard !handle.isEmpty else { return }
         Task {

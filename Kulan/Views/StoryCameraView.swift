@@ -3,7 +3,7 @@ import AVFoundation
 import UIKit
 import PhotosUI
 
-// Full-screen story camera (Snapchat/Instagram-style): live preview, capture, flip,
+// Full-screen story camera (standard story-camera style): live preview, capture, flip,
 // flash, zoom levels, and a library shortcut. Hands back JPEG Data on capture/pick.
 // NOTE: camera can't be exercised in CI — verify on a real device.
 
@@ -15,6 +15,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     private var input: AVCaptureDeviceInput?
     private(set) var position: AVCaptureDevice.Position = .back
     @Published var torchOn = false
+    @Published var denied = false   // camera access denied/restricted → the view shows a Settings prompt
     var onCapture: ((Data) -> Void)?
 
     private func device(for position: AVCaptureDevice.Position, ultraWide: Bool = false) -> AVCaptureDevice? {
@@ -40,7 +41,10 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-            guard granted, let self else { return }
+            guard let self else { return }
+            // Surface a denial instead of silently leaving a dead black preview.
+            DispatchQueue.main.async { self.denied = !granted }
+            guard granted else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 self.configureIfNeeded()
                 if !self.session.isRunning { self.session.startRunning() }
@@ -148,6 +152,23 @@ struct StoryCameraView: View {
                     .onChanged { scale in cam.zoomContinuous(baseZoom * scale) }
                     .onEnded { scale in baseZoom = max(1, baseZoom * scale) })
 
+            // Camera access denied/restricted → explain + route to Settings instead of a dead black screen.
+            if cam.denied {
+                VStack(spacing: 14) {
+                    Image(systemName: "camera.fill").font(.system(size: 34)).foregroundStyle(.white.opacity(0.6))
+                    Text("Camera access is off — enable it in Settings")
+                        .font(.subheadline).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.black)
+                    .padding(.horizontal, 18).padding(.vertical, 9)
+                    .background(.white, in: Capsule())
+                }
+                .padding(.horizontal, 40)
+            }
+
             VStack {
                 // Top: close + flash
                 HStack {
@@ -183,7 +204,7 @@ struct StoryCameraView: View {
                     PhotosPicker(selection: $libraryItem, matching: .images) { circleIcon("photo.on.rectangle") }
                     Spacer()
                     Button { onTextMode() } label: {
-                        Text("Aa").font(.system(size: 18, weight: .heavy)).foregroundStyle(.white)
+                        Text("Aa").font(.system(size: 18, weight: .heavy)).foregroundStyle(.primary)
                             .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
                     }
                     Spacer()
@@ -210,7 +231,7 @@ struct StoryCameraView: View {
     private func circleIcon(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .liquidGlass(Circle(), interactive: true)
     }

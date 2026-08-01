@@ -50,19 +50,14 @@ struct UserView: View {
                     }
                     Button { NotificationCenter.default.post(name: .init("storyActionShare"), object: nil) }
                         label: { Label("Share", systemImage: "square.and.arrow.up") }
-                    // My own story → red Delete; anyone else's → Hide Stories. (Button(role:) is iOS 15+, so
-                    // guard it for the library's iOS 14 deployment target; the app runs newer so it shows red.)
-                    if isMyStory {
-                        if #available(iOS 15.0, *) {
-                            Button(role: .destructive) { NotificationCenter.default.post(name: .init("storyActionDelete"), object: nil) }
-                                label: { Label("Delete Story", systemImage: "trash") }
-                        } else {
-                            Button { NotificationCenter.default.post(name: .init("storyActionDelete"), object: nil) }
-                                label: { Label("Delete Story", systemImage: "trash") }
-                        }
-                    } else {
+                    // No Delete here on my own story — the owner bar already has a trash button, so
+                    // it lived in two places. Others' stories keep Hide Stories.
+                    if !isMyStory {
                         Button { NotificationCenter.default.post(name: .init("storyActionHide"), object: nil) }
                             label: { Label("Hide Stories", systemImage: "eye.slash") }
+                        // Abuse reporting (App Store 1.2) — the host files the report doc.
+                        Button(role: .destructive) { NotificationCenter.default.post(name: .init("storyActionReport"), object: nil) }
+                            label: { Label("Report", systemImage: "exclamationmark.bubble") }
                     }
                 } label: {
                     Image(systemName: "ellipsis")

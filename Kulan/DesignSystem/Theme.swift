@@ -41,6 +41,10 @@ enum Theme {
     static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xE9E9EB) }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
     static func onAccent(_ dark: Bool) -> Color { dark ? .black : .white }
+    // Default outgoing-bubble colour when no custom Chat Color is picked. Apple systemBlue, which is a
+    // DIFFERENT value in light vs dark mode (brighter in dark so it pops on the dark background). White
+    // text/glyphs read well on both.
+    static func defaultBubble(_ dark: Bool) -> Color { dark ? Color(hex: 0x0A84FF) : Color(hex: 0x007AFF) }
     static let secondary = Color(hex: 0x8E8E93)
 }
 
@@ -69,24 +73,33 @@ extension View {
     /// `interactive: true` gives the same touch-reactive glass animation as the toolbar buttons.
     /// `tint:` gives a coloured Liquid Glass (e.g. the blue NEXT button) — still translucent glass,
     /// not a flat fill.
+    /// `enabled: false` turns the glass OFF without changing the view tree — for views that
+    /// must never unmount mid-gesture (e.g. the hold-to-record mic, whose glass would
+    /// otherwise melt into the neighbouring composer glass while scaled/dragged).
     @ViewBuilder
-    func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false, tint: Color? = nil) -> some View {
+    func liquidGlass(_ shape: some Shape = Capsule(), interactive: Bool = false, tint: Color? = nil, enabled: Bool = true) -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect({
+                guard enabled else { return Glass.identity }   // glass off, view tree unchanged
                 var g: Glass = .regular
                 if let tint { g = g.tint(tint) }
                 return interactive ? g.interactive() : g
             }(), in: shape)
         } else if let tint {
-            self.background(tint.opacity(0.85), in: shape).background(.ultraThinMaterial, in: shape)
+            self.background(tint.opacity(0.85).opacity(enabled ? 1 : 0), in: shape)
+                .background(.ultraThinMaterial.opacity(enabled ? 1 : 0), in: shape)
         } else {
-            self.background(.ultraThinMaterial, in: shape)
+            self.background(.ultraThinMaterial.opacity(enabled ? 1 : 0), in: shape)
         }
     }
 
-    /// Floats a bar at the bottom over the scroll content. iOS 26 uses `safeAreaBar`,
-    /// which adds the native glass dim behind it (content blurs/dims as it scrolls
-    /// under, like iMessage); older iOS falls back to `safeAreaInset` (floats, no dim).
+    /// Composer dock (build-292 model): `safeAreaBar` floats the composer OVER the messages so the content
+    /// and the chat wallpaper scroll UNDER it (Telegram/iMessage look) — the input reads as floating on top
+    /// of the conversation, not sitting on a solid strip. `safeAreaInset` was WRONG here: it reserves a
+    /// strip and pushes content ABOVE it, so behind the composer there was only the plain (white) app
+    /// background instead of the wallpaper/messages. safeAreaBar still grows the bottom safe area and rides
+    /// the keyboard, so the native content-inset (.always) keyboard model is unchanged. safeAreaInset is the
+    /// pre-iOS-26 fallback.
     @ViewBuilder
     func floatingBottomBar<C: View>(@ViewBuilder content: () -> C) -> some View {
         if #available(iOS 26.0, *) {
@@ -97,12 +110,40 @@ extension View {
     }
 }
 
+/// The app's standard 48pt Liquid Glass close button — a round X, used in toolbars in place of a
+/// "Cancel" text button (GIF picker, Edit Profile, wallpaper sheet) so every dismiss looks the same.
+struct CloseXButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 48, height: 48)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct AvatarView: View {
     let name: String
     var photoUrl: String?
     var size: CGFloat = 48
 
     @State private var image: UIImage?
+
+    init(name: String, photoUrl: String? = nil, size: CGFloat = 48) {
+        self.name = name
+        self.photoUrl = photoUrl
+        self.size = size
+        // FIRST-FRAME seed from the synchronous memory cache: without it every AvatarView
+        // renders the letter fallback for a beat before .task loads the (already cached)
+        // photo — the "blink" on the call screen's big 180pt avatar made it obvious.
+        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.memoryImage(u) {
+            _image = State(initialValue: warm)
+        }
+    }
 
     private var hasPhoto: Bool { (photoUrl?.isEmpty == false) }
     private var initial: String {
@@ -138,5 +179,23 @@ struct AvatarView: View {
     private var fallback: some View {
         LinearGradient(colors: AvatarPalette.gradient(for: name), startPoint: .topLeading, endPoint: .bottomTrailing)
             .overlay(Text(initial).font(.system(size: size * 0.42, weight: .bold)).foregroundColor(.white))
+    }
+}
+
+/// Google's multi-colour "G" mark, for the Google sign-in and connect rows. A plain letter "G" read
+/// as a placeholder next to Apple's real glyph, and there is no SF Symbol for it - Apple does not
+/// ship third-party brand logos, so this has to be a bundled image.
+///
+/// It lives in the ASSET CATALOG. It was previously a loose PNG in Resources/Brand, and
+/// `Image("google-g")` does not search subfolders, so it silently resolved to nothing and the row
+/// drew an empty gap where the logo should be.
+struct GoogleGIcon: View {
+    var size: CGFloat = 20
+    var body: some View {
+        Image("google-g")
+            .renderingMode(.original)   // keep Google's four colours, never tinted by the row
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
     }
 }

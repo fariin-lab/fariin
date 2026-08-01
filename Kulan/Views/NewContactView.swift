@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Add a contact — Telegram-style layout (First/Last Name card + identifier below). Kulan is
+// Add a contact — modern-style layout (First/Last Name card + identifier below). Kulan is
 // handle-based (no phone numbers), so the identifier is the @username. The name you type is saved
 // locally (ContactNames) and shown for them in your chat list + headers; we find them by username.
 struct NewContactView: View {
@@ -24,7 +24,7 @@ struct NewContactView: View {
                     header
                     ScrollView {
                         VStack(spacing: 22) {
-                            // Name card (First + Last) — Telegram style.
+                            // Name card (First + Last) — modern style.
                             VStack(spacing: 0) {
                                 field("First Name", text: $firstName, focus: .first, submit: .last)
                                 Divider().padding(.leading, 18)
@@ -100,7 +100,7 @@ struct NewContactView: View {
         working = true
         if let u = await ChatService.findByHandle(h), u.id != me {
             let full = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
-            if !full.isEmpty { ContactNames.set(full, for: u.id) }   // save the local display name
+            if !full.isEmpty { ContactNames.shared.set(full, for: u.id) }   // save the local display name
             let cid = ChatService.convId(me, u.id)
             try? await ChatService.openConversation(other: u)
             working = false

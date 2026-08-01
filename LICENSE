@@ -17,4 +17,10 @@ Unauthorized use, reproduction, or distribution of this code or any portion of
 it is strictly prohibited and may violate copyright, trade secret, and other
 laws, and may result in legal action.
 
+Third-party components included in this repository (for example, the StoryUI
+library under StoryUI/, MIT-licensed by Tolga Iskender) remain under their own
+licenses, which are preserved alongside them. The terms above apply to all
+Kulan-original code and content, including all modifications made to those
+components.
+
 For licensing inquiries, contact the copyright holder.

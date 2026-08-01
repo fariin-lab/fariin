@@ -1,6 +1,5 @@
 //
-// Direction-locked pan recognizer, cloned from Signal-iOS (SignalUI/Views/DirectionalPanGestureRecognizer.swift,
-// AGPL-3.0). It only begins if the first movement is in the allowed direction and cancels itself if the
+// Direction-locked pan recognizer. It only begins if the first movement is in the allowed direction and cancels itself if the
 // cross-axis dominates. We pair it with scrollView.panGestureRecognizer.require(toFail:) so the cube page
 // swipe and the swipe-down dismiss are mutually exclusive.
 //
@@ -24,37 +23,52 @@ struct PanDirection: OptionSet {
 final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
 
     let direction: PanDirection
+    private var startPoint: CGPoint?
 
     init(direction: PanDirection, target: AnyObject, action: Selector) {
         self.direction = direction
         super.init(target: target, action: action)
     }
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        startPoint = touches.first?.location(in: view)
+    }
+
+    override func reset() {
+        super.reset()
+        startPoint = nil
+    }
+
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        // Only start the gesture if the initial movement is in the specified direction.
-        if state == .possible {
-            guard let touch = touches.first else { return }
-            let previousLocation = touch.previousLocation(in: view)
-            let location = touch.location(in: view)
-            let deltaY = previousLocation.y - location.y
-            let deltaX = previousLocation.x - location.x
-
-            let isSatisfied: Bool = {
-                if abs(deltaY) > abs(deltaX) {
-                    if direction.contains(.up), deltaY < 0 { return true }
-                    if direction.contains(.down), deltaY > 0 { return true }
-                } else {
-                    if direction.contains(.left), deltaX < 0 { return true }
-                    if direction.contains(.right), deltaX > 0 { return true }
+        // Direction gate: judge the CUMULATIVE movement since touch-down, and only once the finger
+        // has clearly moved (≥8pt on the dominant axis). Judging the single latest inter-sample
+        // delta made the decision depend on micro-jitter: a slow drag sneaked in off a noisy
+        // sample while one big clean first sample from a fast flick failed the pan instantly
+        // ("fast swipe-down never closes"). Cumulative + threshold is stable at every speed.
+        if state == .possible, let touch = touches.first {
+            let loc = touch.location(in: view)
+            let start = startPoint ?? loc
+            let dx = loc.x - start.x   // + = finger moved right
+            let dy = loc.y - start.y   // + = finger moved down
+            let ax = abs(dx), ay = abs(dy)
+            if max(ax, ay) >= 8 {
+                // Only judge once one axis CLEARLY dominates (1.2×). Hard-failing on an ambiguous
+                // diagonal first sample killed whole drags dead — a finger that rolls slightly
+                // sideways at touch-down then pulls straight down never got the pan back ("scroll
+                // down to close sometimes completely not working"). Ambiguous → keep sampling; the
+                // .began velocity axis-check below still catches anything that slips through.
+                if ay > ax * 1.2 {
+                    // Clearly vertical: right direction begins, wrong direction fails (frees the tap
+                    // zones / the app's swipe-up).
+                    let ok = (direction.contains(.down) && dy > 0) || (direction.contains(.up) && dy < 0)
+                    if !ok { state = .failed; return }
+                } else if ax > ay * 1.2 {
+                    // Clearly horizontal: fail NOW so the cube pager (require(toFail:) on us) can
+                    // begin instantly — no sticky paging.
+                    let ok = (direction.contains(.left) && dx < 0) || (direction.contains(.right) && dx > 0)
+                    if !ok { state = .failed; return }
                 }
-                return false
-            }()
-
-            guard isSatisfied else {
-                // Clearly off-axis movement: fail NOW instead of lingering in .possible, so a scroll view
-                // that did require(toFail:) us (the cube pager) can begin instantly (no sticky paging).
-                if abs(deltaX) > 0.5 || abs(deltaY) > 0.5 { state = .failed }
-                return
             }
         }
 

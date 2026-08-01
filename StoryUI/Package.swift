@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "StoryUI",
-    platforms: [.iOS(.v14)],
+    platforms: [.iOS(.v15)],   // app is iOS 26; v15 unlocks @FocusState (reply focus) with no downside
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(

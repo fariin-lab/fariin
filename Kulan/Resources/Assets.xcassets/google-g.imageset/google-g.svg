@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Google "G" mark, as used on Sign in with Google buttons (Google's branding guidelines require
+       their own mark on that button). Four arc segments plus the blue crossbar - NOT a filled disc,
+       which is what the previous bitmap looked like. -->
+  <path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64l7.11 5.52c4.15-3.82 6.56-9.45 6.56-16.17z"/>
+  <path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07l-7.4 5.73C7.85 41.53 15.35 46 24 46z"/>
+  <path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18l-7.4-5.73C2.83 17.07 2 20.43 2 24s.83 6.93 2.29 9.91l7.4-5.73z"/>
+  <path fill="#EA4335" d="M24 9.5c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 2.92 29.93 1 24 1 15.35 1 7.85 5.47 4.29 12.09l7.4 5.73C13.42 12.62 18.27 9.5 24 9.5z"/>
+</svg>

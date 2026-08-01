@@ -1,8 +1,11 @@
 import SwiftUI
 import LocalAuthentication
+import UIKit
 
 struct RootView: View {
-    enum Phase { case loading, onboarding, main }
+    // Equatable must be DECLARED now: Swift synthesises it automatically only for enums with no
+    // associated values, and `.restore` added two. onChange(of: phase) depends on it.
+    enum Phase: Equatable { case loading, welcome, onboarding, main, restore(handle: String, due: Date) }
     @State private var phase: Phase = .loading
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
@@ -11,6 +14,9 @@ struct RootView: View {
     @AppStorage("screenSecurity") private var screenSecurity = false
     @State private var locked = false
     @State private var backgroundedAt: Date?
+    // Someone signed this phone out from Settings › Devices on another phone.
+    @ObservedObject private var devices = DeviceRegistry.shared
+    @State private var showRevokedNotice = false
 
     var body: some View {
         ZStack {
@@ -21,14 +27,28 @@ struct RootView: View {
                 // screen so boot feels instant, like other chat apps. No "loading" UI.
                 Text("Kulan").font(.system(size: 40, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
+            case .welcome:
+                // Signed out → the front door (Apple / Google / email). After any door
+                // succeeds, route() decides onboarding (new account) vs main (returning).
+                WelcomeView(onAuthed: { Task { await route() } },
+                            onDemo: { phase = .main })
             case .onboarding:
                 OnboardingView { phase = .main }
+            case .restore(let handle, let due):
+                // A scheduled-for-deletion account cannot enter the app: it is hidden from everyone
+                // else, so being half-inside it would be worse than either choice. Restore or finish.
+                RestoreAccountView(handle: handle, scheduledFor: due,
+                                   onRestored: { Task { await route() } },
+                                   onDeletedNow: { Task { await route() } })
             case .main:
                 // Root-level call container so an active call (full screen or top mini
                 // bar) lives above every screen and survives all navigation.
                 CallContainer {
                     MainShell(onSignOut: { Task { await route() } })
                 }
+                // Our own message banner, mounted once here so it rides above every screen. It sits
+                // UNDER the call screen on purpose: a call already owns the whole display.
+                .inAppBanner()
             }
 
             // Screen security: blank the app preview in the app switcher.
@@ -40,7 +60,30 @@ struct RootView: View {
             if locked { LockScreen { authenticate() } }
         }
         .task { await route() }
+        // PREVIEW ONLY (Debug builds — Appetize): a fresh preview account is empty, so seed a demo
+        // story once we reach the main app, so the Story feature (and the viewers swipe) is testable
+        // in the browser. Stripped from TestFlight/App Store (Release), so real users never see it.
+        .onChange(of: phase) { _, new in
+            #if DEBUG
+            if new == .main && !DemoMode.active { Task { await seedPreviewStoryIfNeeded() } }
+            #endif
+        }
         .onAppear { if lockEnabled { locked = true; authenticate() } }
+        // Remote sign-out: our own device record was deleted from another phone. Same teardown
+        // as tapping Sign Out here, then back to the front door with a word about why.
+        .onChange(of: devices.revoked) { _, revoked in
+            guard revoked else { return }
+            Task {
+                await DeviceRegistry.shared.performRevokedSignOut()
+                await route()
+                showRevokedNotice = true
+            }
+        }
+        .alert("Signed out", isPresented: $showRevokedNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This device was signed out from another device.")
+        }
         .onChange(of: scenePhase) { _, new in
             if new == .background {
                 backgroundedAt = Date()
@@ -71,17 +114,83 @@ struct RootView: View {
 
     private func route() async {
         phase = .loading
-        await AuthService.shared.bootstrap()
+        await AuthService.shared.bootstrap()   // adopts an existing session, creates nothing
+        // Signed out (fresh install, or after sign-out) → the account doors. Existing
+        // anonymous testers still have their session, so they never see this screen.
+        guard AuthService.shared.isSignedIn else {
+            phase = .welcome
+            return
+        }
+        // Returning user: boot INSTANTLY from the on-disk cache (the WhatsApp model).
+        // Launch must never wait on the network — offline, each awaited server call
+        // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
+        // is Keychain-only now, so the whole fast path is local.
+        if await ProfileStore.shared.loadCachedMine() {
+            // Deliberately re-checked from the SERVER before using the cache: the deletion may have
+            // been scheduled on another device, and the cached copy would happily let them in.
+            if let due = await ProfileStore.shared.scheduledDeletionDate() {
+                phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
+                return
+            }
+            try? await Crypto.shared.ensureReady()
+            Push.register(); Push.saveVoipToken()
+            DeviceRegistry.shared.start()   // record this phone in Settings › Devices, and watch for a remote sign-out
+            phase = .main
+            Task {   // background refresh + key self-heal, off the boot path
+                await ProfileStore.shared.loadMine()
+                await Crypto.shared.publishPublicKey()
+            }
+            return
+        }
+        // First run (nothing cached yet): the original network path decides
+        // onboarding vs main, and publishes the key once the profile doc exists —
+        // self-heals accounts that failed to publish on a first launch (otherwise
+        // others can never message them: "hasn't set up encryption yet").
         try? await Crypto.shared.ensureReady()
         await ProfileStore.shared.loadMine()
-        // Re-publish the public key now that the profile doc exists — self-heals
-        // accounts that failed to publish on a first launch (otherwise others can
-        // never message them: "hasn't set up encryption yet").
         await Crypto.shared.publishPublicKey()
+        if let due = ProfileStore.shared.me?.deletionScheduledFor, due > Date() {
+            phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
+            return
+        }
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
-        if ready { Push.register(); Push.saveVoipToken() }   // notifications + VoIP token now that we're signed in
+        if ready {
+            Push.register(); Push.saveVoipToken()   // notifications + VoIP token now that we're signed in
+            DeviceRegistry.shared.start()
+        }
         phase = ready ? .main : .onboarding
     }
+
+    #if DEBUG
+    // Seed one demo story on a fresh PREVIEW account (Appetize) so the app isn't empty and the Story
+    // viewer / swipe-up can be tried. Debug-only: never compiled into the Release (TestFlight/App Store) build.
+    private func seedPreviewStoryIfNeeded() async {
+        await StoriesRepository.shared.load(force: true)
+        guard StoriesRepository.shared.mine?.stories.isEmpty ?? true else { return }   // seed once
+        guard let data = Self.makeDemoStoryImage() else { return }
+        StoriesService.shared.postStoryBackground(image: data, caption: "Demo story — swipe up to see viewers")
+    }
+
+    private static func makeDemoStoryImage() -> Data? {
+        let size = CGSize(width: 1080, height: 1920)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            let cg = ctx.cgContext
+            let colors = [UIColor.systemPurple.cgColor, UIColor.systemBlue.cgColor] as CFArray
+            if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                cg.drawLinearGradient(g, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
+            }
+            let text = "Demo\nStory" as NSString
+            let p = NSMutableParagraphStyle(); p.alignment = .center
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: UIColor.white,
+                .font: UIFont.systemFont(ofSize: 140, weight: .heavy),
+                .paragraphStyle: p,
+            ]
+            text.draw(in: CGRect(x: 0, y: size.height/2 - 180, width: size.width, height: 400), withAttributes: attrs)
+        }
+        return img.jpegData(compressionQuality: 0.85)
+    }
+    #endif
 }
 
 // Full-screen lock shown when App Lock is on.
@@ -110,47 +219,99 @@ struct OnboardingView: View {
     @State private var handle = ""
     @State private var saving = false
     @State private var error: String?
+    private enum Field { case name, handle }
+    @FocusState private var focus: Field?
+
+    // Live username validity (client-side only — the taken/not check runs on Continue).
+    private var handleValid: Bool { ChatService.isValidHandle(ChatService.sanitizeHandle(handle)) }
+    private var canContinue: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && handleValid && !saving
+    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("Your name", text: $name)
-                        .textInputAutocapitalization(.words)
-                    HStack(spacing: 1) {
-                        Text("@").foregroundStyle(.secondary)
-                        TextField("Username", text: $handle)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .onChange(of: handle) { _, v in
-                                let clean = ChatService.sanitizeHandle(v)
-                                if clean != v { handle = clean }
-                            }
-                    }
-                } header: {
+        // Last step of the sign-up flow, so it wears the flow's skin: pinned light, same
+        // palette and pills as Welcome/Apple/Google/Email (see AuthFlowViews).
+        ZStack {
+            AuthPalette.page.ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer().frame(height: 24)
+
+                    // Live avatar preview: their initials + hashed color, exactly how they'll appear
+                    // to everyone else. Fills in as they type, so the profile feels theirs immediately.
+                    AvatarView(name: name.isEmpty ? "?" : name, size: 84)
+                        .overlay(Circle().strokeBorder(AuthPalette.hairline, lineWidth: 1))
+                        .animation(.easeOut(duration: 0.2), value: name)
+
                     Text("Create your profile")
-                } footer: {
-                    Text("Username: letters, numbers and _ only, 3–24 characters.")
-                }
-                if let error {
-                    Section { Text(error).foregroundStyle(.red) }
-                }
-            }
-            .navigationTitle("Welcome to Kulan")
-            .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 12) {
+                        .font(.system(size: 23, weight: .bold)).foregroundStyle(.primary)
+                        .padding(.top, 16)
+                    Text("This is how people will find and know you on Kulan.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 5).padding(.horizontal, 24)
+
+                    VStack(spacing: 14) {
+                        field("YOUR NAME") {
+                            TextField("", text: $name,
+                                      prompt: Text("e.g. Amina Yusuf").foregroundStyle(.tertiary))
+                                .textInputAutocapitalization(.words)
+                                .focused($focus, equals: .name)
+                                .submitLabel(.next)
+                                .onSubmit { focus = .handle }
+                        }
+
+                        field("USERNAME", accessory: {
+                            // Inline validity tick, so the rules are felt rather than read.
+                            if !handle.isEmpty {
+                                Image(systemName: handleValid ? "checkmark.circle.fill" : "circle.dashed")
+                                    .foregroundStyle(handleValid ? Color.green : Color.secondary)
+                                    .font(.system(size: 17))
+                            }
+                        }) {
+                            HStack(spacing: 2) {
+                                Text("@").foregroundStyle(.secondary)
+                                TextField("", text: $handle,
+                                          prompt: Text("username").foregroundStyle(.tertiary))
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                    .focused($focus, equals: .handle)
+                                    .submitLabel(.done)
+                                    .onChange(of: handle) { _, v in
+                                        let clean = ChatService.sanitizeHandle(v)
+                                        if clean != v { handle = clean }
+                                    }
+                            }
+                        }
+
+                        Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.top, 26)
+
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 14)
+                    }
+
+                    Spacer(minLength: 28)
+
                     Button {
                         Task { await save() }
                     } label: {
-                        if saving {
-                            ProgressView().frame(maxWidth: .infinity)
-                        } else {
-                            Text("Continue").fontWeight(.semibold).frame(maxWidth: .infinity)
+                        Group {
+                            if saving {
+                                ProgressView().tint(AuthPalette.page)   // spinner reads on the filled pill
+                            } else {
+                                Text("Continue")
+                            }
                         }
+                        .authPrimaryPill()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(saving)
+                    .disabled(!canContinue)
+                    .opacity(canContinue ? 1 : 0.5)
+                    .animation(.easeOut(duration: 0.15), value: canContinue)
 
                     // App Store Guideline 1.2: users must agree to the terms (which
                     // include a zero-tolerance policy for objectionable content and
@@ -160,18 +321,61 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .tint(.primary)
+                        .padding(.top, 14)
+                    #if DEBUG
+                    Text("Preview: type **apple** in either field, then Continue, to load a demo account.")
+                        .font(.caption2).foregroundStyle(.blue).multilineTextAlignment(.center)
+                        .padding(.top, 8)
+                    #endif
                 }
-                .padding()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .preferredColorScheme(.light)
+        .onAppear {
+            // Apple hands over the person's name exactly once, at first authorization —
+            // prefill it so they just pick a username.
+            if name.isEmpty, let n = AuthService.shared.pendingDisplayName { name = n }
+        }
+    }
+
+    // Labelled field box, same shape language as the email sign-up screen.
+    private func field<C: View, A: View>(_ label: String,
+                                         @ViewBuilder accessory: () -> A = { EmptyView() },
+                                         @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(label).font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                .tracking(0.6)
+            HStack(spacing: 8) {
+                content()
+                    .font(.system(size: 17))
+                    .foregroundStyle(.primary)
+                accessory()
+            }
+            .padding(.horizontal, 16).frame(height: 50)
+            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
     private func save() async {
+        #if DEBUG
+        // Preview demo login (Appetize): "apple" loads a fully-local demo account (stories + chats)
+        // with no Firebase, so the app can be tried where Storage uploads don't work. Debug-only.
+        // Accept it in EITHER field (name or username), trimmed — so a wrong-field tap still works.
+        let nameTrim = name.trimmingCharacters(in: .whitespaces).lowercased()
+        if handle.lowercased() == "apple" || nameTrim == "apple" {
+            // Firebase-free demo: DemoMode.activate() sets AuthService.shared.uid itself.
+            await MainActor.run { DemoMode.activate(); onDone() }
+            return
+        }
+        #endif
         let n = name.trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }
         guard ChatService.isValidHandle(h) else {
-            error = "Username: letters, numbers and _ only, 3–24 characters"; return
+            error = "Username: letters, numbers and _ only, 3–30 characters"; return   // matches Limits.usernameMaxChars
         }
         saving = true; error = nil
         do {

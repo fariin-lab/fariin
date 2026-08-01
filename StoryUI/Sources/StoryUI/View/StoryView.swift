@@ -24,7 +24,7 @@ public struct StoryView: View {
     let onItemSeen: ((String) -> Void)?      // fires each individual story id as it becomes visible
     let onDrag: ((CGFloat) -> Void)?         // swipe-down amount (so the host can hide its overlays)
     let showMore: Bool                      // show the header "…" dropdown menu
-    let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet (Telegram)
+    let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet
     let onSwipeUpChanged: ((CGFloat) -> Void)?   // live upward drag amount → real-time sheet open
     let onSwipeUpEnded: ((CGFloat, CGFloat) -> Void)?   // (translation +up, velocity +up) on release
     let dismissEnabled: Bool               // install the library's native DOWN swipe-down-to-dismiss pan
@@ -82,7 +82,16 @@ public struct StoryView: View {
                 onItemSeen: onItemSeen,
                 showMore: showMore,
                 onDragChanged: { dy in onDrag?(dy) },   // fade the host overlays as the card slides
-                onCommit: { isPresented = false },      // card already animated off in UIKit; remove the cover
+                // Swipe-commit close: the card has ALREADY slid off in UIKit, so remove the cover with
+                // NO dismissal animation. Letting the host's zoom-back transition play here re-laid-out
+                // the still-mounted story content into the shrinking cover frame — image and reply bar
+                // exploded across a stretched black card for ~0.3s on every fast-flick close. The hero
+                // zoom-back stays for the X button / auto-close (they dismiss via other paths).
+                onCommit: {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { isPresented = false }
+                },
                 onCancel: { onDrag?(0) },               // sprang back; restore overlays
                 onSwipeUp: { onSwipeUp?() },            // up-swipe → host opens the views sheet
                 onSwipeUpChanged: { up in onSwipeUpChanged?(up) },

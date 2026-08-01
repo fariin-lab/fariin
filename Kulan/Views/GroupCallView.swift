@@ -31,7 +31,10 @@ struct GroupCallView: View {
 
     private var header: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button {
+                service.minimized = true   // NOT ending the call: the green return bar takes over
+                dismiss()
+            } label: {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)
                     .frame(width: 38, height: 38).background(.white.opacity(0.15), in: Circle())
             }
@@ -85,16 +88,30 @@ struct GroupCallView: View {
         HStack(spacing: 20) {
             ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
             ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
-            ctrl("phone.down.fill", bg: .red) { service.end() }
+            routeCtrl
+            ctrl("phone.down.fill", tint: Color(.systemRed)) { service.end() }
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
     }
 
-    private func ctrl(_ icon: String, bg: Color = Color.white.opacity(0.2), action: @escaping () -> Void) -> some View {
+    // Native audio-route button (the system route picker): group calls run on speaker by default;
+    // this lets you move the call to AirPods/Bluetooth/earpiece through the system sheet.
+    private var routeCtrl: some View {
+        ZStack {
+            Image(systemName: "speaker.wave.2.fill").font(.title3).foregroundStyle(.primary)
+                .frame(width: 54, height: 54)
+                .liquidGlass(Circle(), interactive: true)
+            AudioRoutePicker().frame(width: 54, height: 54).clipShape(Circle())
+        }
+    }
+
+    private func ctrl(_ icon: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon).font(.title3).foregroundStyle(.white)
-                .frame(width: 54, height: 54).background(bg, in: Circle())
+                .frame(width: 54, height: 54)
+                // Real Liquid Glass circles (was a flat white-20% fill); end button = red glass.
+                .liquidGlass(Circle(), interactive: true, tint: tint)
         }
     }
 }

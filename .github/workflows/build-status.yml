@@ -42,4 +42,49 @@ jobs:
               comp = "MISSING (answer!)" if enc is None else ("set: exempt" if enc is False else "set: uses-encryption")
               print(f"{a['version']:>6}  {str(a.get('processingState')):<11} {comp:<16} {str(a.get('expired')):<7} {a.get('uploadedDate')}")
           print("\nInstallable = processing VALID AND compliance not MISSING.")
+
+          # WHY A VALID BUILD CAN STILL BE INVISIBLE IN THE TESTFLIGHT APP. Processing and compliance
+          # only decide whether the build is USABLE; what decides whether a tester SEES it is whether
+          # it has been given to a group. A build with no groups sits in App Store Connect looking
+          # perfectly healthy and never reaches anyone's phone, which is indistinguishable from "the
+          # upload failed" unless you ask this question.
+          # WHAT ACTUALLY DECIDES WHETHER A BUILD APPEARS IN THE TESTFLIGHT APP.
+          #
+          # `processingState` only says the binary is usable. The field that says a tester can INSTALL it
+          # is buildBetaDetail.internalBuildState — a build can be VALID and still sit at
+          # PROCESSING/MISSING_EXPORT_COMPLIANCE there. Groups matter too, but they are not the whole
+          # story: a build can be visible without appearing in the betaGroups relationship, so reading
+          # only that led to the wrong conclusion once already.
+          print("\nPer build: install state, groups, testers")
+          for b in r.get("data", []):
+              bid, ver = b["id"], b["attributes"]["version"]
+              # SAY WHEN THE REQUEST FAILED. This used to swallow any non-200 into an empty dict, so a
+              # rate-limited or errored call was reported as "internal=None" — indistinguishable from a
+              # build genuinely not set up for testing. That is not a small nicety: it produced a
+              # confident wrong diagnosis twice, and the giveaway was build 399 reading IN_BETA_TESTING
+              # in one run and None in the next, which no real build state can do.
+              def rel(path, params=None):
+                  try:
+                      resp = requests.get(f"{BASE}/builds/{bid}/{path}", headers=H, params=params or {})
+                      if resp.status_code != 200:
+                          print(f"      ! {path} HTTP {resp.status_code}: {resp.text[:200]}")
+                          return {}
+                      return resp.json()
+                  except Exception as e:
+                      print(f"      ! {path} EXCEPTION: {e}")
+                      return {}
+              detail = (rel("buildBetaDetail").get("data") or {}).get("attributes", {})
+              groups = rel("betaGroups", {"fields[betaGroups]": "name,isInternalGroup"}).get("data", [])
+              testers = rel("individualTesters", {"limit": 5}).get("data", [])
+              locs = rel("betaBuildLocalizations", {"fields[betaBuildLocalizations]": "whatsNew"}).get("data", [])
+              names = ", ".join(
+                  f"{g['attributes'].get('name')}"
+                  f"{'(int)' if g['attributes'].get('isInternalGroup') else '(ext)'}"
+                  for g in groups) or "none"
+              print(f"  {ver:>4}: internal={detail.get('internalBuildState')} "
+                    f"external={detail.get('externalBuildState')} "
+                    f"autoNotify={detail.get('autoNotifyEnabled')} "
+                    f"groups=[{names}] individualTesters={len(testers)} whatsNew={len(locs)}")
+          print("\nVisible to internal testers = internal IN_BETA_TESTING. "
+                "internal=None means Apple has not finished setting the build up for testing yet.")
           PY

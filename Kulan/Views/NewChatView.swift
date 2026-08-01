@@ -27,7 +27,9 @@ struct NewChatView: View {
 
     // People you've chatted with, grouped by first letter (A–Z, then "#").
     private var sections: [(letter: String, convs: [Conversation])] {
-        let all = convRepo.conversations.filter { !$0.isCleared(me) }
+        // 1:1 people only — a group here rendered as a person (first member's name/photo)
+        // and opened the group mislabeled.
+        let all = convRepo.conversations.filter { !$0.isCleared(me) && !$0.isGroup }
         let grouped = Dictionary(grouping: all) { c -> String in
             let n = c.name(for: me).trimmingCharacters(in: .whitespaces).uppercased()
             guard let f = n.first, f.isLetter else { return "#" }
@@ -45,8 +47,10 @@ struct NewChatView: View {
                 List {
                     if query.isEmpty {
                         Section {
-                            Button { showNewGroup = true } label: { actionRow("person.2.fill", "New group") }
-                                .tint(.primary)
+                            if Flags.groupsEnabled {
+                                Button { showNewGroup = true } label: { actionRow("person.2.fill", "New group") }
+                                    .tint(.primary)
+                            }
                             Button { showNewContact = true } label: { actionRow("person.crop.circle.badge.plus", "New contact") }
                                 .tint(.primary)
                         }
@@ -56,9 +60,15 @@ struct NewChatView: View {
                     if !query.isEmpty {
                         Section("Results") {
                             ForEach(results) { user in
+                                // Search finds STRANGERS — honor their Profile Picture audience
+                                // (photo hidden unless they allow non-contacts; a shared chat
+                                // qualifies as contact).
                                 Button { start(user) } label: {
                                     personRow(name: user.name.isEmpty ? user.handle : user.name,
-                                              handle: user.handle, photo: user.photoUrl)
+                                              handle: user.handle,
+                                              photo: PrivacyPrefs.allows(user.privacy, "photo",
+                                                                          contactOfMine: PrivacyPrefs.isContact(user.id))
+                                                     ? user.photoUrl : nil)
                                 }
                             }
                             if results.isEmpty {
@@ -70,8 +80,8 @@ struct NewChatView: View {
                             }
                         }
                     } else if sections.isEmpty {
-                        ContentUnavailableView("Start a new chat", systemImage: "square.and.pencil",
-                                               description: Text("Search a username to message someone."))
+                        EmptyStateView(title: "Start a new chat", icon: "square.and.pencil",
+                                       text: "Search a username to message someone.")
                     } else {
                         ForEach(sections, id: \.letter) { section in
                             Section(section.letter) {

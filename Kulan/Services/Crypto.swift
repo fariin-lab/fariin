@@ -55,8 +55,17 @@ final class Crypto {
 
     private let sodium = Sodium()
     private let db = Firestore.firestore()
-    private static let skKeychainKey = "kulan_secret_key_v1"
-    private static let pkKeychainKey = "kulan_public_key_v1"
+    // Legacy APP-SCOPED key names (one keypair per device, whoever was signed in). Kept only so
+    // existing installs can migrate their real key to the per-uid slot below — see initKeys().
+    private static let legacySkKey = "kulan_secret_key_v1"
+    private static let legacyPkKey = "kulan_public_key_v1"
+
+    // PER-ACCOUNT keys. Scoping by uid is what makes sign-out safe: a different account simply
+    // finds no entry and generates its own keypair, so we no longer have to DELETE keys on
+    // sign-out — which used to make every past message permanently unreadable if you ever signed
+    // back into the same account.
+    private static func skKeychainKey(_ uid: String) -> String { "kulan_secret_key_v1.\(uid)" }
+    private static func pkKeychainKey(_ uid: String) -> String { "kulan_public_key_v1.\(uid)" }
 
     // In-memory key state (set by ensureReady / preloadKey; read by the sync `decrypt`).
     private var myPublicKey: Bytes?
@@ -64,10 +73,48 @@ final class Crypto {
     private var pubCache: [String: Bytes] = [:]
     private let lock = NSLock()                 // guards pubCache for the sync decrypt path
     private var readyTask: Task<Void, Error>?
+    private var didWarm = false                 // one-time synchronous warm on the first decrypt
+    private static let pubKeysDefaultsKey = "crypto.pubKeys.v1"   // disk cache of others' PUBLIC keys (not secret)
 
     var isReady: Bool { mySecretKey != nil }
 
     private func currentUid() -> String? { Auth.auth().currentUser?.uid }
+
+    // Persist a peer's PUBLIC key to disk (public keys are not secret) so decrypt works on the FIRST
+    // render after a cold launch instead of showing "…" until the network fetch lands.
+    private func persistPubKey(_ uid: String, _ key: Bytes) {
+        var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
+        let b64 = Data(key).base64EncodedString()
+        guard dict[uid] != b64 else { return }
+        dict[uid] = b64
+        UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+    }
+
+    // One-time synchronous warm start, run lazily on the first decrypt (the chat-list render): load the
+    // existing keypair from the Keychain and every peer's persisted public key from disk. No network, no
+    // key generation — just enough to decrypt the last-message previews immediately (fixes the "…" flash
+    // where the chat list rendered before the async initKeys + network key fetches completed).
+    private func warmIfNeeded() {
+        lock.withLock {
+            guard !didWarm else { return }
+            didWarm = true
+            if let dict = UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String] {
+                for (uid, b64) in dict where pubCache[uid] == nil {
+                    if let d = Data(base64Encoded: b64) { pubCache[uid] = Bytes(d) }
+                }
+            }
+            // Per-account keys: only load a key when we know WHOSE it is (loading blind could
+            // hand one account another account's identity).
+            if mySecretKey == nil, let uid = currentUid(),
+               let skB64 = Keychain.get(Self.skKeychainKey(uid)) ?? Keychain.get(Self.legacySkKey),
+               let pkB64 = Keychain.get(Self.pkKeychainKey(uid)) ?? Keychain.get(Self.legacyPkKey),
+               let sk = Data(base64Encoded: skB64), let pk = Data(base64Encoded: pkB64),
+               sk.count == sodium.box.SecretKeyBytes {
+                mySecretKey = Bytes(sk); myPublicKey = Bytes(pk)
+                pubCache[uid] = Bytes(pk)
+            }
+        }
+    }
 
     // MARK: - Setup
 
@@ -98,15 +145,29 @@ final class Crypto {
                           userInfo: [NSLocalizedDescriptionKey: "ensureReady() called before sign-in"])
         }
 
-        // Load existing keypair from Keychain, or generate + persist a new one.
+        // Load THIS ACCOUNT's keypair from the Keychain, or generate + persist a new one.
         let skBytes: Bytes, pkBytes: Bytes
-        if let skB64 = Keychain.get(Self.skKeychainKey),
-           let pkB64 = Keychain.get(Self.pkKeychainKey),
+        if let skB64 = Keychain.get(Self.skKeychainKey(uid)),
+           let pkB64 = Keychain.get(Self.pkKeychainKey(uid)),
            let sk = Data(base64Encoded: skB64),
            let pk = Data(base64Encoded: pkB64),
            sk.count == sodium.box.SecretKeyBytes {
             skBytes = Bytes(sk)
             pkBytes = Bytes(pk)
+        } else if let skB64 = Keychain.get(Self.legacySkKey),
+                  let pkB64 = Keychain.get(Self.legacyPkKey),
+                  let sk = Data(base64Encoded: skB64),
+                  let pk = Data(base64Encoded: pkB64),
+                  sk.count == sodium.box.SecretKeyBytes {
+            // MIGRATION (one-time, existing installs): the device-wide key belongs to whoever is
+            // signed in right now — that's this uid. Claim it into their per-account slot so their
+            // history stays readable, then drop the legacy entry so no LATER account can adopt it.
+            skBytes = Bytes(sk)
+            pkBytes = Bytes(pk)
+            Keychain.set(Self.skKeychainKey(uid), skB64)
+            Keychain.set(Self.pkKeychainKey(uid), pkB64)
+            Keychain.delete(Self.legacySkKey)
+            Keychain.delete(Self.legacyPkKey)
         } else {
             guard let kp = sodium.box.keyPair() else {
                 throw NSError(domain: "Crypto", code: 2,
@@ -114,19 +175,26 @@ final class Crypto {
             }
             skBytes = kp.secretKey
             pkBytes = kp.publicKey
-            Keychain.set(Self.skKeychainKey, Data(kp.secretKey).base64EncodedString())
-            Keychain.set(Self.pkKeychainKey, Data(kp.publicKey).base64EncodedString())
+            Keychain.set(Self.skKeychainKey(uid), Data(kp.secretKey).base64EncodedString())
+            Keychain.set(Self.pkKeychainKey(uid), Data(kp.publicKey).base64EncodedString())
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
 
-        // Publish my public key so others can encrypt to me.
+        // Publish my public key so others can encrypt to me. Fire-and-forget: the
+        // keypair is already usable locally (set above), and blocking here made a
+        // no-network cold start hang ~10s on the server timeout. publishPublicKey()
+        // self-heals on every launch, so a lost publish is retried next open.
         let myPubB64 = Data(pkBytes).base64EncodedString()
+        Task { await Self.publishKeyIfChanged(db: db, uid: uid, b64: myPubB64) }
+    }
+
+    private static func publishKeyIfChanged(db: Firestore, uid: String, b64: String) async {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
-            if (snap.data()?["publicKey"] as? String) != myPubB64 {
+            if (snap.data()?["publicKey"] as? String) != b64 {
                 try await db.collection("users").document(uid)
-                    .setData(["publicKey": myPubB64], merge: true)
+                    .setData(["publicKey": b64], merge: true)
             }
         } catch {
             print("crypto: publishing public key failed:", error)
@@ -140,29 +208,76 @@ final class Crypto {
     func publishPublicKey() async {
         do { try await ensureReady() } catch { return }
         guard let uid = currentUid(), let pk = myPublicKey else { return }
-        let b64 = Data(pk).base64EncodedString()
-        do {
-            let snap = try await db.collection("users").document(uid).getDocument()
-            if (snap.data()?["publicKey"] as? String) != b64 {
-                try await db.collection("users").document(uid)
-                    .setData(["publicKey": b64], merge: true)
-            }
-        } catch {
-            print("crypto: publishPublicKey failed:", error)
-        }
+        await Self.publishKeyIfChanged(db: db, uid: uid, b64: Data(pk).base64EncodedString())
     }
+
+    /// Sign-out: forget the in-memory E2EE identity so the next account starts clean.
+    ///
+    /// The KEYCHAIN KEY IS DELIBERATELY KEPT. Keys are per-uid now, so the next account
+    /// simply finds no entry of its own and generates a fresh keypair — which is what deleting
+    /// used to accomplish. Deleting was also destroying history: signing out and back into the
+    /// SAME account regenerated a keypair and republished it, leaving every earlier message
+    /// permanently undecryptable. Keeping the key means sign-out is reversible, as users expect.
+    ///
+    /// The account's key IS removed on real account deletion — see `destroyIdentity(uid:)`.
+    func wipeIdentity() {
+        lock.withLock {
+            mySecretKey = nil; myPublicKey = nil
+            pubCache = [:]
+            readyTask = nil
+            didWarm = false
+        }
+        UserDefaults.standard.removeObject(forKey: Self.pubKeysDefaultsKey)   // cache of others' PUBLIC keys
+    }
+
+    /// Account DELETION: the account is gone for good, so its private key should go too
+    /// (nothing is left to decrypt, and leaving it on the device is needless exposure).
+    func destroyIdentity(uid: String) {
+        Keychain.delete(Self.skKeychainKey(uid))
+        Keychain.delete(Self.pkKeychainKey(uid))
+        Keychain.delete(Self.legacySkKey)
+        Keychain.delete(Self.legacyPkKey)
+        wipeIdentity()
+    }
+
+    /// My identity public key (Curve25519), for the safety-number screen. nil until
+    /// ensureReady() has run — callers should `try await ensureReady()` first.
+    var myPublicKeyData: Data? { lock.withLock { myPublicKey.map { Data($0) } } }
+
+    /// Another user's identity public key as Data (fetches + caches). nil if none yet.
+    func publicKeyData(for uid: String) async -> Data? {
+        (await preloadKey(uid)).map { Data($0) }
+    }
+
+    // In-flight fetch dedup (the standard profile-fetch pattern): on a cold start the chat list, the open thread,
+    // and group-member warms all request the same keys SIMULTANEOUSLY — without dedup each fires its
+    // own Firestore read. Concurrent callers now share one Task per uid.
+    private var keyFetches: [String: Task<Bytes?, Never>] = [:]
 
     /// Fetch + cache another user's public key. Returns nil if they have none yet.
     @discardableResult
     func preloadKey(_ uid: String) async -> Bytes? {
         guard !uid.isEmpty else { return nil }
         if let cached = lock.withLock({ pubCache[uid] }) { return cached }
+        let task: Task<Bytes?, Never> = lock.withLock {
+            if let existing = keyFetches[uid] { return existing }
+            let t = Task { await self.fetchKey(uid) }
+            keyFetches[uid] = t
+            return t
+        }
+        let result = await task.value
+        lock.withLock { _ = keyFetches.removeValue(forKey: uid) }
+        return result
+    }
+
+    private func fetchKey(_ uid: String) async -> Bytes? {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
             if let b64 = snap.data()?["publicKey"] as? String,
                let data = Data(base64Encoded: b64) {
                 let key = Bytes(data)
                 lock.withLock { pubCache[uid] = key }
+                persistPubKey(uid, key)   // disk cache → decrypt works on the next cold launch's first render
                 return key
             }
         } catch {
@@ -219,6 +334,7 @@ final class Crypto {
     func decrypt(_ raw: String, cid: String) -> String {
         if raw.hasPrefix("enc:") { return "[old message]" }
         guard raw.hasPrefix("enc1:") else { return raw }
+        warmIfNeeded()
         guard let sk = mySecretKey else { return "…" }
         guard let otherPub = lock.withLock({ pubCache[otherUid(cid)] }) else { return "…" }
 
@@ -238,9 +354,13 @@ final class Crypto {
     // Memoized decrypt for hot, repeatedly-rendered text — the chat-list last-message
     // preview decrypts on EVERY row render/scroll. The same (cid, raw) always yields the
     // same plaintext, so caching it avoids re-running libsodium box.open per frame (a
-    // real scroll-smoothness win, Signal-style "decrypt once, reuse"). NSCache is
+    // real scroll-smoothness win, the standard "decrypt once, reuse"). NSCache is
     // thread-safe and self-evicting under memory pressure.
-    private let previewCache = NSCache<NSString, NSString>()
+    private let previewCache: NSCache<NSString, NSString> = {
+        let c = NSCache<NSString, NSString>()
+        c.countLimit = 500   // bounded (cap every hot cache) — plaintext previews are small but not free
+        return c
+    }()
     func decryptCached(_ raw: String, cid: String) -> String {
         let key = "\(cid)|\(raw)" as NSString
         if let hit = previewCache.object(forKey: key) { return hit as String }
@@ -411,6 +531,7 @@ final class Crypto {
     /// Decrypt a group message. Needs the AUTHOR's uid (sender pubkey) — opens my own wrap.
     func decryptGroup(_ raw: String, authorId: String) -> String {
         guard raw.hasPrefix("encg1:") else { return raw }
+        warmIfNeeded()
         guard let sk = mySecretKey, let me = currentUid() else { return "…" }
         guard let authorPub = lock.withLock({ pubCache[authorId] }) else { return "…" }
         let b64 = String(raw.dropFirst("encg1:".count))
@@ -473,5 +594,14 @@ enum Keychain {
         // Available after first unlock; survives reboot, stays on this device only.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func delete(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

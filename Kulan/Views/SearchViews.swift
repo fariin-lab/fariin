@@ -87,6 +87,7 @@ struct ChatSearchView: View {
         let q = trimmed.lowercased()
         guard !q.isEmpty else { return [] }
         return repo.conversations
+            .filter { Flags.groupsEnabled || !$0.isGroup }
             .filter { !$0.isCleared(me) && $0.name(for: me).lowercased().contains(q) }
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
@@ -153,8 +154,8 @@ struct ChatSearchView: View {
             .listStyle(.plain)
             .overlay {
                 if trimmed.isEmpty {
-                    ContentUnavailableView("Search messages", systemImage: "magnifyingglass",
-                                           description: Text("Search names and the text of every message."))
+                    EmptyStateView(title: "Search messages", icon: "magnifyingglass",
+                                   text: "Search names and the text of every message.")
                 } else if loadingCorpus && nothingFound {
                     ChatListSkeleton()   // skeleton rows instead of a spinner while indexing
                 } else if !loadingCorpus && nothingFound {
@@ -262,7 +263,9 @@ enum MessageSearch {
 
     static func loadCorpus(me: String) async -> [SearchableMessage] {
         let convs = await MainActor.run {
-            ConversationsRepository.shared.conversations.filter { !$0.isCleared(me) }
+            ConversationsRepository.shared.conversations
+                .filter { !$0.isCleared(me) }
+                .filter { Flags.groupsEnabled || !$0.isGroup }
         }
         let db = Firestore.firestore()
         var out: [SearchableMessage] = []
@@ -296,14 +299,154 @@ enum MessageSearch {
                             : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: c.id)
                         guard !text.isEmpty else { return nil }
                         let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                        // Index the SAFE label, not the raw "kulan-…:" payload — contact/location
+                        // cards then match and display as "Contact"/"Location", never the marker.
                         return SearchableMessage(id: doc.documentID, cid: c.id, chatName: name,
-                                                 photoUrl: photo, text: text, date: date)
+                                                 photoUrl: photo, text: quoteSafeLabel(text), date: date)
                     }
                 }
             }
             for await chunk in group { out.append(contentsOf: chunk) }
         }
         return out
+    }
+}
+
+// MARK: - In-chat search (one conversation's whole history)
+
+// One decrypted message from a single chat, for in-chat search.
+struct InChatMessage: Identifiable {
+    let id: String
+    let text: String
+    let authorId: String
+    let date: Date
+    var tokens: [String] = []   // normalized search tokens, computed ONCE at corpus build (not per keystroke)
+}
+
+extension MessageSearch {
+    // Load (up to `limit`) of ONE chat's messages, decrypting only the text. Group messages are sealed
+    // per-sender, so every author's key is warmed first (same as the global corpus loader).
+    // The reference approach indexes messages incrementally instead of re-scanning on every search. Kulan's version:
+    // cache the decrypted corpus per chat for a short TTL, so reopening search moments later doesn't
+    // re-fetch + re-decrypt up to 1000 messages again.
+    private static var corpusCache: [String: (at: Date, corpus: [InChatMessage])] = [:]
+
+    static func loadChat(cid: String, isGroup: Bool, me: String, limit: Int = 1000) async -> [InChatMessage] {
+        if let hit = corpusCache[cid], Date().timeIntervalSince(hit.at) < 120 { return hit.corpus }
+        let db = Firestore.firestore()
+        guard let snap = try? await db.collection("conversations").document(cid)
+            .collection("messages")
+            .order(by: "createdAt", descending: true)
+            .limit(to: limit)
+            .getDocuments() else { return [] }
+        if isGroup {
+            let authors = Set(snap.documents.compactMap { $0.data()["authorId"] as? String })
+            for a in authors where a != me { _ = await Crypto.shared.preloadKey(a) }
+        } else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+            _ = await Crypto.shared.preloadKey(other)
+        }
+        let out = snap.documents.compactMap { doc -> InChatMessage? in
+            let data = doc.data()
+            let author = data["authorId"] as? String ?? ""
+            let text = isGroup
+                ? Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid, authorId: author)
+                : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid)
+            guard !text.isEmpty else { return nil }
+            if data["viewOnce"] as? Bool == true { return nil }   // view-once is never searchable
+            let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            // Same raw-marker guard as the global corpus: index/display the safe label.
+            let safe = quoteSafeLabel(text)
+            return InChatMessage(id: doc.documentID, text: safe, authorId: author, date: date,
+                                 tokens: ChatSearch.tokens(safe))
+        }
+        corpusCache[cid] = (Date(), out)
+        return out
+    }
+}
+
+// Search inside a single conversation. Loads the chat's text history once, filters in memory as you
+// type, and hands the picked message id back so ThreadView can scroll to + flash it.
+struct InChatSearchView: View {
+    let cid: String
+    let isGroup: Bool
+    let me: String
+    var nameFor: (String) -> String = { _ in "" }
+    var onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var corpus: [InChatMessage] = []
+    @State private var loading = false
+    @FocusState private var focused: Bool
+
+    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+
+    private var results: [InChatMessage] {
+        guard trimmed.count >= 2 else { return [] }   // same 2-char floor as the in-conversation search
+        let terms = ChatSearch.queryTerms(trimmed)
+        guard !terms.isEmpty else { return [] }
+        return Array(corpus.filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
+            .sorted { $0.date > $1.date }.prefix(100))
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(results) { m in
+                Button { onPick(m.id); dismiss() } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            if isGroup {
+                                Text(nameFor(m.authorId)).font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.tint).lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Text(m.date.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption).foregroundStyle(.secondary).fixedSize()
+                        }
+                        Text(highlighted(m.text)).font(.system(size: 15)).lineLimit(2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+            }
+            .listStyle(.plain)
+            .overlay {
+                if trimmed.isEmpty {
+                    EmptyStateView(title: "Search this chat", icon: "magnifyingglass",
+                                   text: "Find any message in this conversation.")
+                } else if loading && results.isEmpty {
+                    ProgressView()
+                } else if !loading && results.isEmpty {
+                    ContentUnavailableView.search(text: trimmed)
+                }
+            }
+            .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Search this chat")
+            .autoFocusSearch($focused)
+        }
+        .task {
+            focused = true
+            loading = true
+            corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
+            loading = false
+        }
+    }
+
+    // Bold the matched span inside the snippet so the hit is obvious.
+    private func highlighted(_ text: String) -> AttributedString {
+        var str = AttributedString(text)
+        let q = trimmed
+        guard !q.isEmpty, let r = text.range(of: q, options: .caseInsensitive),
+              let lo = AttributedString.Index(r.lowerBound, within: str),
+              let hi = AttributedString.Index(r.upperBound, within: str) else { return str }
+        str[lo..<hi].font = .system(size: 15, weight: .bold)
+        return str
     }
 }
 
@@ -315,6 +458,7 @@ struct ContactsSearchView: View {
     private var repo = ConversationsRepository.shared
     @Environment(\.colorScheme) private var scheme
     @State private var query = ""
+    @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
     @FocusState private var searchFocused: Bool
 
     private var me: String { AuthService.shared.uid ?? "" }
@@ -332,9 +476,9 @@ struct ContactsSearchView: View {
         NavigationStack {
             List(results) { conv in
                 Button {
-                    CallService.shared.startCall(to: conv.otherUid(me),
-                                                 name: conv.name(for: me),
-                                                 photo: conv.photoUrl(for: me))
+                    // Ask first (never dial on a stray tap) — same confirm as the thread view.
+                    pendingCall = PendingCall(uid: conv.otherUid(me), name: conv.name(for: me),
+                                              photo: conv.photoUrl(for: me), video: false)
                 } label: {
                     HStack(spacing: 12) {
                         AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 46)
@@ -350,8 +494,8 @@ struct ContactsSearchView: View {
             .overlay {
                 if results.isEmpty {
                     if trimmed.isEmpty {
-                        ContentUnavailableView("Call a contact", systemImage: "phone",
-                                               description: Text("Search anyone you've chatted with to start a call."))
+                        EmptyStateView(title: "Call a contact", icon: "phone",
+                                       text: "Search anyone you've chatted with to start a call.")
                     } else {
                         ContentUnavailableView.search(text: trimmed)
                     }
@@ -361,6 +505,17 @@ struct ContactsSearchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)   // search field anchors at the BOTTOM, consistently
             .background { SearchCancelWatcher(canReturn: { trimmed.isEmpty }, onCancel: onCancel) }
+            // Same native confirm the thread view uses before calling back.
+            .alert(pendingCall?.video == true ? "Video call" : "Voice call",
+                   isPresented: Binding(get: { pendingCall != nil }, set: { if !$0 { pendingCall = nil } }),
+                   presenting: pendingCall) { c in
+                Button("Cancel", role: .cancel) { }
+                Button("Call") {
+                    CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
+                }
+            } message: { c in
+                Text("\(c.video ? "Video call" : "Call") \(c.name)?")
+            }
         }
         .searchable(text: $query,
                     prompt: "Search contacts")
@@ -398,8 +553,8 @@ struct SettingsSearchView: View {
             Entry(title: "My Profile", icon: "person.text.rectangle",
                   keywords: "profile bio photo edit stories",
                   dest: AnyView(MyProfileView())),
-            Entry(title: "Linked Devices", icon: "laptopcomputer.and.iphone",
-                  keywords: "devices sessions linked",
+            Entry(title: "Devices", icon: "laptopcomputer.and.iphone",
+                  keywords: "devices sessions linked signed in log out sign out",
                   dest: AnyView(DevicesView())),
             Entry(title: "Notifications", icon: "bell.badge",
                   keywords: "notifications push sound vibrate preview",
@@ -416,9 +571,6 @@ struct SettingsSearchView: View {
             Entry(title: "Blocked Users", icon: "hand.raised",
                   keywords: "blocked block users",
                   dest: AnyView(BlockedUsersView())),
-            Entry(title: "Phone Number", icon: "phone",
-                  keywords: "phone number privacy",
-                  dest: AnyView(PhoneNumberPrivacyView())),
             Entry(title: "Help & About", icon: "questionmark.circle",
                   keywords: "help about version",
                   dest: AnyView(AboutView())),

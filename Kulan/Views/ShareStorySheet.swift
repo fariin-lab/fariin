@@ -4,15 +4,21 @@ import UIKit
 // Flattened story image awaiting the audience sheet (used by both the photo editor + text composer).
 struct StoryShareData: Identifiable { let id = UUID(); let data: Data; var caption: String = "" }
 
+// A picked video awaiting the audience sheet: the source file + the poster frame the editor
+// already generated (drives the uploading ring immediately; the transcode runs in the background).
+// muted = the editor's speaker toggle → the upload strips the audio track (real, as standard messengers do).
+struct StoryVideoPayload { let url: URL; let thumbnail: Data; var muted: Bool = false }
+
 // "Share Story" audience sheet: choose who sees the story, then Post.
 // Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
 struct ShareStorySheet: View {
     let image: Data
     var caption: String = ""
+    var video: StoryVideoPayload? = nil   // set → posts a video story instead of the photo
     var onPosted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
-    // Remember the last audience choice (WhatsApp/Signal/Telegram all do) instead of resetting each post.
+    // Remember the last audience choice (as standard messengers do) instead of resetting each post.
     @State private var mode = UserDefaults.standard.integer(forKey: "storyAudMode")   // 0 contacts, 1 except, 2 only
     @State private var excluded = Set(UserDefaults.standard.stringArray(forKey: "storyAudExcluded") ?? [])
     @State private var included = Set(UserDefaults.standard.stringArray(forKey: "storyAudIncluded") ?? [])
@@ -53,7 +59,7 @@ struct ShareStorySheet: View {
                     Button("OK", role: .cancel) {}
                 } message: {
                     Text(mode == 2
-                         ? "Pick at least one person under \"Only share with,\" or choose \"My contacts.\""
+                         ? "Pick at least one person under \"Only share with,\" or choose \"My friends.\""
                          : "Everyone you'd share with is excluded. Adjust the audience and try again.")
                 }
         }
@@ -67,10 +73,19 @@ struct ShareStorySheet: View {
 
     @ViewBuilder private var audienceList: some View {
         List {
-            Section("Who can see your story") {
-                optionRow(0, "person.fill", "My contacts")
-                optionRow(1, "person.fill.xmark", "My contacts except")
+            Section {
+                optionRow(3, "globe", "Everyone")
+                // "Friends", not "contacts" — there is no phone book behind this, only the people you
+                // chat with. See the Audience enum in PrivacyPages for the full reasoning.
+                optionRow(0, "person.fill", "My friends")
+                optionRow(1, "person.fill.xmark", "My friends except")
                 optionRow(2, "person.crop.circle.badge.checkmark", "Only share with")
+            } header: {
+                Text("Who can see your story")
+            } footer: {
+                if mode == 3 {
+                    Text("Anyone who finds your profile can see this story. Your friends also see it in their story tray.")
+                }
             }
             if mode == 1 {
                 Section {
@@ -137,10 +152,15 @@ struct ShareStorySheet: View {
         // recipientUids would be empty and the story would post to literally no one).
         let contactIds = Set(contacts.map { $0.id })
         let effective: Set<String>
-        if mode == 2 { effective = included.intersection(contactIds) }
+        if mode == 3 { effective = contactIds }   // public: contacts get the tray copy, strangers view via your profile
+        else if mode == 2 { effective = included.intersection(contactIds) }
         else if mode == 1 { effective = contactIds.subtracting(excluded) }
         else { effective = contactIds }
-        if effective.isEmpty {
+        // Block ONLY when you HAVE contacts but narrowed the audience down to literally no one
+        // (excluded everyone / picked nobody). If you simply have NO contacts yet, posting is fine —
+        // it's still YOUR OWN story (always visible to you); it just has no other recipients until
+        // you add contacts. Without this, a brand-new user could never post their first story.
+        if mode != 3 && effective.isEmpty && !contactIds.isEmpty {   // "Everyone" is public → never empty
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             emptyAudienceAlert = true
             return
@@ -151,12 +171,25 @@ struct ShareStorySheet: View {
         UserDefaults.standard.set(Array(included), forKey: "storyAudIncluded")
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         posting = true
-        StoriesService.shared.postStoryBackground(
-            image: image,
-            caption: caption,
-            excluded: mode == 1 ? excluded : [],
-            included: mode == 2 ? included : []
-        )
+        if let video {
+            StoriesService.shared.postVideoStoryBackground(
+                videoURL: video.url,
+                thumbnail: video.thumbnail,
+                muted: video.muted,
+                caption: caption,
+                excluded: mode == 1 ? excluded : [],
+                included: mode == 2 ? included : [],
+                everyone: mode == 3
+            )
+        } else {
+            StoriesService.shared.postStoryBackground(
+                image: image,
+                caption: caption,
+                excluded: mode == 1 ? excluded : [],
+                included: mode == 2 ? included : [],
+                everyone: mode == 3
+            )
+        }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
     }
 }

@@ -7,6 +7,26 @@ import CoreImage.CIFilterBuiltins
 // black canvas; X top-left; a caption bar + @ and a crop / draw / adjust / HD tool row at the
 // bottom with a green send. Send flattens the edits and opens the audience sheet, which posts the
 // story via StoriesService. Every tool is real.
+// Publishes the live keyboard height. The editor opts OUT of SwiftUI's automatic keyboard
+// avoidance (it was squishing the canvas and desyncing button hit-tests) and instead lifts
+// only the bottom bar by this measured height.
+final class KeyboardWatcher: ObservableObject {
+    @Published var height: CGFloat = 0
+    private var tokens: [NSObjectProtocol] = []
+    init() {
+        tokens.append(NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
+                guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+                self?.height = max(0, UIScreen.main.bounds.height - f.origin.y)
+        })
+        tokens.append(NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.height = 0
+        })
+    }
+    deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
+}
+
 struct StoryEditorView: View {
     let source: UIImage
     var onPosted: () -> Void = {}
@@ -21,7 +41,7 @@ struct StoryEditorView: View {
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
     @State private var canvasSize: CGSize = .zero
     // Pinch-zoom + pan the photo directly on the canvas (baked WYSIWYG into the post). Driven by UIKit
-    // recognizers (PinchPanGestureView) using Telegram's accumulate-and-reset pattern — see below.
+    // recognizers (PinchPanGestureView) using the standard accumulate-and-reset pattern — see below.
     @State private var photoZoom: CGFloat = 1
     @State private var photoOffset: CGSize = .zero
     // Real device safe-area top from the window (the editor's GeometryReader under-reports it because the
@@ -35,6 +55,7 @@ struct StoryEditorView: View {
     @State private var postError = false
     @State private var pendingShare: StoryShareData?
     @FocusState private var captionFocused: Bool
+    @StateObject private var keyboard = KeyboardWatcher()   // manual keyboard rise (editor ignores the keyboard safe area)
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
@@ -61,7 +82,7 @@ struct StoryEditorView: View {
         updateIconContrast()   // re-sample brightness so the controls stay readable on this photo
     }
 
-    // The photo's aspect-fit size inside the frame (Signal "always-cover" clamp basis).
+    // The photo's aspect-fit size inside the frame ("always-cover" clamp basis).
     private func fittedSize(in frame: CGSize) -> CGSize {
         let s = edited.size
         guard s.width > 0, s.height > 0 else { return frame }
@@ -69,7 +90,7 @@ struct StoryEditorView: View {
         return CGSize(width: s.width * scale, height: s.height * scale)
     }
     // Clamp the pan so the photo edge can reach the frame edge but never past it (no gaps / floating).
-    // offset ∈ ±(scaledSize − frameSize)/2  — exactly Signal's ImageEditorTransform.normalize math.
+    // offset ∈ ±(scaledSize − frameSize)/2  — the standard image-transform normalize math.
     private func clampedOffset(_ off: CGSize, zoom: CGFloat, in frame: CGSize) -> CGSize {
         let fit = fittedSize(in: frame)
         let maxX = max(0, (fit.width * zoom - frame.width) / 2)
@@ -82,15 +103,50 @@ struct StoryEditorView: View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
-                // Photo: aspect-fit on BLACK (Signal/WhatsApp lobby — NO blurred self-background).
-                // Zoom/pan applied DIRECTLY to a UIImageView's transform in UIKit (no SwiftUI @State write
-                // per touch -> zero re-render mid-pinch -> butter smooth, anchored between the fingers).
+                // Story canvas CARD (user reference, "image 2"): a FULL-WIDTH rounded canvas
+                // between the status area and the bottom controls, filled with a heavily muted,
+                // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
+                // earlier vivid full-screen blur, which was rejected). Black frames it above
+                // and below. Editor-only look; the posted image is untouched.
+                // User-tuned (round 3): the STATUS BAR is visible in the editor (reference look),
+                // so the card starts just below it; bottom leaves clear room for the controls.
+                let cardTop: CGFloat = 8
+                let cardBottomGap: CGFloat = 44
+                let cardH = geo.size.height - cardTop - cardBottomGap
+                let boxed = !imageFillsCanvas(geo.size)
+                if boxed, cardH > 0 {
+                    Image(uiImage: edited).resizable().scaledToFill()
+                        .frame(width: geo.size.width, height: cardH)
+                        .blur(radius: 90, opaque: true)
+                        .saturation(0.4)
+                        .overlay(Color.black.opacity(0.4))
+                        .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                        .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                        .allowsHitTesting(false)
+                }
+                // Photo: SQUARE-EDGED, full canvas width, lying on the card (the floating
+                // rounded-thumbnail look was rejected). Zoom/pan applied DIRECTLY to a
+                // UIImageView's transform in UIKit (no SwiftUI @State write per touch ->
+                // zero re-render mid-pinch -> butter smooth, anchored between the fingers).
                 // The final scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
                 ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
                                   maxScale: 4, interactive: !isDrawing && editingID == nil,
                                   onTap: { captionFocused = false; selectedID = nil })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
+                    // Zoomed/panned photo stays STRICTLY inside the card (user's final spec:
+                    // "when I zoom, the image should not go outside the frame"). A MASK only —
+                    // the pinch mechanics, pan limits, and the posted photo are untouched.
+                    .mask {
+                        if boxed, cardH > 0 {
+                            Rectangle().fill(.black)
+                                .frame(width: geo.size.width, height: cardH)
+                                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                                .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                        } else {
+                            Rectangle().fill(.black)
+                        }
+                    }
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
@@ -151,7 +207,7 @@ struct StoryEditorView: View {
                     HStack {
                         Button { dismiss() } label: {
                             Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)   // always white; glass + shadow carry contrast
+                                .foregroundStyle(.primary)   // always white; glass + shadow carry contrast
                                 .shadow(color: .black.opacity(0.35), radius: 2)
                                 .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
                         }
@@ -175,7 +231,13 @@ struct StoryEditorView: View {
                     VStack {
                         Spacer()
                         bottomBar
-                            .padding(.bottom, captionFocused ? 8 : geo.safeAreaInsets.bottom + 8)
+                            // Keyboard rise is MANUAL (the editor ignores the keyboard's safe area).
+                            // Computed against the GEO's real screen position: the raw height left a
+                            // fat gap (geo's bottom sits above the physical bottom, and the bar has
+                            // 10pt internal lift) — the caption now floats 8pt above the keyboard.
+                            .padding(.bottom, keyboard.height > 0
+                                ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
+                                : -14)
                     }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
                 }
@@ -194,7 +256,12 @@ struct StoryEditorView: View {
                 }
             }
         }
-        .statusBarHidden()
+        // The editor NEVER resizes for the keyboard: automatic avoidance was squishing the
+        // canvas (user bug 1) and desynced the compact send button's visual vs tappable
+        // frame (user bug 2 — taps landed on nothing). The bottom bar rises by a MEASURED
+        // keyboard height instead (KeyboardWatcher).
+        .ignoresSafeArea(.keyboard)
+        .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
         .sheet(item: $pendingShare) { s in
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
@@ -213,27 +280,34 @@ struct StoryEditorView: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {   // user spec: 12px between the caption bar and the tool row
             // Caption bar — dark pill. While typing, Send sits beside it so you can post without
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 10) {
                     // Grows with the text (up to 5 lines) instead of staying a single truncated line.
-                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color(.systemGray3)), axis: .vertical)
+                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
+                        // ...and the text itself carries a hairline shadow so it reads on white.
+                        .shadow(color: .black.opacity(0.45), radius: 1.5)
                         .lineLimit(1...5)
                         .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
                 }
-                .padding(.horizontal, 18).padding(.vertical, 12).frame(minHeight: 46)
-                // Real Apple Liquid Glass pill (matches the toolbar buttons) instead of a flat dark fill.
-                .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous))
+                .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)   // user spec: 40px
+                // Dark pill (like every other app + our own ChatImageEditor): the light Liquid Glass
+                // made the white caption text/placeholder unreadable on bright photos (user screenshot).
+                .background(Color.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                // Light photos made the white caption text invisible (user screenshot: white-on-
+                // white). A soft bar shadow lifts the pill off bright backgrounds...
+                .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
 
                 // While typing, a SMALL round send button (not the wide NEXT pill) so the caption
                 // field keeps most of the width.
                 if captionFocused { compactSendButton }
             }
+            .padding(.bottom, 10)   // user: caption bar sat too low — lift it for breathing room
 
-            // Tool row hides while typing a caption (IG/WA: only the caption field stays, above the keyboard).
+            // Tool row hides while typing a caption (only the caption field stays, above the keyboard).
             if !captionFocused {
                 HStack(spacing: 14) {
                     // Aa / crop / draw grouped in ONE dark capsule (target design), not separate circles.
@@ -242,7 +316,7 @@ struct StoryEditorView: View {
                         capsuleTool("crop", active: croppedSource != nil) { showCrop = true }
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
                     }
-                    .padding(.horizontal, 20).frame(height: 48)
+                    .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
                     .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
 
                     Spacer()
@@ -267,13 +341,21 @@ struct StoryEditorView: View {
     // Shared green Send — used in the toolbar (idle) AND beside the caption (while typing).
     // Compact round send used beside the caption while the keyboard is open (keeps the field wide).
     private var compactSendButton: some View {
-        Button { Task { await send() } } label: {
+        Button {
+            // Presenting the share sheet WHILE the keyboard is dismissing silently failed
+            // (tap closed the keyboard, no sheet). Resign first, let it settle, then send.
+            captionFocused = false
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                await send()
+            }
+        } label: {
             Group {
                 if posting { ProgressView().tint(.white) }
-                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold)) }
+                else { Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)) }
             }
             .foregroundStyle(.white)
-            .frame(width: 46, height: 46)
+            .frame(width: 40, height: 40)
             .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
@@ -290,9 +372,12 @@ struct StoryEditorView: View {
                 }
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 22).frame(height: 48)
+            .padding(.horizontal, 22).frame(height: 46)   // user spec: 46px
             // Blue-tinted real Liquid Glass (prominent action), not a flat blue fill.
             .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
+            // WHOLE PILL tappable (user: only the "NEXT" text responded). Without an explicit
+            // contentShape, SwiftUI hit-tests only the opaque text/chevron, not the padded capsule.
+            .contentShape(Capsule())
         }
         .buttonStyle(StoryPressStyle()).disabled(posting)
     }
@@ -320,7 +405,7 @@ struct StoryEditorView: View {
         let data = await flatten()
         posting = false
         guard !data.isEmpty else { postError = true; return }   // never hand off a zero-byte (broken) image
-        // Caption travels as TEXT (rendered as a Telegram overlay in the viewer), NOT baked into the photo —
+        // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data, caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -336,7 +421,7 @@ struct StoryEditorView: View {
         }
         let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
         let composed = ZStack(alignment: .bottom) {
-            Color.black   // Signal/WhatsApp lobby = photo on black (no blurred self-background)
+            Color.black   // standard lobby = photo on black (no blurred self-background)
             // Foreground photo with the SAME fit + zoom + pan as the editor → WYSIWYG.
             Image(uiImage: base).resizable().scaledToFit()
                 .scaleEffect(photoZoom).offset(photoOffset)
@@ -351,11 +436,48 @@ struct StoryEditorView: View {
                     .rotationEffect(o.rotation)
                     .position(o.center)
             }
-            // (Caption is NOT baked here — it's posted as text and drawn as a Telegram-style overlay.)
+            // (Caption is NOT baked here — it's posted as text and drawn as an overlay.)
         }
         .frame(width: size.width, height: size.height)
         let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
-        return r.uiImage?.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
+        guard let full = r.uiImage else { return base.jpegData(compressionQuality: quality) ?? Data() }
+        // SAME AS NORMAL POSTS (user's call): the posted file keeps the PHOTO's own shape — the
+        // canvas's empty black areas are cropped away, so the viewer adds its normal live blur
+        // around a text-edited photo exactly like an untouched one. (Text dragged outside the
+        // photo gets cropped with the black — accepted limit of this design.) The photo's
+        // canvas footprint mirrors the editor layout: aspect-fit, centred, scaled about the
+        // centre by photoZoom, then shifted by photoOffset.
+        let fit = photoFitSize(in: size)
+        let scaled = CGSize(width: fit.width * photoZoom, height: fit.height * photoZoom)
+        let centre = CGPoint(x: size.width / 2 + photoOffset.width, y: size.height / 2 + photoOffset.height)
+        let photoRect = CGRect(x: centre.x - scaled.width / 2, y: centre.y - scaled.height / 2,
+                               width: scaled.width, height: scaled.height)
+            .intersection(CGRect(origin: .zero, size: size))
+        if !photoRect.isEmpty,
+           photoRect.width < size.width - 1 || photoRect.height < size.height - 1,   // full-bleed → nothing to crop
+           let cg = full.cgImage {
+            let s = full.scale
+            let px = CGRect(x: photoRect.minX * s, y: photoRect.minY * s,
+                            width: photoRect.width * s, height: photoRect.height * s).integral
+            if let cropped = cg.cropping(to: px) {
+                return UIImage(cgImage: cropped, scale: s, orientation: .up)
+                    .jpegData(compressionQuality: quality) ?? Data()
+            }
+        }
+        return full.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
+    }
+
+    // The picture's aspect-fit size within the canvas — the photo frame's real footprint.
+    private func photoFitSize(in canvas: CGSize) -> CGSize {
+        let iw = edited.size.width, ih = edited.size.height
+        guard iw > 0, ih > 0 else { return canvas }
+        let s = min(canvas.width / iw, canvas.height / ih)
+        return CGSize(width: iw * s, height: ih * s)
+    }
+    // Edge-to-edge photos keep the plain full-bleed canvas (no backdrop, no rounding).
+    private func imageFillsCanvas(_ canvas: CGSize) -> Bool {
+        let f = photoFitSize(in: canvas)
+        return f.width >= canvas.width - 1 && f.height >= canvas.height - 1
     }
 
     // MARK: - Image ops
@@ -393,7 +515,7 @@ struct StoryEditorView: View {
     }
 }
 
-// MARK: - Text-on-photo overlay (Telegram/Instagram style)
+// MARK: - Text-on-photo overlay (modern style)
 
 struct TextOverlay: Identifiable, Equatable {
     let id = UUID()
@@ -505,7 +627,7 @@ struct TextOverlayView: View {
     }
 }
 
-// Full-screen text editor (Telegram image 220): focused field + font/color/align/bg controls.
+// Full-screen text editor: focused field + font/color/align/bg controls.
 struct TextEditorOverlay: View {
     @Binding var draft: TextOverlay
     var onCancel: () -> Void
@@ -726,19 +848,25 @@ struct ZoomableImageView: UIViewRepresentable {
 struct DrawingCanvas: UIViewRepresentable {
     @Binding var drawing: PKDrawing
     let isActive: Bool
+    var penColor: UIColor? = nil          // set (with showsToolPicker false) → external palette
+    var showsToolPicker: Bool = true
+    var inkType: PKInkingTool.InkType = .pen   // pen vs marker/highlighter
+    var penWidth: CGFloat = 6
     func makeUIView(context: Context) -> PKCanvasView {
         let v = PKCanvasView()
         v.drawingPolicy = .anyInput
         v.backgroundColor = .clear
         v.isOpaque = false
-        v.tool = PKInkingTool(.pen, color: .white, width: 6)
+        v.tool = PKInkingTool(inkType, color: penColor ?? .white, width: penWidth)
         v.delegate = context.coordinator
-        context.coordinator.toolPicker.addObserver(v)   // native PencilKit tool palette
+        if showsToolPicker { context.coordinator.toolPicker.addObserver(v) }   // native PencilKit tool palette
         return v
     }
     func updateUIView(_ v: PKCanvasView, context: Context) {
         if v.drawing != drawing { v.drawing = drawing }
         v.isUserInteractionEnabled = isActive
+        if let penColor { v.tool = PKInkingTool(inkType, color: penColor, width: penWidth) }   // external palette drives the ink
+        guard showsToolPicker else { return }
         // Show Apple's PKToolPicker (pens/marker/eraser/colors/undo) while drawing is active.
         let picker = context.coordinator.toolPicker
         picker.setVisible(isActive, forFirstResponder: v)
@@ -759,7 +887,7 @@ struct DrawingCanvas: UIViewRepresentable {
     }
 }
 
-// Real interactive crop, Telegram style: pan/zoom the image inside a fixed frame, surroundings DIMMED
+// Real interactive crop: pan/zoom the image inside a fixed frame, surroundings DIMMED
 // (you see what you're cropping out), rotation dial (-45°…45°) with auto-zoom so corners never gap,
 // rotate-90, flip, aspect MENU, grid that fades in during a gesture, corner handles, Reset.
 // Done renders exactly what's inside the frame. Body split into sub-views for the type-checker.

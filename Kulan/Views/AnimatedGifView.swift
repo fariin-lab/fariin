@@ -1,6 +1,28 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import CryptoKit
+
+// Persistent disk store for raw GIF bytes (keyed by URL) — so a GIF downloads ONCE and replays from
+// disk on every relaunch, no re-download. Application Support (permanent), excluded from backup.
+enum GifBytesCache {
+    private static var dir: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let d = base.appendingPathComponent("gif-cache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        var mutable = d; try? mutable.setResourceValues(values)
+        return d
+    }()
+    private static func file(_ url: String) -> URL {
+        let key = SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
+        return dir.appendingPathComponent(key).appendingPathExtension("gif")
+    }
+    static func data(_ url: String) -> Data? { try? Data(contentsOf: file(url)) }
+    static func store(_ data: Data, _ url: String) {
+        try? data.write(to: file(url), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+}
 
 // Plays an animated GIF from a URL with zero third-party deps — decodes frames via ImageIO
 // into an animated UIImage. Used in the GIF picker and in chat bubbles.
@@ -28,11 +50,24 @@ struct AnimatedGifView: UIViewRepresentable {
     private func load(into v: UIImageView, _ coord: Coordinator) {
         coord.loadedURL = url   // mark BEFORE loading so re-renders/updates don't re-download+re-decode
         guard let u = URL(string: url) else { return }
+        // Memory (decoded) → instant.
         if let cached = Self.cache.object(forKey: url as NSString) { v.image = cached; return }
+        // Persistent disk (raw bytes) → decode, no download.
+        if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
+            Self.cache.setObject(img, forKey: url as NSString); v.image = img; return
+        }
+        let requested = url
         URLSession.shared.dataTask(with: u) { data, _, _ in
             guard let data, let img = UIImage.animatedGif(data: data) else { return }
+            GifBytesCache.store(data, url)   // persist raw bytes so it never re-downloads
             Self.cache.setObject(img, forKey: url as NSString)
-            DispatchQueue.main.async { v.image = img }
+            DispatchQueue.main.async {
+                // The view may have been REUSED for a different GIF while this download was in flight
+                // (bubble scroll / grid reuse) — only assign if it still wants THIS url, else the old
+                // GIF would overwrite the new one (the "wrong GIF flashes" bug).
+                guard coord.loadedURL == requested else { return }
+                v.image = img
+            }
         }.resume()
     }
 }

@@ -3,6 +3,19 @@ import Observation
 import FirebaseAuth
 import FirebaseFirestore
 
+// Locally-hidden message ids ("delete for me"): the message doc stays in Firestore for the other
+// person, but we never show it here. Persisted in UserDefaults, cached in memory for cheap reads.
+enum HiddenMessages {
+    private static var cache = Set<String>((UserDefaults.standard.string(forKey: "hiddenMessages") ?? "")
+        .split(separator: " ").map(String.init))
+    static func isHidden(_ id: String) -> Bool { cache.contains(id) }
+    static func hide(_ id: String) {
+        guard !id.isEmpty, !cache.contains(id) else { return }
+        cache.insert(id)
+        UserDefaults.standard.set(cache.joined(separator: " "), forKey: "hiddenMessages")
+    }
+}
+
 /// Live messages for one conversation. Loads a bounded WINDOW (most-recent page)
 /// with a live listener, pages OLDER messages in on scroll-to-top, and reuses
 /// already-decrypted messages so each snapshot only decrypts new/changed docs.
@@ -15,45 +28,118 @@ final class ThreadRepository {
     let cid: String
 
     private let pageSize = 40
+    // The standard approach caps the in-memory window (~500) and LRU-drops the oldest — an unbounded
+    // window is a memory + main-thread cost that feeds watchdog kills on huge chats. We trim on live
+    // commits above a high-water mark (paging older may exceed the cap briefly; the next live commit
+    // trims back, and canLoadOlder flips true so the dropped history re-pages on scroll).
+    private let windowCap = 500
+    private let windowHighWater = 800
+    private var windowTrimmed = false   // oldestDoc cursor no longer matches the kept window → cursor by value
 
     var messages: [Message] = []           // confirmed server messages (ascending)
-    var pending: [Message] = []            // optimistic, not yet echoed back
+    // Optimistic, not yet echoed back. Mirrored into ThreadMessageCache on every change so leaving the
+    // conversation cannot throw away a send that is still owed — this repository is per-cid and dies when
+    // you navigate away, which is why an offline message vanished on reopen.
+    var pending: [Message] = [] {
+        didSet { ThreadMessageCache.shared.storePending(cid, pending) }
+    }
     var canLoadOlder = true
     var loadingOlder = false
 
     // Decrypt cache: id -> built message, plus the raw (encrypted) reactions we last
     // saw, so we only rebuild a message when its one mutable field actually changes.
     private var byId: [String: Message] = [:]
-    private var rawReactions: [String: [String: String]] = [:]
+    private var rawReactions: [String: String] = [:]   // id -> change signature (reactions + text cipher + edited)
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private(set) var didInitialLoad = false
 
+    private(set) var convLoaded = false   // first conversation-doc snapshot landed (block state is real)
     var otherTyping = false
     var typingNames: [String] = []   // group: who is currently typing
+    private var typingExpiry: Timer? // incoming typing self-clears after 15s — a crashed sender's flag can't stick
     var otherOnline = false
     var otherLastActive: Date?
+    var otherPrivacy: [String: String] = [:]   // their per-field audience map (users doc)
     var otherLastReadMillis: Double = 0
+    var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
     var disappearSeconds = 0
     private var expiryTimer: Timer?
     private var otherUid = ""
     private var myBlockedAtMillis: Double = 0       // when I blocked
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
-    var pinnedMessageIds: [String] = []   // up to 5 pinned messages (Telegram-style)
+    var pinnedMessageIds: [String] = []   // up to 5 pinned messages (standard)
 
-    init(cid: String) { self.cid = cid }
+    init(cid: String) {
+        self.cid = cid
+        // Restore anything still unsent from a previous visit to this chat, BEFORE the cached window is
+        // seeded, so a pending message is on screen from the very first frame with its sending/failed
+        // state intact and its retry affordance available.
+        pending = ThreadMessageCache.shared.pending(for: cid)
+        // Seed the last-decrypted messages SYNCHRONOUSLY so the conversation is fully rendered and
+        // frozen on the first frame — before the push transition — as standard messengers do, instead of
+        // fading in a beat late while the E2EE decrypt runs off the main thread. The live listener
+        // in start() then reconciles silently (same ids → no visible change). First-ever open this
+        // session has no cache → normal async load + reveal.
+        if let cached = ThreadMessageCache.shared.messages(for: cid), !cached.isEmpty {
+            messages = cached
+            for m in cached { byId[m.id] = m }   // reuse them so start()'s snapshot only decrypts new/changed docs
+            didInitialLoad = true
+            refreshItems()
+        }
+    }
 
     /// Display list = confirmed server messages + any optimistic ones not yet echoed.
     /// Stored (not computed) so every read in one render is the same snapshot and we
     /// don't re-filter per row.
     private(set) var items: [Message] = []
+    // One-producer discipline (Signal model): the repo publishes derived lookups ONCE per data change,
+    // instead of every consumer re-deriving them per render/per cell. indexById kills the O(n) scans the
+    // row builder / swipe gate / date pill did per call; itemsVersion lets the view cache per-emission
+    // work (row signatures) instead of recomputing it on every SwiftUI body run.
+    private(set) var indexById: [String: Int] = [:]
+    private(set) var itemsVersion = 0
     private func refreshItems() {
         let echoed = Set(messages.compactMap { $0.clientId })
-        items = messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) }
+        // Pending sends are MERGED by send time, not appended: an uploading photo stays exactly where
+        // it was sent even when later texts confirm first (order never shuffles on upload finish).
+        var merged = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+            .sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
+            .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
+
+        // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
+        // diffable snapshot — `appendItemsWithIdentifiers:` throws an NSInternalInconsistencyException on
+        // a repeat, which is an instant abort, not a glitch. Three crash reports from the user's phone
+        // (builds 380, 381 and 384, 2026-07-27) are exactly that stack.
+        //
+        // Every individual path that can produce a collision is already defended: the listener drops a
+        // double echo sharing a clientId, retry removes the old pending before adding the new one, and
+        // `indexById` two lines down has always used `uniquingKeysWith` — which is the tell. Someone knew
+        // duplicates could reach here and protected the dictionary while leaving `items` itself, the thing
+        // that actually crashes, unprotected. Rather than hunt for one more path, this makes the invariant
+        // true at the funnel where `items` is produced. First occurrence wins, matching the double-echo
+        // rule that the EARLIER message is the real one.
+        var seenRowIds = Set<String>()
+        seenRowIds.reserveCapacity(merged.count)
+        merged.removeAll { !seenRowIds.insert($0.rowId).inserted }
+        items = merged
+
+        indexById = Dictionary(items.enumerated().map { ($0.element.rowId, $0.offset) },
+                               uniquingKeysWith: { a, _ in a })
+        itemsVersion += 1
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
+    // "Delete for me" — hide a single message locally (the doc stays for the other person). Deleting
+    // "for everyone" removes the Firestore doc instead (ChatService.deleteMessage).
+    func hideForMe(_ id: String) { HiddenMessages.hide(id); refreshItems() }
+    #if DEBUG
+    func addDemoMessage(_ text: String, from authorId: String) {
+        messages.append(Message(demoId: UUID().uuidString, from: authorId, text, Date()))
+        refreshItems()
+    }
+    #endif
     func markFailed(clientId: String) {
         if let i = pending.firstIndex(where: { $0.clientId == clientId }) { pending[i].sendState = .failed }
         refreshItems()
@@ -61,6 +147,17 @@ final class ThreadRepository {
     func removePending(clientId: String) { pending.removeAll { $0.clientId == clientId }; refreshItems() }
 
     func start() {
+        #if DEBUG
+        if DemoMode.active {
+            // Preview: serve the local demo conversation directly — no Firestore, no decryption.
+            messages = DemoMode.messages(for: cid)
+            didInitialLoad = true
+            canLoadOlder = false
+            otherOnline = true
+            refreshItems()
+            return
+        }
+        #endif
         guard let uid = Auth.auth().currentUser?.uid else { return }
         // 1:1 cid is "uidA_uidB"; a group cid is a random doc id (no underscore).
         let isOneToOne = cid.contains("_")
@@ -71,12 +168,14 @@ final class ThreadRepository {
         convListener = db.collection("conversations").document(cid)
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self else { return }
+                self.convLoaded = true
                 let d = snap?.data()
                 // Typing + lastRead are hot fields (fire on every keystroke / incoming
                 // message) but never change which messages are visible — update directly,
                 // skip the O(N log N) rebuild.
                 if isOneToOne {
                     self.otherTyping = (d?["typing"] as? [String: Any])?[other] as? Bool ?? false
+                    self.armTypingExpiry()
                     if let ts = (d?["lastRead"] as? [String: Any])?[other] as? Timestamp {
                         self.otherLastReadMillis = ts.dateValue().timeIntervalSince1970 * 1000
                     }
@@ -89,10 +188,16 @@ final class ThreadRepository {
                     let typers = others.filter { (typingMap[$0] as? Bool) == true }
                     self.otherTyping = !typers.isEmpty
                     self.typingNames = typers.map { names[$0] ?? "Someone" }
+                    self.armTypingExpiry()
                     if !others.isEmpty {
                         let readMap = d?["lastRead"] as? [String: Any] ?? [:]
                         let times = others.map { (readMap[$0] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0 }
                         self.otherLastReadMillis = (times.min() ?? 0) * 1000
+                        // Keep the FULL per-member map too (not just the min) so a message-info screen
+                        // can show exactly who has read a given message ("read by" list).
+                        self.memberLastRead = Dictionary(uniqueKeysWithValues: others.map {
+                            ($0, ((readMap[$0] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000)
+                        })
                     }
                 }
                 // Only rebuild when a field that actually FILTERS the list changes.
@@ -120,6 +225,7 @@ final class ThreadRepository {
             userListener = db.collection("users").document(other)
                 .addSnapshotListener { [weak self] snap, _ in
                     let d = snap?.data()
+                    self?.otherPrivacy = (d?["privacy"] as? [String: String]) ?? [:]
                     self?.otherOnline = d?["online"] as? Bool ?? false
                     if let ts = d?["lastActive"] as? Timestamp { self?.otherLastActive = ts.dateValue() }
                 }
@@ -127,6 +233,7 @@ final class ThreadRepository {
         expiryTimer?.invalidate()
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.sweepExpired()
+            self?.sweepStuckSends()
         }
         // Attach the message listener IMMEDIATELY — the thread must paint without waiting
         // on key fetches. (Bug fixed: previously this listener was created only AFTER
@@ -138,10 +245,21 @@ final class ThreadRepository {
             .order(by: "createdAt", descending: true)
             .limit(to: pageSize)
             .addSnapshotListener { [weak self] snap, _ in
-                guard let self, let snap else { return }
+                guard let self else { return }
+                guard let snap else {
+                    // Listener ERROR (seen in the wild: a brand-new chat opened from search sat on
+                    // the skeleton FOREVER). A dead listener must never freeze the screen — reveal
+                    // the (empty) chat and re-attach after a beat.
+                    self.didInitialLoad = true
+                    self.retryStartSoon()
+                    return
+                }
                 // Don't blank an open thread on an empty offline snapshot.
                 if snap.metadata.isFromCache && snap.documents.isEmpty && !self.messages.isEmpty { return }
-                self.applyLiveSnapshot(snap.documents)
+                // Pass whether this is a cache/local snapshot — deletes are only trusted from the SERVER
+                // (a from-cache/resync snapshot can transiently drop docs that still exist → the "message
+                // gone for a few seconds then comes back" bug).
+                self.applyLiveSnapshot(snap.documents, fromCache: snap.metadata.isFromCache)
             }
         // Load keys in the BACKGROUND (in parallel). Warming the recipient's key here also
         // means the first send is instant instead of blocking on the fetch. Once the key
@@ -157,8 +275,12 @@ final class ThreadRepository {
             }
             await MainActor.run {
                 guard !self.lastDocs.isEmpty else { return }   // new chat: nothing to re-decrypt
-                self.byId.removeAll(); self.rawReactions.removeAll()
-                self.applyLiveSnapshot(self.lastDocs)
+                // Force a re-decrypt of the window (keys just arrived) WITHOUT clearing byId: emptying it
+                // blanked the whole list until the off-main decrypt finished AND dropped any paged-older
+                // history. Clearing only the sig cache makes applyLiveSnapshot re-decrypt the window while
+                // byId stays populated, so nothing ever goes blank and older messages are preserved.
+                self.rawReactions.removeAll()
+                self.applyLiveSnapshot(self.lastDocs, fromCache: false)
             }
         }
     }
@@ -176,16 +298,35 @@ final class ThreadRepository {
         return fallbackOther.isEmpty ? [] : [fallbackOther]
     }
 
-    // Build a message, reusing the cached copy unless its reactions changed.
+    // Stable change signature for the MUTABLE fields of a message doc: reactions, the text cipher
+    // (EDITS — the old reactions-only gate meant an edited message never re-rendered), and the edited
+    // flag. Reaction keys are sorted so the signature is deterministic.
+    private func changeSig(_ data: [String: Any]) -> String {
+        let raw = (data["reactions"] as? [String: String]) ?? [:]
+        let reactions = raw.keys.sorted().map { "\($0)=\(raw[$0] ?? "")" }.joined(separator: ",")
+        return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false) + "|" + reactions
+    }
+
+    // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
     @discardableResult
     private func buildCached(_ doc: QueryDocumentSnapshot) -> Message {
         let id = doc.documentID, data = doc.data()
-        let raw = (data["reactions"] as? [String: String]) ?? [:]
-        if let cached = byId[id], rawReactions[id] == raw { return cached }
+        let sig = changeSig(data)
+        if let cached = byId[id], rawReactions[id] == sig { return cached }
         let m = Message(id: id, data: data, cid: cid, crypto: Crypto.shared)
         byId[id] = m
-        rawReactions[id] = raw
+        rawReactions[id] = sig
         return m
+    }
+
+    // Re-attach the whole listener set after a listener error (bounded — never an error loop).
+    private var listenerRetries = 0
+    private func retryStartSoon() {
+        guard listenerRetries < 3 else { return }
+        listenerRetries += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.start()
+        }
     }
 
     // Monotonic snapshot sequencing: detached decrypt batches can finish out of order; the
@@ -196,7 +337,7 @@ final class ThreadRepository {
 
     // Apply the live (recent-window) snapshot: refresh/insert the window's messages,
     // reconcile deletes within the window's time range, keep paged-older messages.
-    private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot]) {
+    private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool) {
         lastDocs = docs   // remember the window so we can re-decrypt once the key arrives
         snapshotSeq += 1
         let seq = snapshotSeq
@@ -205,36 +346,43 @@ final class ThreadRepository {
         // thread froze the UI during the navigation transition (the tester's "tap → gray →
         // hang"). Only NEW or reaction-changed docs are decrypted; the rest are reused.
         // (box.open is a thread-safe pure op, and my keys are set before any chat can open.)
+        let sigs = Dictionary(uniqueKeysWithValues: docs.map { ($0.documentID, changeSig($0.data())) })
         let needBuild = docs.filter { doc in
-            let raw = (doc.data()["reactions"] as? [String: String]) ?? [:]
-            return byId[doc.documentID] == nil || rawReactions[doc.documentID] != raw
+            byId[doc.documentID] == nil || rawReactions[doc.documentID] != sigs[doc.documentID]
         }
-        guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq); return }
+        guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq, fromCache: fromCache); return }
         let cidLocal = cid
         Task.detached(priority: .userInitiated) { [weak self] in
-            let built: [(String, [String: String], Message)] = needBuild.map { doc in
-                let raw = (doc.data()["reactions"] as? [String: String]) ?? [:]
-                return (doc.documentID, raw,
-                        Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
+            let built: [(String, Message)] = needBuild.map { doc in
+                (doc.documentID, Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
             }
             await MainActor.run {
                 guard let self else { return }
                 // Drop this batch if a NEWER snapshot already committed (out-of-order completion).
                 guard seq >= self.committedSeq else { return }
-                for (id, raw, m) in built { self.byId[id] = m; self.rawReactions[id] = raw }
-                self.commitSnapshot(docs, seq: seq)
+                for (id, m) in built { self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? "" }
+                self.commitSnapshot(docs, seq: seq, fromCache: fromCache)
             }
         }
     }
 
     // Reconcile the window (deletes, paging cursor, first-load flag) and republish — runs
     // on the main thread AFTER the (off-main) decryption merges its results into the cache.
-    private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int) {
+    private func commitSnapshot(_ docs: [QueryDocumentSnapshot], seq: Int, fromCache: Bool) {
         guard seq >= committedSeq else { return }   // never let an older snapshot overwrite a newer one
         committedSeq = seq
         let windowIds = Set(docs.map { $0.documentID })
-        // A doc missing from the window but newer than its oldest edge was deleted.
-        if let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
+        // A doc missing from the window but newer than its oldest edge was deleted — but ONLY trust the
+        // SERVER for this. A from-cache/resync snapshot can transiently omit a doc that still exists;
+        // deleting on it made the message vanish for a few seconds until the next full snapshot re-added
+        // it ("gone then comes back"). Cache snapshots may still ADD/UPDATE (below), just never DELETE.
+        if !fromCache, docs.isEmpty {
+            // The SERVER says the collection is now EMPTY (everything deleted for everyone / the
+            // disappearing sweep finished on the other device). The cutoff loop below is skipped when
+            // there's no oldest doc, which used to keep every cached message alive — and re-persist the
+            // ghosts to the warm cache, so even reopening showed a fully-deleted conversation forever.
+            byId.removeAll(); rawReactions.removeAll()
+        } else if !fromCache, let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
             for (id, m) in byId where m.createdAt >= cutoff && !windowIds.contains(id) {
                 byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
             }
@@ -244,9 +392,59 @@ final class ThreadRepository {
             didInitialLoad = true
             if docs.count < pageSize { canLoadOlder = false }   // short first page => no history
         }
+        trimWindowIfNeeded()
         rebuild()
         let echoed = Set(byId.values.compactMap { $0.clientId })
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
+    }
+
+    // Incoming typing self-clears after 15s without a refresh: if the
+    // sender's app crashed/lost network before writing typing=false, the bubble would otherwise stick
+    // until some other doc change. Re-armed on every snapshot where typing is (still) true.
+    private func armTypingExpiry() {
+        typingExpiry?.invalidate(); typingExpiry = nil
+        guard otherTyping else { return }
+        typingExpiry = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+            self?.otherTyping = false
+            self?.typingNames = []
+        }
+    }
+
+    // Failed-message sweep, adapted: a bubble must never spin "sending" forever. Any
+    // optimistic message still .sending after 2 minutes flips to .failed ("Tap to retry"). If its
+    // upload later succeeds anyway, the server echo removes the pending — the state self-corrects.
+    private func sweepStuckSends() {
+        let cutoff = Date().addingTimeInterval(-120)
+        var changed = false
+        for i in pending.indices where pending[i].sendState == .sending && pending[i].createdAt < cutoff {
+            pending[i].sendState = .failed
+            changed = true
+        }
+        if changed { refreshItems() }
+    }
+
+    // True while the reader is AWAY from the bottom (reading history) — fed by the view. The trim must
+    // never run then: it LRU-drops the OLDEST rows, which are exactly the rows under the reader — the
+    // deletion yanked the viewport ("the conversation scrolls back while I read old messages"). Trimming
+    // resumes as soon as they return to the bottom, so the memory cap still holds over time.
+    var readerAwayFromBottom = false
+    // True while ensureLoaded pages toward a jump target: the jump can start FROM the bottom (the
+    // scroll hasn't happened yet, so readerAwayFromBottom is still false), and a live commit mid-loop
+    // used to trim away the very pages the jump just loaded — the loop re-paged, the trim re-dropped,
+    // and the jump silently failed after burning its page budget (audit M7).
+    private var jumpPagingInFlight = false
+
+    // LRU-drop the OLDEST messages once the window blows past the high-water mark (the standard 500-cap).
+    // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
+    private func trimWindowIfNeeded() {
+        guard !readerAwayFromBottom, !jumpPagingInFlight else { return }
+        guard byId.count > windowHighWater else { return }
+        let sorted = byId.values.sorted { $0.createdAt < $1.createdAt }
+        for m in sorted.prefix(sorted.count - windowCap) {
+            byId.removeValue(forKey: m.id); rawReactions.removeValue(forKey: m.id)
+        }
+        windowTrimmed = true
+        canLoadOlder = true   // the dropped history can page back in on scroll
     }
 
     // Periodic sweep so messages disappear over time even while the chat is open;
@@ -274,7 +472,19 @@ final class ThreadRepository {
                 var c = m; c.reactions.removeValue(forKey: otherUid); return c
             }
         }
-        messages = msgs.sorted { $0.createdAt < $1.createdAt }
+        // Sort by SEND time (sortAt = sender tap time when present) — a slow-uploading photo keeps its
+        // place above a fast text sent after it. rowId tie-break keeps equal-time order deterministic.
+        var sorted = msgs.sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
+        // Double-echo dedupe: a retry racing a slow-but-successful original can produce TWO server docs
+        // with the same clientId. Show only the FIRST (earlier) one — the duplicate is invisible to the
+        // user even before any server-side cleanup.
+        var seenClientIds = Set<String>()
+        sorted.removeAll { m in
+            guard let c = m.clientId else { return false }
+            return !seenClientIds.insert(c).inserted
+        }
+        messages = sorted
+        ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems()
     }
 
@@ -291,11 +501,19 @@ final class ThreadRepository {
     /// Page in the next older window (called on scroll-to-top). `completion` runs after
     /// the list updates so the view can restore the scroll anchor (no jump).
     func loadOlder(completion: @escaping () -> Void = {}) {
-        guard canLoadOlder, !loadingOlder, let cursor = oldestDoc else { completion(); return }
-        loadingOlder = true
-        db.collection("conversations").document(cid).collection("messages")
+        guard canLoadOlder, !loadingOlder else { completion(); return }
+        let base = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
-            .start(afterDocument: cursor)
+        // After a window trim the doc-snapshot cursor points BELOW the dropped range, so cursor by the
+        // oldest KEPT message's value instead — dropped history pages back in seamlessly.
+        let query: Query
+        if windowTrimmed, let oldest = messages.first {
+            query = base.start(after: [Timestamp(date: oldest.createdAt)])
+        } else if let cursor = oldestDoc {
+            query = base.start(afterDocument: cursor)
+        } else { completion(); return }
+        loadingOlder = true
+        query
             .limit(to: pageSize)
             .getDocuments { [weak self] snap, _ in
                 guard let self else { return }
@@ -309,12 +527,26 @@ final class ThreadRepository {
             }
     }
 
+    // Page older history until `messageId` is loaded (so in-chat search can scroll to a match that's
+    // far above the current window), or we run out of history. Bounded so a bad id can't loop forever.
+    @MainActor
+    func ensureLoaded(_ messageId: String, maxPages: Int = 12) async {   // 12×40 ≈ the window cap — never page unbounded history into memory
+        jumpPagingInFlight = true
+        defer { jumpPagingInFlight = false }
+        var pages = 0
+        while !items.contains(where: { $0.id == messageId }) && canLoadOlder && pages < maxPages {
+            await withCheckedContinuation { cont in loadOlder { cont.resume() } }
+            pages += 1
+        }
+    }
+
     func stop() {
         listener?.remove(); listener = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         expiryTimer?.invalidate(); expiryTimer = nil
+        typingExpiry?.invalidate(); typingExpiry = nil
     }
 
-    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); expiryTimer?.invalidate() }
+    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); expiryTimer?.invalidate(); typingExpiry?.invalidate() }
 }

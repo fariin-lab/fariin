@@ -12,11 +12,15 @@ struct CallEntry: Identifiable, Hashable {
     let otherUid: String
     let callerUid: String
     let outcome: String     // answered | missed
+    let video: Bool         // placed as a video call (old records default to voice)
     let durationSec: Int
     let date: Date
 
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
     var missed: Bool { outcome == "missed" }
+    /// Red/badge-worthy only when THEY called and I didn't pick up — my own
+    /// unanswered outgoing call is just "Outgoing" (standard call-history rule).
+    var missedIncoming: Bool { missed && !mine }
 }
 
 // Aggregates call records across all of my conversations into one history list.
@@ -32,6 +36,14 @@ final class CallsRepository {
     var loading = false
     var hasLoaded = false   // false until the first load finishes -> drives the skeleton
     private var lastLoadedAt: Date?
+
+    /// Sign-out/delete: drop the previous account's call log.
+    func reset() {
+        calls = []
+        hasLoaded = false
+        loading = false
+        lastLoadedAt = nil
+    }
 
     // force: true bypasses the 30s TTL (pull-to-refresh). Normal tab-switch passes false so we
     // don't re-fire N concurrent Firestore queries every time the Calls tab becomes visible.
@@ -53,7 +65,7 @@ final class CallsRepository {
 
         let convSnap = try? await database.collection("conversations")
             .whereField("users", arrayContains: me).getDocuments()
-        let convs = (convSnap?.documents ?? []).map { Conversation(id: $0.documentID, data: $0.data()) }
+        let convs = (convSnap?.documents ?? []).map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
 
         // Fetch every chat's call records CONCURRENTLY (was sequential = N round-trips in
         // series). Each task builds its own CallEntry list off-main; results merged after.
@@ -73,6 +85,7 @@ final class CallsRepository {
                             name: name, photoUrl: photo, otherUid: other,
                             callerUid: data["callerUid"] as? String ?? "",
                             outcome: data["callOutcome"] as? String ?? "answered",
+                            video: data["callVideo"] as? Bool ?? false,
                             durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
                             date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
                     }

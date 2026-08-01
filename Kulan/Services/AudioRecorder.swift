@@ -10,18 +10,73 @@ final class AudioRecorder {
     private var recorder: AVAudioRecorder?
     private var fileURL: URL?
     private var timer: Timer?
+    private var interruptionObserver: NSObjectProtocol?
+    // Fired when a phone call / Siri / alarm interrupts recording — the view resets its hold UI.
+    var onInterrupt: (() -> Void)?
     var isRecording = false
     var elapsed: TimeInterval = 0
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }   // live (not the 0.05s-throttled `elapsed`)
     var levels: [Float] = []          // recent normalized levels (0…1) for the live waveform
     private var allLevels: [Float] = []
 
+    // ── Metering DSP state ──────────────────────────────────────────────────────────────────
+    private var smoothed: Float = 0             // envelope-followed level (VU-meter ballistics output)
+    private let meterHz: Double = 30            // 30 Hz sampling → smooth bars, low CPU
+    private let tauAttack: Float = 0.050        // 50 ms rise  — fast attack (PPM-like), catches transients
+    private let tauDecay:  Float = 0.300        // 300 ms fall — slow decay, the natural VU "settle"
+    private let noiseFloorDB: Float = -50       // below this = silence (0)
+    private let waveWindow = 48                 // live scrolling bar count
+    private let maxWaveSamples = 900            // bounded streaming buffer (halved by RMS when exceeded)
+
+    // Voice-tuned AAC: 24 kHz mono comfortably covers speech (≤ ~8 kHz voiced energy, Nyquist 12 kHz)
+    // and ~40 kbps keeps the E2EE payload small (faster seal + upload) with no audible loss on speech.
     private let settings: [String: Any] = [
         AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-        AVSampleRateKey: 44_100,
+        AVSampleRateKey: 24_000,
         AVNumberOfChannelsKey: 1,
-        AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+        AVEncoderBitRateKey: 40_000,
     ]
+
+    // Set when a call/Siri/alarm interrupted an in-flight recording: the partial note is PRESERVED
+    // (paused, file kept) instead of discarded — the user can still send or cancel it (standard messengers keep an
+    // interrupted draft; the old behavior deleted a long recording with no recovery).
+    var wasInterrupted = false
+
+    init() {
+        // Observe audio-session interruptions (phone call, Siri, alarm, another app grabbing the mic).
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            switch type {
+            case .began:
+                guard self.isRecording else { return }
+                self.recorder?.pause()          // keep the file + captured audio — do NOT discard
+                self.timer?.invalidate(); self.timer = nil
+                self.wasInterrupted = true      // the view flips to the locked bar (send/cancel the draft)
+                self.onInterrupt?()
+            case .ended:
+                // Resume only if iOS says we should and the user hasn't finished/cancelled meanwhile.
+                let opts = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init)
+                if self.wasInterrupted, self.isRecording, opts?.contains(.shouldResume) == true {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    self.recorder?.record()
+                    // Re-arm metering: .began invalidated the timer, so without this the elapsed
+                    // clock and live waveform stayed frozen after the interruption ended.
+                    self.beginMetering(resuming: true)
+                    self.wasInterrupted = false
+                }
+            @unknown default: break
+            }
+        }
+    }
+
+    deinit {
+        if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
+    }
 
     // Pre-warm: activate the session + build & prepareToRecord a recorder AHEAD of time, so the
     // first hold-to-record fires `record()` with ~no latency. Call on chat open + after each send.
@@ -45,11 +100,16 @@ final class AudioRecorder {
 
     func requestAndStart() {
         if let r = recorder {
-            // Re-assert record category — VoiceMessageView playback leaves the session in .playback,
-            // which would make record() silently fail (H1). Cheap, runs on every start.
             let s = AVAudioSession.sharedInstance()
-            try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
-            try? s.setActive(true)
+            // ONLY reconfigure if the session isn't already recording-ready (e.g. voice playback left
+            // it in .playback). `setActive(true)` synchronously negotiates with the audio hardware and
+            // blocks the UI ~100–300ms — that was the hold-to-record lag. When the session is already
+            // .playAndRecord (pre-warmed in prepare(), kept warm across records), skip it and record()
+            // instantly. (First record right after playing a voice note still reconfigures.)
+            if s.category != .playAndRecord {
+                try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? s.setActive(true)
+            }
             r.record(); beginMetering()   // already warmed → instant
             return
         }
@@ -70,40 +130,85 @@ final class AudioRecorder {
         }
     }
 
-    private func beginMetering() {
-        isRecording = true; elapsed = 0; levels = []; allLevels = []
+    private func beginMetering(resuming: Bool = false) {
+        // `resuming` = restarting the timer after an interruption ends: skip the state reset so the
+        // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
+        if !resuming {
+            isRecording = true; elapsed = 0; levels = []; allLevels = []; smoothed = 0
+            Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (sleep block)
+        }
         timer?.invalidate()
+        // Pre-compute the envelope smoothing coefficients from the fixed tick dt: a one-pole
+        // low-pass, alpha = 1 − e^(−dt/τ). Fast attack τ + slow decay τ = real meter ballistics.
+        let dt = Float(1.0 / meterHz)
+        let aAttack = 1 - exp(-dt / tauAttack)
+        let aDecay  = 1 - exp(-dt / tauDecay)
         // .common run-loop mode so elapsed/levels keep updating during gesture/scroll tracking.
-        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 1.0 / meterHz, repeats: true) { [weak self] _ in
             guard let self, let r = self.recorder else { return }
             self.elapsed = r.currentTime
             r.updateMeters()
-            let level = self.normalize(r.averagePower(forChannel: 0))
-            self.allLevels.append(level)
+            let target = self.perceptualLevel(rmsDB: r.averagePower(forChannel: 0),
+                                              peakDB: r.peakPower(forChannel: 0))
+            // Envelope follower: rise quickly toward louder targets, fall back slowly — the
+            // characteristic "spring up, ease down" of an analogue meter (rectified one-pole IIR).
+            let a = target > self.smoothed ? aAttack : aDecay
+            self.smoothed += (target - self.smoothed) * a
+            let level = self.smoothed
             self.levels.append(level)
-            if self.levels.count > 48 { self.levels.removeFirst(self.levels.count - 48) }
+            if self.levels.count > self.waveWindow {
+                self.levels.removeFirst(self.levels.count - self.waveWindow)
+            }
+            self.appendWaveSample(level)
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
 
-    // dBFS (−160…0) → 0…1 with a −50 dB silence floor (Signal's threshold idea).
-    private func normalize(_ dB: Float) -> Float {
-        let floor: Float = -50
-        let clamped = max(floor, min(0, dB))
-        return (clamped - floor) / -floor
+    // dBFS (−∞…0) → perceptual 0…1. Fuses RMS "body" with peak "transients" in the LINEAR domain
+    // (the physically correct place to mix amplitudes), converts back to dB (log ≈ perceptual), gates
+    // the noise floor, and applies a mild power-law expansion so conversational speech fills the bars
+    // without the loud syllables clipping to full scale.
+    private func perceptualLevel(rmsDB: Float, peakDB: Float) -> Float {
+        let rms  = pow(10, rmsDB  / 20)          // dBFS → linear amplitude 0…1
+        let peak = pow(10, peakDB / 20)
+        let amp  = max(0, 0.72 * rms + 0.28 * peak)
+        let db   = amp > 1e-6 ? 20 * log10(amp) : -160
+        let norm = max(0, min(1, (db - noiseFloorDB) / -noiseFloorDB))
+        return pow(norm, 0.85)
     }
 
-    // Reduce all captured levels to `count` bars, quantized to 0…100 for compact storage.
+    // Bounded streaming buffer: when it fills, halve it by RMS-pairing (√((a²+b²)/2)) — an energy-
+    // preserving decimation (a 1-level mip) so a 10-second and a 5-minute note both keep an accurate
+    // envelope in O(maxWaveSamples) memory instead of growing without bound.
+    private func appendWaveSample(_ v: Float) {
+        allLevels.append(v)
+        guard allLevels.count >= maxWaveSamples * 2 else { return }
+        var reduced: [Float] = []; reduced.reserveCapacity(allLevels.count / 2 + 1)
+        var i = 0
+        while i < allLevels.count {
+            if i + 1 < allLevels.count {
+                let a = allLevels[i], b = allLevels[i + 1]
+                reduced.append(sqrt((a * a + b * b) / 2))
+            } else {
+                reduced.append(allLevels[i])
+            }
+            i += 2
+        }
+        allLevels = reduced
+    }
+
+    // Reduce all captured levels to `count` bars via RMS per bucket (preserves perceived energy far
+    // better than a plain mean, which washes out peaks), quantized to 0…100 for compact storage.
     private func waveform(_ count: Int = 40) -> [Int] {
         guard !allLevels.isEmpty else { return [] }
-        let per = max(1, allLevels.count / count)
+        let per = max(1, Int((Double(allLevels.count) / Double(count)).rounded(.up)))
         var bars: [Int] = []
         var i = 0
         while i < allLevels.count && bars.count < count {
             let slice = allLevels[i..<min(i + per, allLevels.count)]
-            let avg = slice.reduce(0, +) / Float(slice.count)
-            bars.append(Int((avg * 100).rounded()))
+            let ms = slice.reduce(Float(0)) { $0 + $1 * $1 } / Float(slice.count)
+            bars.append(Int((sqrt(ms) * 100).rounded()))
             i += per
         }
         return bars
@@ -117,7 +222,9 @@ final class AudioRecorder {
         recorder.stop()
         let wf = waveform()
         reset()
-        guard duration >= 0.5, let data = try? Data(contentsOf: url) else {
+        // Floor at 1.0s: anything shorter displays as "0:00" (Int-floored) — never send a 0:00 note.
+        // The smallest sendable note is ~1s, which shows 0:01.
+        guard duration >= 1.0, let data = try? Data(contentsOf: url) else {
             try? FileManager.default.removeItem(at: url)   // don't leak temp files for tap-too-short clips
             return nil
         }
@@ -133,10 +240,14 @@ final class AudioRecorder {
 
     private func reset() {
         isRecording = false
+        Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         recorder = nil
         levels = []
         allLevels = []
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        prepare()   // re-warm so the NEXT hold-to-record is instant too
+        // Do NOT setActive(false) here: prepare() below immediately setActive(true)s again, so the
+        // deactivate→reactivate churn only made the next hold-to-record re-activate the session from
+        // cold (the "long sluggish delay before recording starts"). Keeping the session warm lets
+        // requestAndStart's record() fire instantly on touch-down.
+        prepare()   // re-warm the recorder so the NEXT hold-to-record is instant too
     }
 }

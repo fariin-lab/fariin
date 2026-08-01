@@ -7,10 +7,15 @@ import Foundation
 enum Limits {
     // Chat
     static let pinnedMessagesPerChat = 3
+    /// Photos or videos in one album message. Picking more starts another album rather than hiding the
+    /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout
+    /// draws, so a sent album is always fully visible.
+    static let albumMaxItems = 10
     static let pinnedChats = 3
     static let forwardChatsAtOnce = 5
-    static let mediaPerMessage = 30
+    static let mediaPerMessage = 32   // raised for parity with standard messengers (user request; was 30)
     static let fileUploadBytes = 2 * 1024 * 1024 * 1024            // 2 GB
+    static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB after 720p transcode
     static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
     static let deleteForEveryoneSeconds: TimeInterval = 48 * 3600 // 48 h
@@ -20,7 +25,7 @@ enum Limits {
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
     static let storyUploadBytes = 100 * 1024 * 1024              // 100 MB
-    static let storyVideoSeconds = 60
+    static let storyVideoSeconds = 30   // standard cap; longer picks are auto-trimmed, never rejected
     static let storyCaptionChars = 700
 
     // Groups

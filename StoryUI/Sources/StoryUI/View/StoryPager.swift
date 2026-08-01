@@ -1,7 +1,7 @@
 //
 // Route A: UIKit UIPageViewController pager (replaces the SwiftUI TabView). The dismiss pan is added to
 // the pager's OWN scroll view (a real direct subview) with require(toFail:), so cube (sideways) and
-// dismiss (down) are mutually exclusive (Signal's StoryPageViewController mechanism). Each page hosts
+// dismiss (down) are mutually exclusive (the same page-controller mechanism). Each page hosts
 // the existing SwiftUI StoryDetailView, so all the story logic (progress, reply, tap-advance) is reused.
 // The cube fold itself is the existing rotation3DEffect inside StoryDetailView (reads its own position).
 //
@@ -19,13 +19,24 @@ struct StoryPager: UIViewControllerRepresentable {
     let onDragChanged: (CGFloat) -> Void   // overlay fade only; the card itself moves in UIKit (smooth)
     let onCommit: () -> Void               // pulled past threshold -> dismiss
     let onCancel: () -> Void               // released short -> overlays restore
-    let onSwipeUp: () -> Void              // up-swipe -> host opens the views sheet (Telegram)
+    let onSwipeUp: () -> Void              // up-swipe -> host opens the views sheet
     var onSwipeUpChanged: (CGFloat) -> Void = { _ in }   // LIVE upward drag amount (pts, +up) → real-time open
     var onSwipeUpEnded: (CGFloat, CGFloat) -> Void = { _, _ in }  // (translation +up, velocity +up) on release
     var dismissEnabled: Bool = true        // install the library's native DOWN dismiss pan (smooth UIKit)
     var swipeUpEnabled: Bool = true        // install the library's UP pan (false -> host owns swipe-up)
 
+    // TRUE while a swipe-down dismiss drag/exit is running. The cube fold (getAngle) derives
+    // its 3D angle from each page's GLOBAL minX — and the dismiss transform MOVES the card,
+    // so a fast flick slammed the pages into a sudden violent fold (content flips away =
+    // "wrong story/layout", edge-on = "black frame"). The cube must be inert during dismissal.
+    static var dismissActive = false
+    // The pager's horizontal scroll view: the cube may fold ONLY while THIS is live (a real
+    // finger page-swipe: tracking/dragging/decelerating). Any other page movement — Apple's
+    // zoom-transition interactive dismiss, layout shifts — must never fold the pages.
+    static weak var horizontalScroll: UIScrollView?
+
     func makeUIViewController(context: Context) -> UIPageViewController {
+        StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
         let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
         pager.dataSource = context.coordinator
         pager.delegate = context.coordinator
@@ -55,7 +66,7 @@ struct StoryPager: UIViewControllerRepresentable {
         coordinator.cubeLink = nil
     }
 
-    // Telegram's cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the
+    // The cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the
     // cube-distance depth so the two faces meet at the shared edge, and a face push (+w/2 z) so the centred
     // page sits flat at full size (cancels the -w/2). t in [-1, 1]: 0 = flat centre, ±1 = edge-on.
     static func cubeTransform(_ t: CGFloat, width w: CGFloat) -> CATransform3D {
@@ -81,7 +92,15 @@ struct StoryPager: UIViewControllerRepresentable {
         private let dismissBackdrop = UIImageView()
         private let dismissBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
         private var didInstallPan = false
+        private weak var dismissPan: DirectionalPanGestureRecognizer?   // ours — system pans defer to it
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
+        // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
+        // begins after the finger has already travelled ~its 8pt threshold plus whatever it moved
+        // while the competing pans were failing — so translation(in:) is already ~30-40pt at the
+        // first .changed. Reporting that raw value made the card JUMP ~5% the moment the sheet
+        // engaged (user's red-border test: a 12px snap at t=0.94). Subtracting this baseline makes
+        // the drag start from ZERO at engagement, so the card tracks smoothly from full size.
+        private var swipeUpBaselineY: CGFloat?
 
         init(_ parent: StoryPager) { self.parent = parent }
         deinit { cubeLink?.invalidate() }
@@ -163,6 +182,7 @@ struct StoryPager: UIViewControllerRepresentable {
             didInstallPan = true
             let scroll = pager.view.subviews.compactMap { $0 as? UIScrollView }.first
             internalScroll = scroll
+            StoryPager.horizontalScroll = scroll   // getAngle gates the cube on ITS live activity
             // When the host owns the swipe (own story: app-level SwiftUI dismiss), the pager's internal
             // scroll pan has nothing to navigate to (single bucket) and only CONTENDS with the host drag
             // for the same touch — that horizontal scroll/bounce fighting the vertical drag is the
@@ -185,11 +205,32 @@ struct StoryPager: UIViewControllerRepresentable {
             // DOWN dismiss pan (native UIKit — smooth). Installed for BOTH own and friends now, so the
             // own-story swipe-down uses the exact same buttery pan friends use (no app-level SwiftUI
             // offset). The card moves in pure UIKit; require(toFail:) keeps the horizontal slide separate.
+            if !parent.dismissEnabled {
+                // PASSIVE watcher over Apple's native zoom-dismiss (user rule: never touch the
+                // native close animation): it moves NOTHING — it only (a) pauses the story the
+                // moment a downward drag starts and (b) COMMITS the close on a fast flick, which
+                // the system's interactive dismissal tends to bounce back ("fast doesn't work").
+                let watch = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismissWatch(_:)))
+                watch.delegate = self
+                watch.cancelsTouchesInView = false
+                pager.view.addGestureRecognizer(watch)
+            }
             if parent.dismissEnabled {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
                 scroll?.panGestureRecognizer.require(toFail: pan)
+                dismissPan = pan
+                // The zoom navigationTransition installs its OWN hidden interactive-dismiss pan on the
+                // presentation chain, and it wins the race on fast flicks (re-lays-out the cover mid-
+                // drag: wrong story flash, black frame, stuck dismissal — and it IGNORES
+                // .interactiveDismissDisabled, device-proven on build 220). Subordinate it: any SYSTEM
+                // pan up the chain must WAIT for our pan to fail — ours begins on every real downward
+                // drag, so the system gesture never engages during drags, while X/auto closes (no pan)
+                // keep the zoom-back hero. The recognizer only exists once presentation settles, so
+                // try shortly after mount and again after the transition completes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.subordinateSystemPans() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.subordinateSystemPans() }
             }
             // UP pan opens the views sheet. NOT installed for own stories — the host owns swipe-up there
             // (real-time viewers-sheet tracking), so the library up pan would double-fire.
@@ -204,7 +245,7 @@ struct StoryPager: UIViewControllerRepresentable {
             // shake/black, so it's disabled — the pager just provides the horizontal slide.
         }
 
-        // Telegram's cube: rotate each page around the shared vertical edge with perspective depth, driven
+        // The cube: rotate each page around the shared vertical edge with perspective depth, driven
         // by its position relative to screen centre. Centre page = flat; ±1 page = 90° (edge-on, hidden).
         @objc func applyCube() {
             guard let scroll = internalScroll else { return }
@@ -227,7 +268,7 @@ struct StoryPager: UIViewControllerRepresentable {
                     sub.layer.transform = CATransform3DIdentity            // resting page is pixel-perfect
                 } else if abs(t) <= 1.0 {
                     // Undo the scroll's flat slide FIRST, then rotate — so the cube anchors to the screen
-                    // edge instead of stacking rotation on top of the slide. Telegram drives the cube from
+                    // edge instead of stacking rotation on top of the slide. The transform drives the cube from
                     // the pan alone with no scroll translation underneath (confirmed from StoryContainerScreen);
                     // this makes our UIPageViewController scroll behave the same way visually.
                     let undoSlide = CATransform3DMakeTranslation(-relX, 0, 0)
@@ -236,36 +277,82 @@ struct StoryPager: UIViewControllerRepresentable {
             }
         }
 
+        // Rides ALONGSIDE the system zoom-dismiss without influencing it (cancelsTouchesInView
+        // false, simultaneous recognition). Pause on drag-start; commit fast flicks via the
+        // SAME native dismissal (isPresented=false → the zoom-back hero plays — no custom anim).
+        @objc func handleDismissWatch(_ g: UIPanGestureRecognizer) {
+            guard let pager else { return }
+            switch g.state {
+            case .began:
+                NotificationCenter.default.post(name: .pauseStory, object: nil)
+            case .ended:
+                let ty = g.translation(in: pager.view).y
+                let vy = g.velocity(in: pager.view).y
+                if ty > 20, vy > 800 {
+                    NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
+                } else {
+                    // Released gently: the system gesture decides commit/cancel on its own;
+                    // resume so a cancelled drag never leaves the story frozen.
+                    NotificationCenter.default.post(name: .resumeStory, object: nil)
+                }
+            case .cancelled, .failed:
+                NotificationCenter.default.post(name: .resumeStory, object: nil)
+            default: break
+            }
+        }
+
         @objc func handleDismiss(_ g: UIPanGestureRecognizer) {
             guard let pager, let card = internalScroll else { return }
             let t = g.translation(in: pager.view)
             switch g.state {
             case .began:
-                // Snapshot the current card, show it (blurred) as the stationary backdrop the drag uncovers.
-                dismissBackdrop.image = snapshot(card)
-                dismissBackdrop.isHidden = false
-                dismissBlur.isHidden = false
+                StoryPager.dismissActive = true   // freeze the cube: no 3D fold while the card moves
+                // SEE-THROUGH dismissal (user reference): the shrinking card must reveal the CHAT
+                // LIST behind the cover, not a blurred copy of itself. The stationary container
+                // goes clear (the cover's presentation background is already clear at rest); the
+                // MOVING card keeps its own solid backing so the story never turns transparent.
+                card.backgroundColor = .black
+                pager.view.backgroundColor = .clear
+                dismissBackdrop.isHidden = true
+                dismissBlur.isHidden = true
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
             case .changed:
                 let ty = max(0, t.y)
                 let frac = min(1, ty / card.bounds.height)
-                let scale = 1.0 - 0.4 * frac            // Telegram: card scales 1.0 -> 0.6 as you pull
+                // Reference video (user's chosen close): the card shrinks HARD as you pull —
+                // down to ~30% at a full drag — floating over the live chat list, with a light
+                // horizontal follow. It shrinks in place; it does not ride off with the finger.
+                let scale = 1.0 - 0.7 * frac
                 card.layer.cornerCurve = .continuous    // Apple squircle
                 card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
                 card.layer.masksToBounds = true
-                // Move ONLY the card; the backdrop stays put, so the area above it shows the blur, not black.
-                card.transform = CGAffineTransform(translationX: 0, y: ty).scaledBy(x: scale, y: scale)
+                // Horizontal follow clamped: a flick's large t.x must not yank the card sideways.
+                let tx = max(-60, min(60, t.x * 0.7))
+                card.transform = CGAffineTransform(translationX: tx, y: ty * 0.85)
+                    .scaledBy(x: scale, y: scale)
                 parent.onDragChanged(ty)                // fade the host overlays
             case .ended, .cancelled:
                 let ty = t.y, vy = g.velocity(in: pager.view).y
-                // Telegram commit: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
+                // commit threshold: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
                 if ty > 200 || (ty > 5 && vy > 200) {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
-                    UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
-                        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height).scaledBy(x: 0.6, y: 0.6)
-                    } completion: { _ in self.parent.onCommit() }
+                    // Reference video (user's chosen close): the card SHRINKS AND MELTS AWAY in
+                    // place over the visible chat list. It must NOT slide off the bottom — the
+                    // slide-off exit was the rejected look. Same exit at every drag depth/speed.
+                    let exitScale: CGFloat = 0.12
+                    let exitTx = max(-60, min(60, t.x * 0.7))   // clamped like the drag
+                    UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn]) {
+                        card.transform = CGAffineTransform(translationX: exitTx, y: max(0, t.y) * 0.85 + 40)
+                            .scaledBy(x: exitScale, y: exitScale)
+                        card.alpha = 0
+                    } completion: { _ in
+                        self.parent.onCommit()
+                        card.alpha = 1   // reset in case the pager is ever reused
+                        StoryPager.dismissActive = false
+                    }
                 } else {
                     NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
                     UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
@@ -273,8 +360,8 @@ struct StoryPager: UIViewControllerRepresentable {
                         card.transform = .identity
                         card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
                     } completion: { _ in
-                        self.dismissBackdrop.isHidden = true
-                        self.dismissBlur.isHidden = true
+                        self.pager?.view.backgroundColor = .black   // restore the solid backing at rest
+                        StoryPager.dismissActive = false            // cube live again at rest
                         self.parent.onCancel()
                     }
                 }
@@ -290,24 +377,57 @@ struct StoryPager: UIViewControllerRepresentable {
         }
         @objc func handleSwipeUp(_ g: UIPanGestureRecognizer) {
             guard let pager else { return }
-            let t = g.translation(in: pager.view)
-            let v = g.velocity(in: pager.view)
+            // WINDOW space, not pager space: the sheet-open morph SCALES the pager while this
+            // pan is live, so pager-space deltas get amplified by 1/scale — a compounding
+            // feedback loop that made the sheet leave the finger at ~50% and fly open on its
+            // own (user report; same disease as the sheet drag's old .local-space bug).
+            let space: UIView = pager.view.window ?? pager.view
+            let t = g.translation(in: space)
+            let v = g.velocity(in: space)
             // Report the drag CONTINUOUSLY so the host tracks the viewers sheet 1:1 with the finger
             // (native feel), then decides open/close on release. Direction-locked to .up, so it never
-            // fights the down dismiss pan.
+            // fights the down dismiss pan. The drag is measured from the ENGAGEMENT point (baseline),
+            // not from touch-down, so the first frame reports ~0 instead of the accumulated wake-up
+            // distance (that was the ~5% engagement snap the user measured).
             switch g.state {
+            case .began:
+                swipeUpBaselineY = t.y
             case .changed:
-                parent.onSwipeUpChanged(max(0, -t.y))          // +up
+                if swipeUpBaselineY == nil { swipeUpBaselineY = t.y }
+                let up = -(t.y - (swipeUpBaselineY ?? t.y))    // +up, zeroed at engagement
+                parent.onSwipeUpChanged(max(0, up))
             case .ended, .cancelled:
-                parent.onSwipeUpEnded(-t.y, -v.y)              // translation +up, velocity +up
+                let up = -(t.y - (swipeUpBaselineY ?? t.y))
+                parent.onSwipeUpEnded(up, -v.y)                // translation +up (from engagement), velocity +up
+                swipeUpBaselineY = nil
             default: break
             }
         }
 
-        // Let the dismiss/swipe-up pans coexist with the hosted SwiftUI gestures (tap zones, hold-to-pause)
-        // and the page scroll. Returning false here blocked the pans whenever the content was tracking a
-        // touch, so swipe-down-to-close and swipe-up never fired. The horizontal-scroll relationship is
-        // still ordered by require(toFail:), so this doesn't double-handle paging.
+        // Walk the presentation chain (pager → window) and make every SYSTEM pan recognizer —
+        // identified by Apple's private "_UI…" class-name prefix (name READ only, no private API
+        // called) — wait for our dismiss pan to fail. SwiftUI's own gesture host recognizers
+        // ("SwiftUI.…") and the scroll pans are untouched. Idempotent; if nothing matches
+        // (future iOS moves it), behavior simply stays as before — graceful no-op.
+        private func subordinateSystemPans() {
+            guard let pan = dismissPan, let v = pager?.view else { return }
+            var node: UIView? = v.superview
+            while let cur = node {
+                for g in cur.gestureRecognizers ?? [] where g !== pan {
+                    guard g is UIPanGestureRecognizer else { continue }
+                    if NSStringFromClass(type(of: g)).hasPrefix("_UI") {
+                        g.require(toFail: pan)
+                    }
+                }
+                node = cur.superview   // ends at (and includes) the UIWindow
+            }
+        }
+
+        // Let our pans coexist with EVERYTHING: the hosted SwiftUI gestures (tap zones,
+        // hold-to-pause), the page scroll, and — critically — the system zoom-dismiss pan,
+        // which the passive watcher must ride alongside without ever blocking it. (The old
+        // "_UI…" exclusion protected the CUSTOM card pan from double-driving; that pan is
+        // inert now, and excluding the system pan would kill the native close outright.)
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
     }
 }
@@ -318,7 +438,7 @@ final class StoryPageHostVC: UIHostingController<AnyView> {
     override init(rootView: AnyView) {
         super.init(rootView: rootView)
         view.backgroundColor = .clear
-        // The story photo must fill edge-to-edge UNDER the status bar (WhatsApp). A UIHostingController insets
+        // The story photo must fill edge-to-edge UNDER the status bar. A UIHostingController insets
         // its SwiftUI content by the safe area by default — THAT was the black strip at the top. Turn it off;
         // the progress bars + reply bar re-add their own safe-area padding inside StoryDetailView.
         if #available(iOS 16.4, *) { safeAreaRegions = [] }

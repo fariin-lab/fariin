@@ -34,6 +34,77 @@ enum StoryDiskCache {
     }
 }
 
+// The story exactly as it renders FULL SCREEN — photo + its real material bars, one image.
+// Captured whenever a fit story is displayed; the host app's viewers-sheet cards render THIS
+// (the original blur, guaranteed) instead of re-building fill+material at card size, which
+// reads as a different, darker blur (heavier relative blur + dimming at small sizes).
+public enum StoryCompositeCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 180 * 1024 * 1024   // screen-sized composites are ~12MB each @3x
+        return c
+    }()
+    public static func image(for url: String) -> UIImage? { cache.object(forKey: url as NSString) }
+    static func store(_ img: UIImage, for url: String) {
+        let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
+        cache.setObject(img, forKey: url as NSString, cost: cost)
+        // Cards showing the placeholder re-check the cache on this signal.
+        NotificationCenter.default.post(name: Notification.Name("storySnapshotReady"), object: url)
+    }
+}
+
+// Renders a story's full-screen composite (photo + native material bars) EXACTLY as the viewer
+// renders it — offscreen, behind the app's content — and photographs it into the cache. This is
+// the iOS app-switcher pattern: the system never scales a live blur; it snapshots the rendered
+// result and scales the picture. Cards built from these snapshots are pixel-native by definition.
+@MainActor
+public enum StorySnapshotFactory {
+    private static var inFlight = Set<String>()
+
+    // contentHeight: the height the LIVE viewer gives the media (screen minus the owner-footer
+    // strip). The offscreen render must match it exactly or the photo centres ~20pt differently
+    // than the morphing real story and the card jumps at hand-off (audit M1).
+    public static func warm(urlString: String, contentHeight: CGFloat) {
+        guard !urlString.isEmpty,
+              StoryCompositeCache.image(for: urlString) == nil,
+              !inFlight.contains(urlString),
+              let scene = UIApplication.shared.connectedScenes
+                  .compactMap({ $0 as? UIWindowScene })
+                  .first(where: { $0.activationState == .foregroundActive }),
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        else { return }
+        inFlight.insert(urlString)
+        let loader = ImageLoader()
+        // Mirror the LIVE media frame exactly: the own-story media view is contentHeight tall
+        // (screen minus the Views/Delete footer strip — audit-verified from the mineOnly
+        // VStack layout), NOT full screen. Rendering at the wrong height centred fit-photos
+        // ~43pt differently and the centre card's photo JUMPED at every hand-off.
+        let mediaFrame = CGRect(x: 0, y: 0, width: window.bounds.width,
+                                height: min(contentHeight, window.bounds.height))
+        loader.frame = mediaFrame
+        window.insertSubview(loader, at: 0)   // behind the root view — never user-visible
+        loader.loadImageWithUrl(urlString) {
+            // One committed frame so the material composites, then photograph.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                let bounds = window.bounds
+                var rendered = false
+                let img = UIGraphicsImageRenderer(bounds: bounds).image { ctx in
+                    UIColor.black.setFill()
+                    ctx.fill(bounds)
+                    rendered = loader.drawHierarchy(in: mediaFrame, afterScreenUpdates: true)
+                }
+                loader.removeFromSuperview()
+                inFlight.remove(urlString)
+                // Only cache real renders: a failed drawHierarchy leaves the black canvas, and a
+                // loader that never got its image has nothing to show (audit M2).
+                if rendered, loader.imageView.image != nil {
+                    StoryCompositeCache.store(img, for: urlString)
+                }
+            }
+        }
+    }
+}
+
 // Shimmering skeleton placeholder (instead of a spinner) while an image is fetched — feels faster.
 final class ShimmerView: UIView {
     private let gradient = CAGradientLayer()
@@ -66,12 +137,14 @@ final class ImageLoader: UIView {
     // .clipShape doesn't clip the UIVisualEffectView blur (it composites separately and spills past the
     // mask), so the friend reply-bar card stayed square; a UIKit corner mask clips the blur reliably.
     var bottomCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
-    // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped (Instagram/WhatsApp).
+    // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped.
     var imageView = UIImageView()
     // Background: a zoomed + blurred copy of the same photo that fills the empty top/bottom.
     private let backgroundImageView = UIImageView()
     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
     private let shimmer = ShimmerView()
+    // The frozen fill+blur composite while the viewers sheet scales the story (see freezeBlur).
+    private var frozenBlur: UIImageView?
 
     // MARK: - Initializers
     init() {
@@ -89,6 +162,7 @@ final class ImageLoader: UIView {
         blurView.frame = bounds
         imageView.frame = bounds
         shimmer.frame = bounds
+        frozenBlur?.frame = bounds
         applyCornerMask()
         // NB: the fit/fill decision is NOT recomputed here — it's fixed once per image in apply(),
         // so a swipe-down's transient bounds changes can never flip it (that flip was the "shaking").
@@ -120,6 +194,10 @@ final class ImageLoader: UIView {
         imageView.image = image
         backgroundImageView.image = image
         decideContentMode()        // fixed for this image; never recomputed on layout/drag
+        if image != nil {
+            scheduleCompositeCapture()
+            installFreezeIfReady()   // sheet engaged + fresh image (carousel jump) → frozen backdrop now
+        }
     }
 
     private func showShimmer(_ show: Bool) {
@@ -140,6 +218,14 @@ final class ImageLoader: UIView {
         }
 
         imageURL = URL(string: validatedUrl)
+
+        // Reused for a different story (carousel jump mid-sheet): the previous story's FROZEN
+        // blur overlay must never survive under the new photo (audit C1 — story A's bars were
+        // showing beneath story B). Drop the stale overlay ONLY — the sheet is still engaged,
+        // so freezeWanted stays set and apply() re-freezes the new image the moment it lands.
+        frozenBlur?.removeFromSuperview()
+        frozenBlur = nil
+        blurView.isHidden = false
 
         guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
 
@@ -207,7 +293,7 @@ final class ImageLoader: UIView {
 private extension ImageLoader {
    func setupImageView() {
        backgroundColor = .black
-       // WhatsApp/Instagram for non-9:16 photos: a zoomed + heavily-blurred copy of the SAME image fills the
+       // For non-9:16 photos: a zoomed + heavily-blurred copy of the SAME image fills the
        // whole screen behind, so the empty top/bottom become a blurred color-matched backdrop (no black bars).
        backgroundImageView.contentMode = .scaleAspectFill
        backgroundImageView.clipsToBounds = true
@@ -216,12 +302,132 @@ private extension ImageLoader {
 
        // Foreground: the photo at its TRUE aspect ratio — aspect-FIT so a square/landscape is never
        // cropped/zoomed. The empty top/bottom become the zoomed + blurred backdrop above (user prefers
-       // this resize+blur look over Instagram's center-crop fill).
+       // this resize+blur look over a center-crop fill).
        imageView.contentMode = .scaleAspectFit
        imageView.clipsToBounds = true
        addSubview(imageView)
 
        shimmer.isHidden = true
        addSubview(shimmer)
+
+       // Viewers-sheet pull-up: freeze/unfreeze the blurred backdrop (posted by the host app).
+       NotificationCenter.default.addObserver(self, selector: #selector(freezeBlur),
+                                              name: Notification.Name("storyFreezeBlur"), object: nil)
+       NotificationCenter.default.addObserver(self, selector: #selector(unfreezeBlur),
+                                              name: Notification.Name("storyUnfreezeBlur"), object: nil)
    }
+}
+
+// MARK: - Blur freeze (viewers-sheet pull-up)
+extension ImageLoader {
+    // A LIVE material re-computes itself as the story scales down, rendering the fit-image bars far
+    // darker/flatter than they looked full screen (user spec: "keep the exact blur from before the
+    // pull-up — never generate a new one"). Freezing rasterizes the CURRENT on-screen appearance
+    // (fill + material composite) into plain pixels and hides the live blur: frozen pixels scale
+    // like a photograph, identical at every size. Unfreeze restores the live material at full screen.
+    // The sheet is engaged and every current/future image should carry a frozen backdrop.
+    // Set by storyFreezeBlur, cleared by storyUnfreezeBlur; apply() re-freezes on image load
+    // (a one-shot timer missed slow-loading carousel jumps — audit finding 3).
+    static var freezeWanted = false
+
+    @objc private func freezeBlur() {
+        Self.freezeWanted = true
+        installFreezeIfReady()
+    }
+
+    func installFreezeIfReady() {
+        guard Self.freezeWanted, frozenBlur == nil,
+              imageView.image != nil, imageView.contentMode == .scaleAspectFit,
+              bounds.width > 0, window != nil else { return }
+        // BLUR-ONLY FREEZE (user's red-border test PROVED the cause): the freeze must hold ONLY
+        // the blurred backdrop, never the sharp photo. It used to photograph the WHOLE story, so
+        // the photo got baked into the freeze AND the live imageView still sat on top — TWO copies
+        // of the photo. On the sheet morph they drifted apart (the two red rectangles the user saw)
+        // and snapped to one at the hand-off (the "jump to fit", up AND back). Freezing the blur
+        // alone leaves exactly ONE photo — the live one — so nothing can drift or snap.
+        // This also keeps the earlier fix: a FRESH live capture (never the offscreen cache, where
+        // Apple's UIVisualEffectView blur fails to render) keeps the blur from looking broken.
+        guard let img = rasterizeBlurBackdrop() else { return }
+        let iv = UIImageView(image: img)
+        iv.frame = bounds
+        iv.contentMode = .scaleToFill          // img is captured at `bounds` → no distortion
+        insertSubview(iv, aboveSubview: blurView)   // BEHIND the live photo (imageView stays on top)
+        blurView.isHidden = true
+        frozenBlur = iv
+    }
+
+    // The blurred backdrop ALONE (background fill + material), captured with the sharp photo
+    // HIDDEN — so the frozen overlay can never contain a second copy of the photo. The live
+    // imageView stays on top and remains the single visible photo. afterScreenUpdates: true is
+    // required so the "hide the photo" change is committed before the snapshot (otherwise the
+    // capture would still include it); the photo is restored synchronously, before any refresh,
+    // so it never visibly disappears.
+    private func rasterizeBlurBackdrop() -> UIImage? {
+        guard bounds.width > 0, window != nil, imageView.image != nil,
+              imageView.contentMode == .scaleAspectFit else { return nil }
+        let photoWasHidden = imageView.isHidden
+        let shimmerWasHidden = shimmer.isHidden
+        imageView.isHidden = true
+        shimmer.isHidden = true
+        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            drawHierarchy(in: bounds, afterScreenUpdates: true)
+        }
+        imageView.isHidden = photoWasHidden
+        shimmer.isHidden = shimmerWasHidden
+        return img
+    }
+
+    // The container's blur samples only its own fill subview, so drawing the hierarchy captures
+    // the material composite correctly. Feeds StoryCompositeCache so the viewers-sheet CARDS can
+    // render the ORIGINAL blur for this story. (The pull-up FREEZE uses rasterizeBlurBackdrop
+    // instead — blur only, no baked photo.)
+    private func rasterizeComposite() -> UIImage? {
+        guard bounds.width > 0, window != nil,
+              imageView.image != nil,
+              imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars
+        else { return nil }
+        let shimmerWasHidden = shimmer.isHidden
+        shimmer.isHidden = true
+        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            drawHierarchy(in: bounds, afterScreenUpdates: false)
+        }
+        shimmer.isHidden = shimmerWasHidden
+        // The CACHE entry is SCREEN-SPACE: the story exactly as the full screen shows it, drawn
+        // at this view's true on-screen position into a screen-sized black canvas. The host's
+        // card windows are computed in screen coordinates, and the media view may be inset from
+        // the screen edges — caching only the media bounds shifted the photo inside the card
+        // (the "image jumping up" hand-off). Skip while mid-page-slide (x offset) or scaled.
+        let origin = convert(CGPoint.zero, to: nil)
+        if let url = imageURL?.absoluteString,
+           abs(origin.x) < 1, abs(origin.y) < 2, transform == .identity {
+            let screen = window?.bounds ?? UIScreen.main.bounds
+            let full = UIGraphicsImageRenderer(bounds: screen).image { ctx in
+                UIColor.black.setFill()
+                ctx.fill(screen)
+                img.draw(in: CGRect(origin: origin, size: bounds.size))
+            }
+            StoryCompositeCache.store(full, for: url)
+        }
+        return img
+    }
+
+    // Capture the full-screen composite shortly after a fit image is shown (view settled,
+    // material rendered). Cheap, once per story per session (cache hit skips it).
+    private func scheduleCompositeCapture() {
+        guard imageView.contentMode == .scaleAspectFit,
+              let url = imageURL?.absoluteString,
+              StoryCompositeCache.image(for: url) == nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, let current = self.imageURL?.absoluteString, current == url,
+                  StoryCompositeCache.image(for: url) == nil else { return }
+            _ = self.rasterizeComposite()
+        }
+    }
+
+    @objc private func unfreezeBlur() {
+        Self.freezeWanted = false
+        frozenBlur?.removeFromSuperview()
+        frozenBlur = nil
+        blurView.isHidden = false
+    }
 }

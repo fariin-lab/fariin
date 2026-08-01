@@ -16,10 +16,19 @@ final class CacheManager: NSObject {
 
     private let fileManager = FileManager.default
 
+    // Firebase-style download URLs percent-encode the whole object path into ONE component
+    // ("stories%2Fid%2Fvideo.mp4"); lastPathComponent DECODES it back to a string WITH slashes,
+    // so using it as a filename pointed into directories that don't exist — the cache move threw
+    // and every remote video spun forever. Flatten to a single safe, unique-per-object name.
+    static func cacheFileName(for url: URL) -> String {
+        let raw = url.lastPathComponent.isEmpty ? String(url.absoluteString.hashValue) : url.lastPathComponent
+        return raw.replacingOccurrences(of: "/", with: "_")
+    }
+
     func loadVideo(from url: URL, completion: @escaping (Result<URL>) -> Void) {
         switch createCacheDirectory() {
         case .success(let cacheDirectory):
-            let videoFileName = url.lastPathComponent
+            let videoFileName = Self.cacheFileName(for: url)
             let destinationUrl = cacheDirectory.appendingPathComponent(videoFileName)
 
             if fileManager.fileExists(atPath: destinationUrl.path) {
@@ -95,7 +104,7 @@ private extension CacheManager {
 
                 switch self.createCacheDirectory() {
                 case .success(let cacheDirectory):
-                    let videoFileName = url.lastPathComponent
+                    let videoFileName = Self.cacheFileName(for: url)
                     let destinationUrl = cacheDirectory.appendingPathComponent(videoFileName)
 
                     do {

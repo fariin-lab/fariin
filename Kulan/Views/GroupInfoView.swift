@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import FirebaseFirestore
 
 // Group info: avatar (admin can change) + name (admin can rename), member list with Admin
 // badges, admin actions (add / remove / promote), and Leave. Live from ConversationsRepository.
@@ -27,14 +28,21 @@ struct GroupInfoView: View {
     @State private var uploadingAvatar = false
     @State private var showCall = false
     @State private var pendingDisappear: Int?   // chosen timer awaiting the "for all members" confirm
+    @State private var showInvite = false
+    @State private var joinReqs: [JoinRequest] = []
+    @State private var reqListener: ListenerRegistration?
+    @State private var confirmDelete = false
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
 
     private var conv: Conversation? { repo.conversations.first { $0.id == cid } }
     private var iAmAdmin: Bool { conv?.isAdmin(me) ?? false }
-    // Admins always can; members can too when the matching permission toggle is on.
-    private var canEditInfo: Bool { iAmAdmin || (conv?.membersCanEditInfo ?? false) }
-    private var canAdd: Bool { iAmAdmin || (conv?.membersCanAdd ?? false) }
+    private var iAmOwner: Bool { conv?.createdBy == me && !(conv?.createdBy.isEmpty ?? true) }
+    // Per-flag admin right check (owner = all; legacy admin with no adminRights entry = all).
+    private func can(_ r: Conversation.Right) -> Bool { conv?.adminCan(me, r) ?? false }
+    // An admin with the matching right can; members can too when the group's permission toggle is on.
+    private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
+    private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
     var body: some View {
         Group {   // pushed from the chat header → uses the parent nav bar (no nested stack)
@@ -84,6 +92,7 @@ struct GroupInfoView: View {
         List {
             headerSection
             settingsSection
+            if can(.inviteUsers) && !joinReqs.isEmpty { joinRequestsSection }
             mediaSection
             membersSection
             leaveSection
@@ -91,8 +100,20 @@ struct GroupInfoView: View {
         .navigationTitle("Group Info")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
+        .onAppear {
+            guard reqListener == nil else { return }
+            reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
+        }
+        .onDisappear { reqListener?.remove(); reqListener = nil }
+        .sheet(isPresented: $showInvite) {
+            InviteLinkSheet(cid: cid, groupTitle: conv?.title ?? "Group", groupPhoto: conv?.avatarUrl,
+                            initialCode: conv?.inviteCode ?? "")
+                .presentationDetents([.medium, .large])
+        }
         .sheet(item: $memberAction) { m in
-            GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "")
+            GroupMemberSheet(cid: cid, member: m, iAmAdmin: iAmAdmin, ownerUid: conv?.createdBy ?? "",
+                             canManageAdmins: iAmOwner, canRestrict: can(.banUsers),
+                             currentRights: conv?.adminRights[m.id], mutedUntil: conv?.restrictedUntil[m.id] ?? 0)
                 .presentationDetents([.medium, .large])
         }
         .confirmationDialog("Leave this group?", isPresented: $confirmLeave, titleVisibility: .visible) {
@@ -111,10 +132,22 @@ struct GroupInfoView: View {
                 if let d = try? await item.loadTransferable(type: Data.self) {
                     try? await ChatService.uploadGroupAvatar(cid: cid, data: d)
                 }
-                await MainActor.run { uploadingAvatar = false }
+                // Reset so re-picking (even the same photo) fires onChange again (WallpaperPickerSheet pattern).
+                await MainActor.run { uploadingAvatar = false; avatarItem = nil }
             }
         }
-        .task { media = await ChatService.sharedMedia(cid) }
+        // Local first (offline + instant), then the server; a failed load leaves what we have rather
+        // than emptying the section — see ContactInfoView.load for the whole story.
+        .task {
+            if let local = ThreadMessageCache.shared.messages(for: cid) {
+                let localMedia = local
+                    .filter { $0.isImage || $0.isVideo || $0.isAlbum }
+                    .flatMap { $0.expandedGalleryItems(cid: cid) }
+                    .reversed()
+                if !localMedia.isEmpty { media = Array(localMedia) }
+            }
+            if let fresh = await ChatService.sharedMedia(cid) { media = fresh }
+        }
         .sheet(isPresented: $showAllMedia) { SharedMediaGridView(cid: cid, media: media) }
         .fullScreenCover(isPresented: $showCall) { GroupCallView() }
     }
@@ -141,7 +174,7 @@ struct GroupInfoView: View {
                 }
                 Text(conv?.title ?? "Group").font(.title2.weight(.bold))
                 Text(conv?.memberCountLabel ?? "").font(.subheadline).foregroundStyle(.secondary)
-                // Description (tap to add/edit if admin) — like Signal/Telegram group info.
+                // Description (tap to add/edit if admin) — like standard group info.
                 if let d = conv?.groupDescription, !d.isEmpty {
                     Text(d).font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -191,10 +224,29 @@ struct GroupInfoView: View {
             .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
+    private var joinRequestsSection: some View {
+        Section("Join requests (\(joinReqs.count))") {
+            ForEach(joinReqs) { r in
+                HStack(spacing: 12) {
+                    AvatarView(name: r.name, photoUrl: r.photo, size: 34)
+                    Text(r.name).foregroundStyle(.primary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button { Task { try? await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
+                        Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                    }.buttonStyle(.plain)
+                    Button { Task { try? await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
+                        Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.red)
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     private var membersSection: some View {
         Section(conv?.memberCountLabel.capitalized ?? "Members") {
             if canAdd {
                 Button { showAdd = true } label: { rowLabel("person.badge.plus", "Add Members", .blue) }
+                Button { showInvite = true } label: { rowLabel("link", "Invite via Link", .teal) }
             }
             ForEach(sortedMembers, id: \.self) { uid in memberRow(uid) }
         }
@@ -203,8 +255,8 @@ struct GroupInfoView: View {
     private var settingsSection: some View {
         Section {
             Button { showMute = true } label: { rowLabel("bell.slash.fill", "Mute Notifications", .gray) }
-            // Disappearing messages is a group-wide setting → admin-only to change.
-            if iAmAdmin {
+            // Disappearing messages is a group-wide setting → needs the Change-info right to edit.
+            if can(.changeInfo) {
                 Button { showDisappear = true } label: {
                     HStack {
                         rowLabel("timer", "Disappearing Messages", .orange)
@@ -219,8 +271,8 @@ struct GroupInfoView: View {
                     Text(disappearLabel).foregroundStyle(.secondary)
                 }
             }
-            // Announcement mode (admin): only admins can send. Enforced in the message rules.
-            if iAmAdmin {
+            // Announcement mode + who-can-do-what: group governance → needs the Change-info right.
+            if can(.changeInfo) {
                 Toggle(isOn: Binding(
                     get: { conv?.onlyAdminsSend ?? false },
                     set: { v in Task { try? await ChatService.setOnlyAdminsSend(cid: cid, v) } }
@@ -259,8 +311,9 @@ struct GroupInfoView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(media.prefix(12)) { m in
-                            if let url = m.imageUrl {
-                                SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
+                            // Videos carry thumbUrl/thumbEnc (no imageUrl) — they were invisible here.
+                            if let url = m.imageUrl ?? m.thumbUrl {
+                                SecureImageView(imageUrl: url, enc: m.imageUrl != nil ? m.enc : m.thumbEnc, cid: cid)
                                     .frame(width: 84, height: 84)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
@@ -283,6 +336,12 @@ struct GroupInfoView: View {
             Button(role: .destructive) { confirmReport = true } label: {
                 HStack(spacing: 12) { chip("exclamationmark.bubble.fill", .red); Text("Report Group").foregroundStyle(.red) }
             }
+            // Only the owner can permanently delete the whole group (for everyone).
+            if iAmOwner {
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    HStack(spacing: 12) { chip("trash.slash.fill", .red); Text("Delete Group").foregroundStyle(.red) }
+                }
+            }
         } footer: {
             if let label = createdByLabel {
                 Text(label).frame(maxWidth: .infinity).multilineTextAlignment(.center).padding(.top, 6)
@@ -295,10 +354,22 @@ struct GroupInfoView: View {
         } message: { Text("This clears the chat from your device only.") }
         .confirmationDialog("Report this group?", isPresented: $confirmReport, titleVisibility: .visible) {
             Button("Report", role: .destructive) {
-                Task { await ChatService.report(reportedUid: conv?.admins.first ?? "", cid: cid, reason: "group") }
+                // admins.first can be ME (self-report) — pick another admin, else the creator, else any other member.
+                let creator = conv?.createdBy
+                let target = conv?.admins.first(where: { $0 != me })
+                    ?? ((creator?.isEmpty == false && creator != me) ? creator : nil)
+                    ?? conv?.users.first(where: { $0 != me })
+                    ?? ""
+                Task { await ChatService.report(reportedUid: target, cid: cid, reason: "group") }
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("The group will be reported to moderators for review.") }
+        .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Group", role: .destructive) {
+                Task { try? await GroupInviteService.deleteGroup(cid: cid); await MainActor.run { dismiss() } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
     }
 
     // "Created by you · 26 Jun 2026" footer, like the reference group screens.
@@ -463,11 +534,23 @@ struct GroupMemberSheet: View {
     let member: GroupInfoView.MemberAction
     let iAmAdmin: Bool
     let ownerUid: String
+    var canManageAdmins: Bool = false      // I'm the owner → can promote/demote + set admin rights
+    var canRestrict: Bool = false          // I hold the Restrict-members right → can remove/mute
+    var currentRights: [String]? = nil      // this admin's granted rights (nil = all/legacy)
+    var mutedUntil: Double = 0              // ms; > now = currently restricted
     @Environment(\.dismiss) private var dismiss
     @State private var profile: UserProfile?
     @State private var confirmRemove = false
+    @State private var rights: Set<String> = []
+    @State private var rightsLoaded = false
     private var me: String { AuthService.shared.uid ?? "" }
     private var isOwner: Bool { member.id == ownerUid }
+    private var iAmOwner: Bool { ownerUid == me }
+    private var isMuted: Bool { mutedUntil > Date().timeIntervalSince1970 * 1000 }
+
+    private func mute(_ seconds: Double) {
+        Task { try? await ChatService.muteMember(cid: cid, uid: member.id, name: member.name, seconds: seconds); dismiss() }
+    }
 
     var body: some View {
         NavigationStack {
@@ -503,25 +586,66 @@ struct GroupMemberSheet: View {
                         } label: { Label("Message", systemImage: "message") }
                     }
                 }
-                // The owner is protected: no admin can demote or remove them.
-                if iAmAdmin && member.id != me && !isOwner {
+                // The owner is protected: no admin can demote or remove them. Promote/demote needs the
+                // Add-admins right; removing a member needs the Restrict-members right.
+                if member.id != me && !isOwner && (canManageAdmins || canRestrict) {
                     Section {
-                        if member.isAdmin {
-                            Button("Remove as Admin") {
-                                Task { try? await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
-                            }
-                        } else {
-                            Button("Make Admin") {
-                                Task { try? await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                        if canManageAdmins {
+                            if member.isAdmin {
+                                Button("Remove as Admin") {
+                                    Task { try? await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                }
+                            } else {
+                                Button("Make Admin") {
+                                    Task { try? await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                }
                             }
                         }
-                        Button("Remove from Group", role: .destructive) { confirmRemove = true }
+                        if canRestrict {
+                            Button("Remove from Group", role: .destructive) { confirmRemove = true }
+                        }
+                    }
+                }
+                // Per-flag admin permissions — owner-only, for an admin who isn't the owner.
+                if iAmOwner && member.isAdmin && !isOwner && member.id != me {
+                    Section("Admin permissions") {
+                        ForEach(Conversation.Right.allCases) { r in
+                            Toggle(r.label, isOn: Binding(
+                                get: { rights.contains(r.rawValue) },
+                                set: { on in
+                                    if on { rights.insert(r.rawValue) } else { rights.remove(r.rawValue) }
+                                    let list = Array(rights)
+                                    Task { try? await ChatService.setAdminRights(cid: cid, uid: member.id, rights: list) }
+                                }))
+                        }
+                    }
+                }
+                // Restrictions — an admin with the Restrict right can mute a regular member (auto-expiring).
+                if canRestrict && !member.isAdmin && !isOwner && member.id != me {
+                    Section("Restrictions") {
+                        if isMuted {
+                            Button("Lift restrictions") {
+                                Task { try? await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name); dismiss() }
+                            }
+                        } else {
+                            Menu {
+                                Button("1 hour")  { mute(3600) }
+                                Button("1 day")   { mute(86400) }
+                                Button("1 week")  { mute(604800) }
+                                Button("Forever") { mute(0) }
+                            } label: { Label("Mute (can't send)", systemImage: "speaker.slash") }
+                        }
                     }
                 }
             }
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { profile = await ProfileStore.shared.fetch(member.id) }
+            .onAppear {
+                guard !rightsLoaded else { return }
+                rightsLoaded = true
+                rights = currentRights.map(Set.init) ?? Set(Conversation.Right.allCases.map(\.rawValue))
+            }
             .confirmationDialog("Remove \(member.name) from the group?",
                                 isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) {
