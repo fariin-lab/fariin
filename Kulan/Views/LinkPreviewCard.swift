@@ -18,8 +18,8 @@ struct LinkPreviewCard: View {
             if let img = preview.imageUrl {
                 Group {
                     if let enc = preview.imageEnc {
-                        SecureImageView(imageUrl: img, enc: enc, cid: cid)
-                    } else if let ui = DiskImageCache.shared.memoryImage(img) {
+                        SecureImageView(imageUrl: img, enc: enc, cid: cid, smallSync: true)
+                    } else if let ui = DiskImageCache.shared.smallImageSync(img) {
                         // The pending bubble's draft image (cached locally under a draft key).
                         Image(uiImage: ui).resizable().scaledToFill()
                     } else {

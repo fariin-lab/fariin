@@ -116,6 +116,12 @@ final class ThreadRepository {
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private(set) var didInitialLoad = false
 
+    /// Same rule as the chat list's: the skeleton is for a genuinely cold chat, not for the moment
+    /// the cache takes to hand back messages it already holds. Shown immediately it flashed grey
+    /// bubbles during the push into EVERY chat, including ones fully cached (owner screenshot).
+    /// Armed only if the first page has still not arrived after a beat.
+    var skeletonArmed = false
+
     private(set) var convLoaded = false   // first conversation-doc snapshot landed (block state is real)
     var otherTyping = false
     var otherRecording = false       // someone is recording a voice note (string "audio…" in the typing map)
@@ -221,6 +227,11 @@ final class ThreadRepository {
             return
         }
         #endif
+        skeletonArmed = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.didInitialLoad else { return }   // cache already answered
+            self.skeletonArmed = true
+        }
         // Anything a forward parked for this chat before we existed. Claimed BEFORE the listener
         // attaches, so the bubble is on screen on the first frame rather than appearing a beat later.
         pending.append(contentsOf: PendingOutbox.take(cid))

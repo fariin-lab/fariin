@@ -480,7 +480,7 @@ struct ThreadView: View {
             // Skeleton placeholder bubbles until the first page is ready (cold load only;
             // a cached chat flips didInitialLoad instantly, so this never flashes).
             .overlay {
-                if !repo.didInitialLoad {
+                if !repo.didInitialLoad, repo.skeletonArmed {
                     ThreadSkeleton().allowsHitTesting(false)
                 }
             }

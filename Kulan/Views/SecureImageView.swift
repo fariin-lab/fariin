@@ -14,6 +14,10 @@ struct SecureImageView: View {
     // Chat photo bubbles pass true: the photos auto-download POLICY can hold the download
     // until tapped (blur + arrow shown). Everything already cached is untouched.
     var gated: Bool = false
+    /// Opt in to the synchronous first-frame disk read. ONLY for small images (a link preview
+    /// thumbnail, a document tile). A chat photo must not use it: decoding one on the main thread
+    /// is exactly the scroll hitch the async path exists to avoid.
+    var smallSync: Bool = false
 
     @State private var image: UIImage?
     @State private var failed = false
@@ -23,7 +27,10 @@ struct SecureImageView: View {
     var body: some View {
         // Synchronous memory-cache read so an already-cached image renders on the FIRST frame
         // (the async path caused a one-frame skeleton flash even on a pure memory hit).
-        let shown = image ?? DiskImageCache.shared.memoryImage(imageUrl)
+        // Memory is empty on every launch, so a small image that IS on disk still had nothing to
+        // draw on its first frame and appeared a beat late (owner report on link previews).
+        let shown = image ?? (smallSync ? DiskImageCache.shared.smallImageSync(imageUrl)
+                                        : DiskImageCache.shared.memoryImage(imageUrl))
         return ZStack {
             if let shown {
                 if fill {
