@@ -407,6 +407,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // ghosted. The hand-made gradient bands failed separately (frosted blocks mid-chat).
         // DO NOT TRY AGAIN without a device in hand: not the system effect, not custom bands. The chat
         // scrolls raw under its bars, which the user has accepted over any of the failure modes.
+        //
+        // ATTEMPT 5 (2026-08-01) — also removed, and this time the reason is written down, because
+        // attempts 4 and 5 were both reverted with EMPTY revert messages and that cost a full session
+        // to reconstruct. Whoever is next: the record below is the point of it.
+        //
+        // What 5 fixed, both real bugs in 4, both confirmed against Apple's own words:
+        //   • 4 set `blurView.layer.mask`. Apple's forum answer says masking a UIVisualEffectView's
+        //     layer is "not guaranteed to work", and the documented symptom is the blur silently not
+        //     rendering, leaving a flat alpha wash. 5 put the blur inside a plain host and masked the
+        //     host instead.
+        //   • 4 ramped the mask across the whole band. Fading a UNIFORM blur shows the sharp bubble
+        //     and a blurred copy at once, which is the "every bubble ghosted" report. 5 kept the band
+        //     solid over the bar and dissolved it over 22pt.
+        //
+        // SYMPTOM ON DEVICE: nothing drew at all. Not washed, not ghosted, absent. Same shape as
+        // attempt 2's failure on iOS 27.
+        //
+        // BEST UNTESTED HYPOTHESIS, for whoever picks this up: the bands are hidden by their own
+        // guard. `layoutEdgeBlur` sized them from `view.safeAreaInsets` on THIS controller's view,
+        // and the note above (the .never inset experiment, build 388) records that on device those
+        // insets "came out near zero". With safe.top ≈ 0 and topOverlayHeight 0 in a chat with no
+        // pinned bar, `topBar <= 0` is true and the band hides itself. Check that before rewriting
+        // anything: log the two numbers on a device first.
+        //
+        // AND THE THING THAT MAY MAKE ALL OF THIS MOOT: every version we can legally build varies
+        // the blur's OPACITY. Apple's `.soft` varies its RADIUS. Those look the same only while the
+        // fade is very short. If a sixth attempt draws but still looks wrong, that is why, and the
+        // honest answer is to stop imitating it and un-invert the list so Apple's own effect works.
         if #available(iOS 26.0, *) {
             collectionView.topEdgeEffect.isHidden = true
             collectionView.bottomEdgeEffect.isHidden = true
