@@ -70,19 +70,19 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            A round of fixes from your own reports, plus the profile icons you sent. Verified to build, not tested on a phone, so please be rough with it.
+            A big one. Most of this is invisible plumbing for bad connections, plus deleted messages now leave a mark instead of vanishing. Verified to build and unit tested, but barely tested on a phone, so please be rough with it.
 
-            THINGS THAT DID NOTHING WHEN TAPPED
-            In the photo viewer, Save Image, Share and the pen all work again. They were reading the photo from the wrong place, so on a picture that was already loaded they quietly did nothing while Delete kept working.
+            DELETING A MESSAGE
+            Deleting for everyone now leaves "This message was deleted" instead of the message silently disappearing, the way WhatsApp does it. Delete that marker again and it goes too, for you or for both of you. If you deleted something and tried again because you were not sure it worked, it no longer lies and says the server refused. And a message you deleted no longer stays readable inside anyone's reply to it, which it did before.
 
-            PINS
-            Deleting a pinned message now clears the pin bar. Delete for Everyone already did this; Delete for Me left a dead "Tap to view" pin behind. Your pin disappears without touching the other person's.
+            WEAK SIGNAL
+            Photos and videos no longer give up the moment you walk into a lift. They wait for the signal and carry on. A failed upload now retries itself instead of failing the whole send, and it keeps going for a while after you leave the app. Calls carry redundancy so one lost packet stops punching a hole in the audio, and they use much less data while nobody is talking. On a 1 to 1 video call, if the line gets too weak the video pauses on its own and says why, then comes back when the line holds. Group video now steps down through three quality levels instead of stalling.
 
-            BUBBLES AND SPACING
-            A message no longer cuts off with dots when there is clearly room below it. Sending a file no longer makes its bubble jump size when the upload lands, and an uploading PDF now shows its page straight away. Sending a reply no longer leaves a gap between the message and the keyboard; cancelling always worked, sending did not.
+            FORWARDING
+            Forwarded photos and messages appear instantly in the chat you send them to, instead of you landing there and watching an empty space while it uploads.
 
-            LOOK AND FEEL
-            The long-press blur now closes exactly like Signal, as a plain fade rather than riding the spring, and the lifted message drops no shadow on iOS 26 the way Signal does. On the profile, the Notes card's More now sits at the end of the second line instead of taking a third. New icons for Verify Encryption, Disappearing Messages, Change Wallpaper, and Sounds and Notifications now matches the Settings one.
+            SMALLER THINGS
+            Pasting a link shows its preview straight away. Sending a file no longer makes the bubble jump size when the upload lands. Photos you send and receive are now kept on your phone properly, which is groundwork for cutting our server costs later.
 
-            PLEASE TRY on the 13 Pro Max especially: send a long message and check it wraps instead of showing dots; send a file and watch the bubble while it uploads; reply to a message and send it, then look at the space above the keyboard; pin a message then delete it; open a photo and tap Save, Share and the pen.
+            PLEASE TRY: delete a message for everyone and check it leaves a mark, then delete the mark; reply to a message then delete the original; forward a photo to someone and watch the chat you land in; send a photo with the phone in airplane mode then turn it off; paste a link in the box; make a video call somewhere with bad signal.
         run: fastlane beta
