@@ -70,17 +70,11 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            A small one, mostly taking something back out.
+            Two small fixes.
 
-            THE LAUNCH
-            I removed the change that drew your chats from a file on the phone. It was meant to kill the blink and instead made the app visibly build itself: letters stacked in a column, then ghosted double text, then rows sliding in from the left. Each fix only revealed the next one, so it is out. The brief blink comes back, which is the lesser problem.
+            Avatars no longer go grey when you tap Edit on the chat list. They were being dimmed as a side effect of switching off the row tap, which was never wanted.
 
-            One piece stays: the time and draft text on a chat row can no longer wrap, so nothing can ever stack them into a column again.
+            Swipe down to close a photo works again after you leave the app and come back. The app was quietly forgetting which photo it was showing, so the swipe had nothing to grab.
 
-            DELETING
-            A delete that could not even read the message was quietly reporting success, showing no error at all. It now says so honestly.
-
-            KNOWN, NOT FIXED YET: a deleted message can stay on screen until you delete another one. I found why. The app spots deletions by comparing what it has against what the server sent, but only for messages newer than the oldest one loaded, so an older one is never noticed. Deleting something else shifts that line and sweeps it out, which is why they vanished together. The proper fix is to ask the server which messages were removed instead of guessing, and it needs doing with you watching.
-
-            PLEASE TRY: nothing new to hunt for. Just use it normally and tell me if anything feels worse than the last build.
+            PLEASE TRY: open a photo, switch to another app, come back, swipe down. And tap Edit on the chat list and check the avatars look normal.
         run: fastlane beta
