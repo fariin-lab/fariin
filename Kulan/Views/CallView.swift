@@ -88,7 +88,10 @@ struct CallView: View {
         switch call.state {
         case .outgoing:     return call.calleeRinging ? "Ringing…" : "Calling…"
         case .incoming:     return "Incoming…"
-        case .active:       return durationText
+        // The weak-signal notice displaces the duration deliberately: while the camera is down, WHY it
+        // is down is the only thing the user actually wants, and without it a paused camera reads as
+        // the app being broken. The timer comes straight back when the link recovers.
+        case .active:       return call.videoPausedForNetwork ? "Video paused, weak signal" : durationText
         case .reconnecting: return "Reconnecting…"
         case .ended:        return endedText
         default:            return ""
@@ -777,6 +780,7 @@ struct MiniCallBar: View {
     private var statusText: String {
         switch call.state {
         case .active:
+            if call.videoPausedForNetwork { return "Video paused" }   // no room for the full sentence here
             if let start = call.connectedDate {
                 let s = max(0, Int(now.timeIntervalSince(start)))
                 return String(format: "%d:%02d", s / 60, s % 60)

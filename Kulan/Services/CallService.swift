@@ -72,12 +72,14 @@ final class CallService: NSObject {
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 startHeartbeat()             // prove we're alive; detect a force-quit on the other side
+                startLinkMonitor()           // weak link -> drop to audio rather than starve it
                 updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 cameraPausedByBackground = false; stopPausedCameraRetry()
+                stopLinkMonitor()
                 calleeRinging = false; recordWritten = false; minimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
@@ -535,6 +537,11 @@ final class CallService: NSObject {
         // real interruption — so the other side would have been left on a frozen frame.
         cameraPausedByBackground = false
         stopPausedCameraRetry()
+        // MANUAL INTENT WINS, and it wins permanently. Clearing this here is what stops the weak-link
+        // monitor from turning a camera back on that the user themselves switched off: with the flag
+        // down there is nothing for the recovery path to resume, and the windows restart from scratch.
+        videoPausedForNetwork = false
+        poorSince = nil; goodSince = nil
         localVideoTrack?.isEnabled = on
         if on { startCameraCapture() } else { videoCapturer?.stopCapture() }
         applyVideoAudioPolicy()
@@ -580,7 +587,12 @@ final class CallService: NSObject {
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
     private func broadcastCameraState() {
         guard let id = callId else { return }
-        db.collection("calls").document(id).updateData(["cams.\(me)": cameraOn])
+        // What we are ACTUALLY sending, not what the user asked for. A camera held down by a capture
+        // interruption or a weak link is producing nothing, and announcing it as on is what leaves the
+        // other side staring at a frozen face instead of falling back to the avatar. The interruption
+        // path already said that was the intent in its own comment; it was still sending `cameraOn`.
+        let sending = cameraOn && !cameraPausedByBackground && !videoPausedForNetwork
+        db.collection("calls").document(id).updateData(["cams.\(me)": sending])
     }
 
     // MARK: - Screen behavior during calls
@@ -696,6 +708,103 @@ final class CallService: NSObject {
     private func stopPausedCameraRetry() {
         pausedCameraRetry?.invalidate()
         pausedCameraRetry = nil
+    }
+
+    // MARK: - Weak-signal video fallback (1:1 only)
+
+    // Group calls do NOT need this: their simulcast ladder steps 540p down to 360p down to 180p, so a
+    // weak leg loses resolution instead of the call. A 1:1 call has no ladder and no floor, so video
+    // just keeps competing with the audio until neither works. This is that missing floor.
+
+    /// Video is off because the LINK cannot carry it, not because the user turned it off. The UI reads
+    /// this to say so. `cameraOn` deliberately stays TRUE throughout: it holds the user's intent, and
+    /// the moment the link recovers we restore what they actually asked for.
+    private(set) var videoPausedForNetwork = false
+
+    private var linkMonitor: Timer?
+    private var poorSince: Date?
+    private var goodSince: Date?
+
+    /// Below this the link cannot carry even the lowest useful video, and the frames we keep pushing
+    /// into it are taken straight out of the audio the call actually needs.
+    private let weakLinkBitrate: Double = 50_000
+    /// Slow in BOTH directions, on purpose. A bare threshold flaps: the estimate wanders across the
+    /// line and video blinks on and off, which is far worse to sit through than the poor video it is
+    /// trying to prevent. Recovery is slower still, so we only come back when it will hold.
+    private let pauseAfterPoor: TimeInterval = 5
+    private let resumeAfterGood: TimeInterval = 10
+
+    private func startLinkMonitor() {
+        guard linkMonitor == nil else { return }
+        linkMonitor = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.sampleLinkQuality()
+        }
+    }
+
+    private func stopLinkMonitor() {
+        linkMonitor?.invalidate(); linkMonitor = nil
+        poorSince = nil; goodSince = nil
+        videoPausedForNetwork = false
+    }
+
+    private func sampleLinkQuality() {
+        guard inLiveCall, let pc else { stopLinkMonitor(); return }
+        // Only meaningful while we are trying to send video at all. A voice call has nothing to pause,
+        // and leaving the windows running would carry a stale verdict into the next camera-on.
+        guard cameraOn else { poorSince = nil; goodSince = nil; return }
+        pc.statistics { [weak self] report in
+            // The ACTIVE pair's estimate. This is what WebRTC's own congestion controller concluded, so
+            // it already folds in loss and round-trip time; a separate packet-loss rule bolted on top
+            // would only add noise and a second thing to tune.
+            let bitrate = report.statistics.values
+                .filter { $0.type == "candidate-pair" && ($0.values["state"] as? String) == "succeeded" }
+                .compactMap { ($0.values["availableOutgoingBitrate"] as? NSNumber)?.doubleValue }
+                .max()
+            DispatchQueue.main.async { self?.applyLinkQuality(bitrate) }
+        }
+    }
+
+    private func applyLinkQuality(_ bitrate: Double?) {
+        guard inLiveCall, cameraOn else { return }
+        // No estimate yet: the pair is still forming, or this build is talking to something that does
+        // not report it. Decide NOTHING. Treating unknown as bad would blank video on a healthy link.
+        guard let bitrate, bitrate > 0 else { poorSince = nil; goodSince = nil; return }
+
+        if bitrate < weakLinkBitrate {
+            goodSince = nil
+            let since = poorSince ?? Date(); poorSince = since
+            if !videoPausedForNetwork, Date().timeIntervalSince(since) >= pauseAfterPoor {
+                pauseVideoForWeakLink()
+            }
+        } else {
+            poorSince = nil
+            let since = goodSince ?? Date(); goodSince = since
+            if videoPausedForNetwork, Date().timeIntervalSince(since) >= resumeAfterGood {
+                resumeVideoAfterWeakLink()
+            }
+        }
+    }
+
+    private func pauseVideoForWeakLink() {
+        // A camera already down for a capture interruption is not ours to take over; that path owns
+        // its own resume and would fight us for it.
+        guard cameraOn, !cameraPausedByBackground else { return }
+        videoPausedForNetwork = true
+        localVideoTrack?.isEnabled = false
+        videoCapturer?.stopCapture()   // stop paying for frames the link cannot carry
+        broadcastCameraState()         // they get the avatar, not a frozen face
+        updateInCallScreenBehavior()
+    }
+
+    private func resumeVideoAfterWeakLink() {
+        videoPausedForNetwork = false
+        // Re-check intent rather than blindly restoring: the user may have hung up, or turned the
+        // camera off themselves, during the ten seconds we spent deciding the link was healthy.
+        guard inLiveCall, cameraOn, !cameraPausedByBackground else { return }
+        localVideoTrack?.isEnabled = true
+        startCameraCapture()
+        broadcastCameraState()
+        updateInCallScreenBehavior()
     }
 
     // Backstop only. If an interruption ended without its notification (or one never fired), returning
