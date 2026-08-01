@@ -160,6 +160,39 @@ struct ForwardPicker: View {
         .background(.bar)
     }
 
+    // Split out of `body`. With the composer and its avatar strip added, the whole thing in one
+    // expression pushed the SwiftUI type-checker past giving up: it stopped inferring `Group`'s
+    // content and reported that it could not convert a ContentUnavailableView to a TableColumn,
+    // which says nothing about the real problem. Same reason ContactInfoView is split into layers.
+    @ViewBuilder private var peopleList: some View {
+        List {
+            Section {
+                ForEach(people) { c in
+                    Button { toggle(c.id) } label: {
+                        HStack(spacing: 12) {
+                            AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 44)
+                            Text(c.displayName(me))
+                                .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(selected.contains(c.id) ? Color.accentColor : Color.secondary)
+                        }
+                    }
+                    .listRowSeparator(.hidden)
+                }
+            } header: {
+                forwardingPreview.textCase(nil)
+            }
+        }
+        .listStyle(.plain)
+        // SWIPE THE LIST TO PUT THE KEYBOARD AWAY. There was no way out of it: this screen has no
+        // Done button, and tapping a row picks that person rather than dismissing, so once the
+        // message box had focus the keyboard stayed up over half the list (owner screenshot).
+        // Interactive, so it follows the finger, the same gesture the chat itself uses.
+        .scrollDismissesKeyboard(.interactive)
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -167,33 +200,7 @@ struct ForwardPicker: View {
                     ContentUnavailableView("No other chats", systemImage: "paperplane",
                                            description: Text("Start another chat to forward into it."))
                 } else {
-                    List {
-                        Section {
-                            ForEach(people) { c in
-                                Button { toggle(c.id) } label: {
-                                    HStack(spacing: 12) {
-                                        AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 44)
-                                        Text(c.displayName(me))
-                                            .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
-                                        Spacer()
-                                        Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
-                                            .font(.system(size: 20))
-                                            .foregroundStyle(selected.contains(c.id) ? Color.accentColor : Color.secondary)
-                                    }
-                                }
-                                .listRowSeparator(.hidden)
-                            }
-                        } header: {
-                            forwardingPreview.textCase(nil)
-                        }
-                    }
-                    .listStyle(.plain)
-                    // SWIPE THE LIST TO PUT THE KEYBOARD AWAY. There was no way out of it: this
-                    // screen has no Done button, and tapping a row picks that person rather than
-                    // dismissing, so once the message box had focus the keyboard stayed up over half
-                    // the list (owner screenshot). Interactive, so it follows the finger, which is
-                    // the same gesture the chat itself uses.
-                    .scrollDismissesKeyboard(.interactive)
+                    peopleList
                 }
             }
             // PINNED UNDER THE TITLE. iOS 26 puts search at the BOTTOM by default, which landed it
