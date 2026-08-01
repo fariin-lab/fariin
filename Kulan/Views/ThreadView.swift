@@ -5319,6 +5319,25 @@ struct MessageBubble: View, Equatable {
                 guard !isMe, !viewed, message.sendState == nil else { return }
                 onTapImage(message)   // ThreadView marks it viewed when the viewer closes
             }
+            // DOUBLE-TAP REACT, but ONLY where the single tap above is inert: your own view-once
+            // photo, or one already viewed. Both are cases where a tap does nothing today, so there
+            // is nothing to delay and nothing to mis-fire.
+            //
+            // Deliberately NOT offered on a received, unviewed one. A single tap there OPENS AND
+            // CONSUMES the photo, and adding tap-counting would make every open wait to see whether
+            // a second tap is coming — the same reason the ordinary photo bubble denies itself this
+            // and hands it to the caption instead. A view-once pill has no caption, so the choice is
+            // react or instant open, and instant open wins on the one that can be burned.
+            // Long-press still reaches the reaction bar in every case.
+            .highPriorityGesture(
+                TapGesture(count: 2).onEnded {
+                    guard isMe || viewed, message.sendState == nil, !restricted, !message.deleted else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    let quick = QuickReaction.current
+                    onReact(myReaction == quick ? nil : quick)
+                },
+                including: (isMe || viewed) ? .all : .subviews
+            )
         } else if message.isImage {
             // ONE bubble: the photo on top, the caption flush below, sharing a
             // single background + a single rounded outline — never two separate bubbles.
