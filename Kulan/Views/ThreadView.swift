@@ -3575,7 +3575,7 @@ struct ThreadView: View {
         composer
             // LINK DETECTION while typing (debounced): resolve the first https link into a draft
             // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
-            .onChange(of: input) { _, text in
+            .onChange(of: input) { old, text in
                 linkDetectTask?.cancel()
                 guard let url = LinkPreviewService.firstURL(in: text) else {
                     if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
@@ -3584,8 +3584,13 @@ struct ThreadView: View {
                 }
                 if url.absoluteString == suppressedLinkUrl { return }
                 if url == linkDraft?.url { return }
+                // A PASTE arrives whole and complete, so there is nothing to wait for and the debounce
+                // was pure dead time before the card appeared (owner report: "the preview is late").
+                // TYPING still needs it, or every keystroke fires a fetch at a half-written url. The
+                // jump in length is what separates them: a keystroke moves it by one.
+                let pasted = text.count - old.count > 1
                 linkDetectTask = Task {
-                    try? await Task.sleep(nanoseconds: 400_000_000)   // let typing settle
+                    if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
                     guard !Task.isCancelled else { return }
                     let d = await LinkPreviewService.shared.draft(for: url)
                     guard !Task.isCancelled, let d else { return }
