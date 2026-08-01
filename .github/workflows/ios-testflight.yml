@@ -70,19 +70,19 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            A big one. Most of this is invisible plumbing for bad connections, plus deleted messages now leave a mark instead of vanishing. Verified to build and unit tested, but barely tested on a phone, so please be rough with it.
+            Mostly about how the app FEELS on opening, plus a new look for the profile. Compiled and unit tested, not tested on a phone, so please be rough with it.
 
-            DELETING A MESSAGE
-            Deleting for everyone now leaves "This message was deleted" instead of the message silently disappearing, the way WhatsApp does it. Delete that marker again and it goes too, for you or for both of you. If you deleted something and tried again because you were not sure it worked, it no longer lies and says the server refused. And a message you deleted no longer stays readable inside anyone's reply to it, which it did before.
+            OPENING THE APP
+            The grey loading rows on the chat list should be gone. Chats now draw on the very first frame, from a small file we keep on the phone, the way WhatsApp does it. Avatars should no longer flash their coloured letter before the photo appears. Opening a chat should no longer flash grey bubbles, and a link preview picture should be there straight away instead of a beat later.
 
-            WEAK SIGNAL
-            Photos and videos no longer give up the moment you walk into a lift. They wait for the signal and carry on. A failed upload now retries itself instead of failing the whole send, and it keeps going for a while after you leave the app. Calls carry redundancy so one lost packet stops punching a hole in the audio, and they use much less data while nobody is talking. On a 1 to 1 video call, if the line gets too weak the video pauses on its own and says why, then comes back when the line holds. Group video now steps down through three quality levels instead of stalling.
+            PROFILE, NEW LOOK
+            Each person now has their own colour at the top of their profile, and it is the same colour as their circle in your chat list. kasim is violet everywhere, Ikran is red everywhere. Their photo stays sharp in the circle where you can see their face. Pull down and the colour stretches. Scroll and their name rises into the bar at the top, so you always know whose profile you are on.
 
             FORWARDING
-            Forwarded photos and messages appear instantly in the chat you send them to, instead of you landing there and watching an empty space while it uploads.
+            The forward screen now has the normal message box and send button at the bottom, so you type and send in one place instead of reaching to the top corner. When you pick more than one person their faces show above it.
 
-            SMALLER THINGS
-            Pasting a link shows its preview straight away. Sending a file no longer makes the bubble jump size when the upload lands. Photos you send and receive are now kept on your phone properly, which is groundwork for cutting our server costs later.
+            THE ONE I NEED YOU TO CHECK
+            The blur at the top and bottom of a chat, where messages slide under the bars. Four earlier versions of this broke on your phone, so please look at it carefully. Two questions: does the MIDDLE of the chat look normal, and when a message slides under the top bar does it look like it is going soft, or like there are two of it. If it looks wrong, tell me which of those two.
 
-            PLEASE TRY: delete a message for everyone and check it leaves a mark, then delete the mark; reply to a message then delete the original; forward a photo to someone and watch the chat you land in; send a photo with the phone in airplane mode then turn it off; paste a link in the box; make a video call somewhere with bad signal.
+            PLEASE TRY: close the app fully and reopen it, and watch the first second; open kasim and Ikran profiles and scroll them; forward a photo to two people; and scroll a chat up and down watching the top and bottom edges.
         run: fastlane beta
