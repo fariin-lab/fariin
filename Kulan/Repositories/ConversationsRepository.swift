@@ -16,6 +16,13 @@ final class ConversationsRepository {
     var conversations: [Conversation] = []
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
 
+    /// The skeleton is for a genuinely COLD load, not for the ~100ms Firestore's persistent cache
+    /// takes to hand back chats it already has on disk. Shown immediately, it flashed shimmer rows
+    /// on EVERY launch and replaced them almost at once, which reads as the app struggling to find
+    /// its own data (owner screenshots). It is armed only if the first snapshot has still not
+    /// arrived after a beat, so a warm launch goes straight from splash to real rows.
+    var skeletonArmed = false
+
     // "Has this account ever shown a non-empty chat list on this device?" — decides whether the FIRST
     // load may show the skeleton. A fresh sign-up has nothing coming, and shimmer rows there fake
     // content that does not exist (user report: "first time sign up have this loading, what is this");
@@ -39,6 +46,11 @@ final class ConversationsRepository {
         // forever: even if auth isn't ready yet, or Firestore's realtime channel is blocked/slow (a cloud
         // simulator like Appetize, or a brand-new user on a poor connection). Real chats clear it sooner.
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.hasLoaded = true }
+        skeletonArmed = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, !self.hasLoaded else { return }   // cache already answered; never flash
+            self.skeletonArmed = true
+        }
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.

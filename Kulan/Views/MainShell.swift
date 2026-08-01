@@ -999,7 +999,7 @@ struct ChatsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if !repo.hasLoaded && repo.expectsChats {
+                if !repo.hasLoaded && repo.expectsChats && repo.skeletonArmed {
                     // Shimmer placeholders on a cold load — ONLY for an account that has ever had
                     // chats here. A fresh sign-up skips the fake rows and lands on the real empty
                     // state directly (its chats, if any ever come, still pop in via the listener).
@@ -1087,7 +1087,10 @@ struct ChatsView: View {
                     // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
                     // only when truly unfiltered; a filtered empty result says so instead.
                     .overlay(alignment: .top) {
-                        if visible.isEmpty {
+                        // `hasLoaded` too, or the quiet window before the skeleton arms would show
+                        // "No chats yet" to someone who has chats. An empty list is only news once
+                        // we have actually heard back.
+                        if visible.isEmpty, repo.hasLoaded {
                             if chatFilter == 0 {
                                 // First run: an empty list must TEACH the next step, not dead-end
                                 // (big-app pattern) — find people, share your QR, invite friends.

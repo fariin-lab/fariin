@@ -161,6 +161,27 @@ final class DiskImageCache {
         mem.object(forKey: url as NSString)
     }
 
+    /// SYNCHRONOUS first-frame read, for SMALL images only. Blocks the caller.
+    ///
+    /// `isCached` can already say "this file is on disk" instantly, but saying so is not enough: an
+    /// AvatarView still had nothing to draw on the frame it was created, so every avatar rendered
+    /// its coloured letter and then cross-faded to the real photo a frame or more later. On a cold
+    /// launch that is EVERY avatar at once, because memory starts empty, and it reads as the app
+    /// not knowing who its own contacts are (owner screenshots).
+    ///
+    /// Justified here because avatars are tiny. The `isCached` gate means a miss costs a Set lookup
+    /// rather than a file probe, and the result is promoted to memory, so each url pays once per
+    /// launch and every later row hits memory. Do NOT use this for full-size photos or video
+    /// posters: those are big enough that reading them on the main thread would stutter a scroll.
+    func smallImageSync(_ url: String) -> UIImage? {
+        if let m = mem.object(forKey: url as NSString) { return m }
+        guard isCached(url), let data = try? Data(contentsOf: existingFileURL(url)),
+              let raw = UIImage(data: data) else { return nil }
+        let img = raw.boundedForDisplay() ?? raw
+        mem.setObject(img, forKey: url as NSString)
+        return img
+    }
+
     /// Memory hit → instant. Otherwise read from disk off-main, decode, and promote
     /// to memory. Returns nil if not cached anywhere (caller should then download).
     func image(for url: String) async -> UIImage? {

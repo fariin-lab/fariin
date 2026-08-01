@@ -145,10 +145,17 @@ struct AvatarView: View {
         self.photoUrl = photoUrl
         self.size = size
         self.onPhotoResolved = onPhotoResolved
-        // FIRST-FRAME seed from the synchronous memory cache: without it every AvatarView
-        // renders the letter fallback for a beat before .task loads the (already cached)
-        // photo — the "blink" on the call screen's big 180pt avatar made it obvious.
-        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.memoryImage(u) {
+        // FIRST-FRAME seed. Memory, then DISK if memory has not been warmed yet.
+        //
+        // Memory alone was not enough: it starts empty on every launch and is dropped on every
+        // backgrounding, so on a cold start EVERY avatar fell through to its coloured letter and
+        // cross-faded to the real photo a frame later, even though the file had been on disk for
+        // days. That is the flash of letters the owner photographed on the chat list.
+        //
+        // The disk read is synchronous and that is deliberate: an avatar is a few KB, it is gated on
+        // the cache's in-memory index so a miss never touches the filesystem, and the result is
+        // promoted to memory so each photo pays once per launch.
+        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.smallImageSync(u) {
             _image = State(initialValue: warm)
         }
     }
