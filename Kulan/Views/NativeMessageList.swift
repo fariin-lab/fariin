@@ -351,6 +351,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var datePillTop: NSLayoutConstraint!   // top constant grows by the pinned-bar height when pinned
     private var topOverlayHeight: CGFloat = 0
     private var composerBarH: CGFloat = 0
+
+    // MARK: Progressive edge blur (attempt 5 — see the long note in viewDidLoad)
+
+    /// The mask goes on THESE, never on the blur views. Masking a UIVisualEffectView's own layer is
+    /// unsupported: Apple's forum answer says it is "not guaranteed to work", and the documented
+    /// symptom is that the blur silently stops rendering and you get a flat alpha wash instead. That
+    /// is what attempt 4 did, and a grey wash over the chat is what came back on the device.
+    private let topBlurHost = UIView()
+    private let bottomBlurHost = UIView()
+    private let topBlurBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let bottomBlurBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let topBlurMask = CAGradientLayer()
+    private let bottomBlurMask = CAGradientLayer()
+    /// How far the blur dissolves BELOW the bar. Everything above this is fully blurred and sits
+    /// behind the bar anyway, so it costs nothing. Short on purpose: a half-faded blur shows the
+    /// sharp bubble AND a blurred copy of it at once, and a long ramp is what made every bubble look
+    /// ghosted. Apple's own `.soft` avoids this by varying the blur RADIUS instead of the opacity,
+    /// which needs private API to reproduce. This keeps the honest imitation's flaw small.
+    private let edgeBlurFade: CGFloat = 22
     private let dateLabel = UILabel()
     private var dateFadeWork: DispatchWorkItem?
     private var lastDateId: String?
@@ -410,6 +429,43 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if #available(iOS 26.0, *) {
             collectionView.topEdgeEffect.isHidden = true
             collectionView.bottomEdgeEffect.isHidden = true
+        }
+
+        // ATTEMPT 5. Apple's own effect stays off above, for the reason four attempts established:
+        // it reads the scroll view's geometry and this list is transformed (scaleY -1), so it blurs
+        // the wrong end. That is structural and the inversion is what killed the scroll jump, so it
+        // is not a trade we undo for a visual.
+        //
+        // What changed since attempt 4, which was the same idea and was reverted twice with no
+        // reason recorded:
+        //
+        //   1. THE MASK MOVED OFF THE BLUR VIEW. Attempt 4 set `blurView.layer.mask`. Apple's forum
+        //      answer is explicit that masking a UIVisualEffectView's layer is not guaranteed to
+        //      work, and the documented failure is that the blur stops rendering and leaves a flat
+        //      alpha wash. A grey wash over the chat is exactly what came back from the device. The
+        //      blur now sits inside a plain host view and the HOST carries the mask.
+        //
+        //   2. THE FADE GOT SHORT. Attempt 4 ramped across the whole band. Fading a uniform blur
+        //      shows the sharp bubble and a blurred copy of it at the same time, so a long ramp
+        //      ghosts everything it covers. The band is now full blur over the bar region, where it
+        //      is hidden behind the bar anyway, and dissolves over 22pt below it.
+        //
+        // Honest about what this is: Apple's `.soft` varies the blur RADIUS, which needs private
+        // API. This varies opacity. It is an imitation, and the fix above is to keep the part where
+        // the imitation shows as small as possible rather than pretend it is not there.
+        for (host, band, mask, isTop) in [
+            (topBlurHost, topBlurBand, topBlurMask, true),
+            (bottomBlurHost, bottomBlurBand, bottomBlurMask, false),
+        ] {
+            host.isUserInteractionEnabled = false
+            band.isUserInteractionEnabled = false
+            mask.colors = isTop ? [UIColor.black.cgColor, UIColor.clear.cgColor]
+                                : [UIColor.clear.cgColor, UIColor.black.cgColor]
+            mask.startPoint = CGPoint(x: 0.5, y: 0)
+            mask.endPoint = CGPoint(x: 0.5, y: 1)
+            host.layer.mask = mask
+            host.addSubview(band)
+            view.insertSubview(host, aboveSubview: collectionView)
         }
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -1708,8 +1764,42 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// Frames written by hand from THIS controller's view, which is untransformed and is the real
+    /// screen region. Nothing here reads the collection view, so the flip cannot reach it.
+    private func layoutEdgeBlur() {
+        let safe = view.safeAreaInsets
+        let w = view.bounds.width
+        let topBar = max(0, safe.top + topOverlayHeight)
+        let bottomBar = max(0, safe.bottom + composerBarH)
+        let topH = topBar + edgeBlurFade
+        let bottomH = bottomBar + edgeBlurFade
+
+        // A layer frame write animates implicitly, which would smear the mask every time the
+        // composer or keyboard changes height.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        topBlurHost.frame = CGRect(x: 0, y: 0, width: w, height: topH)
+        topBlurBand.frame = topBlurHost.bounds
+        topBlurMask.frame = topBlurHost.bounds
+        // Solid until the bar ends, then dissolve. Two stops, so there is no half-blurred middle.
+        topBlurMask.locations = [NSNumber(value: Double(topH > 0 ? topBar / topH : 0)), 1]
+
+        bottomBlurHost.frame = CGRect(x: 0, y: view.bounds.height - bottomH, width: w, height: bottomH)
+        bottomBlurBand.frame = bottomBlurHost.bounds
+        bottomBlurMask.frame = bottomBlurHost.bounds
+        bottomBlurMask.locations = [0, NSNumber(value: Double(bottomH > 0 ? edgeBlurFade / bottomH : 1))]
+
+        // Nothing to blur behind a bar that is not there (a chat with no pinned bar, a composer that
+        // has been hidden). A zero-height band would otherwise draw a hairline at the very edge.
+        topBlurHost.isHidden = topBar <= 0
+        bottomBlurHost.isHidden = bottomBar <= 0
+        CATransaction.commit()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        layoutEdgeBlur()
         // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
         // returns immediately unless a value actually moved.
         updateInsets()
