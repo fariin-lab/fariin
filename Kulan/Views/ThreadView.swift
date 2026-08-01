@@ -225,14 +225,7 @@ struct ThreadView: View {
     @State private var pendingDelete: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
-    // Plain @State, not @FocusState: the composer is a UITextView now (ComposerTextView), so focus
-    // travels as a Bool binding. Every read, write and .onChange below is unchanged by that.
-    @State private var inputFocused = false
-    // The sticker panel, built once and kept. Signal builds their keyboards once and caches them
-    // too: rebuilding one per presentation is a collection view and a layout pass you pay for on
-    // every open. Lazy, so a chat you never open the panel in never allocates it.
-    @State private var stickerKeyboard: StickerKeyboard?
-    @State private var showingStickers = false
+    @FocusState private var inputFocused: Bool
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
     @AppStorage("typingIndicators") private var typingPref = true
@@ -474,13 +467,6 @@ struct ThreadView: View {
             // and it too was a proxy.scrollTo NO-OP that never executed (the "tap input → conversation
             // doesn't move" report).
             .onChange(of: inputFocused) { _, focused in
-                // ONE rule that covers every dismissal there is. The panel is only up while the text
-                // view is first responder, so anything that resigns it — "+", the camera, the GIF
-                // sheet, pushing a profile, leaving the chat, the long-press menu, opening search —
-                // has also put the panel away, and the state has to agree. Signal's clearDesiredKeyboard
-                // exists for exactly this: resigning alone leaves the intent set and the panel springs
-                // back the next time the keyboard opens.
-                if !focused, showingStickers { showingStickers = false }
                 guard focused, isAtBottom else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     nativeScrollTarget = "BOTTOM"
@@ -1268,9 +1254,6 @@ struct ThreadView: View {
                     AnimatedGifView(url: url)
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                } else if let m = msg, m.isSticker, let url = m.imageUrl {
-                    StickerImageView(url: url, fadeIn: false)
-                        .frame(width: 32, height: 32)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
@@ -1281,7 +1264,7 @@ struct ThreadView: View {
                     }
                     Text(msg.map { m in
                         m.isAlbum ? (m.text.isEmpty ? "\(m.album.count) Photos" : m.text)
-                        : (m.isGif ? "GIF" : (m.isSticker ? "Sticker" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.safeText)))))
+                        : (m.isGif ? "GIF" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.safeText))))
                     } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -1949,7 +1932,7 @@ struct ThreadView: View {
         guard m.id != highlightId, m.sendState == nil,                 // delivered only
               m.replyTo == nil, m.reactions.isEmpty,
               !m.isFeatureMarker, !m.viewOnce, !m.forwarded,           // Forwarded tag is SwiftUI-only
-              !m.isImage, !m.isVideo, !m.isGif, !m.isSticker, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
+              !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
         guard !text.isEmpty else { return nil }
@@ -2102,7 +2085,6 @@ struct ThreadView: View {
         if m.isAudio { return "a voice message" }
         if m.isFile { return "a file" }
         if m.isGif { return "a GIF" }
-        if m.isSticker { return "a sticker" }
         let t = m.safeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return "a message" }
         return t.count > 20 ? "\"\(t.prefix(20))…\"" : "\"\(t)\""
@@ -2670,7 +2652,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : ($0.isSticker ? "Sticker" : $0.safeText)))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         // Animated, exactly like the X button does it (see the reply banner's cancel). Clearing it
         // bare drops the banner's ~54pt out of the composer in one frame with no layout pass the
@@ -2934,7 +2916,7 @@ struct ThreadView: View {
         // A photo sent while replying carries the reply (like text/voice) and clears the bar.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : ($0.isSticker ? "Sticker" : $0.safeText)))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         await MainActor.run {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
@@ -3579,7 +3561,7 @@ struct ThreadView: View {
     // always stays open — the Messages-privacy gate only blocks COLD new chats.
     private var hasChatHistory: Bool {
         !(conversation?.lastMessageCipher ?? "").isEmpty
-            || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif || $0.isSticker }
+            || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif }
     }
 
     // The other person's Messages privacy (Settings > Privacy > Messages). "My Contacts" /
@@ -3679,8 +3661,6 @@ struct ThreadView: View {
                 AnimatedGifView(url: url)
                     .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            } else if r.isSticker, let url = r.imageUrl {
-                StickerImageView(url: url, fadeIn: false).frame(width: 36, height: 36)
             } else if r.isVideo, let url = r.thumbUrl {
                 SecureImageView(imageUrl: url, enc: r.thumbEnc, cid: cid)
                     .frame(width: 36, height: 36)
@@ -3763,8 +3743,6 @@ struct ThreadView: View {
             Text(r.viewOnce ? "View-once photo" : "Photo").font(.caption).foregroundStyle(.secondary)
         } else if r.isGif {
             Text("GIF").font(.caption).foregroundStyle(.secondary)
-        } else if r.isSticker {
-            Text(r.stickerEmoji.map { "\($0) Sticker" } ?? "Sticker").font(.caption).foregroundStyle(.secondary)
         } else if r.isVideo {
             Text("Video").font(.caption).foregroundStyle(.secondary)
         } else if r.isFile {
@@ -3918,7 +3896,7 @@ struct ThreadView: View {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
                     // …sticker + camera show only when idle & empty…
-                    if !recordingHeld && !hasText { inFieldSticker; inFieldCamera }
+                    if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
                     // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
                     // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
                     // the DragGesture survives record-start; zIndex keeps the red circle in front of the
@@ -3954,15 +3932,13 @@ struct ThreadView: View {
 
     // Just the text field — trailing buttons are stable siblings (so the mic view never
     // unmounts when the field swaps to the recording row mid-hold).
-    // A real UITextView, so there is a first responder to hand the sticker panel to later. Same font,
-    // same 1...6 growth, same 14/9 padding (now inside the view, which also makes the whole pill
-    // tappable instead of just the text's frame). maxWidth is what makes it greedy the way the
-    // SwiftUI field was, so the sticker/camera/mic siblings keep their 40pt slots.
     private var messageField: some View {
-        ComposerTextView(text: $input, isFocused: $inputFocused,
-                         customInputView: showingStickers ? stickerKeyboard : nil,
-                         onTapWhileCustomInput: { showingStickers = false })
-            .frame(maxWidth: .infinity, alignment: .leading)
+        TextField("Message", text: $input, axis: .vertical)
+            .font(.system(size: 17))
+            .lineLimit(1...6)
+            .focused($inputFocused)
+            .padding(.leading, 14)
+            .padding(.vertical, 9)   // single-line field height ~40 to match the + button
             .onChange(of: input) { _, v in
                 // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
                 if typingBox.suppressNext { typingBox.suppressNext = false; return }
@@ -4012,62 +3988,17 @@ struct ThreadView: View {
                 .frame(width: 40, height: 40)
         }
     }
-    // Stickers open as a KEYBOARD, not a sheet — the panel is the composer's inputView, so UIKit
-    // performs the slide and the swap. Tapping again puts everything away, which is what the owner
-    // asked for and also what Signal does; tapping the text field goes back to typing.
-    //
-    // No SF Symbol means "sticker", so this is the smiley every messenger uses for the same button.
-    @ViewBuilder private var inFieldSticker: some View {
-        if !isGroup || conversation?.isRestricted(me, .sendStickers, now: Date().timeIntervalSince1970) != true {
-            Button { toggleStickerPanel() } label: {
-                Image(systemName: showingStickers ? "keyboard" : "face.smiling")
-                    .font(.system(size: 21, weight: .regular))
-                    .frame(width: 24, height: 24).foregroundStyle(.primary)
-                    .frame(width: 40, height: 40)
-                    .contentTransition(.symbolEffect(.replace))
-            }
-        }
-    }
-
-    /// Signal's swap, and the whole trick is the UNCONDITIONAL focus at the end. If the keyboard is
-    /// already up it is a no-op and UIKit swaps the content in place at a fixed frame; if nothing is
-    /// up, the panel is what gets presented and the system keyboard never appears at all. Either way
-    /// there is exactly one animation and one first responder throughout.
-    private func toggleStickerPanel() {
-        if showingStickers {
-            showingStickers = false
+    // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
+    private var inFieldGif: some View {
+        Button {
+            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            return
-        }
-        if stickerKeyboard == nil {
-            let k = StickerKeyboard()
-            k.onPick = { sticker, packId in sendSticker(sticker, packId: packId) }
-            stickerKeyboard = k
-        }
-        stickerKeyboard?.reloadTabs()
-        showingStickers = true
-        inputFocused = true
-    }
-
-    /// Optimistic, exactly like a GIF: the image is already on this device, so the bubble IS the
-    /// send as far as the eye is concerned. The panel deliberately stays open — sending a sticker is
-    /// not a reason to close a keyboard, and people send them in bursts.
-    private func sendSticker(_ s: StickerPack.Sticker, packId: String) {
-        let clientId = UUID().uuidString
-        repo.addPending(Message(localSticker: s, packId: packId, authorId: me,
-                                clientId: clientId, sendState: .sending))
-        Task {
-            do {
-                try await ChatService.sendSticker(cid: cid, packId: packId, stickerId: s.id, url: s.url,
-                                                  emoji: s.emoji, width: s.width, height: s.height,
-                                                  clientId: clientId, group: isGroup ? groupMembers : nil)
-            } catch {
-                await MainActor.run {
-                    repo.markFailed(clientId: clientId)
-                    sendError = "Couldn't send the sticker. Check your connection and try again."
-                }
-            }
+            showGifPicker = true
+        } label: {
+            Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 24, height: 24).foregroundStyle(.primary)
+                .frame(width: 40, height: 40)
         }
     }
 
@@ -4301,7 +4232,7 @@ struct ThreadView: View {
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : ($0.isSticker ? "Sticker" : $0.safeText)))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
         }
         await MainActor.run {
             // The optimistic bubble must carry the quote too — without it the voice reply
@@ -4861,11 +4792,6 @@ struct MessageBubble: View, Equatable {
     // edge stays a clean, uniform line regardless of length.
     private var maxBubbleWidth: CGFloat { UIScreen.main.bounds.width * 0.72 }
 
-    /// One number for every sticker, not an aspect fit. Stickers are authored square (512×512) and
-    /// the references all draw them at a single fixed size, which is what keeps a conversation full
-    /// of them looking ordered instead of ragged. Art with transparent margins simply sits inside it.
-    static let stickerSide: CGFloat = 140
-
     // Photo bubble sized to the image's natural aspect (capped), not a forced square.
     private var imageDisplaySize: CGSize {
         let maxW: CGFloat = 240, maxH: CGFloat = 340
@@ -5268,27 +5194,6 @@ struct MessageBubble: View, Equatable {
                         }
                 }
             }
-        } else if message.isSticker {
-            // NO bubble. Signal, WhatsApp and Telegram all draw a sticker bare on the wallpaper, and
-            // a sticker is drawn to be seen that way — a background would box in art whose edges are
-            // the point. So no fill, no outline, no corner radii here.
-            VStack(alignment: .leading, spacing: 4) {
-                replyQuote
-                if let url = message.imageUrl {
-                    StickerImageView(url: url)
-                        .frame(width: Self.stickerSide, height: Self.stickerSide)
-                        // Without a background there is nothing for SwiftUI to hit-test, so long-press
-                        // and swipe-to-reply would pass straight through. Same fix the GIF bubble needs.
-                        .overlay(Color.clear.contentShape(Rectangle()))
-                        .overlay(alignment: .bottomTrailing) {
-                            // The time has to sit ON the sticker: there is no bubble to put it in, and
-                            // the wallpaper behind can be any colour, so it carries its own scrim.
-                            metaRow.padding(.horizontal, 7).padding(.vertical, 3)
-                                .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white)
-                        }
-                        .accessibilityLabel(message.stickerEmoji.map { "Sticker, \($0)" } ?? "Sticker")
-                }
-            }
         } else if message.isVideo {
             // ONE bubble: video on top, caption flush below sharing a single background + outline
             // as one unit — the caption was previously not rendered at all ("video + caption not
@@ -5414,25 +5319,6 @@ struct MessageBubble: View, Equatable {
                 guard !isMe, !viewed, message.sendState == nil else { return }
                 onTapImage(message)   // ThreadView marks it viewed when the viewer closes
             }
-            // DOUBLE-TAP REACT, but ONLY where the single tap above is inert: your own view-once
-            // photo, or one already viewed. Both are cases where a tap does nothing today, so there
-            // is nothing to delay and nothing to mis-fire.
-            //
-            // Deliberately NOT offered on a received, unviewed one. A single tap there OPENS AND
-            // CONSUMES the photo, and adding tap-counting would make every open wait to see whether
-            // a second tap is coming — the same reason the ordinary photo bubble denies itself this
-            // and hands it to the caption instead. A view-once pill has no caption, so the choice is
-            // react or instant open, and instant open wins on the one that can be burned.
-            // Long-press still reaches the reaction bar in every case.
-            .highPriorityGesture(
-                TapGesture(count: 2).onEnded {
-                    guard isMe || viewed, message.sendState == nil, !restricted, !message.deleted else { return }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    let quick = QuickReaction.current
-                    onReact(myReaction == quick ? nil : quick)
-                },
-                including: (isMe || viewed) ? .all : .subviews
-            )
         } else if message.isImage {
             // ONE bubble: the photo on top, the caption flush below, sharing a
             // single background + a single rounded outline — never two separate bubbles.
@@ -6057,8 +5943,6 @@ struct MessageBubble: View, Equatable {
                 SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
             } else if o.isGif, let url = o.imageUrl {
                 AnimatedGifView(url: url)
-            } else if o.isSticker, let url = o.imageUrl {
-                StickerImageView(url: url, fadeIn: false)
             } else if o.isVideo, let url = o.thumbUrl {
                 SecureImageView(imageUrl: url, enc: o.thumbEnc, cid: cid)
                     .overlay { Image(systemName: "play.circle.fill").font(.system(size: 14)).foregroundStyle(.white).shadow(radius: 2) }
@@ -6079,7 +5963,6 @@ struct MessageBubble: View, Equatable {
         // someone else's message to fix it, but we can refuse to render the stale copy once we can
         // see the original is gone.
         if o?.deleted == true { return "This message was deleted" }
-        if let o, o.isSticker { return o.stickerEmoji.map { "\($0) Sticker" } ?? "Sticker" }
         if let o, o.isImage || o.isGif || o.isVideo || o.isAlbum {
             if !o.text.isEmpty { return quoteSafeLabel(o.text) }   // caption wins
             if o.isAlbum { return "Photos" }

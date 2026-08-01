@@ -51,14 +51,13 @@ struct ForwardPicker: View {
         if message.isVideo { return "Video" }
         if message.isAudio { return "Voice message" }
         if message.isGif { return "GIF" }
-        if message.isSticker { return message.stickerEmoji.map { "\($0) Sticker" } ?? "Sticker" }
         return message.safeText   // never leak a raw kulan-…: marker (contact/location card)
     }
 
     // WHAT you're forwarding, visibly (owner's 416 report vs WhatsApp: "won't show what u
     // forwarding?"): real decrypted thumbnails for media — the same SecureImageView the chat
     // renders with — as an overlapping stack, with a quote line for text-only forwards.
-    private struct Thumb { let url: String; let enc: EncMeta?; let isVideo: Bool; var isSticker = false }
+    private struct Thumb { let url: String; let enc: EncMeta?; let isVideo: Bool }
     private var previewThumbs: [Thumb] {
         var out: [Thumb] = []
         for m in messages {
@@ -73,10 +72,6 @@ struct ForwardPicker: View {
                 out.append(Thumb(url: t, enc: m.thumbEnc, isVideo: true))
             } else if m.isGif, let u = m.imageUrl {
                 out.append(Thumb(url: u, enc: nil, isVideo: false))
-            } else if m.isSticker, let u = m.imageUrl {
-                // Not a SecureImageView url: a sticker is public and unsealed, so it is flagged with
-                // a nil enc and drawn by the sticker path instead of the decrypting one.
-                out.append(Thumb(url: u, enc: nil, isVideo: false, isSticker: true))
             }
             if out.count >= 3 { return out }
         }
@@ -89,17 +84,8 @@ struct ForwardPicker: View {
             if !thumbs.isEmpty {
                 HStack(spacing: -14) {   // overlapping stack — the reference feel, our drawing
                     ForEach(Array(thumbs.enumerated()), id: \.offset) { i, t in
-                        Group {
-                            if t.isSticker {
-                                // Padded, because a sticker is see-through: drawn edge to edge in a
-                                // 48pt tile it reads as a crop of itself rather than as a sticker.
-                                StickerImageView(url: t.url, fadeIn: false).padding(4)
-                            } else {
-                                SecureImageView(imageUrl: t.url, enc: t.enc, cid: sourceCid)
-                            }
-                        }
+                        SecureImageView(imageUrl: t.url, enc: t.enc, cid: sourceCid)
                             .frame(width: 48, height: 48)
-                            .background(t.isSticker ? Color(uiColor: .secondarySystemBackground) : Color.clear)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)

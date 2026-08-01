@@ -70,17 +70,11 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Stickers are in. Tap the smiley in the message box and the sticker panel opens where the keyboard opens, at the same height, instead of as a sheet over the screen. Tap one to send it. The panel stays open so you can send a few, and tapping the message box goes back to typing.
+            Two small fixes.
 
-            There are only three test stickers for now, in one test pack. They are placeholders so the panel can be tested. Real artwork is yours to send me whenever you are ready.
+            Avatars no longer go grey when you tap Edit on the chat list. They were being dimmed as a side effect of switching off the row tap, which was never wanted.
 
-            Hold a sticker to add it to Favourites. Ones you have used show up under the clock.
+            Swipe down to close a photo works again after you leave the app and come back. The app was quietly forgetting which photo it was showing, so the swipe had nothing to grab.
 
-            The message box was also rebuilt underneath to make this possible. It should look and feel exactly the same as before, so please tell me if you can spot any difference at all.
-
-            The GIF button has left the message box. GIFs are still there, behind the plus, exactly as before. The box is now sticker, camera, mic.
-
-            PLEASE TRY. Stickers: open the panel with the keyboard already up, and with it down, and watch for any jump or double movement. Send a few in a row. Check they look right in the chat, and that reply, forward and reactions still work on them. Turn off wifi and data and open the panel again, the stickers should still be there.
-
-            Typing: write a long message until it stops growing and scrolls, then delete it back down. Tap Edit on a long message you sent. Leave a half written message, go to another chat, come back. Swipe to reply and check the keyboard comes up. Tap plus and the camera and check the keyboard goes fully away each time.
+            PLEASE TRY: open a photo, switch to another app, come back, swipe down. And tap Edit on the chat list and check the avatars look normal.
         run: fastlane beta
