@@ -18,6 +18,7 @@ enum SessionWipe {
         PlayedVoice.shared.clear()
         ContactNames.shared.clear()
         SendQueue.removeAll()                   // queued unsent plaintext
+        PendingOutbox.removeAll()               // forwarded bubbles waiting for a chat to be opened
         AudioCache.removeAll()                  // decrypted voice notes on disk
         VideoCache.removeAll()                  // decrypted videos on disk
         AppRouter.shared.pendingChatId = nil

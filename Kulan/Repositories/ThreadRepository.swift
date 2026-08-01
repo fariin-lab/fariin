@@ -5,6 +5,61 @@ import FirebaseFirestore
 
 // Locally-hidden message ids ("delete for me"): the message doc stays in Firestore for the other
 // person, but we never show it here. Persisted in UserDefaults, cached in memory for cheap reads.
+// Optimistic bubbles for a chat that is NOT OPEN YET.
+//
+// `addPending` only ever reaches the repository of the chat you are standing in. A normal send never
+// notices, because it is already in the chat it is sending to. A FORWARD is the one case that is
+// not: you land in the target chat and the bubble cannot exist yet, so you sit looking at nothing
+// through a download, a decrypt, a re-encrypt and an upload before the photo appears (owner report).
+//
+// A forward parks its bubble here first, and the repository picks it up the moment that chat opens.
+// Reconciliation is entirely unchanged: the bubble carries a clientId, and refreshItems already
+// drops any pending whose clientId comes back in a real message.
+//
+// In memory only, deliberately. A forward that does not outlive the app being killed is a forward
+// that never left, and SendQueue already owns durable retry for text.
+enum PendingOutbox {
+    private static var byCid: [String: [Message]] = [:]
+    private static let lock = NSLock()
+
+    static func add(_ m: Message, to cid: String) {
+        lock.lock(); byCid[cid, default: []].append(m); lock.unlock()
+    }
+
+    /// Drained, not copied. The repository owns them from here, so a second open cannot resurrect a
+    /// bubble whose real message has already landed.
+    static func take(_ cid: String) -> [Message] {
+        lock.lock(); defer { lock.unlock() }
+        return byCid.removeValue(forKey: cid) ?? []
+    }
+
+    /// A forward that failed before its chat was ever opened must not leave a bubble waiting there
+    /// to greet the user later.
+    static func remove(clientId: String) {
+        lock.lock(); defer { lock.unlock() }
+        for (cid, list) in byCid {
+            let kept = list.filter { $0.clientId != clientId }
+            if kept.isEmpty { byCid.removeValue(forKey: cid) } else { byCid[cid] = kept }
+        }
+    }
+
+    /// Sign-out: these are decrypted previews of the previous account's messages.
+    static func removeAll() { lock.lock(); byCid.removeAll(); lock.unlock() }
+
+    static let didFail = Notification.Name("PendingOutbox.didFail")
+
+    /// The forward failed, so nothing is coming to replace its bubble.
+    ///
+    /// Two places can be holding it and ForwardPicker can reach neither: the outbox if that chat was
+    /// never opened, and the chat's own repository if the user is standing in it right now. Clearing
+    /// one and not the other leaves a bubble stuck on "sending" for the rest of the session, which
+    /// reads as the app losing the message rather than failing to send it.
+    static func markFailed(clientId: String) {
+        remove(clientId: clientId)
+        NotificationCenter.default.post(name: didFail, object: clientId)
+    }
+}
+
 enum HiddenMessages {
     private static var cache = Set<String>((UserDefaults.standard.string(forKey: "hiddenMessages") ?? "")
         .split(separator: " ").map(String.init))
@@ -29,6 +84,7 @@ enum HiddenMessages {
 final class ThreadRepository {
     private let db = Firestore.firestore()
     private var listener: ListenerRegistration?
+    private var outboxObserver: NSObjectProtocol?
     private var convListener: ListenerRegistration?
     private var userListener: ListenerRegistration?
     let cid: String
@@ -165,6 +221,16 @@ final class ThreadRepository {
             return
         }
         #endif
+        // Anything a forward parked for this chat before we existed. Claimed BEFORE the listener
+        // attaches, so the bubble is on screen on the first frame rather than appearing a beat later.
+        pending.append(contentsOf: PendingOutbox.take(cid))
+        // A forward can fail while its chat is open, and ForwardPicker has no handle on us to say so.
+        if outboxObserver == nil {
+            outboxObserver = NotificationCenter.default.addObserver(
+                forName: PendingOutbox.didFail, object: nil, queue: .main) { [weak self] n in
+                    if let id = n.object as? String { self?.markFailed(clientId: id) }
+                }
+        }
         guard let uid = Auth.auth().currentUser?.uid else { return }
         // 1:1 cid is "uidA_uidB"; a group cid is a random doc id (no underscore).
         let isOneToOne = cid.contains("_")
@@ -565,6 +631,8 @@ final class ThreadRepository {
 
     func stop() {
         listener?.remove(); listener = nil
+        if let outboxObserver { NotificationCenter.default.removeObserver(outboxObserver) }
+        outboxObserver = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         expiryTimer?.invalidate(); expiryTimer = nil

@@ -179,6 +179,31 @@ struct ForwardPicker: View {
         // ONE chat lands you IN that chat — watching your forward arrive IS the confirmation, so no
         // toast there. Several chats can't all be landed in → stay put, the toast confirms instead.
         // Same route a banner tap uses; MainShell foregrounds Chats and pushes.
+        // OPTIMISTIC BUBBLES FIRST, before the navigation below, so the target chat's repository
+        // finds them the moment it starts and the forward is on screen in the first frame.
+        //
+        // Why a forward needed this at all: a normal send shows its bubble instantly from the bytes
+        // already on the phone, but a forward went straight to ChatService and showed NOTHING until a
+        // download, a decrypt, a re-encrypt and an upload had all finished. You landed in the chat and
+        // watched an empty space (owner report). The bubble now appears immediately and the real
+        // message replaces it in place, matched on this clientId.
+        var ids: [String: [String]] = [:]   // cid -> clientIds, so a failure can clear the right ones
+        for cid in targets where cid != src {
+            for m in ordered {
+                let clientId = UUID().uuidString
+                var p = m
+                p.clientId = clientId
+                p.authorId = me
+                p.createdAt = Date()
+                p.sendState = .sending
+                p.forwarded = true
+                p.reactions = [:]     // reactions belong to the ORIGINAL message, not this copy
+                p.replyTo = nil       // and so does whatever it was replying to over there
+                PendingOutbox.add(p, to: cid)
+                ids[cid, default: []].append(clientId)
+            }
+        }
+
         if targets.count == 1, let cid = targets.first {
             // Forwarding back into the chat you're standing in needs no navigation and no toast —
             // the sheet closes and the forward lands in front of you.
@@ -193,9 +218,17 @@ struct ForwardPicker: View {
         Task {
             var anyFailed = false
             for cid in targets {
-                for m in ordered {
-                    do { try await ChatService.forwardMessage(m, from: src, to: cid) }
-                    catch { anyFailed = true }
+                for (i, m) in ordered.enumerated() {
+                    // Same clientId the bubble above carries, so the echo lands ON it.
+                    let clientId = ids[cid]?[i]
+                    do { try await ChatService.forwardMessage(m, from: src, to: cid, clientId: clientId) }
+                    catch {
+                        anyFailed = true
+                        // Nothing is coming to replace this one. Clear it from BOTH places: the chat
+                        // if it is already open, and the outbox if it has never been opened, or the
+                        // user would meet a bubble stuck on "sending" whenever they got there.
+                        if let clientId { PendingOutbox.markFailed(clientId: clientId) }
+                    }
                 }
                 if !note.isEmpty {
                     do { try await ChatService.sendText(cid: cid, text: note) }
