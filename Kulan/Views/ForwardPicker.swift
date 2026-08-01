@@ -139,7 +139,12 @@ struct ForwardPicker: View {
                 TextField("Add a message…", text: $comment, axis: .vertical)
                     .lineLimit(1...4)
                     .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(.regularMaterial, in: Capsule())
+                    // A filled capsule on the bar's own material, with a hairline, so it reads as a
+                    // composer rather than a search field. A plain material capsule is exactly what
+                    // iOS search looks like, and with search sitting under it the two were
+                    // indistinguishable (owner screenshot).
+                    .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
                 Button { sendAll() } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 19, weight: .bold))
@@ -185,7 +190,12 @@ struct ForwardPicker: View {
                     .listStyle(.plain)
                 }
             }
-            .searchable(text: $query, prompt: "Search")
+            // PINNED UNDER THE TITLE. iOS 26 puts search at the BOTTOM by default, which landed it
+            // directly beneath the message box and gave the screen two stacked input fields, so the
+            // one you type into read as a second search bar (owner screenshot). Search belongs at the
+            // top with the list it filters; the bottom belongs to the message you are sending.
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Search")
             // Add-your-own-text (owner's pick): appears once a chat is chosen; lands as its OWN
             // message right after the forwards, in every picked chat — never glued to a caption.
             .safeAreaInset(edge: .bottom) {
