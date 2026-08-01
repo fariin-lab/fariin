@@ -70,11 +70,13 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Two small fixes.
+            This build is a step back to build 430.
 
-            Avatars no longer go grey when you tap Edit on the chat list. They were being dimmed as a side effect of switching off the row tap, which was never wanted.
+            The stickers and the rebuilt message box from the last build are gone. All of it has been removed, not patched, so this is exactly the app you had before that build with nothing new added and nothing left over.
 
-            Swipe down to close a photo works again after you leave the app and come back. The app was quietly forgetting which photo it was showing, so the swipe had nothing to grab.
+            The message box is back to how it was, with the GIF button beside the camera.
 
-            PLEASE TRY: open a photo, switch to another app, come back, swipe down. And tap Edit on the chat list and check the avatars look normal.
+            Stickers will come back, differently, and one piece at a time so anything wrong is easy to spot.
+
+            NOTHING NEW TO TEST. If anything still feels wrong here, it is something I have not found yet, so tell me and I will chase it.
         run: fastlane beta
