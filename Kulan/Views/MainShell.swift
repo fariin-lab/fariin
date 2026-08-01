@@ -728,6 +728,11 @@ struct ChatsView: View {
         }
         .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
         .disabled(selecting)   // edit mode: the push is off; the overlay owns the tap
+        // ...but `disabled` also DIMS, and that is not wanted here. In Select mode every avatar and
+        // name went grey, so the list looked switched off rather than ready to be picked from (owner
+        // screenshot). The disable is only there to stop the push; the tap-catcher overlay already
+        // owns the gesture. Putting the opacity back leaves the behaviour and drops the greying.
+        .opacity(1)
         .overlay {
             if selecting {
                 // Whole row toggles, like Mail and Telegram (taps on a Button's content were
