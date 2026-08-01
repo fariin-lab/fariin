@@ -70,19 +70,14 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            You can watch an upload happen now. The ring on a photo, video or file fills as the bytes go, instead of spinning and telling you nothing.
+            Video is back to how it was. My rebuilt controls from the last build broke it, so I took the whole change out rather than patch it, and the player file is now exactly what it was before I touched it.
 
-            When you first asked for this I told you it could not be measured. That was wrong. The upload was reporting its progress the whole time and the app was throwing it away, so this build reads it properly.
+            I will do that work again, but properly next time: one piece at a time with you looking at each on the phone, instead of me checking it compiles and calling it done.
 
-            It still spins for the first moment, before any bytes have gone. That is deliberate and it is what Signal does too: no reading yet is not the same as zero, and a ring sitting empty at the start looks broken.
+            In Select Chats, a row whose person has a story now slides across with the rest when the checkboxes appear, instead of standing out of line.
 
-            Two things you might notice and wonder about, both on purpose. If an upload drops and restarts, the ring goes back to zero, because the bytes really do start again. And it never slides backwards, even though the phone sometimes reports progress out of order.
+            Everything from the last build is still here: the upload ring that fills as the bytes go, your archive icons, and the message sound icon.
 
-            The spinner itself is rebuilt on Signal's, read from their code. It opens from nothing into a half circle as it starts turning, rather than just appearing.
+            PLEASE TRY: open a video and scroll, and check it behaves like it used to. Then tap Edit on the chat list and watch the row that has a story ring move with its neighbours.
 
-            Albums do not show progress yet. An album uploads one photo at a time so there is no single number, and I would rather ask you what it should mean than guess.
-
-            Also in this build: your archive icon in all four places, and the message sound icon. Note that the message sound drawing you sent is identical to the call sound one, so those two rows now show the same picture. Say the word if that was not intended.
-
-            PLEASE TRY: send a big video on a slow connection and watch the ring. Send a photo. Check the archive icon on a swipe, in the menu, and in Select mode, and tell me if the swipe one is blank.
         run: fastlane beta
