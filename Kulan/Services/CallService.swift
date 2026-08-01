@@ -312,6 +312,86 @@ final class CallService: NSObject {
         }
     }
 
+    // MARK: - Opus tuning (DTX + RED)
+
+    // Every SDP we create goes through here before it is installed AND before the same bytes are
+    // published to Firestore, so the two can never disagree.
+    //
+    // Opus DTX and opus RED are both off by default in libwebrtc, and at this SDK version there is no
+    // API to switch them on from iOS: RTCRtpTransceiver has no setCodecPreferences (that one is
+    // browser-only) and RTCRtpEncodingParameters has no dtx field. Rewriting the SDP is the only lever.
+    //
+    // What they buy on the mobile networks these calls actually run over: DTX stops the encoder paying
+    // full bitrate for silence (only one person talks at a time, and the callee's line is silent for
+    // the whole ring), and RED carries the previous opus frame alongside the current one so a single
+    // lost packet no longer punches an audible hole.
+    //
+    // Direction is the reason this has to run on the ANSWER as well as the offer: the parameters in
+    // the SDP we send configure the OTHER phone's encoder (RFC 7587 usedtx is stated as the decoder's
+    // preference, and libwebrtc picks the send codec out of the remote description). Against a peer on
+    // an older build the un-rewritten direction simply stays plain opus and still negotiates.
+    private func withOpusDtxAndRed(_ original: RTCSessionDescription) -> RTCSessionDescription {
+        RTCSessionDescription(type: original.type, sdp: opusDtxAndRedSdp(from: original.sdp))
+    }
+
+    // Deliberately paranoid. A malformed answer does not degrade a call, it kills it, so anything that
+    // does not look exactly like what libwebrtc generates is handed back untouched.
+    private func opusDtxAndRedSdp(from sdp: String) -> String {
+        let eol = sdp.contains("\r\n") ? "\r\n" : "\n"
+        var lines = sdp.components(separatedBy: eol)
+        guard let mLine = lines.firstIndex(where: { $0.hasPrefix("m=audio ") }) else { return sdp }
+        // Stop at the next m= line. A video call's section carries its own rtpmaps, video red/90000
+        // included, and matching those would rewrite the wrong m-line.
+        let end = lines[(mLine + 1)...].firstIndex(where: { $0.hasPrefix("m=") }) ?? lines.endIndex
+        let audio = (mLine + 1)..<end
+
+        func payloadType(of rtpmap: String) -> String? {
+            for i in audio where lines[i].hasPrefix("a=rtpmap:") {
+                let f = lines[i].dropFirst("a=rtpmap:".count).split(separator: " ", maxSplits: 1)
+                if f.count == 2, f[1].trimmingCharacters(in: .whitespaces) == rtpmap { return String(f[0]) }
+            }
+            return nil
+        }
+        func fmtpLine(for pt: String) -> Int? { audio.first { lines[$0].hasPrefix("a=fmtp:\(pt) ") } }
+
+        guard let opus = payloadType(of: "opus/48000/2") else { return sdp }
+
+        // DTX and the bitrate ceiling both ride on the fmtp line libwebrtc already writes (minptime,
+        // useinbandfec). No such line, or an empty one, and we skip rather than invent the syntax.
+        let opusFmtp = "a=fmtp:\(opus) "
+        if let i = fmtpLine(for: opus), lines[i].count > opusFmtp.count {
+            if !lines[i].contains("usedtx") { lines[i] += ";usedtx=1" }
+            // A voice ceiling, not a music one: opus is clean on speech well below this, and the
+            // headroom it frees is the difference between a call holding and a call breaking up on a
+            // 2G leg. Budget for roughly double on the wire when RED is also on, since every packet
+            // then carries the previous frame as well.
+            if !lines[i].contains("maxaveragebitrate") { lines[i] += ";maxaveragebitrate=24000" }
+        }
+
+        // libwebrtc offers red directly AFTER opus, which gets it negotiated but never used: the send
+        // codec is the first one in the list, so red has to move in front of opus. This is exactly what
+        // setCodecPreferences does in a browser, and only the m-line order matters (attributes are
+        // looked up by payload type), so the rtpmap/fmtp lines are left where they are.
+        if let red = payloadType(of: "red/48000/2"), let i = fmtpLine(for: red) {
+            // red's own fmtp has to list this exact opus payload (a=fmtp:63 111/111). Red WITHOUT a
+            // valid RFC 2198 line is the M95 shape that fails to negotiate, and preferring that would
+            // take the whole audio stream down with it.
+            let carried = lines[i].dropFirst(("a=fmtp:\(red) ").count).split(separator: "/")
+            var pts = lines[mLine].split(separator: " ").map(String.init)
+            // 0...2 are "m=audio", the port and the proto; the payload list starts at 3. Searching only
+            // from there is what stops a port number that happens to read like a payload type matching.
+            if !carried.isEmpty, carried.allSatisfy({ $0.trimmingCharacters(in: .whitespaces) == opus }),
+               pts.count > 4,
+               let redAt = pts[3...].firstIndex(of: red),
+               let opusAt = pts[3...].firstIndex(of: opus), redAt > opusAt {
+                pts.remove(at: redAt)
+                pts.insert(red, at: opusAt)
+                lines[mLine] = pts.joined(separator: " ")
+            }
+        }
+        return lines.joined(separator: eol)
+    }
+
     // MARK: - Video tracks / capture
 
     // Adds the local video track (once, at call setup). Only fires the camera + its permission
@@ -968,9 +1048,13 @@ final class CallService: NSObject {
                                               optionalConstraints: nil)
         pc.offer(for: constraints) { [weak self] sdp, _ in
             guard let self, let sdp, let pc = self.pc else { return }
-            pc.setLocalDescription(sdp) { _ in
+            // createOffer rebuilds the codec list from scratch, so a restart offer that skipped this
+            // would flip the order back to opus-first and drop RED for the rest of the call, right at
+            // the moment the network is already bad enough to need a reconnect.
+            let local = self.withOpusDtxAndRed(sdp)
+            pc.setLocalDescription(local) { _ in
                 self.db.collection("calls").document(id)
-                    .updateData(["restartOffer": ["sdp": sdp.sdp, "version": v]])
+                    .updateData(["restartOffer": ["sdp": local.sdp, "version": v]])
             }
         }
     }
@@ -1033,7 +1117,8 @@ final class CallService: NSObject {
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             self.pc?.offer(for: constraints) { [weak self] sdp, _ in
                 guard let self, let sdp, let pc = self.pc else { return }
-                pc.setLocalDescription(sdp) { _ in
+                let local = self.withOpusDtxAndRed(sdp)
+                pc.setLocalDescription(local) { _ in
                     ref.setData([
                         "caller": self.me,
                         "callee": uid,
@@ -1041,7 +1126,7 @@ final class CallService: NSObject {
                         "callerPhoto": ProfileStore.shared.me?.photoUrl ?? "",
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
-                        "offer": ["sdp": sdp.sdp, "type": "offer"],
+                        "offer": ["sdp": local.sdp, "type": "offer"],
                         "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]) { [weak self] err in
@@ -1338,8 +1423,9 @@ final class CallService: NSObject {
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc.answer(for: constraints) { answerSdp, _ in
                 guard let answerSdp else { return }
-                pc.setLocalDescription(answerSdp) { _ in
-                    var data: [String: Any] = ["answer": ["sdp": answerSdp.sdp, "type": "answer"], "status": "active"]
+                let local = self.withOpusDtxAndRed(answerSdp)
+                pc.setLocalDescription(local) { _ in
+                    var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"], "status": "active"]
                     data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
                     // ONLY IF IT IS STILL RINGING (audit). answer() removes the cancel watcher and
                     // then waits on the mic prompt and TURN; a caller who cancels inside that window
@@ -1400,8 +1486,9 @@ final class CallService: NSObject {
                     let c = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
                     pc.answer(for: c) { ans, _ in
                         guard let ans else { return }
-                        pc.setLocalDescription(ans) { _ in
-                            ref.updateData(["restartAnswer": ["sdp": ans.sdp, "version": v]])
+                        let local = self.withOpusDtxAndRed(ans)
+                        pc.setLocalDescription(local) { _ in
+                            ref.updateData(["restartAnswer": ["sdp": local.sdp, "version": v]])
                         }
                     }
                 }
