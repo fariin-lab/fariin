@@ -15,7 +15,20 @@ final class GroupCallService: ObservableObject {
     // Public LiveKit server address (not a secret — it's just where the app connects).
     private let url = "wss://kulan-irgnsxba.livekit.cloud"
 
-    let room = Room()                       // observe this in the UI for live participant updates
+    // Observe this room in the UI for live participant updates. Dynacast and adaptiveStream both
+    // default to FALSE in the SDK, so we were publishing simulcast layers nobody had subscribed to
+    // and pulling the top layer into tiles the size of a stamp: the whole uplink budget of a weak
+    // phone spent on pixels no one sees. Capture is pinned to 540p rather than the 720p default so
+    // the top layer matches its 800kbps preset instead of being a starved 720p, and so published
+    // width stays at the SDK's >= 960 cutoff for a three-layer ladder. That ladder is the point:
+    // a weak leg drops to 180p instead of the call stalling out.
+    let room = Room(roomOptions: RoomOptions(
+        defaultCameraCaptureOptions: CameraCaptureOptions(dimensions: .h540_169),
+        defaultVideoPublishOptions: VideoPublishOptions(encoding: VideoParameters.presetH540_169.encoding,
+                                                        simulcast: true),
+        adaptiveStream: true,
+        dynacast: true
+    ))
     @Published var activeCid: String?       // nil = no group call in progress
     @Published var isVideo = false
     @Published var micOn = true
