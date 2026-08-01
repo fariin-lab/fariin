@@ -765,7 +765,10 @@ struct ChatsView: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button {
                 Task { await ChatService.setArchived(conv.id, true) }
-            } label: { Label("Archive", systemImage: "archivebox.fill") }
+            } label: {
+                // The SOLID archive drawing, which is the one he sent for the swipe specifically.
+                Label { Text("Archive") } icon: { Image("ic_archive_fill").renderingMode(.template) }
+            }
             .tint(.gray)
             Button { pendingMute = conv } label: { Label("Mute", systemImage: "bell.slash.fill") }
             .tint(.indigo)
@@ -866,7 +869,9 @@ struct ChatsView: View {
                 Button { chatFilter = 2 } label: { if chatFilter == 2 { Label("Groups", systemImage: "checkmark") } else { Text("Groups") } }
             }
             Divider()
-            Button { showArchived = true } label: { Label("Archive", systemImage: "archivebox") }
+            Button { showArchived = true } label: {
+                Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template) }
+            }
             // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
             if !storiesOptedOut {
                 Button { showCompose = true } label: {
@@ -901,7 +906,10 @@ struct ChatsView: View {
             }
             // Native bottom toolbar (like Mail/Photos edit mode) — no custom glass bar.
             ToolbarItemGroup(placement: .bottomBar) {
-                Button { archiveSelected() } label: { Image(systemName: "archivebox") }
+                Button { archiveSelected() } label: {
+                    Image("ic_archive").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 22, height: 22)
+                }
                     .tint(.primary).disabled(selection.isEmpty)
                 Spacer()
                 Button("Read All") { markReadSelected() }.tint(.primary).disabled(selection.isEmpty)
@@ -992,7 +1000,7 @@ struct ChatsView: View {
                 }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
-            Label("Archive", systemImage: "archivebox")
+            Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template) }
         }
         Button(role: .destructive) { pendingDelete = conv } label: {
             Label("Delete", systemImage: "trash")
