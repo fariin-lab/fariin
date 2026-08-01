@@ -552,37 +552,40 @@ struct SettingsSearchView: View {
         var id: String { title }   // stable identity (was UUID() -> new id each render = List flicker)
         let title: String
         let icon: String
+        /// true = an SF Symbol, false = one of the app's own icon assets. Same distinction
+        /// SettingsRowLabel makes, because these rows now ARE settings rows.
+        var system = false
         let keywords: String
         let dest: AnyView
     }
 
     private var entries: [Entry] {
         [
-            Entry(title: "Account", icon: "person.crop.circle",
+            Entry(title: "Account", icon: "ic_account",
                   keywords: "account name username id sign out delete",
                   dest: AnyView(AccountSettingsView(onSignOut: onSignOut))),
-            Entry(title: "My Profile", icon: "person.text.rectangle",
+            Entry(title: "My Profile", icon: "person.text.rectangle", system: true,
                   keywords: "profile bio photo edit stories",
                   dest: AnyView(MyProfileView())),
-            Entry(title: "Devices", icon: "laptopcomputer.and.iphone",
+            Entry(title: "Devices", icon: "ic_linked_devices",
                   keywords: "devices sessions linked signed in log out sign out",
                   dest: AnyView(DevicesView())),
-            Entry(title: "Notifications", icon: "bell.badge",
+            Entry(title: "Notifications", icon: "ic_notifications",
                   keywords: "notifications push sound vibrate preview",
                   dest: AnyView(NotificationsSettingsView())),
-            Entry(title: "Appearance", icon: "paintbrush",
+            Entry(title: "Appearance", icon: "paintbrush", system: true,
                   keywords: "appearance theme dark light",
                   dest: AnyView(AppearanceSettingsView())),
-            Entry(title: "Stories", icon: "circle.dashed",
+            Entry(title: "Stories", icon: "ic_stories",
                   keywords: "stories status view receipts",
                   dest: AnyView(StorySettingsView())),
-            Entry(title: "Privacy & Security", icon: "lock.shield",
+            Entry(title: "Privacy & Security", icon: "ic_privacy",
                   keywords: "privacy security read receipts typing last seen app lock screen",
                   dest: AnyView(PrivacySettingsView())),
-            Entry(title: "Blocked Users", icon: "hand.raised",
+            Entry(title: "Blocked Users", icon: "hand.raised", system: true,
                   keywords: "blocked block users",
                   dest: AnyView(BlockedUsersView())),
-            Entry(title: "Help & About", icon: "questionmark.circle",
+            Entry(title: "Help & About", icon: "questionmark.circle", system: true,
                   keywords: "help about version",
                   dest: AnyView(AboutView())),
         ]
@@ -597,7 +600,12 @@ struct SettingsSearchView: View {
     var body: some View {
         NavigationStack {
             List(results) { e in
-                NavigationLink { e.dest } label: { Label(e.title, systemImage: e.icon) }
+                NavigationLink { e.dest } label: {
+                    // The SAME row as the settings page itself, so a result and the row it leads to
+                    // are the same thing wearing the same icon.
+                    e.system ? SettingsRowLabel(e.title, system: e.icon)
+                             : SettingsRowLabel(e.title, e.icon)
+                }
             }
             .listStyle(.insetGrouped)
             .overlay {

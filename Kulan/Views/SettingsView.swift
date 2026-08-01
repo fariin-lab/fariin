@@ -9,7 +9,11 @@ import AuthenticationServices   // Sign in with Apple button (connect Apple in A
 // ONE row style for every settings row (the owner's Signal side-by-side: ours read cramped and
 // mixed — some rows had asset icons, some plain SF labels, all at the 44pt List default).
 // Signal's rhythm: ~54pt rows, a steady 26pt icon column, 17pt text.
-private struct SettingsRowLabel: View {
+// Not private: the settings SEARCH results draw their rows with this too. They used to build
+// their own Labels from SF Symbols, so searching "Devices" produced a row that looked nothing like
+// the Devices row one tap away (owner screenshot). One row style, one icon set, one place to change
+// them.
+struct SettingsRowLabel: View {
     let title: String
     let image: String
     var system = false
