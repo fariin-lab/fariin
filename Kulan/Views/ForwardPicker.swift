@@ -190,7 +190,7 @@ struct ForwardPicker: View {
         // Done button, and tapping a row picks that person rather than dismissing, so once the
         // message box had focus the keyboard stayed up over half the list (owner screenshot).
         // Interactive, so it follows the finger, the same gesture the chat itself uses.
-        .scrollDismissesKeyboard(.interactive)
+        .scrollDismissesKeyboard(.interactively)
     }
 
     var body: some View {
