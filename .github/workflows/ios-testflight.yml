@@ -70,11 +70,17 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            The message box was rebuilt underneath. It should look and feel exactly the same as before, so the real test is whether you can tell any difference at all.
+            Stickers are in. Tap the smiley in the message box and the sticker panel opens where the keyboard opens, at the same height, instead of as a sheet over the screen. Tap one to send it. The panel stays open so you can send a few, and tapping the message box goes back to typing.
 
-            This is groundwork for the sticker panel, which needs to open where the keyboard opens instead of as a sheet over the screen. Nothing about stickers has changed yet.
+            There are only three test stickers for now, in one test pack. They are placeholders so the panel can be tested. Real artwork is yours to send me whenever you are ready.
 
-            You can also now double tap to react to a view once photo, in the cases where a single tap does nothing anyway: your own, or one you have already viewed.
+            Hold a sticker to add it to Favourites. Ones you have used show up under the clock.
 
-            PLEASE TRY, and report anything that feels off even slightly: type a long message until it stops growing and scrolls, then delete it back down. Tap Edit on a long message you sent. Leave a half written message, go to another chat, come back. Swipe to reply, and use the menu, and check the keyboard comes up. Tap plus, the camera, and the GIF button, and check the keyboard goes fully away each time. Dictation and emoji if you use them.
+            The message box was also rebuilt underneath to make this possible. It should look and feel exactly the same as before, so please tell me if you can spot any difference at all.
+
+            The GIF button has left the message box. GIFs are still there, behind the plus, exactly as before. The box is now sticker, camera, mic.
+
+            PLEASE TRY. Stickers: open the panel with the keyboard already up, and with it down, and watch for any jump or double movement. Send a few in a row. Check they look right in the chat, and that reply, forward and reactions still work on them. Turn off wifi and data and open the panel again, the stickers should still be there.
+
+            Typing: write a long message until it stops growing and scrolls, then delete it back down. Tap Edit on a long message you sent. Leave a half written message, go to another chat, come back. Swipe to reply and check the keyboard comes up. Tap plus and the camera and check the keyboard goes fully away each time.
         run: fastlane beta
