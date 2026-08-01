@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import SwiftUI          // Transaction, for the silent disk-rows swap in publish()
 import FirebaseAuth
 import FirebaseFirestore
 
@@ -54,18 +53,6 @@ final class ConversationsRepository {
         }
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
-        // SYNCHRONOUS, and that is the whole point. Every Firestore read is a callback, so the screen
-        // is always built before it can be told anything, and that first empty draw is the blink on a
-        // cold launch. Reading our own file right here means the first frame already has rows on it,
-        // which is what WhatsApp and Signal get from reading a local database directly.
-        //
-        // `hasLoaded` is NOT set from this: these rows are last-known, not confirmed, so the skeleton
-        // logic and the empty state still wait for the real answer. This only decides what is on
-        // screen while they do.
-        if conversations.isEmpty {
-            let cached = ChatListSnapshot.load()
-            if !cached.isEmpty { conversations = cached; seededFromDisk = true }
-        }
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
         // Cached chats render instantly (hasLoaded flips on the first non-empty snapshot);
         // a true cold start shows the skeleton until the server responds.
@@ -87,9 +74,6 @@ final class ConversationsRepository {
                 // chat as delete-for-me and it vanishes from the list until the server acks.
                 let convs = snap.documents.map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
                 self.publish(convs)
-                // Persist for the NEXT launch's first frame. Same .estimate as above, so a pending
-                // server timestamp is not written as nil and read back as a cleared chat.
-                ChatListSnapshot.save(snap.documents.map { ($0.documentID, $0.data(with: .estimate)) })
 
                 // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY
                 // (was N sequential round-trips → slow cold start). preloadKey is cached, so the
@@ -116,24 +100,9 @@ final class ConversationsRepository {
     private var flushScheduled = false
     private let minPublishInterval: TimeInterval = 0.15
 
-    /// True from the moment `start()` seeds rows off disk until the first real snapshot lands.
-    /// Those disk rows are the SAME chats Firestore is about to send, so the swap must be silent.
-    /// Without this, SwiftUI treats it as a content change and cross-dissolves the two, which reads
-    /// as ghosted double text over the whole list on a cold launch (owner caught it frame by frame).
-    private var seededFromDisk = false
-
     private func publish(_ convs: [Conversation]) {
         if !convs.isEmpty { rememberHadChats() }
-        guard convs != conversations else { hasLoaded = true; seededFromDisk = false; return }
-        // The disk rows being REPLACED, not chats actually changing. Land it with no animation.
-        if seededFromDisk {
-            seededFromDisk = false
-            lastPublish = Date()
-            pendingConvs = nil
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { conversations = convs; hasLoaded = true }
-            return
-        }
+        guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
             lastPublish = Date()
             conversations = convs
@@ -173,6 +142,6 @@ final class ConversationsRepository {
         pendingConvs = nil
         conversations = []
         hasLoaded = false
-        seededFromDisk = false
+
     }
 }
