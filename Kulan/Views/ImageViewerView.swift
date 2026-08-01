@@ -565,7 +565,7 @@ struct ImageViewerView: View {
         if let cached = await DiskImageCache.shared.image(for: u) { loaded[m.id] = cached; return }
         // Not cached yet → download the ciphertext + decrypt (same path SecureImageView uses).
         if let url = URL(string: u), let meta = m.enc,
-           let (cipher, _) = try? await URLSession.shared.data(from: url),
+           let (cipher, _) = try? await MediaSession.shared.data(from: url),
            let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
             loaded[m.id] = UIImage(data: dec)
         }

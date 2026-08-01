@@ -1101,7 +1101,7 @@ private struct ProfilePhotoViewer: View {
         .task {
             if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
             guard let url = URL(string: photoUrl),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let (data, _) = try? await MediaSession.shared.data(from: url),
                   let ui = UIImage(data: data) else { return }
             DiskImageCache.shared.store(ui, data: data, for: photoUrl)
             image = ui

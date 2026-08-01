@@ -239,7 +239,7 @@ struct VoiceMessageView: View {
         guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else { return }
         loading = true
         defer { loading = false }
-        guard let (cipher, _) = try? await URLSession.shared.data(from: url),
+        guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
               let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return }
         // Persist the decrypted note (Application Support, file-protected) so it never re-downloads.
         let local = AudioCache.store(data, for: message.id)

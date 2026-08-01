@@ -625,7 +625,7 @@ struct MediaGalleryView: View {
     private func decryptedImage(_ m: Message) async -> UIImage? {
         if let data = m.localImageData { return UIImage(data: data) }
         guard m.isImage, let s = m.imageUrl, let url = URL(string: s), let meta = m.enc,
-              let (cipher, _) = try? await URLSession.shared.data(from: url),
+              let (cipher, _) = try? await MediaSession.shared.data(from: url),
               let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
         return UIImage(data: dec)
     }

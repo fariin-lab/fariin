@@ -103,7 +103,7 @@ enum MediaAutoDownloader {
         Task.detached(priority: .utility) {
             defer { lock.lock(); inFlight.remove(id); lock.unlock() }
             guard let u = URL(string: url),
-                  let (data, _) = try? await URLSession.shared.data(from: u) else { return }
+                  let (data, _) = try? await MediaSession.shared.data(from: u) else { return }
             if let meta {
                 if let clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: meta) {
                     store(clear)

@@ -205,7 +205,7 @@ struct StoryImage: View {
         for delay in delays {
             if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             if Task.isCancelled { return }
-            if let (data, _) = try? await URLSession.shared.data(from: u), let img = UIImage(data: data) {
+            if let (data, _) = try? await MediaSession.shared.data(from: u), let img = UIImage(data: data) {
                 DiskImageCache.shared.store(img, data: data, for: url)
                 await apply(img)
                 return
@@ -1562,7 +1562,7 @@ struct StoryViewer: View {
     private func saveCurrentVideo(_ mediaUrl: String?) {
         Task {
             guard let s = mediaUrl, let url = URL(string: s) else { return }
-            guard let (tmp, _) = try? await URLSession.shared.download(from: url) else { return }
+            guard let (tmp, _) = try? await MediaSession.shared.download(from: url) else { return }
             // .download hands back an extension-less temp file; PhotoKit needs .mp4 to accept it.
             let mp4 = FileManager.default.temporaryDirectory.appendingPathComponent("story-save-\(UUID().uuidString).mp4")
             try? FileManager.default.moveItem(at: tmp, to: mp4)

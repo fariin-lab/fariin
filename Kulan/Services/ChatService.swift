@@ -1136,7 +1136,7 @@ enum ChatService {
             if let local = m.localImageData {
                 bytes = local
             } else if let s = m.imageUrl, let url = URL(string: s), let meta = m.enc,
-                      let (cipher, _) = try? await URLSession.shared.data(from: url),
+                      let (cipher, _) = try? await MediaSession.shared.data(from: url),
                       let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
             } else { throw ForwardError.sourceUnavailable }
@@ -1150,12 +1150,12 @@ enum ChatService {
             var items: [AlbumSendItem] = []
             for it in m.album {
                 guard let purl = URL(string: it.imageUrl),
-                      let (pCipher, _) = try? await URLSession.shared.data(from: purl),
+                      let (pCipher, _) = try? await MediaSession.shared.data(from: purl),
                       let poster = await Crypto.shared.decryptBytes(sourceCid, cipher: pCipher, meta: it.enc)
                 else { throw ForwardError.sourceUnavailable }
                 if it.isVideo {
                     guard let vs = it.videoUrl, let vurl = URL(string: vs), let venc = it.videoEnc,
-                          let (vCipher, _) = try? await URLSession.shared.data(from: vurl),
+                          let (vCipher, _) = try? await MediaSession.shared.data(from: vurl),
                           let clip = await Crypto.shared.decryptBytes(sourceCid, cipher: vCipher, meta: venc)
                     else { throw ForwardError.sourceUnavailable }
                     items.append(.video(clip, thumbnail: poster, duration: it.duration,
@@ -1168,7 +1168,7 @@ enum ChatService {
             try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, forwarded: true)
         } else if m.isAudio {
             guard let s = m.audioUrl, let url = URL(string: s), let meta = m.enc,
-                  let (cipher, _) = try? await URLSession.shared.data(from: url),
+                  let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             else { throw ForwardError.sourceUnavailable }
             try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform, forwarded: true)
@@ -1176,14 +1176,14 @@ enum ChatService {
             // Prefer this device's copy (the server object may already be delivered+deleted).
             var bytes = VideoCache.data(for: m.id)
             if bytes == nil, let s = m.videoUrl, let url = URL(string: s), let meta = m.enc,
-               let (cipher, _) = try? await URLSession.shared.data(from: url),
+               let (cipher, _) = try? await MediaSession.shared.data(from: url),
                let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
             }
             guard let bytes else { throw ForwardError.sourceUnavailable }
             var thumb: Data? = nil
             if let s = m.thumbUrl, let url = URL(string: s), let meta = m.thumbEnc,
-               let (cipher, _) = try? await URLSession.shared.data(from: url) {
+               let (cipher, _) = try? await MediaSession.shared.data(from: url) {
                 thumb = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             }
             guard let thumb else { throw ForwardError.sourceUnavailable }
@@ -1194,7 +1194,7 @@ enum ChatService {
             try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200, forwarded: true)
         } else if m.isFile {
             guard let s = m.fileUrl, let url = URL(string: s), let meta = m.enc,
-                  let (cipher, _) = try? await URLSession.shared.data(from: url),
+                  let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             else { throw ForwardError.sourceUnavailable }
             try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File", forwarded: true)

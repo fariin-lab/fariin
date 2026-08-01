@@ -83,7 +83,7 @@ struct SecureImageView: View {
         }
         guard let url = URL(string: imageUrl) else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await MediaSession.shared.data(from: url)
             var ui: UIImage?
             var clearBytes: Data?
             if let enc {

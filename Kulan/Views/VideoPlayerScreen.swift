@@ -295,7 +295,7 @@ struct VideoPlayerScreen: View {
         guard let s = message.videoUrl, let url = URL(string: s), let meta = message.enc else {
             await MainActor.run { unavailable = true }; return
         }
-        guard let (cipher, resp) = try? await URLSession.shared.data(from: url) else {
+        guard let (cipher, resp) = try? await MediaSession.shared.data(from: url) else {
             await MainActor.run { unavailable = true }; return   // transient network failure — NOT terminal
         }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0

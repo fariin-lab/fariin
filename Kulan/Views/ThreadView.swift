@@ -2497,7 +2497,7 @@ struct ThreadView: View {
     private func openFile(_ message: Message) {
         guard let s = message.fileUrl, let url = URL(string: s), let meta = message.enc else { return }
         Task {
-            guard let (cipher, _) = try? await URLSession.shared.data(from: url),
+            guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
                 await MainActor.run { sendError = "Couldn't open the file." }; return
             }
@@ -2938,7 +2938,7 @@ struct ThreadView: View {
         else if let s = m.imageUrl {
             if let cached = DiskImageCache.shared.memoryImage(s) { ui = cached }
             else if let cached = await DiskImageCache.shared.image(for: s) { ui = cached }
-            else if let url = URL(string: s), let (cipher, _) = try? await URLSession.shared.data(from: url) {
+            else if let url = URL(string: s), let (cipher, _) = try? await MediaSession.shared.data(from: url) {
                 if let meta = m.enc, let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
                     ui = UIImage(data: dec)
                 } else { ui = UIImage(data: cipher) }

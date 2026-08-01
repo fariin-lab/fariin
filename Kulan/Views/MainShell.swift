@@ -177,7 +177,7 @@ struct MainShell: View {
         // Persistent cache first (same store as every other avatar) — was a raw URLSession fetch that
         // re-downloaded my own profile photo on every launch.
         var img = await DiskImageCache.shared.image(for: s)
-        if img == nil, let (data, _) = try? await URLSession.shared.data(from: url), let ui = UIImage(data: data) {
+        if img == nil, let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
             DiskImageCache.shared.store(ui, data: data, for: s)
             img = ui
         }
