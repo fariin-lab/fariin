@@ -1256,6 +1256,9 @@ struct ThreadView: View {
                     AnimatedGifView(url: url)
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else if let m = msg, m.isSticker, let url = m.imageUrl {
+                    StickerImageView(url: url, fadeIn: false)
+                        .frame(width: 32, height: 32)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
@@ -1266,7 +1269,7 @@ struct ThreadView: View {
                     }
                     Text(msg.map { m in
                         m.isAlbum ? (m.text.isEmpty ? "\(m.album.count) Photos" : m.text)
-                        : (m.isGif ? "GIF" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.safeText))))
+                        : (m.isGif ? "GIF" : (m.isSticker ? "Sticker" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.safeText)))))
                     } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -1934,7 +1937,7 @@ struct ThreadView: View {
         guard m.id != highlightId, m.sendState == nil,                 // delivered only
               m.replyTo == nil, m.reactions.isEmpty,
               !m.isFeatureMarker, !m.viewOnce, !m.forwarded,           // Forwarded tag is SwiftUI-only
-              !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
+              !m.isImage, !m.isVideo, !m.isGif, !m.isSticker, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
         guard !text.isEmpty else { return nil }
@@ -2087,6 +2090,7 @@ struct ThreadView: View {
         if m.isAudio { return "a voice message" }
         if m.isFile { return "a file" }
         if m.isGif { return "a GIF" }
+        if m.isSticker { return "a sticker" }
         let t = m.safeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return "a message" }
         return t.count > 20 ? "\"\(t.prefix(20))…\"" : "\"\(t)\""
@@ -2654,7 +2658,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : ($0.isSticker ? "Sticker" : $0.safeText)))))))
         }
         // Animated, exactly like the X button does it (see the reply banner's cancel). Clearing it
         // bare drops the banner's ~54pt out of the composer in one frame with no layout pass the
@@ -2918,7 +2922,7 @@ struct ThreadView: View {
         // A photo sent while replying carries the reply (like text/voice) and clears the bar.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : ($0.isSticker ? "Sticker" : $0.safeText)))))))
         }
         await MainActor.run {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
@@ -3563,7 +3567,7 @@ struct ThreadView: View {
     // always stays open — the Messages-privacy gate only blocks COLD new chats.
     private var hasChatHistory: Bool {
         !(conversation?.lastMessageCipher ?? "").isEmpty
-            || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif }
+            || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif || $0.isSticker }
     }
 
     // The other person's Messages privacy (Settings > Privacy > Messages). "My Contacts" /
@@ -3663,6 +3667,8 @@ struct ThreadView: View {
                 AnimatedGifView(url: url)
                     .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else if r.isSticker, let url = r.imageUrl {
+                StickerImageView(url: url, fadeIn: false).frame(width: 36, height: 36)
             } else if r.isVideo, let url = r.thumbUrl {
                 SecureImageView(imageUrl: url, enc: r.thumbEnc, cid: cid)
                     .frame(width: 36, height: 36)
@@ -3745,6 +3751,8 @@ struct ThreadView: View {
             Text(r.viewOnce ? "View-once photo" : "Photo").font(.caption).foregroundStyle(.secondary)
         } else if r.isGif {
             Text("GIF").font(.caption).foregroundStyle(.secondary)
+        } else if r.isSticker {
+            Text(r.stickerEmoji.map { "\($0) Sticker" } ?? "Sticker").font(.caption).foregroundStyle(.secondary)
         } else if r.isVideo {
             Text("Video").font(.caption).foregroundStyle(.secondary)
         } else if r.isFile {
@@ -4234,7 +4242,7 @@ struct ThreadView: View {
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : ($0.isSticker ? "Sticker" : $0.safeText)))))))
         }
         await MainActor.run {
             // The optimistic bubble must carry the quote too — without it the voice reply
@@ -4794,6 +4802,11 @@ struct MessageBubble: View, Equatable {
     // edge stays a clean, uniform line regardless of length.
     private var maxBubbleWidth: CGFloat { UIScreen.main.bounds.width * 0.72 }
 
+    /// One number for every sticker, not an aspect fit. Stickers are authored square (512×512) and
+    /// the references all draw them at a single fixed size, which is what keeps a conversation full
+    /// of them looking ordered instead of ragged. Art with transparent margins simply sits inside it.
+    static let stickerSide: CGFloat = 140
+
     // Photo bubble sized to the image's natural aspect (capped), not a forced square.
     private var imageDisplaySize: CGSize {
         let maxW: CGFloat = 240, maxH: CGFloat = 340
@@ -5194,6 +5207,27 @@ struct MessageBubble: View, Equatable {
                             metaRow.padding(.horizontal, 7).padding(.vertical, 3)   // time+tick over the gif (was missing)
                                 .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
                         }
+                }
+            }
+        } else if message.isSticker {
+            // NO bubble. Signal, WhatsApp and Telegram all draw a sticker bare on the wallpaper, and
+            // a sticker is drawn to be seen that way — a background would box in art whose edges are
+            // the point. So no fill, no outline, no corner radii here.
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote
+                if let url = message.imageUrl {
+                    StickerImageView(url: url)
+                        .frame(width: Self.stickerSide, height: Self.stickerSide)
+                        // Without a background there is nothing for SwiftUI to hit-test, so long-press
+                        // and swipe-to-reply would pass straight through. Same fix the GIF bubble needs.
+                        .overlay(Color.clear.contentShape(Rectangle()))
+                        .overlay(alignment: .bottomTrailing) {
+                            // The time has to sit ON the sticker: there is no bubble to put it in, and
+                            // the wallpaper behind can be any colour, so it carries its own scrim.
+                            metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white)
+                        }
+                        .accessibilityLabel(message.stickerEmoji.map { "Sticker, \($0)" } ?? "Sticker")
                 }
             }
         } else if message.isVideo {
@@ -5964,6 +5998,8 @@ struct MessageBubble: View, Equatable {
                 SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
             } else if o.isGif, let url = o.imageUrl {
                 AnimatedGifView(url: url)
+            } else if o.isSticker, let url = o.imageUrl {
+                StickerImageView(url: url, fadeIn: false)
             } else if o.isVideo, let url = o.thumbUrl {
                 SecureImageView(imageUrl: url, enc: o.thumbEnc, cid: cid)
                     .overlay { Image(systemName: "play.circle.fill").font(.system(size: 14)).foregroundStyle(.white).shadow(radius: 2) }
@@ -5984,6 +6020,7 @@ struct MessageBubble: View, Equatable {
         // someone else's message to fix it, but we can refuse to render the stale copy once we can
         // see the original is gone.
         if o?.deleted == true { return "This message was deleted" }
+        if let o, o.isSticker { return o.stickerEmoji.map { "\($0) Sticker" } ?? "Sticker" }
         if let o, o.isImage || o.isGif || o.isVideo || o.isAlbum {
             if !o.text.isEmpty { return quoteSafeLabel(o.text) }   // caption wins
             if o.isAlbum { return "Photos" }

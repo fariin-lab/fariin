@@ -1132,6 +1132,54 @@ enum ChatService {
         try await batch.commit()
     }
 
+    /// Send a sticker from one of our packs.
+    ///
+    /// Same shape as sendGif because it is the same kind of thing: a published asset referenced by
+    /// url, not private bytes to seal. `imageUrl` and `emoji` are written onto the MESSAGE rather
+    /// than only `packId`/`stickerId`, so a sticker already sent still draws after its pack is
+    /// unpublished — the message carries everything it needs to render itself.
+    static func sendSticker(cid: String, packId: String, stickerId: String, url: String,
+                            emoji: String, width: Double, height: Double,
+                            clientId: String? = nil, group: [String]? = nil,
+                            forwarded: Bool = false) async throws {
+        var members = group
+        if members == nil, !cid.contains("_") {
+            let snap = try? await db.collection("conversations").document(cid).getDocument()
+            members = snap?.data()?["users"] as? [String]
+        }
+        let convRef = db.collection("conversations").document(cid)
+        if members == nil {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+        }
+        let msgRef = convRef.collection("messages").document()
+        let batch = db.batch()
+        var msg: [String: Any] = [
+            "type": "sticker", "imageUrl": url, "width": width, "height": height,
+            "packId": packId, "stickerId": stickerId,
+            "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": Date().timeIntervalSince1970 * 1000,
+        ]
+        if !emoji.isEmpty { msg["stickerEmoji"] = emoji }
+        if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
+        if forwarded { msg["forwarded"] = true }
+        batch.setData(msg, forDocument: msgRef)
+        // The chat-list line carries the emoji when the sticker has one, the way WhatsApp shows the
+        // sticker's meaning rather than a bare word.
+        var convUpdate: [String: Any] = [
+            "lastMessage": emoji.isEmpty ? "Sticker" : "\(emoji) Sticker",
+            "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),
+        ]
+        if let members {
+            for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) }
+        } else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
+        }
+        batch.updateData(convUpdate, forDocument: convRef)
+        try await batch.commit()
+    }
+
     /// Forward an existing message into another conversation. Because every chat is
     /// E2EE with its own key, media is decrypted from the source chat and re-encrypted
     /// for the target by reusing the normal send pipeline (never re-uses source ciphertext).
@@ -1204,6 +1252,14 @@ enum ChatService {
         } else if m.isGif {
             guard let gifUrl = m.imageUrl, !gifUrl.isEmpty else { throw ForwardError.sourceUnavailable }
             try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200, clientId: clientId, forwarded: true)
+        } else if m.isSticker {
+            // Nothing to decrypt or re-seal: forwarding a sticker is re-sending the same reference.
+            // The pack fields ride along so the recipient can still add the pack it came from.
+            guard let sUrl = m.imageUrl, !sUrl.isEmpty else { throw ForwardError.sourceUnavailable }
+            try await sendSticker(cid: targetCid, packId: m.packId ?? "", stickerId: m.stickerId ?? "",
+                                  url: sUrl, emoji: m.stickerEmoji ?? "",
+                                  width: m.width ?? 512, height: m.height ?? 512,
+                                  clientId: clientId, forwarded: true)
         } else if m.isFile {
             guard let s = m.fileUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await MediaSession.shared.data(from: url),

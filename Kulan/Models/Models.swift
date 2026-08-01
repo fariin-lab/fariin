@@ -100,6 +100,12 @@ struct Message: Identifiable, Equatable {
     var deleted: Bool = false
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
     var clientTs: Date? = nil               // sender's tap time (ms epoch on the wire) — display order is send order
+    /// Sticker: which pack and which sticker in it. Kept alongside `imageUrl` rather than instead of
+    /// it — the url is denormalised on the message ON PURPOSE, so a sticker already sent still draws
+    /// after its pack is unpublished. These two are only for "add this pack" and recents.
+    var packId: String? = nil
+    var stickerId: String? = nil
+    var stickerEmoji: String? = nil         // what the sticker means: chat-list preview, push text, VoiceOver
 
     var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
     var isAudio: Bool { (type == "audio" && (audioUrl?.isEmpty == false)) || localAudioData != nil }
@@ -107,6 +113,10 @@ struct Message: Identifiable, Equatable {
     var isVideo: Bool { type == "video" && (videoUrl?.isEmpty == false || localImageData != nil) }
     var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false || localFile) }
     var isGif: Bool { type == "gif" && (imageUrl?.isEmpty == false) }   // public Giphy url (not E2EE)
+    /// Sticker from one of our own packs. Public url like a GIF, and for the same reason: a sticker is
+    /// a published asset, not private content, and sealing it per chat would mean re-uploading the
+    /// same bytes for every conversation. See kulan-sticker-system for why that is the right call.
+    var isSticker: Bool { type == "sticker" && (imageUrl?.isEmpty == false) }
     var isAlbum: Bool { type == "album" && (!album.isEmpty || !localAlbum.isEmpty) }
     var isCall: Bool { type == "call" }
     var isSystem: Bool { type == "system" }   // group event ("X added Y"), shown centered
@@ -306,6 +316,9 @@ struct Message: Identifiable, Equatable {
                     imageEnc: (lp["imageEnc"] as? [String: Any]).flatMap(EncMeta.init(map:)))
             }
         }
+        self.packId = data["packId"] as? String
+        self.stickerId = data["stickerId"] as? String
+        self.stickerEmoji = data["stickerEmoji"] as? String
         self.callerUid = data["callerUid"] as? String
         self.callOutcome = data["callOutcome"] as? String
         self.callVideo = data["callVideo"] as? Bool ?? false
