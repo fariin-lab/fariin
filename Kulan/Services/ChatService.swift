@@ -1431,7 +1431,12 @@ enum ChatService {
             // "Delete for everyone" and the disappearing timer both promise the content is gone, so
             // the ciphertext should not outlive the message it belonged to.
             let ref = db.collection("conversations").document(cid).collection("messages").document(messageId)
-            let snap = try? await ref.getDocument()
+            // `try`, NOT `try?`. With `try?` a failed READ came back nil, and the "already gone"
+            // branch below treats nil exactly like a missing document: it returned SUCCESS, deleted
+            // nothing, and showed no error. The owner deleted a forwarded gif and it simply stayed,
+            // with no alert, because the app believed it had already been removed. A read we could
+            // not perform is not proof of anything, so it now throws to the catch and is reported.
+            let snap = try await ref.getDocument()
             // ALREADY GONE = SUCCESS. Deleting twice is not an error, the end state the caller asked
             // for is already true. The rule reads `resource.data` to decide who may delete, and on a
             // missing document that lookup is null, so a second delete comes back as a REFUSAL. The
