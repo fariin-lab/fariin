@@ -119,6 +119,13 @@ struct ContactInfoView: View {
                 if showProfilePhoto {
                     ProfilePhotoViewer(name: shownName, photoUrl: gatedPhotoUrl ?? "",
                                        sourceFrame: avatarFrame, isPresented: $showProfilePhoto)
+                        // THE VIEWER OWNS THE WHOLE SCREEN. Without this the overlay is the page's
+                        // frame, which stops below the status bar, and the viewer's chrome was being
+                        // drawn up into the safe area by ignoring it one layer further in — drawn
+                        // outside the frame it belongs to, which is a reliable way to get something
+                        // you can see and cannot press. The viewer's own comment already claimed the
+                        // container did this; now it actually does.
+                        .ignoresSafeArea()
                 }
             }
     }
@@ -1101,6 +1108,17 @@ private struct ProfilePhotoViewer: View {
     let sourceFrame: CGRect          // the hero avatar, in global coords — morph start AND end
     @Binding var isPresented: Bool
     @State private var image: UIImage?
+
+    init(name: String, photoUrl: String, sourceFrame: CGRect, isPresented: Binding<Bool>) {
+        self.name = name
+        self.photoUrl = photoUrl
+        self.sourceFrame = sourceFrame
+        _isPresented = isPresented
+        // The avatar this grows out of is already on screen, so its bitmap is already in memory.
+        // Seeding here means the morph begins holding the photo, instead of a grey disc that swaps
+        // to the photo a frame later — which reads as part of the "jump".
+        _image = State(initialValue: DiskImageCache.shared.memoryImage(for: photoUrl))
+    }
     @State private var progress: CGFloat = 0   // 0 = sitting on the avatar, 1 = open in the center
     @State private var drag: CGSize = .zero
     @State private var zoom: CGFloat = 1
@@ -1159,42 +1177,45 @@ private struct ProfilePhotoViewer: View {
                             else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
                         }
                 )
-            }
-            // Just the X (user spec): no name label — the photo is the subject, and the page's own
-            // back/Edit chrome is hidden while this is open so nothing else floats over it.
-            .overlay {
-                // ABSOLUTE placement from the true screen top, measured against Signal's own profile
-                // photo viewer: their close button's centre sits ~10pt below the safe-area top (69pt on
-                // a Dynamic Island device), hard against the 16pt leading margin.
+                // Just the X (user spec): no name label — the photo is the subject, and the page's own
+                // back/Edit chrome is hidden while this is open so nothing else floats over it.
                 //
-                // Padding was the wrong tool twice here. This overlay's container is neither the full
-                // screen nor safe-area-aligned, so `.padding(.top, 8)` put the button at ~121pt and
-                // adding winInsets.top on top of that pushed it to ~174pt - both far below Signal's
-                // 69pt. A GeometryReader that ignores the safe area gives a coordinate space whose
-                // origin IS the screen corner, so .position needs no assumptions about the container.
-                GeometryReader { _ in
-                    Button { close() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                            .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
-                            .liquidGlass(Circle(), interactive: true)   // other full-screen close button
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    // .position places the CENTRE. `winInsets.top + 10` therefore put the button's TOP
-                    // edge 14pt ABOVE the safe area (centre 10 below it, minus half of 48), which is
-                    // inside the status bar - the overlap the user reported. The safe-area top is exactly
-                    // the line chrome must not cross, so the button's top edge goes 8pt below it and the
-                    // centre follows: inset + 8 + half the button.
-                    .position(x: 16 + 24, y: winInsets.top + 8 + 24)
+                // IN the ZStack, not in an overlay of it. As an overlay that ignored the safe area, the
+                // button was drawn into a strip its own parent did not occupy: visible, and dead to
+                // touch. Here it shares one coordinate space with the backdrop and the photo, both of
+                // which take taps, so if they can be pressed so can this.
+                //
+                // The viewer now owns the whole screen (see .ignoresSafeArea() where it is presented),
+                // so this space starts at the screen corner and winInsets is measured from the same
+                // place. `.position` places the CENTRE, so the button's top edge sits 8pt below the
+                // safe-area line — the line chrome must not cross — and the centre follows from its
+                // own size.
+                Button { close() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                        .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
+                        .liquidGlass(Circle(), interactive: true)   // other full-screen close button
+                        .contentShape(Circle())
                 }
-                .ignoresSafeArea()
+                .buttonStyle(.plain)
+                .position(x: 16 + 24, y: winInsets.top + 8 + 24)
                 .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
                 .animation(.easeOut(duration: 0.15), value: drag == .zero)
             }
         }
-        .onAppear { withAnimation(.spring(duration: 0.38, bounce: 0.15)) { progress = 1 } }
+        .onAppear {
+            // ONE FRAME AT THE START, THEN ANIMATE. This is why opening jumped while closing was
+            // smooth: closing changes a view that is already on screen, so there is a previous frame
+            // to move from. Opening ran inside the transaction that INSERTS the viewer, and a view
+            // being inserted has no previous frame — SwiftUI drew it at progress 1 and there was
+            // nothing left to animate. Handing the change to the next runloop means the avatar-sized
+            // circle is really on screen first, and the spring then has somewhere to travel from.
+            DispatchQueue.main.async {
+                withAnimation(.spring(duration: 0.38, bounce: 0.15)) { progress = 1 }
+            }
+        }
         .task {
+            if image != nil { return }   // already seeded from memory — don't re-fetch or flash
             if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
             guard let url = URL(string: photoUrl),
                   let (data, _) = try? await MediaSession.shared.data(from: url),

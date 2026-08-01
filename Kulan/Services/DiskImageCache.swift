@@ -182,6 +182,12 @@ final class DiskImageCache {
         return img
     }
 
+    /// Memory only, and synchronous. For a view that has to draw on its FIRST frame: the async path
+    /// below costs at least one frame even on a hit, and one frame of placeholder is a visible flash
+    /// on anything that animates out of something already on screen. NSCache is thread-safe, so this
+    /// is safe to call from a view's initialiser.
+    func memoryImage(for url: String) -> UIImage? { mem.object(forKey: url as NSString) }
+
     /// Memory hit → instant. Otherwise read from disk off-main, decode, and promote
     /// to memory. Returns nil if not cached anywhere (caller should then download).
     func image(for url: String) async -> UIImage? {
