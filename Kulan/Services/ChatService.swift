@@ -1444,12 +1444,12 @@ enum ChatService {
             // the app tells them "the server refused, the message is still there for both of you"
             // about a message that is gone (owner screenshot). Still clean up below, in case the doc
             // went while its pin or summary did not.
-            if snap?.exists != true {
+            if !snap.exists {
                 await removePinnedMessage(cid, messageId)
                 await clearSummaryIfNewest(cid: cid, deletedId: messageId)
                 return true
             }
-            let blobs = mediaStorageURLs(in: snap?.data())
+            let blobs = mediaStorageURLs(in: snap.data())
 
             // TOMBSTONE, not a hole. The document survives carrying `deleted`, with every content
             // field stripped, so both sides see that something was here and was removed instead of a
@@ -1465,7 +1465,7 @@ enum ChatService {
             // SECOND delete on a tombstone removes it outright. The first leaves the marker so the
             // other person knows something was here; deleting that marker is the owner saying they
             // want the trace gone too, and there is no content left to protect by then.
-            let alreadyTombstone = snap?.data()?["deleted"] as? Bool == true
+            let alreadyTombstone = snap.data()?["deleted"] as? Bool == true
 
             var markedDeleted = false
             if !alreadyTombstone {
