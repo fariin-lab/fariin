@@ -91,6 +91,7 @@ struct ImageViewerView: View {
     // UIKit animator pair in SignalMediaDismiss.swift owns both directions.
     @State private var current: String  // id of the page being shown
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase   // re-warm `loaded` on return, see the overlay
 
     // Pen edit → full editor → SEND: wired by the conversation (nil in profile/gallery contexts, where
     // there's no send pipeline — the pen button hides there). (data, caption, viewOnce).
@@ -240,6 +241,21 @@ struct ImageViewerView: View {
                 clipRect: clipProvider,
                 closeToken: closeToken,
                 onDismiss: { instantDismiss() })
+        }
+        // BACK FROM THE BACKGROUND: re-warm the CURRENT page so the drag can still start.
+        //
+        // DiskImageCache drops its memory cache when the app backgrounds. The page already on screen
+        // is NOT re-rendered on return, so the photo stays visible while `loaded` is empty and the
+        // memory chain above now answers nil — and the media closure returning nil means the drag
+        // never begins. That is "swipe down to close stops working after leaving the app".
+        //
+        // Deliberately does NOT touch the media closure or the gesture. It only refills `loaded`,
+        // which the closure already prefers, so the drag path is byte-for-byte unchanged. `load` is
+        // idempotent and checks memory then disk before any network, so this is a local read.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, loaded[current] == nil,
+                  let m = gallery.first(where: { $0.id == current }) else { return }
+            Task { await load(m) }
         }
         // Transparent presentation so the fading backdrop reveals the CONVERSATION behind.
         .presentationBackground(.clear)
