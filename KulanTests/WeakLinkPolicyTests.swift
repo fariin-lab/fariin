@@ -38,9 +38,13 @@ final class WeakLinkPolicyTests: XCTestCase {
         // A single healthy sample four seconds in must throw the whole window away, not let the
         // earlier poor run count toward a pause.
         _ = p.evaluate(bitrate: good, paused: false, now: at(4.5))
+        // The new run starts at the next POOR sample, 6s, not at the good one that cleared it. So the
+        // pause is due at 11s. The old 9.5s here was my own arithmetic, and the suite caught it.
         XCTAssertEqual(p.evaluate(bitrate: poor, paused: false, now: at(6)), .none,
-                       "the poor run restarted at 4.5s, so 6s is only 1.5s in")
-        XCTAssertEqual(p.evaluate(bitrate: poor, paused: false, now: at(9.5)), .pause)
+                       "this sample restarts the run, so nothing is due yet")
+        XCTAssertEqual(p.evaluate(bitrate: poor, paused: false, now: at(10.9)), .none,
+                       "10.9s is 4.9s into a run that began at 6s")
+        XCTAssertEqual(p.evaluate(bitrate: poor, paused: false, now: at(11)), .pause)
     }
 
     func testAlreadyPausedNeverPausesAgain() {
@@ -76,9 +80,14 @@ final class WeakLinkPolicyTests: XCTestCase {
         _ = p.evaluate(bitrate: good, paused: true, now: at(0))
         _ = p.evaluate(bitrate: good, paused: true, now: at(8))
         _ = p.evaluate(bitrate: poor, paused: true, now: at(9))   // one dip resets it
+        // Same rule as the pause side: the run restarts at the next GOOD sample, 15s, so the resume
+        // is due at 25s. Eight seconds of health before the dip count for nothing, which is the
+        // point. Video comes back only after a full clean ten.
         XCTAssertEqual(p.evaluate(bitrate: good, paused: true, now: at(15)), .none,
-                       "the good run restarted at 9s, so 15s is only 6s in")
-        XCTAssertEqual(p.evaluate(bitrate: good, paused: true, now: at(19)), .resume)
+                       "this sample restarts the run, so nothing is due yet")
+        XCTAssertEqual(p.evaluate(bitrate: good, paused: true, now: at(24.9)), .none,
+                       "24.9s is 9.9s into a run that began at 15s")
+        XCTAssertEqual(p.evaluate(bitrate: good, paused: true, now: at(25)), .resume)
     }
 
     func testNotPausedNeverResumes() {
