@@ -208,6 +208,8 @@ struct ContactInfoView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
         }
+        // Named so the backdrop can read its own offset and stretch on a rubber-band pull.
+        .coordinateSpace(name: "profileScroll")
         .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -641,6 +643,53 @@ struct ContactInfoView: View {
         PrivacyPrefs.allows(targetPrivacy, "calls", contactOfMine: iAmContact)
     }
 
+    /// The backdrop behind the hero: their own photo, blurred, fading into the page.
+    ///
+    /// NO PHOTO IS NEVER A GREY BOX. The app already gives every name a fixed pair of colours
+    /// (`AvatarPalette.gradient(for:)`, chosen by hashing the name) and fills their letter avatar
+    /// with it. The cover reuses that exact pair, so kasim's profile is violet from top to bottom and
+    /// it is the SAME violet as his circle in the chat list. The colour follows the person around the
+    /// app instead of being decoration invented for this screen.
+    ///
+    /// Drawn behind the hero rather than replacing it, so the story ring, the tap routing and the
+    /// avatar's geometry reporting are all untouched.
+    @ViewBuilder private var heroBackdrop: some View {
+        GeometryReader { geo in
+            // Pull-to-stretch: `minY` goes positive as the scroll rubber-bands, so the cover grows
+            // upward with the finger instead of tearing away from the top of the screen.
+            let stretch = max(0, geo.frame(in: .named("profileScroll")).minY)
+            ZStack {
+                LinearGradient(colors: AvatarPalette.gradient(for: shownName),
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                // NOT gated on `heroHasPhoto`: that flips only after the avatar finishes loading, so
+                // the backdrop would show the gradient and then swap to the photo a frame later. The
+                // synchronous read already answers the same question, on the first frame, and returns
+                // nil when there is nothing to show.
+                if let u = gatedPhotoUrl, !u.isEmpty,
+                   let img = DiskImageCache.shared.smallImageSync(u) {
+                    // The photo only ever appears here as a wash. The sharp copy is the avatar on
+                    // top, which is why it still reads as a face when the header shrinks.
+                    Image(uiImage: img).resizable().scaledToFill()
+                        .blur(radius: 34, opaque: true)
+                        .overlay(Color.black.opacity(0.06))
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height + stretch)
+            .offset(y: -stretch)
+            // Fades to the page colour so the cards below sit on the normal grey with no seam.
+            .mask(LinearGradient(stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black.opacity(0.55), location: 0.55),
+                .init(color: .clear, location: 1),
+            ], startPoint: .top, endPoint: .bottom))
+        }
+        // Full bleed: the hero is inside the 16pt page inset, and a cover that stopped at that inset
+        // would read as a card rather than a header.
+        .padding(.horizontal, -16)
+        .ignoresSafeArea(edges: .top)
+        .allowsHitTesting(false)
+    }
+
     private var hero: some View {
         VStack(spacing: 6) {
             ZStack {
@@ -712,7 +761,9 @@ struct ContactInfoView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 8)
+        .padding(.top, 20)
+        .padding(.bottom, 14)
+        .background(heroBackdrop)
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
 
