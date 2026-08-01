@@ -169,24 +169,14 @@ struct MediaGalleryView: View {
     // targets, Dynamic Type, VoiceOver traits and the iOS 26 glass treatment all arrive for free and
     // cannot drift from the OS. Roughly forty lines of custom glass plumbing went with it.
     private var tabBar: some View {
-        Picker("", selection: $tab) {
-            ForEach(Tab.allCases, id: \.self) { t in
-                Text(t.label).tag(t)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        // NOTHING ELSE. The previous version wrapped this in a hand-made glass capsule, and to let
-        // that capsule show through it ERASED the control's background images — which is what took
-        // the active-tab indicator away (owner 2026-07-31: "Active tab Is gone… is looks like liquid
-        // glass but is not really"). Both complaints had the same cause: a fake glass surface can
-        // only be seen by removing the real one, and the selected pill is drawn as part of that real
-        // surface. Signal's All Media uses the stock control for exactly this reason.
-        //
-        // Left alone, iOS 26 renders this control in the system material — the same real thing the
-        // back button gets, because it comes from the OS rather than from us — and draws, sizes and
-        // animates the selected segment itself. Height is the system's too: forcing 48 was part of
-        // the same hand-built bar.
+        MediaTabBar(titles: Tab.allCases.map(\.label),
+                    selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
+                                       set: { tab = Tab.allCases[$0] }))
+        // STILL the system control (see MediaTabBar) — only its colours changed, to the flat dark
+        // track and lighter selected slab the owner asked for (2026-08-01, Telegram reference). The
+        // rule the earlier hand-built bar broke is kept: nothing is erased, so the system still owns
+        // the selected pill and it cannot go missing again.
+        .frame(height: 34)
         .padding(.horizontal, 16)
         .padding(.top, 6)
         .padding(.bottom, 2)
