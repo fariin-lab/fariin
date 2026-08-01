@@ -704,9 +704,11 @@ struct ContactInfoView: View {
                 // and the join with the page below never moves.
                 .scaleEffect(x: 1, y: 1 + (stretch / max(geo.size.height, 1)), anchor: .bottom)
                 // Fades to the page colour so the cards below sit on the normal grey with no seam.
+                // Measured from the BOTTOM, not as a fraction: the overshoot above changes the total
+                // height, and a fractional stop would slide the fade up into the avatar with it.
                 .mask(LinearGradient(stops: [
                     .init(color: .black, location: 0),
-                    .init(color: .black.opacity(0.5), location: 0.6),
+                    .init(color: .black, location: max(0, 1 - 120 / max(geo.size.height, 1))),
                     .init(color: .clear, location: 1),
                 ], startPoint: .top, endPoint: .bottom))
                 // Published so the nav bar can fade its own copy of the name in as this leaves.
@@ -715,7 +717,14 @@ struct ContactInfoView: View {
         // Full bleed: the hero is inside the 16pt page inset, and a cover that stopped at that inset
         // would read as a card rather than a header.
         .padding(.horizontal, -16)
-        .ignoresSafeArea(edges: .top)
+        // UP BEHIND THE BARS. The hero begins below the safe area, so a backdrop sized to the hero
+        // began there too and left a white strip across the status bar and nav bar (owner
+        // screenshot). `ignoresSafeArea` alone does not help here: this is a background inside
+        // scrolling content, and the scroll view's own inset is what is holding it down. Reaching up
+        // by a fixed overshoot is what actually gets it behind the bar; anything past the top of the
+        // screen is clipped and costs nothing, which is why the number is generous rather than
+        // measured.
+        .padding(.top, -180)
         .allowsHitTesting(false)
     }
 
