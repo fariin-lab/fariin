@@ -188,6 +188,12 @@ struct ForwardPicker: View {
                         }
                     }
                     .listStyle(.plain)
+                    // SWIPE THE LIST TO PUT THE KEYBOARD AWAY. There was no way out of it: this
+                    // screen has no Done button, and tapping a row picks that person rather than
+                    // dismissing, so once the message box had focus the keyboard stayed up over half
+                    // the list (owner screenshot). Interactive, so it follows the finger, which is
+                    // the same gesture the chat itself uses.
+                    .scrollDismissesKeyboard(.interactive)
                 }
             }
             // PINNED UNDER THE TITLE. iOS 26 puts search at the BOTTOM by default, which landed it
