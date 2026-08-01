@@ -327,7 +327,9 @@ struct CallsView: View {
                                     AppRouter.shared.pendingChatName = call.name
                                     AppRouter.shared.pendingChatPhoto = call.photoUrl
                                     AppRouter.shared.pendingChatId = call.cid
-                                } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
+                                } label: {
+                                    Label { Text("Chats") } icon: { Image("ic_menu_chat").renderingMode(.template) }
+                                }
                                 Button {
                                     withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
                                 } label: { Label("Select", systemImage: "checkmark.circle") }
@@ -966,7 +968,7 @@ struct ChatsView: View {
             }
         } else {
             Button { Task { await ChatService.markUnread(conv.id) } } label: {
-                Label("Unread", systemImage: "envelope.badge")
+                Label { Text("Unread") } icon: { Image("ic_menu_unread").renderingMode(.template) }
             }
         }
         // Native submenu (clean popover) instead of a custom mute sheet.

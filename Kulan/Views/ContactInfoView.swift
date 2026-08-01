@@ -854,7 +854,7 @@ struct ContactInfoView: View {
                         }
                     }
                 } label: {
-                    tileLabel(muted ? "unmute" : "mute", muted ? "bell.fill" : "bell.slash.fill")
+                    tileLabel(muted ? "unmute" : "mute", muted ? "ic_bell" : "ic_bell_off")
                 }
                 .tint(.primary)
             }
@@ -924,8 +924,13 @@ struct ContactInfoView: View {
 
     private func tileLabel(_ title: String, _ icon: String) -> some View {
         VStack(spacing: 7) {
-            Image(systemName: icon)
-                .font(.system(size: 22))
+            Group {
+                if icon.hasPrefix("ic_") {
+                    Image(icon).renderingMode(.template).resizable().scaledToFit().frame(width: 24, height: 24)
+                } else {
+                    Image(systemName: icon).font(.system(size: 22))
+                }
+            }
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)

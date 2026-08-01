@@ -27,7 +27,7 @@ struct SoundsNotificationsView: View {
             VStack(spacing: 0) {
                 row("Message Sound", "speaker.wave.2", value: messageSound.name) { picker = .message }
                 Divider().padding(.leading, 56)
-                row("Call Sound", "phone", value: callSound.name) { picker = .call }
+                row("Call Sound", "ic_sound_call", value: callSound.name) { picker = .call }
                 Divider().padding(.leading, 56)
                 // Native dropdown Menu (real Apple context menu), not a popover dialog.
                 Menu {
@@ -38,7 +38,7 @@ struct SoundsNotificationsView: View {
                     Button("1 week")  { setMute(ChatService.muteUntil(168)) }
                     Button("Always")  { setMute(ChatService.muteUntil(nil)) }
                 } label: {
-                    rowLabel("Mute", "bell.slash", muteLabel)
+                    rowLabel("Mute", "ic_sound_mute", muteLabel)
                 }
                 .tint(.primary)
             }
@@ -62,7 +62,15 @@ struct SoundsNotificationsView: View {
     // The shared row visual — used by the Button rows AND the native Mute Menu.
     private func rowLabel(_ title: String, _ icon: String, _ value: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 17)).frame(width: 26).foregroundStyle(.primary)
+            // "ic_" names one of our own drawings; anything else is an SF Symbol.
+            Group {
+                if icon.hasPrefix("ic_") {
+                    Image(icon).renderingMode(.template).resizable().scaledToFit().frame(width: 21, height: 21)
+                } else {
+                    Image(systemName: icon).font(.system(size: 17))
+                }
+            }
+            .frame(width: 26).foregroundStyle(.primary)
             Text(title).foregroundStyle(.primary)
             Spacer()
             Text(value).foregroundStyle(.secondary)
