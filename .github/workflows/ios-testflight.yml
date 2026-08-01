@@ -70,11 +70,11 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Two small fixes.
+            The message box was rebuilt underneath. It should look and feel exactly the same as before, so the real test is whether you can tell any difference at all.
 
-            Avatars no longer go grey when you tap Edit on the chat list. They were being dimmed as a side effect of switching off the row tap, which was never wanted.
+            This is groundwork for the sticker panel, which needs to open where the keyboard opens instead of as a sheet over the screen. Nothing about stickers has changed yet.
 
-            Swipe down to close a photo works again after you leave the app and come back. The app was quietly forgetting which photo it was showing, so the swipe had nothing to grab.
+            You can also now double tap to react to a view once photo, in the cases where a single tap does nothing anyway: your own, or one you have already viewed.
 
-            PLEASE TRY: open a photo, switch to another app, come back, swipe down. And tap Edit on the chat list and check the avatars look normal.
+            PLEASE TRY, and report anything that feels off even slightly: type a long message until it stops growing and scrolls, then delete it back down. Tap Edit on a long message you sent. Leave a half written message, go to another chat, come back. Swipe to reply, and use the menu, and check the keyboard comes up. Tap plus, the camera, and the GIF button, and check the keyboard goes fully away each time. Dictation and emoji if you use them.
         run: fastlane beta
