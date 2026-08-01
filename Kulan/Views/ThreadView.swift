@@ -225,7 +225,9 @@ struct ThreadView: View {
     @State private var pendingDelete: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
-    @FocusState private var inputFocused: Bool
+    // Plain @State, not @FocusState: the composer is a UITextView now (ComposerTextView), so focus
+    // travels as a Bool binding. Every read, write and .onChange below is unchanged by that.
+    @State private var inputFocused = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
     @AppStorage("typingIndicators") private var typingPref = true
@@ -3932,13 +3934,13 @@ struct ThreadView: View {
 
     // Just the text field — trailing buttons are stable siblings (so the mic view never
     // unmounts when the field swaps to the recording row mid-hold).
+    // A real UITextView, so there is a first responder to hand the sticker panel to later. Same font,
+    // same 1...6 growth, same 14/9 padding (now inside the view, which also makes the whole pill
+    // tappable instead of just the text's frame). maxWidth is what makes it greedy the way the
+    // SwiftUI field was, so the sticker/camera/mic siblings keep their 40pt slots.
     private var messageField: some View {
-        TextField("Message", text: $input, axis: .vertical)
-            .font(.system(size: 17))
-            .lineLimit(1...6)
-            .focused($inputFocused)
-            .padding(.leading, 14)
-            .padding(.vertical, 9)   // single-line field height ~40 to match the + button
+        ComposerTextView(text: $input, isFocused: $inputFocused)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .onChange(of: input) { _, v in
                 // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
                 if typingBox.suppressNext { typingBox.suppressNext = false; return }
