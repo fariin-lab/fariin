@@ -1534,8 +1534,17 @@ private struct StoryAvatarTap: ViewModifier {
     let active: Bool
     let action: () -> Void
     func body(content: Content) -> some View {
-        if active { content.highPriorityGesture(TapGesture().onEnded(action)) }
-        else { content }
+        // ONE STRUCTURE, ALWAYS. This used to be `if active { content.gesture } else { content }`,
+        // which gives an avatar WITH a story a different view tree from one without. Structure is
+        // identity to SwiftUI, so when Select mode slid the checkbox in and indented every row, a
+        // ringed avatar was rebuilt rather than moved — it snapped to its new place while the plain
+        // ones slid, which is exactly the row that stood out of line in his screenshot.
+        //
+        // `including:` carries the same meaning without the branch: `.subviews` leaves the
+        // recogniser present but unreachable, so a story-less avatar still passes its taps through
+        // to the row. Same fix, and same reason, as the view-once bubble's double tap.
+        content.highPriorityGesture(TapGesture().onEnded(action),
+                                    including: active ? .all : .subviews)
     }
 }
 
