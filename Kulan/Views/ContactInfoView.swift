@@ -210,7 +210,8 @@ struct ContactInfoView: View {
         // there is no chat underneath and the tap silently did nothing (audit).
         if source == .chat {
             Button { changeWallpaper() } label: {
-                Label { Text("Change Wallpaper") } icon: { Image("ic_wallpaper").renderingMode(.template) }
+                Label { Text("Change Wallpaper") } icon: { Image("ic_wallpaper").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 20, height: 20) }
             }
         }
         // "Share Profile", not "Share Contact" — what it sends is a Kulan profile link, and there is no

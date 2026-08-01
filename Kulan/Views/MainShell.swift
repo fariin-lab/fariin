@@ -332,7 +332,8 @@ struct CallsView: View {
                                     AppRouter.shared.pendingChatPhoto = call.photoUrl
                                     AppRouter.shared.pendingChatId = call.cid
                                 } label: {
-                                    Label { Text("Chats") } icon: { Image("ic_menu_chat").renderingMode(.template) }
+                                    Label { Text("Chats") } icon: { Image("ic_menu_chat").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 20, height: 20) }
                                 }
                                 Button {
                                     withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
@@ -767,7 +768,8 @@ struct ChatsView: View {
                 Task { await ChatService.setArchived(conv.id, true) }
             } label: {
                 // The SOLID archive drawing, which is the one he sent for the swipe specifically.
-                Label { Text("Archive") } icon: { Image("ic_archive_fill").renderingMode(.template) }
+                Label { Text("Archive") } icon: { Image("ic_archive_fill").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 22, height: 22) }
             }
             .tint(.gray)
             Button { pendingMute = conv } label: { Label("Mute", systemImage: "bell.slash.fill") }
@@ -870,12 +872,14 @@ struct ChatsView: View {
             }
             Divider()
             Button { showArchived = true } label: {
-                Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template) }
+                Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 20, height: 20) }
             }
             // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
             if !storiesOptedOut {
                 Button { showCompose = true } label: {
-                    Label { Text("Add Story") } icon: { Image("ic_stories").renderingMode(.template) }
+                    Label { Text("Add Story") } icon: { Image("ic_stories").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 20, height: 20) }
                 }
             }
         } label: {
@@ -980,7 +984,8 @@ struct ChatsView: View {
             }
         } else {
             Button { Task { await ChatService.markUnread(conv.id) } } label: {
-                Label { Text("Unread") } icon: { Image("ic_menu_unread").renderingMode(.template) }
+                Label { Text("Unread") } icon: { Image("ic_menu_unread").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 20, height: 20) }
             }
         }
         // Native submenu (clean popover) instead of a custom mute sheet.
@@ -1000,7 +1005,8 @@ struct ChatsView: View {
                 }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
-            Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template) }
+            Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template)
+                        .resizable().scaledToFit().frame(width: 20, height: 20) }
         }
         Button(role: .destructive) { pendingDelete = conv } label: {
             Label("Delete", systemImage: "trash")
