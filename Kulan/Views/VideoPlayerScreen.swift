@@ -58,7 +58,7 @@ struct VideoPlayerScreen: View {
                 .opacity(dismissing ? 0 : 1)
         }
         .overlay(alignment: .top) { if showChrome { topBar } }
-        .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
+        .overlay(alignment: .bottom) { if showChrome, player != nil { bottomControls } }
         .animation(.easeInOut(duration: 0.25), value: showChrome)
         .animation(.easeInOut(duration: 0.2), value: isPlaying)
         // Zoomed-in pan (the dismiss drag is now the shared pan below, images + videos identical).
@@ -128,13 +128,19 @@ struct VideoPlayerScreen: View {
                         .updating($pinch) { v, s, _ in s = v }
                         .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
                 )
-                // Double-tap the LEFT half → back 10s, RIGHT half → forward 10s (YouTube/native).
+                // Double-tap the LEFT half → back 15s, RIGHT half → forward 15s. Fifteen, not ten, so the
+                // gesture and the buttons move the video by the same amount.
                 .onTapGesture(count: 2, coordinateSpace: .global) { loc in
-                    if loc.x < UIScreen.main.bounds.width / 2 { skip(-10) } else { skip(10) }
+                    if loc.x < UIScreen.main.bounds.width / 2 { skip(-15) } else { skip(15) }
                 }
                 // Single tap on the video → play/pause (user request), and reveal the controls.
                 .onTapGesture { togglePlay(); showChromeBriefly() }
-            if !isPlaying && !zoomed {   // center play button (glass) when paused / at end
+            // Signal has NO centre play button: play and pause live in the control cluster, and
+            // their chrome stays up while paused so it is always reachable. Ours auto-hides, so
+            // dropping this outright could leave a paused video with nothing on screen to press.
+            // Gating it on the chrome being DOWN gives Signal's arrangement whenever the controls
+            // are visible, and keeps a way back when they are not.
+            if !isPlaying && !zoomed && !showChrome {
                 Button { togglePlay() } label: {
                     Image(systemName: "play.fill").font(.system(size: 30)).foregroundStyle(.primary)
                         .frame(width: 74, height: 74)
@@ -143,11 +149,11 @@ struct VideoPlayerScreen: View {
                 .buttonStyle(.plain)
                 .transition(.opacity)
             }
-            // ±10s skip flash (double-tap side) — a glass pill on the tapped half.
+            // ±15s skip flash (double-tap side) — a glass pill on the tapped half.
             if skipFlashShown {
                 HStack {
-                    if skipFlash < 0 { skipBadge("gobackward.10"); Spacer() }
-                    else { Spacer(); skipBadge("goforward.10") }
+                    if skipFlash < 0 { skipBadge("gobackward.15"); Spacer() }
+                    else { Spacer(); skipBadge("goforward.15") }
                 }
                 .padding(.horizontal, 40)
                 .allowsHitTesting(false)
@@ -223,11 +229,64 @@ struct VideoPlayerScreen: View {
                 }
             }
             .tint(.white)
-            Text(fmt(duration)).font(.system(size: 13).monospacedDigit()).foregroundStyle(.white.opacity(0.65))
+            // REMAINING, not total. Signal's progress view shows a position label and a remaining
+            // label, so the right-hand number counts down to zero and tells you what is left rather
+            // than restating a length you already know.
+            Text("-" + fmt(max(0, duration - current)))
+                .font(.system(size: 13).monospacedDigit()).foregroundStyle(.white.opacity(0.65))
         }
         .padding(.horizontal, 16).frame(height: 44)
         .liquidGlass(Capsule(), interactive: true)
-        .padding(.horizontal, 12).padding(.bottom, 8)
+        .padding(.horizontal, 12)
+    }
+
+    // SIGNAL'S CONTROL CLUSTER, read from their VideoPlaybackControls.swift rather than guessed.
+    //
+    // Their whole cluster is ONE capsule of interactive glass with the buttons inside it, laid out
+    // rewind | play | fast-forward at buttonSpacing 12 and horizontalMargin 6. Those numbers are
+    // theirs; the glass is the same interactive regular glass our own bars already use.
+    //
+    // The skip is 15 seconds. Signal draws that numeral as a real label over a plain arrow because
+    // their asset has no digits in it; SF Symbols ships the numeral in the glyph, so gobackward.15
+    // is the same picture with none of the layout. Native where native exists.
+    private var controlCluster: some View {
+        HStack(spacing: 12) {
+            if showsSkipButtons { skipButton(-15) }
+            Button { togglePlay() } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 21)).foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            if showsSkipButtons { skipButton(15) }
+        }
+        .padding(.horizontal, 6)
+        .liquidGlass(Capsule(), interactive: true)
+    }
+
+    /// Signal hides these entirely for anything 30 seconds or shorter, and lays out `|[Play]|` alone.
+    /// Skipping a quarter of a clip is not a control, it is a way to miss it.
+    private var showsSkipButtons: Bool { duration > 30 }
+
+    private func skipButton(_ seconds: Double) -> some View {
+        Button { skip(seconds) } label: {
+            Image(systemName: seconds < 0 ? "gobackward.15" : "goforward.15")
+                .font(.system(size: 20)).foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // Scrubber above, controls below, both floating clear of the edge — the arrangement in his
+    // reference. Two separate capsules, exactly as Signal builds them: the progress view and the
+    // playback controls are different views with their own glass.
+    private var bottomControls: some View {
+        VStack(spacing: 10) {
+            scrubberBar
+            controlCluster
+        }
+        .padding(.bottom, 10)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
