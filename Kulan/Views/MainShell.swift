@@ -1674,7 +1674,9 @@ struct ChatRow: View, Equatable {
             Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
-                .font(.system(size: 14)).lineLimit(2)
+                // 2 lines is the design, but the first layout pass can offer almost no width, and
+                // without a cap the text stacks one letter per line. See the note on timeStr.
+                .font(.system(size: 14)).lineLimit(2).truncationMode(.tail)
         } else if let r = reactionPreview {
             Text(r).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         } else if isPhotoPreview {
@@ -1773,6 +1775,13 @@ struct ChatRow: View, Equatable {
                     Text(timeStr)
                         .font(.system(size: 12))
                         .foregroundStyle(unread > 0 ? Theme.accent(dark) : .secondary)
+                        // NEVER WRAP. The list's first layout pass can offer a row almost no width,
+                        // and an unconstrained Text answers that by stacking one letter per line —
+                        // "Yesterday" became a vertical column of e/s/t/e/r/d/a/y (owner caught it
+                        // frame by frame on a cold launch). It was invisible before only because
+                        // there were no rows on screen that early to lay out badly.
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 HStack(alignment: .top, spacing: 4) {
                     previewContent

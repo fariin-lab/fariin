@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI          // Transaction, for the silent disk-rows swap in publish()
 import FirebaseAuth
 import FirebaseFirestore
 
@@ -63,7 +64,7 @@ final class ConversationsRepository {
         // screen while they do.
         if conversations.isEmpty {
             let cached = ChatListSnapshot.load()
-            if !cached.isEmpty { conversations = cached }
+            if !cached.isEmpty { conversations = cached; seededFromDisk = true }
         }
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
         // Cached chats render instantly (hasLoaded flips on the first non-empty snapshot);
@@ -115,9 +116,24 @@ final class ConversationsRepository {
     private var flushScheduled = false
     private let minPublishInterval: TimeInterval = 0.15
 
+    /// True from the moment `start()` seeds rows off disk until the first real snapshot lands.
+    /// Those disk rows are the SAME chats Firestore is about to send, so the swap must be silent.
+    /// Without this, SwiftUI treats it as a content change and cross-dissolves the two, which reads
+    /// as ghosted double text over the whole list on a cold launch (owner caught it frame by frame).
+    private var seededFromDisk = false
+
     private func publish(_ convs: [Conversation]) {
         if !convs.isEmpty { rememberHadChats() }
-        guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
+        guard convs != conversations else { hasLoaded = true; seededFromDisk = false; return }
+        // The disk rows being REPLACED, not chats actually changing. Land it with no animation.
+        if seededFromDisk {
+            seededFromDisk = false
+            lastPublish = Date()
+            pendingConvs = nil
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { conversations = convs; hasLoaded = true }
+            return
+        }
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
             lastPublish = Date()
             conversations = convs
@@ -157,5 +173,6 @@ final class ConversationsRepository {
         pendingConvs = nil
         conversations = []
         hasLoaded = false
+        seededFromDisk = false
     }
 }
