@@ -22,6 +22,49 @@ enum GifRecents {
         list.insert(["u": g.url, "w": g.width, "h": g.height], at: 0)
         UserDefaults.standard.set(Array(list.prefix(cap)), forKey: key)
     }
+
+    /// Take one back out. Recents fill themselves without being asked, so there has to be a way to
+    /// say "not that one" — otherwise a GIF you sent once by mistake sits in the row for good.
+    static func forget(_ url: String) {
+        let list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+            .filter { ($0["u"] as? String) != url }
+        UserDefaults.standard.set(list, forKey: key)
+    }
+}
+
+/// GIFs you keep on purpose, as opposed to the ones you happen to have sent. Same store shape as
+/// recents, and local for the same reason — but the ORDER is oldest first, because a favourite is
+/// something you go back to and a row that reshuffles under your finger every time you use it is
+/// not a shelf, it is another recents row.
+enum GifFavorites {
+    private static let key = "gifFavorites.v1"
+    private static let cap = 60
+
+    static func all() -> [GiphyService.Gif] {
+        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []).compactMap { d in
+            guard let url = d["u"] as? String else { return nil }
+            return GiphyService.Gif(id: "fav-\(url)", url: url,
+                                    width: d["w"] as? Double ?? 1, height: d["h"] as? Double ?? 1)
+        }
+    }
+
+    static func contains(_ url: String) -> Bool {
+        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+            .contains { ($0["u"] as? String) == url }
+    }
+
+    static func add(_ g: GiphyService.Gif) {
+        var list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+        guard !list.contains(where: { ($0["u"] as? String) == g.url }) else { return }
+        list.append(["u": g.url, "w": g.width, "h": g.height])
+        UserDefaults.standard.set(Array(list.prefix(cap)), forKey: key)
+    }
+
+    static func remove(_ url: String) {
+        let list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+            .filter { ($0["u"] as? String) != url }
+        UserDefaults.standard.set(list, forKey: key)
+    }
 }
 
 struct GifPickerView: View {
@@ -36,9 +79,10 @@ struct GifPickerView: View {
     // has a version), drawn OUR way: our icons, accent tint, no copied glyph set. Each chip is a
     // ready-made search; Trending is the browse default.
     private enum GifCategory: CaseIterable {
-        case recent, trending, happy, love, sad, party, thumbsUp
+        case favorites, recent, trending, happy, love, sad, party, thumbsUp
         var icon: String {
             switch self {
+            case .favorites: return "star.fill"
             case .recent: return "clock"
             case .trending: return "flame"
             case .happy: return "face.smiling"
@@ -50,7 +94,7 @@ struct GifPickerView: View {
         }
         var term: String {
             switch self {
-            case .recent, .trending: return ""
+            case .favorites, .recent, .trending: return ""
             case .happy: return "happy"
             case .love: return "love"
             case .sad: return "sad"
@@ -72,6 +116,11 @@ struct GifPickerView: View {
                 if category == .recent, gifs.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
                     ContentUnavailableView("No recent GIFs", systemImage: "clock",
                                            description: Text("GIFs you send will appear here."))
+                        .padding(.top, 40)
+                }
+                if category == .favorites, gifs.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    ContentUnavailableView("No favourites yet", systemImage: "star",
+                                           description: Text("Hold a GIF and choose Add to Favourites."))
                         .padding(.top, 40)
                 }
                 // Masonry (standard style): 2 columns, each GIF at its OWN natural aspect ratio,
@@ -145,8 +194,13 @@ struct GifPickerView: View {
     // local (the device's own sent list) — instant, no network; Trending = "".
     private func refresh() async {
         let q = query.trimmingCharacters(in: .whitespaces)
+        // The two local tabs answer from the device, so they are instant and work offline.
         if q.isEmpty, category == .recent {
             gifs = GifRecents.all()
+            return
+        }
+        if q.isEmpty, category == .favorites {
+            gifs = GifFavorites.all()
             return
         }
         let results = await GiphyService.shared.search(q.isEmpty ? category.term : q)
@@ -214,5 +268,36 @@ struct GifPickerView: View {
                 Color.clear.contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .onTapGesture { pick(g) }
             }
+            // Long press = the native menu, on the SwiftUI layer rather than the UIKit gif view.
+            // A gesture attached to the animated view itself can silently never fire, because the
+            // touch lands in its UIImageView — the same reason the tap lives on an overlay.
+            .contextMenu {
+                let favourite = GifFavorites.contains(g.url)
+                Button {
+                    favourite ? GifFavorites.remove(g.url) : GifFavorites.add(g)
+                    refreshLocalTab()
+                } label: {
+                    Label(favourite ? "Remove from Favourites" : "Add to Favourites",
+                          systemImage: favourite ? "star.slash" : "star")
+                }
+                // Only where it means something. Offering "Remove from Recent" while browsing
+                // Trending would be a button that silently does nothing to what you are looking at.
+                if category == .recent {
+                    Button(role: .destructive) {
+                        GifRecents.forget(g.url)
+                        refreshLocalTab()
+                    } label: {
+                        Label("Remove from Recent", systemImage: "clock.badge.xmark")
+                    }
+                }
+            }
+    }
+
+    /// Redraw immediately after editing a local list, but only when the list being edited is the one
+    /// on screen — re-running the loader on Trending would throw away the page for no reason.
+    private func refreshLocalTab() {
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        if category == .favorites { gifs = GifFavorites.all() }
+        else if category == .recent { gifs = GifRecents.all() }
     }
 }
