@@ -25,6 +25,7 @@ struct ForwardPicker: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme   // send button tint matches the bubble colour
     @State private var repo = ConversationsRepository.shared
     @State private var query = ""
     @State private var selected = Set<String>()
@@ -107,6 +108,53 @@ struct ForwardPicker: View {
         .padding(.vertical, 6)
     }
 
+    /// The bottom bar IS the chat composer, on purpose.
+    ///
+    /// Send used to live in the top-right toolbar while the text field sat at the bottom, so you
+    /// typed down here and then reached the whole height of the screen to send. WhatsApp and the
+    /// apps copying it put send beside the text, and on that one detail they are simply right: your
+    /// thumb is already there.
+    ///
+    /// But rather than reproduce their bar, this reuses OURS. Same capsule, same round glass send
+    /// button, same tint as the message bubbles. A forward is you writing a message, so it should
+    /// look like writing a message, and anyone who has used the app already knows this control.
+    @ViewBuilder private var forwardComposer: some View {
+        VStack(spacing: 8) {
+            // WHO it is going to, as faces rather than a list of names. Every person already has a
+            // colour of their own, so a row of circles is read at a glance where names have to be
+            // read one at a time. It also survives picking eight people, which names do not.
+            if selected.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: -8) {
+                        ForEach(people.filter { selected.contains($0.id) }) { c in
+                            AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 28)
+                                .overlay(Circle().stroke(Color(uiColor: .systemBackground), lineWidth: 2))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .frame(height: 30)
+            }
+            HStack(spacing: 10) {
+                TextField("Add a message…", text: $comment, axis: .vertical)
+                    .lineLimit(1...4)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                Button { sendAll() } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(scheme == .dark))
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+        .background(.bar)
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -141,22 +189,19 @@ struct ForwardPicker: View {
             // Add-your-own-text (owner's pick): appears once a chat is chosen; lands as its OWN
             // message right after the forwards, in every picked chat — never glued to a caption.
             .safeAreaInset(edge: .bottom) {
-                if !selected.isEmpty {
-                    TextField("Add a message…", text: $comment, axis: .vertical)
-                        .lineLimit(1...3)
-                        .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                }
+                if !selected.isEmpty { forwardComposer }
             }
             .navigationTitle("Forward to…")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
+                // Send lives in the composer now, next to the text. Kept here ONLY for the moment
+                // before anyone is picked, when there is no composer on screen to hold it, so the
+                // screen still explains what it is for.
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Send") { sendAll() }
-                        .disabled(selected.isEmpty)
-                        .fontWeight(.semibold)
+                    if selected.isEmpty {
+                        Button("Send") { }.disabled(true).fontWeight(.semibold)
+                    }
                 }
             }
         }
