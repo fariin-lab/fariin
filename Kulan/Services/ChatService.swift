@@ -1465,11 +1465,21 @@ enum ChatService {
             var markedDeleted = false
             if !alreadyTombstone {
                 do {
-                    var strip: [String: Any] = ["deleted": true, "text": "", "enc": FieldValue.delete()]
+                    // TYPE GOES BACK TO TEXT, and that one field is what keeps the rest of the app
+                    // honest. A tombstone that stayed type "image" still answered isImage, so it
+                    // turned up in All Media as a broken tile with no photo behind it, and in the
+                    // profile's media grid, and in the gallery expansion. Fixing those filters one
+                    // by one would have missed the next one; a deleted message simply is not media.
+                    var strip: [String: Any] = [
+                        "deleted": true, "text": "", "type": "text", "enc": FieldValue.delete(),
+                    ]
                     for k in ["imageUrl", "videoUrl", "thumbUrl", "audioUrl", "fileUrl", "album",
                               "fileName", "fileSize", "waveform", "duration", "blurhash", "linkPreview",
                               "poll", "locationCard", "contactCard", "replyTo", "reactions",
-                              "videoEnc", "thumbEnc", "viewOnce", "mentions"] {
+                              "videoEnc", "thumbEnc", "viewOnce", "mentions",
+                              // The Forwarded tag sits ABOVE the bubble, so it survived the content
+                              // being stripped and read "Forwarded / This message was deleted".
+                              "forwarded"] {
                         strip[k] = FieldValue.delete()
                     }
                     try await ref.updateData(strip)

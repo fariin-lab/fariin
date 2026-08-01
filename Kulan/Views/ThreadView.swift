@@ -2147,7 +2147,8 @@ struct ThreadView: View {
     }
 
     private func bulkForwardStart() {
-        let msgs = repo.items.filter { selectedIds.contains($0.id) && !$0.isCall && !$0.isSystem }
+        // A tombstone has nothing to forward, and forwarding one would deliver an empty message.
+        let msgs = repo.items.filter { selectedIds.contains($0.id) && !$0.isCall && !$0.isSystem && !$0.deleted }
             .sorted { $0.createdAt < $1.createdAt }
         guard !msgs.isEmpty else { return }
         bulkForward = msgs
@@ -5881,8 +5882,10 @@ struct MessageBubble: View, Equatable {
                         // Unique per MESSAGE (two replies can quote the same story — duplicate
                         // hero ids glitch the transition).
                         .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
-                } else if let o = original {
+                } else if let o = original, !o.deleted {
                     // Photo / GIF / video / album reply → real thumbnail (WhatsApp-style preview).
+                    // Never for a deleted original: its thumbnail is gone from Storage, so this would
+                    // draw an empty box next to the words saying it was deleted.
                     replyMediaThumb(o)
                 }
                 VStack(alignment: .leading, spacing: 1) {
@@ -5955,6 +5958,11 @@ struct MessageBubble: View, Equatable {
     // word ("Photo"/"GIF"/"Video"/"Photos") when we have the original, else the stored text snippet.
     private func replyLabel(reply: ReplyRef, original o: Message?) -> String {
         if reply.isStatus { return "Status" }
+        // The quote is a SNAPSHOT baked into the replying message, so deleting the original left its
+        // words still readable inside every reply to it. That defeats the delete. We cannot rewrite
+        // someone else's message to fix it, but we can refuse to render the stale copy once we can
+        // see the original is gone.
+        if o?.deleted == true { return "This message was deleted" }
         if let o, o.isImage || o.isGif || o.isVideo || o.isAlbum {
             if !o.text.isEmpty { return quoteSafeLabel(o.text) }   // caption wins
             if o.isAlbum { return "Photos" }
