@@ -784,8 +784,9 @@ struct ChatsView: View {
                 Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
             } label: {
                 Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
-                    conv.isPinned(me) ? Image(systemName: "pin.slash")
-                                      : Image("ic_pin_menu").renderingMode(.template)
+                    conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
+                                      : AnyView(Image("ic_pin_menu").renderingMode(.template)
+                                                    .resizable().scaledToFit().frame(width: 20, height: 20))
                 }
             }
             .tint(.orange)
@@ -1000,8 +1001,9 @@ struct ChatsView: View {
         } label: { Label("Mute", systemImage: "bell.slash") }
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
             Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
-                    conv.isPinned(me) ? Image(systemName: "pin.slash")
-                                      : Image("ic_pin_menu").renderingMode(.template)
+                    conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
+                                      : AnyView(Image("ic_pin_menu").renderingMode(.template)
+                                                    .resizable().scaledToFit().frame(width: 20, height: 20))
                 }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
