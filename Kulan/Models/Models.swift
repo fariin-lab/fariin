@@ -231,6 +231,27 @@ struct Message: Identifiable, Equatable {
         self.height = height
     }
 
+    /// Optimistic STICKER. There is nothing to upload — the image is already on the device, in the
+    /// sticker cache — so this bubble is the whole send as far as the eye is concerned: it lands in
+    /// the same frame as the tap and the server echo replaces it in place.
+    init(localSticker s: StickerPack.Sticker, packId: String, authorId: String, clientId: String,
+         sendState: MessageSendState) {
+        self.id = clientId
+        self.authorId = authorId
+        self.text = ""
+        self.type = "sticker"
+        self.clientId = clientId
+        self.reactions = [:]
+        self.createdAt = Date()
+        self.sendState = sendState
+        self.imageUrl = s.url
+        self.width = s.width
+        self.height = s.height
+        self.packId = packId
+        self.stickerId = s.id
+        self.stickerEmoji = s.emoji.isEmpty ? nil : s.emoji
+    }
+
     /// Local optimistic message shown instantly before the server confirms it.
     /// `id` = clientId until the server echo (matched by clientId) replaces it.
     init(localText: String, authorId: String, clientId: String, replyTo: ReplyRef?, sendState: MessageSendState,

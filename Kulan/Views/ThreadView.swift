@@ -228,6 +228,11 @@ struct ThreadView: View {
     // Plain @State, not @FocusState: the composer is a UITextView now (ComposerTextView), so focus
     // travels as a Bool binding. Every read, write and .onChange below is unchanged by that.
     @State private var inputFocused = false
+    // The sticker panel, built once and kept. Signal builds their keyboards once and caches them
+    // too: rebuilding one per presentation is a collection view and a layout pass you pay for on
+    // every open. Lazy, so a chat you never open the panel in never allocates it.
+    @State private var stickerKeyboard: StickerKeyboard?
+    @State private var showingStickers = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
     @AppStorage("typingIndicators") private var typingPref = true
@@ -469,6 +474,13 @@ struct ThreadView: View {
             // and it too was a proxy.scrollTo NO-OP that never executed (the "tap input → conversation
             // doesn't move" report).
             .onChange(of: inputFocused) { _, focused in
+                // ONE rule that covers every dismissal there is. The panel is only up while the text
+                // view is first responder, so anything that resigns it — "+", the camera, the GIF
+                // sheet, pushing a profile, leaving the chat, the long-press menu, opening search —
+                // has also put the panel away, and the state has to agree. Signal's clearDesiredKeyboard
+                // exists for exactly this: resigning alone leaves the intent set and the panel springs
+                // back the next time the keyboard opens.
+                if !focused, showingStickers { showingStickers = false }
                 guard focused, isAtBottom else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     nativeScrollTarget = "BOTTOM"
@@ -3906,7 +3918,7 @@ struct ThreadView: View {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
                     // …sticker + camera show only when idle & empty…
-                    if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
+                    if !recordingHeld && !hasText { inFieldSticker; inFieldGif; inFieldCamera }
                     // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
                     // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
                     // the DragGesture survives record-start; zIndex keeps the red circle in front of the
@@ -3947,7 +3959,9 @@ struct ThreadView: View {
     // tappable instead of just the text's frame). maxWidth is what makes it greedy the way the
     // SwiftUI field was, so the sticker/camera/mic siblings keep their 40pt slots.
     private var messageField: some View {
-        ComposerTextView(text: $input, isFocused: $inputFocused)
+        ComposerTextView(text: $input, isFocused: $inputFocused,
+                         customInputView: showingStickers ? stickerKeyboard : nil,
+                         onTapWhileCustomInput: { showingStickers = false })
             .frame(maxWidth: .infinity, alignment: .leading)
             .onChange(of: input) { _, v in
                 // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
@@ -3998,6 +4012,65 @@ struct ThreadView: View {
                 .frame(width: 40, height: 40)
         }
     }
+    // Stickers open as a KEYBOARD, not a sheet — the panel is the composer's inputView, so UIKit
+    // performs the slide and the swap. Tapping again puts everything away, which is what the owner
+    // asked for and also what Signal does; tapping the text field goes back to typing.
+    //
+    // No SF Symbol means "sticker", so this is the smiley every messenger uses for the same button.
+    @ViewBuilder private var inFieldSticker: some View {
+        if !isGroup || conversation?.isRestricted(me, .sendStickers, now: Date().timeIntervalSince1970) != true {
+            Button { toggleStickerPanel() } label: {
+                Image(systemName: showingStickers ? "keyboard" : "face.smiling")
+                    .font(.system(size: 21, weight: .regular))
+                    .frame(width: 24, height: 24).foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+        }
+    }
+
+    /// Signal's swap, and the whole trick is the UNCONDITIONAL focus at the end. If the keyboard is
+    /// already up it is a no-op and UIKit swaps the content in place at a fixed frame; if nothing is
+    /// up, the panel is what gets presented and the system keyboard never appears at all. Either way
+    /// there is exactly one animation and one first responder throughout.
+    private func toggleStickerPanel() {
+        if showingStickers {
+            showingStickers = false
+            inputFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            return
+        }
+        if stickerKeyboard == nil {
+            let k = StickerKeyboard()
+            k.onPick = { sticker, packId in sendSticker(sticker, packId: packId) }
+            stickerKeyboard = k
+        }
+        stickerKeyboard?.reloadTabs()
+        showingStickers = true
+        inputFocused = true
+    }
+
+    /// Optimistic, exactly like a GIF: the image is already on this device, so the bubble IS the
+    /// send as far as the eye is concerned. The panel deliberately stays open — sending a sticker is
+    /// not a reason to close a keyboard, and people send them in bursts.
+    private func sendSticker(_ s: StickerPack.Sticker, packId: String) {
+        let clientId = UUID().uuidString
+        repo.addPending(Message(localSticker: s, packId: packId, authorId: me,
+                                clientId: clientId, sendState: .sending))
+        Task {
+            do {
+                try await ChatService.sendSticker(cid: cid, packId: packId, stickerId: s.id, url: s.url,
+                                                  emoji: s.emoji, width: s.width, height: s.height,
+                                                  clientId: clientId, group: isGroup ? groupMembers : nil)
+            } catch {
+                await MainActor.run {
+                    repo.markFailed(clientId: clientId)
+                    sendError = "Couldn't send the sticker. Check your connection and try again."
+                }
+            }
+        }
+    }
+
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     private var inFieldGif: some View {
         Button {

@@ -24,9 +24,12 @@ struct ComposerTextView: UIViewRepresentable {
     var maxLines: Int = 6
 
     /// Hand it a panel and that panel takes the system keyboard's place; nil is the system keyboard.
-    /// Unused today — this is the hook the whole rewrite was for, and it stays inert until the panel
-    /// is wired up.
     var customInputView: UIInputView? = nil
+
+    /// Tapping the field while a panel is up. With `inputView` overridden the text view cannot
+    /// receive an ordinary editing tap, so without this there is no way back to typing — you would
+    /// be stuck in the panel. Signal adds the same recogniser, and only while the panel is up.
+    var onTapWhileCustomInput: (() -> Void)? = nil
 
     // Matches the padding the SwiftUI field carried on the outside. Moving it inside means the whole
     // pill is tappable rather than just the text's own frame; the text sits in exactly the same place.
@@ -42,6 +45,12 @@ struct ComposerTextView: UIViewRepresentable {
         // the binding first), so a three-line edit would open one line tall and correct a frame later.
         configure(context.coordinator.sizer)
         context.coordinator.sizer.isScrollEnabled = false
+
+        // Off unless a panel is up. Left always-on it would swallow taps meant for placing the caret.
+        let tap = context.coordinator.panelTap
+        tap.addTarget(context.coordinator, action: #selector(Coordinator.panelTapped))
+        tap.isEnabled = false
+        tv.addGestureRecognizer(tap)
 
         let ph = context.coordinator.placeholderLabel
         ph.text = placeholder
@@ -73,8 +82,20 @@ struct ComposerTextView: UIViewRepresentable {
         c.syncPlaceholder(tv)
 
         if tv.inputView !== customInputView {
+            // MEASURE THE KEYBOARD NOW, in the one instant it can be measured: we are switching away
+            // from the system keyboard and are still first responder, so the keyboard is up and at
+            // rest. A notification's frame cannot be trusted for this — it also fires for undocked,
+            // floating and half-dismissed states, which produce a height that is not a keyboard.
+            if customInputView != nil, tv.inputView == nil, tv.isFirstResponder, let window = tv.window {
+                ComposerKeyboardPanel.recordKeyboardHeight(window.keyboardLayoutGuide.layoutFrame.height,
+                                                           for: tv.traitCollection)
+            }
+            // The height belongs on the panel BEFORE it becomes an inputView; applied afterwards it
+            // is a resize of something already on screen, which is a visible jump.
+            (customInputView as? ComposerKeyboardPanel)?.updateHeight(using: tv.traitCollection)
             tv.inputView = customInputView
             if tv.isFirstResponder { tv.reloadInputViews() }
+            c.panelTap.isEnabled = customInputView != nil
         }
 
         // Focus, driven from SwiftUI. The flag stops the delegate writing state back during a view
@@ -137,9 +158,12 @@ struct ComposerTextView: UIViewRepresentable {
         var parent: ComposerTextView
         let placeholderLabel = UILabel()
         let sizer = UITextView()
+        let panelTap = UITapGestureRecognizer()
         var applyingFocus = false
 
         init(_ parent: ComposerTextView) { self.parent = parent }
+
+        @objc func panelTapped() { parent.onTapWhileCustomInput?() }
 
         func syncPlaceholder(_ tv: UITextView) {
             placeholderLabel.isHidden = !tv.text.isEmpty || tv.markedTextRange != nil

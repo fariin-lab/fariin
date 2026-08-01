@@ -78,8 +78,13 @@ class ComposerKeyboardPanel: UIInputView {
         updateHeight()
     }
 
-    func updateHeight() {
-        let key = SizeKey(traitCollection)
+    /// `traits` matters more than it looks. The height is RECORDED against the composer's traits,
+    /// which are real because that view is in a window. Before its first presentation this panel is
+    /// in no hierarchy at all, so its own size classes can still be `.unspecified` — a different key,
+    /// which would miss the value just measured and fall through to the cold-start estimate. The
+    /// caller passes the traits it recorded with, and the two agree by construction.
+    func updateHeight(using traits: UITraitCollection? = nil) {
+        let key = SizeKey(traits ?? traitCollection)
         // Measured beats estimated beats letting UIKit guess.
         guard let h = Self.measured[key] ?? key.estimate() else {
             heightConstraint.isActive = false

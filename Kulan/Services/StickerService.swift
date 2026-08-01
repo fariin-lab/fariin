@@ -27,6 +27,10 @@ struct StickerPack: Identifiable, Equatable {
     var format: String
     var animated: Bool
     var order: Int
+    /// Installed automatically for anyone who has never had an installed list — what every
+    /// messenger does so a new account opens the panel and finds something in it, rather than an
+    /// empty box and no idea where packs come from.
+    var isDefault: Bool
     var stickers: [Sticker]
 
     struct Sticker: Identifiable, Equatable {
@@ -51,6 +55,7 @@ struct StickerPack: Identifiable, Equatable {
         self.format = data["format"] as? String ?? "png"
         self.animated = data["animated"] as? Bool ?? false
         self.order = (data["order"] as? NSNumber)?.intValue ?? 0
+        self.isDefault = data["isDefault"] as? Bool ?? false
         self.stickers = ((data["stickers"] as? [[String: Any]]) ?? []).compactMap { s in
             guard let sid = s["id"] as? String, let url = s["url"] as? String, !url.isEmpty else { return nil }
             return Sticker(id: sid, url: url,
@@ -108,6 +113,24 @@ final class StickerService: ObservableObject {
         catalogue = packs
         loaded = true
         rebuildInstalled()
+        seedDefaultsIfNeeded()
+    }
+
+    /// A brand-new account gets the default packs, once.
+    ///
+    /// The test is whether the document EXISTS, not whether the list is empty. Those are different
+    /// things: no document means this account has never had stickers, an empty list means someone
+    /// deliberately removed the last pack. Seeding on "empty" would put a pack back every time you
+    /// removed it, which reads as the app refusing to be told.
+    private var hasInstalledDoc = false
+    private var seeded = false
+
+    private func seedDefaultsIfNeeded() {
+        guard !seeded, loaded, !hasInstalledDoc, !uid.isEmpty else { return }
+        let defaults = catalogue.filter(\.isDefault).map(\.id)
+        guard !defaults.isEmpty else { return }
+        seeded = true
+        Task { await writeInstalled(defaults) }
     }
 
     /// Installed packs live in a SUBCOLLECTION, not on the user document: other people can read user
@@ -118,10 +141,13 @@ final class StickerService: ObservableObject {
             .collection("stickers").document("installed")
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self else { return }
+                let exists = snap?.exists ?? false
                 let ids = (snap?.data()?["packs"] as? [String]) ?? []
                 Task { @MainActor in
+                    self.hasInstalledDoc = exists
                     self.installedIds = ids
                     self.rebuildInstalled()
+                    self.seedDefaultsIfNeeded()
                 }
             }
     }
@@ -244,6 +270,7 @@ private enum PackCache {
         let raw = packs.map { p -> [String: Any] in
             ["id": p.id, "name": p.name, "author": p.author, "coverUrl": p.coverUrl,
              "format": p.format, "animated": p.animated, "order": p.order, "published": true,
+             "isDefault": p.isDefault,
              "stickers": p.stickers.map { ["id": $0.id, "url": $0.url, "emoji": $0.emoji,
                                            "w": $0.width, "h": $0.height] }]
         }
@@ -262,24 +289,52 @@ private enum PackCache {
     }
 }
 
-/// Recently used stickers, on the device only — Signal keeps theirs local too, and syncing them
-/// would cost a write on every sticker sent for something nobody misses on a new phone.
+/// Recently used and favourite stickers. Both are device-local: Signal keeps recents local too, and
+/// syncing would cost a write on every sticker sent for something nobody misses on a new phone.
+///
+/// They store the whole sticker, not a reference into a pack, so a favourite survives removing the
+/// pack it came from. Losing your favourites because you tidied up your packs would be its own bug.
 enum StickerRecents {
-    private static let key = "stickerRecents.v1"
-    private static let cap = 24
+    static let recents = Store(key: "stickerRecents.v1", cap: 24, newestFirst: true)
+    static let favourites = Store(key: "stickerFavourites.v1", cap: 60, newestFirst: false)
 
-    static func all() -> [StickerPack.Sticker] {
-        (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []).compactMap { d in
-            guard let id = d["i"] as? String, let url = d["u"] as? String else { return nil }
-            return StickerPack.Sticker(id: id, url: url, emoji: d["e"] as? String ?? "",
-                                       width: d["w"] as? Double ?? 512, height: d["h"] as? Double ?? 512)
+    struct Store {
+        let key: String
+        let cap: Int
+        /// Recents reorder on every use; favourites keep the order you added them, or the row would
+        /// rearrange itself under your finger every time you sent one.
+        let newestFirst: Bool
+
+        func all() -> [StickerPack.Sticker] {
+            (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []).compactMap { d in
+                guard let id = d["i"] as? String, let url = d["u"] as? String else { return nil }
+                return StickerPack.Sticker(id: id, url: url, emoji: d["e"] as? String ?? "",
+                                           width: d["w"] as? Double ?? 512, height: d["h"] as? Double ?? 512)
+            }
         }
-    }
 
-    static func note(_ s: StickerPack.Sticker) {
-        var list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
-            .filter { ($0["i"] as? String) != s.id }
-        list.insert(["i": s.id, "u": s.url, "e": s.emoji, "w": s.width, "h": s.height], at: 0)
-        UserDefaults.standard.set(Array(list.prefix(cap)), forKey: key)
+        func contains(_ id: String) -> Bool {
+            (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+                .contains { ($0["i"] as? String) == id }
+        }
+
+        func note(_ s: StickerPack.Sticker) {
+            var list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+            let entry: [String: Any] = ["i": s.id, "u": s.url, "e": s.emoji, "w": s.width, "h": s.height]
+            if newestFirst {
+                list.removeAll { ($0["i"] as? String) == s.id }
+                list.insert(entry, at: 0)
+            } else {
+                guard !list.contains(where: { ($0["i"] as? String) == s.id }) else { return }
+                list.append(entry)
+            }
+            UserDefaults.standard.set(Array(list.prefix(cap)), forKey: key)
+        }
+
+        func remove(_ id: String) {
+            let list = (UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? [])
+                .filter { ($0["i"] as? String) != id }
+            UserDefaults.standard.set(list, forKey: key)
+        }
     }
 }

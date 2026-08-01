@@ -16,6 +16,10 @@ struct KulanApp: App {
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
                 // resolve — put them back on the default rather than leave them with a broken icon.
                 .task { RetiredAppIcons.resetIfInUse() }
+                // Catalogue + installed packs, once per launch. Started here rather than when a chat
+                // opens so the first tap of the sticker button already has something to draw — the
+                // cached copy paints immediately and the server refresh lands behind it.
+                .task { StickerService.shared.start() }
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await PresenceService.set(online: phase == .active) }
