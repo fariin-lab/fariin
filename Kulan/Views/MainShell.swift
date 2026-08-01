@@ -296,7 +296,11 @@ struct CallsView: View {
                             // In edit mode the row's own buttons stayed live, so tapping the name or
                             // avatar pushed a profile and the round button dialled — instead of
                             // selecting the row. The chat list got this exact fix; this list didn't.
-                            .disabled(selecting)
+                            //
+                            // allowsHitTesting, not disabled: disabled ALSO dims, and a greyed-out
+                            // call list reads as switched off rather than ready to be picked from.
+                            // Same fix, same reason, as the chat list one row type over.
+                            .allowsHitTesting(!selecting)
                             .overlay {
                                 if selecting {
                                     Color.clear.contentShape(Rectangle()).onTapGesture {
