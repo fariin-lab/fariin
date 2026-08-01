@@ -3918,7 +3918,7 @@ struct ThreadView: View {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
                     // …sticker + camera show only when idle & empty…
-                    if !recordingHeld && !hasText { inFieldSticker; inFieldGif; inFieldCamera }
+                    if !recordingHeld && !hasText { inFieldSticker; inFieldCamera }
                     // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
                     // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
                     // the DragGesture survives record-start; zIndex keeps the red circle in front of the
@@ -4068,20 +4068,6 @@ struct ThreadView: View {
                     sendError = "Couldn't send the sticker. Check your connection and try again."
                 }
             }
-        }
-    }
-
-    // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
-    private var inFieldGif: some View {
-        Button {
-            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
-            inputFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            showGifPicker = true
-        } label: {
-            Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 24, height: 24).foregroundStyle(.primary)
-                .frame(width: 40, height: 40)
         }
     }
 
