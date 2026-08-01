@@ -70,21 +70,17 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Fixes for things you spotted in the last build.
+            A small one, mostly taking something back out.
 
-            OPENING THE APP
-            The chat list no longer shows letters stacked in a column while it loads, and no longer ghosts double text as the real chats arrive. It draws from a file on the phone so your chats are there on the first frame.
+            THE LAUNCH
+            I removed the change that drew your chats from a file on the phone. It was meant to kill the blink and instead made the app visibly build itself: letters stacked in a column, then ghosted double text, then rows sliding in from the left. Each fix only revealed the next one, so it is out. The brief blink comes back, which is the lesser problem.
 
-            PROFILE
-            The white strip above the colour is gone. Each person's colour now runs all the way up behind the top bar.
+            One piece stays: the time and draft text on a chat row can no longer wrap, so nothing can ever stack them into a column again.
 
-            FORWARD SCREEN
-            Search moved back to the top, so there are no longer two boxes stacked at the bottom. The message box now looks like a message box instead of a second search bar. And you can swipe the list to put the keyboard away, which was impossible before.
+            DELETING
+            A delete that could not even read the message was quietly reporting success, showing no error at all. It now says so honestly.
 
-            CHAT EDGES
-            The blur at the top and bottom is removed, since it did not draw at all.
+            KNOWN, NOT FIXED YET: a deleted message can stay on screen until you delete another one. I found why. The app spots deletions by comparing what it has against what the server sent, but only for messages newer than the oldest one loaded, so an older one is never noticed. Deleting something else shifts that line and sweeps it out, which is why they vanished together. The proper fix is to ask the server which messages were removed instead of guessing, and it needs doing with you watching.
 
-            STILL TO COME: opening a chat after fully closing the app still draws the messages a moment late. The fix is agreed and written down, it just needs its own session.
-
-            PLEASE TRY: close the app fully and reopen, watching the first second; open a profile; forward something to two people and try the keyboard and the search.
+            PLEASE TRY: nothing new to hunt for. Just use it normally and tell me if anything feels worse than the last build.
         run: fastlane beta
