@@ -119,27 +119,36 @@ enum ChatService {
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = contentType
 
-        // Staged on disk, protected at rest, and removed on EVERY exit path (success, throw,
-        // cancellation). A leaked temp file is a sealed copy of a private message sitting in tmp.
+        let bg = await beginUploadAssertion()
+        defer { Task { @MainActor in endUploadAssertion(bg) } }
+
+        return try await withStagedFile(bytes) { tmp in
+            var attempt = 0
+            while true {
+                do {
+                    _ = try await ref.putFileAsync(from: tmp, metadata: meta)
+                    return try await ref.downloadURL().absoluteString
+                } catch {
+                    attempt += 1
+                    guard attempt < 4, !Task.isCancelled, isRetryableUpload(error) else { throw error }
+                    await Backoff.sleep(attempt: attempt, base: 2, cap: 30)
+                }
+            }
+        }
+    }
+
+    /// Runs `body` with `bytes` staged to a protected temp file, and removes that file afterwards on
+    /// EVERY exit path: success, throw, or cancellation. A leaked temp file is a sealed copy of a
+    /// private message left sitting in tmp.
+    ///
+    /// Split out from the Storage call on purpose. The cleanup guarantee is the part worth testing,
+    /// and inline it could only be tested by actually uploading something.
+    static func withStagedFile<T>(_ bytes: Data, _ body: (URL) async throws -> T) async throws -> T {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-\(UUID().uuidString).enc")
         try bytes.write(to: tmp, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         defer { try? FileManager.default.removeItem(at: tmp) }
-
-        let bg = await beginUploadAssertion()
-        defer { Task { @MainActor in endUploadAssertion(bg) } }
-
-        var attempt = 0
-        while true {
-            do {
-                _ = try await ref.putFileAsync(from: tmp, metadata: meta)
-                return try await ref.downloadURL().absoluteString
-            } catch {
-                attempt += 1
-                guard attempt < 4, !Task.isCancelled, isRetryableUpload(error) else { throw error }
-                await Backoff.sleep(attempt: attempt, base: 2, cap: 30)
-            }
-        }
+        return try await body(tmp)
     }
 
     /// A refusal is not a network problem. Retrying an unauthorized or over-quota upload only burns

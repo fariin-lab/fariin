@@ -1,0 +1,76 @@
+name: iOS Tests
+
+# Unit tests on a simulator.
+#
+# NOT on every push, deliberately. macOS runners bill at 10x the Linux rate and this job builds the
+# whole stack (Firebase, WebRTC, LiveKit, libsodium) before it can run a single assertion, so it is
+# ~20 minutes a go. A normal working session here is eight or ten pushes; on-push would spend the
+# monthly budget in an afternoon, which is the same reason ios-build.yml is manual.
+#
+# To run on every push anyway, add:
+#   push:
+#     branches: [experiment/custom-long-press]
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Kulan/**'
+      - 'KulanTests/**'
+      - 'project.yml'
+      - '.github/workflows/ios-tests.yml'
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode (need iOS 26 SDK)
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)
+          echo "Selecting $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages (retry, clearing corrupt binary-framework artifacts)
+        run: |
+          for i in 1 2 3 4; do
+            if xcodebuild -resolvePackageDependencies -project Kulan.xcodeproj -scheme Kulan; then
+              echo "package resolution succeeded on attempt $i"; break
+            fi
+            echo "::warning::SPM resolve attempt $i failed (likely a partial WebRTC/Firebase download). Clearing artifacts and retrying."
+            rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts
+            rm -rf ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            if [ "$i" = "4" ]; then echo "::error::SPM resolution failed after 4 attempts"; exit 1; fi
+            sleep 10
+          done
+
+      # Pick whatever iPhone this runner image actually has, rather than hardcoding a name.
+      # A hardcoded "iPhone 15" fails the moment GitHub rolls the image forward, and it fails as a
+      # destination error that reads nothing like "your simulator is gone".
+      - name: Pick a simulator
+        id: sim
+        run: |
+          NAME=$(xcrun simctl list devices available -j \
+            | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print(next(x['name'] for r in d for x in d[r] if x['name'].startswith('iPhone')))")
+          echo "Using $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Kulan.xcodeproj \
+            -scheme Kulan \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO

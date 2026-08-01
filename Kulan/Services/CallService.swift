@@ -541,7 +541,7 @@ final class CallService: NSObject {
         // monitor from turning a camera back on that the user themselves switched off: with the flag
         // down there is nothing for the recovery path to resume, and the windows restart from scratch.
         videoPausedForNetwork = false
-        poorSince = nil; goodSince = nil
+        linkPolicy.reset()
         localVideoTrack?.isEnabled = on
         if on { startCameraCapture() } else { videoCapturer?.stopCapture() }
         applyVideoAudioPolicy()
@@ -722,17 +722,8 @@ final class CallService: NSObject {
     private(set) var videoPausedForNetwork = false
 
     private var linkMonitor: Timer?
-    private var poorSince: Date?
-    private var goodSince: Date?
-
-    /// Below this the link cannot carry even the lowest useful video, and the frames we keep pushing
-    /// into it are taken straight out of the audio the call actually needs.
-    private let weakLinkBitrate: Double = 50_000
-    /// Slow in BOTH directions, on purpose. A bare threshold flaps: the estimate wanders across the
-    /// line and video blinks on and off, which is far worse to sit through than the poor video it is
-    /// trying to prevent. Recovery is slower still, so we only come back when it will hold.
-    private let pauseAfterPoor: TimeInterval = 5
-    private let resumeAfterGood: TimeInterval = 10
+    /// The thresholds and both windows live in WeakLinkPolicy, which is pure and unit-tested.
+    private var linkPolicy = WeakLinkPolicy()
 
     private func startLinkMonitor() {
         guard linkMonitor == nil else { return }
@@ -743,7 +734,7 @@ final class CallService: NSObject {
 
     private func stopLinkMonitor() {
         linkMonitor?.invalidate(); linkMonitor = nil
-        poorSince = nil; goodSince = nil
+        linkPolicy.reset()
         videoPausedForNetwork = false
     }
 
@@ -751,7 +742,7 @@ final class CallService: NSObject {
         guard inLiveCall, let pc else { stopLinkMonitor(); return }
         // Only meaningful while we are trying to send video at all. A voice call has nothing to pause,
         // and leaving the windows running would carry a stale verdict into the next camera-on.
-        guard cameraOn else { poorSince = nil; goodSince = nil; return }
+        guard cameraOn else { linkPolicy.reset(); return }
         pc.statistics { [weak self] report in
             // The ACTIVE pair's estimate. This is what WebRTC's own congestion controller concluded, so
             // it already folds in loss and round-trip time; a separate packet-loss rule bolted on top
@@ -766,22 +757,10 @@ final class CallService: NSObject {
 
     private func applyLinkQuality(_ bitrate: Double?) {
         guard inLiveCall, cameraOn else { return }
-        // No estimate yet: the pair is still forming, or this build is talking to something that does
-        // not report it. Decide NOTHING. Treating unknown as bad would blank video on a healthy link.
-        guard let bitrate, bitrate > 0 else { poorSince = nil; goodSince = nil; return }
-
-        if bitrate < weakLinkBitrate {
-            goodSince = nil
-            let since = poorSince ?? Date(); poorSince = since
-            if !videoPausedForNetwork, Date().timeIntervalSince(since) >= pauseAfterPoor {
-                pauseVideoForWeakLink()
-            }
-        } else {
-            poorSince = nil
-            let since = goodSince ?? Date(); goodSince = since
-            if videoPausedForNetwork, Date().timeIntervalSince(since) >= resumeAfterGood {
-                resumeVideoAfterWeakLink()
-            }
+        switch linkPolicy.evaluate(bitrate: bitrate, paused: videoPausedForNetwork, now: Date()) {
+        case .pause:  pauseVideoForWeakLink()
+        case .resume: resumeVideoAfterWeakLink()
+        case .none:   break
         }
     }
 

@@ -123,3 +123,26 @@ targets:
         product: StoryUI
       - package: TOCropViewController
         product: CropViewController
+    # Attaching the tests to the app's own scheme is what makes `xcodebuild test -scheme Kulan`
+    # find them. Without it the scheme has no test action and the command passes having run nothing,
+    # which is worse than failing.
+    scheme:
+      testTargets:
+        - KulanTests
+
+  # Unit tests for logic that can run with no network and no device: the weak-link pause/resume
+  # decision and the upload staging guarantee. Deliberately NOT a UI or integration suite. Anything
+  # touching Firestore, Storage or a live peer connection belongs on a device, not here.
+  KulanTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: KulanTests
+    dependencies:
+      - target: Kulan
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.10"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: NO
