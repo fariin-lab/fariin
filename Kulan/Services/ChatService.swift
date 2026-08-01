@@ -114,19 +114,31 @@ enum ChatService {
     /// (firebase-ios-sdk issue 10137). A dropped upload starts over. What this adds is that it
     /// starts over BY ITSELF with jittered backoff instead of failing the send, and keeps going for
     /// the grace period iOS grants after the user leaves the app.
+    /// `progressId` is the optimistic bubble's clientId. Pass it and the bubble shows a ring that
+    /// FILLS instead of a spinner that only says "busy".
     static func uploadEncrypted(_ bytes: Data, to path: String,
-                                contentType: String = "application/octet-stream") async throws -> String {
+                                contentType: String = "application/octet-stream",
+                                progressId: String? = nil) async throws -> String {
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = contentType
 
         let bg = await beginUploadAssertion()
-        defer { Task { @MainActor in endUploadAssertion(bg) } }
+        defer {
+            Task { @MainActor in
+                endUploadAssertion(bg)
+                if let progressId { UploadProgress.shared.finish(progressId) }
+            }
+        }
 
         return try await withStagedFile(bytes) { tmp in
             var attempt = 0
             while true {
                 do {
-                    _ = try await ref.putFileAsync(from: tmp, metadata: meta)
+                    // A RETRY RESTARTS FROM ZERO, and the ring has to say so. Firebase's iOS SDK sets
+                    // the chunk size to LLONG_MAX, so nothing is ever chunked and a dropped upload
+                    // starts over — a ring left at 80% while the bytes go again would be a lie.
+                    if let progressId, attempt > 0 { await UploadProgress.shared.reset(progressId) }
+                    try await putFileReportingProgress(ref, from: tmp, metadata: meta, progressId: progressId)
                     return try await ref.downloadURL().absoluteString
                 } catch {
                     attempt += 1
@@ -134,6 +146,38 @@ enum ChatService {
                     await Backoff.sleep(attempt: attempt, base: 2, cap: 30)
                 }
             }
+        }
+    }
+
+    /// `putFileAsync` is the reason the bubble could only ever show a spinner: the async wrapper
+    /// throws the task away, and the task is the only thing that reports bytes. The observable form
+    /// gives the same result and hands back progress on the way.
+    private static func putFileReportingProgress(_ ref: StorageReference, from tmp: URL,
+                                                 metadata: StorageMetadata,
+                                                 progressId: String?) async throws {
+        let task = ref.putFile(from: tmp, metadata: metadata)
+        // Exactly one resume: success and failure are mutually exclusive, and observers are torn
+        // down in both so a retry's task cannot report into a continuation that has already returned.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                if let progressId {
+                    task.observe(.progress) { snap in
+                        guard let p = snap.progress, p.totalUnitCount > 0 else { return }
+                        let fraction = Double(p.completedUnitCount) / Double(p.totalUnitCount)
+                        Task { @MainActor in UploadProgress.shared.report(progressId, fraction) }
+                    }
+                }
+                task.observe(.success) { _ in
+                    task.removeAllObservers()
+                    cont.resume()
+                }
+                task.observe(.failure) { snap in
+                    task.removeAllObservers()
+                    cont.resume(throwing: snap.error ?? NSError(domain: StorageErrorDomain, code: -1))
+                }
+            }
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -631,7 +675,7 @@ enum ChatService {
         }
 
         let msgRef = convRef.collection("messages").document()
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).enc")
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).enc", progressId: clientId)
         // Seed the cache with the plaintext image under its URL so when the optimistic bubble
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
         if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
@@ -970,7 +1014,9 @@ enum ChatService {
         let msgRef = convRef.collection("messages").document()
         // The clip first: if it fails, the retry has not already spent the user's data on a poster
         // for a video that is not going to arrive.
-        let videoUrl = try await uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc")
+        // The clip is the upload worth watching; the poster below it is a few KB and would only make
+        // the ring jump. Progress is reported for the video alone.
+        let videoUrl = try await uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc", progressId: clientId)
         let thumbUrl = try await uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
         // Seed the cache so the optimistic bubble reconciles with no shimmer (photo parity).
         if let ui = UIImage(data: thumbnail) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
@@ -1025,7 +1071,7 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
         let msgRef = convRef.collection("messages").document()
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc")
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc", progressId: clientId)
         // iMessage-style document preview (owner's reference): a PDF's first page — or an image
         // file's own pixels — rides along as an ENCRYPTED thumbnail, the video-poster pipeline
         // reused (thumbUrl/thumbEnc parse on every message type). Best-effort: a failed preview

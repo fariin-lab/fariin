@@ -4355,11 +4355,20 @@ struct SelectableRow: ViewModifier {
 /// filling ring would be a lie about something we cannot measure. Signal shows exactly this
 /// spinner in their own `unknownProgress` state, which is the honest one here.
 struct UploadingRing: View {
+    /// The optimistic bubble's clientId. Given one, the ring reports real bytes.
+    var clientId: String? = nil
+
+    @ObservedObject private var uploads = UploadProgress.shared
     @State private var trimEnd: CGFloat = 0
     @State private var rotation: Double = 0
 
     private static let phaseOne: Double = 1     // stroke grows and does its initial turn
     private static let phaseTwo: Double = 1     // one full revolution, repeated
+    private static let determinate: Double = 0.2   // Signal's Animation.Determinate.duration
+
+    /// nil until the first byte is reported — which is NOT the same as zero, and is why the ring
+    /// spins at the start instead of sitting empty looking broken.
+    private var fraction: Double? { uploads.fraction(clientId) }
 
     var body: some View {
         ZStack {
@@ -4369,23 +4378,36 @@ struct UploadingRing: View {
                 .overlay(Circle().stroke(.white.opacity(0.1), lineWidth: 1))
                 .shadow(color: .black.opacity(0.32), radius: 24)
                 .frame(width: 46, height: 46)
-            Circle().trim(from: 0, to: trimEnd)
-                .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .frame(width: 26, height: 26)
-                // -90 puts the arc's start at the top; the rest is the animated turn.
-                .rotationEffect(.degrees(rotation - 90))
+
+            Group {
+                if let fraction {
+                    // DETERMINATE: the arc is the upload. Starts at the top and fills clockwise,
+                    // each step eased over Signal's 0.2s so a burst of progress events reads as one
+                    // continuous movement rather than a series of jumps.
+                    Circle().trim(from: 0, to: max(0.02, CGFloat(fraction)))
+                        .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeOut(duration: Self.determinate), value: fraction)
+                } else {
+                    // INDETERMINATE, Signal's two phases: the stroke grows from nothing to half the
+                    // circle while turning 270°, then that half circle spins for as long as it takes.
+                    Circle().trim(from: 0, to: trimEnd)
+                        .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(rotation - 90))
+                }
+            }
+            .frame(width: 26, height: 26)
         }
-        .onAppear { start() }
+        .onAppear { startIndeterminate() }
     }
 
-    private func start() {
+    private func startIndeterminate() {
         withAnimation(.easeIn(duration: Self.phaseOne)) {
             trimEnd = 0.5
             rotation = 270
         }
         // Phase two takes over exactly where phase one ended, so the turn never stutters: it
-        // continues from 270 rather than restarting, which is what their baking the end state into
-        // the layer before removing the first animations achieves.
+        // continues from 270 rather than restarting.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.phaseOne) {
             withAnimation(.linear(duration: Self.phaseTwo).repeatForever(autoreverses: false)) {
                 rotation = 270 + 360
@@ -5271,7 +5293,7 @@ struct MessageBubble: View, Equatable {
                     .modifier(MediaRectReporter(id: message.id, scope: .chat))   // live bubble rect
                     .overlay {   // upload ring while sending, play disc once delivered
                         if message.sendState == .sending {
-                            ZStack { Color.black.opacity(0.18); UploadingRing() }
+                            ZStack { Color.black.opacity(0.18); UploadingRing(clientId: message.rowId) }
                         } else {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 22)).foregroundStyle(.white)
@@ -5339,7 +5361,7 @@ struct MessageBubble: View, Equatable {
                 if message.sendState == .sending {
                     ZStack {
                         Color.black.opacity(0.18)
-                        UploadingRing()
+                        UploadingRing(clientId: message.rowId)
                     }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 }
@@ -5449,7 +5471,7 @@ struct MessageBubble: View, Equatable {
                         if message.sendState == .sending {
                             ZStack {
                                 Color.black.opacity(0.18)
-                                UploadingRing()
+                                UploadingRing(clientId: message.rowId)
                             }
                         }
                     }
