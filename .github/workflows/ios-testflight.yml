@@ -70,13 +70,17 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            This build is a step back to build 430.
+            Five fixes, all from your reports today. Different screens, nothing shared between them, so if one is wrong the others are not involved.
 
-            The stickers and the rebuilt message box from the last build are gone. All of it has been removed, not patched, so this is exactly the app you had before that build with nothing new added and nothing left over.
+            Opening a profile photo is one movement now instead of a jump. Closing was always right; opening skipped its animation because the picture was being drawn already finished. The X in the corner works too. It was there the whole time but could not be pressed, because it was being drawn into a strip it did not belong to.
 
-            The message box is back to how it was, with the GIF button beside the camera.
+            The Media, Files, Voice, Links row on the All Media page is now the flat dark bar you asked for instead of the bright glass one. It is still Apple's control underneath, only recoloured, so the active tab cannot go missing the way it did last time.
 
-            Stickers will come back, differently, and one piece at a time so anything wrong is easy to spot.
+            Select Chats no longer dims the list. Names, previews and avatars keep the brightness they had before you tapped Edit.
 
-            NOTHING NEW TO TEST. If anything still feels wrong here, it is something I have not found yet, so tell me and I will chase it.
+            GIFs can be kept. Hold any GIF and choose Add to Favourites, and they get their own star tab. In Recent you can also hold one and remove it.
+
+            Search in Settings shows the app's own icons, so a result looks like the row it takes you to.
+
+            PLEASE TRY: open a profile photo and watch how it grows, then press the X. Tap Edit on the chat list and check nothing goes dark. Hold a GIF and favourite it, then find it under the star. Search anything in Settings.
         run: fastlane beta
