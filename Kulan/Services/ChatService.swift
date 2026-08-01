@@ -1431,7 +1431,20 @@ enum ChatService {
             // "Delete for everyone" and the disappearing timer both promise the content is gone, so
             // the ciphertext should not outlive the message it belonged to.
             let ref = db.collection("conversations").document(cid).collection("messages").document(messageId)
-            let blobs = mediaStorageURLs(in: (try? await ref.getDocument())?.data())
+            let snap = try? await ref.getDocument()
+            // ALREADY GONE = SUCCESS. Deleting twice is not an error, the end state the caller asked
+            // for is already true. The rule reads `resource.data` to decide who may delete, and on a
+            // missing document that lookup is null, so a second delete comes back as a REFUSAL. The
+            // user deletes a message, it vanishes, they are not sure it worked, they try again, and
+            // the app tells them "the server refused, the message is still there for both of you"
+            // about a message that is gone (owner screenshot). Still clean up below, in case the doc
+            // went while its pin or summary did not.
+            if snap?.exists != true {
+                await removePinnedMessage(cid, messageId)
+                await clearSummaryIfNewest(cid: cid, deletedId: messageId)
+                return true
+            }
+            let blobs = mediaStorageURLs(in: snap?.data())
             try await ref.delete()
             // Best-effort, AFTER the doc is gone: a failure here must never turn a successful delete
             // into a reported failure, and an already-missing object is not an error worth surfacing.
