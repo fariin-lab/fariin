@@ -70,23 +70,19 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            The video controls are rebuilt. I read Signal's own code for these rather than copying the picture, and a few things in there were worth following.
+            You can watch an upload happen now. The ring on a photo, video or file fills as the bytes go, instead of spinning and telling you nothing.
 
-            There is a proper control bar now: back fifteen, play, forward fifteen, in one glass pill. Before this there was nothing to press. Play was only a tap on the video and skipping was only a double tap on one side of the screen, which you had to already know about.
+            When you first asked for this I told you it could not be measured. That was wrong. The upload was reporting its progress the whole time and the app was throwing it away, so this build reads it properly.
 
-            Skipping is fifteen seconds, and double tapping the sides is fifteen now too, so the button and the gesture move the video by the same amount. On clips of thirty seconds or less the skip buttons are hidden, because jumping a quarter of a short clip only makes you miss it. That is Signal's rule.
+            It still spins for the first moment, before any bytes have gone. That is deliberate and it is what Signal does too: no reading yet is not the same as zero, and a ring sitting empty at the start looks broken.
 
-            The number on the right counts down to zero instead of showing the length again.
+            Two things you might notice and wonder about, both on purpose. If an upload drops and restarts, the ring goes back to zero, because the bytes really do start again. And it never slides backwards, even though the phone sometimes reports progress out of order.
 
-            Also in this build:
+            The spinner itself is rebuilt on Signal's, read from their code. It opens from nothing into a half circle as it starts turning, rather than just appearing.
 
-            Twelve of your icons are in, taken straight from the files you sent. Pin in the menus and in the pin bar, the plus sheet's GIF, files and location, Add Story, the Chats and Unread items in the long press menus, Invite Friends, call sound, mute, and the mute tile on a profile.
+            Albums do not show progress yet. An album uploads one photo at a time so there is no single number, and I would rather ask you what it should mean than guess.
 
-            Double tap to react on a view once photo works again. It was lost when I stepped the app back, not because it was wrong.
+            Also in this build: your archive icon in all four places, and the message sound icon. Note that the message sound drawing you sent is identical to the call sound one, so those two rows now show the same picture. Say the word if that was not intended.
 
-            The calls list no longer dims when you tap Edit, matching the fix the chat list got.
-
-            PLEASE TRY: open a long video and a short one, and check the skip buttons appear on the long one only. Press each control. Then look over the new icons anywhere you spot them.
-
-            NOT FIXED YET: the controls still take a moment to appear when a photo or video opens. I know exactly why and the fix is written, but it needs testing on a phone rather than a compiler, so it is going in on its own next.
+            PLEASE TRY: send a big video on a slow connection and watch the ring. Send a photo. Check the archive icon on a swipe, in the menu, and in Select mode, and tell me if the swipe one is blank.
         run: fastlane beta
