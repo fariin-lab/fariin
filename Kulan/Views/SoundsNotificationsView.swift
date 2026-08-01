@@ -25,7 +25,7 @@ struct SoundsNotificationsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                row("Message Sound", "speaker.wave.2", value: messageSound.name) { picker = .message }
+                row("Message Sound", "ic_sound_message", value: messageSound.name) { picker = .message }
                 Divider().padding(.leading, 56)
                 row("Call Sound", "ic_sound_call", value: callSound.name) { picker = .call }
                 Divider().padding(.leading, 56)
