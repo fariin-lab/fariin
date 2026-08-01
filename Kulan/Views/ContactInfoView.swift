@@ -12,6 +12,14 @@ import FirebaseFirestore
 // tab: offer Message (jump into the chat) + show the recent call with this person.
 enum ProfileSource { case chat, calls, story }   // story: no chat underneath → no Search, no Wallpaper
 
+/// Carries the header's scroll position out to the nav bar. A preference rather than a shared
+/// observable: it is per-screen state that must die with the screen, and two profiles pushed on top
+/// of each other must never read each other's offset.
+private struct HeroOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct ContactInfoView: View {
     let cid: String
     let name: String
@@ -56,6 +64,8 @@ struct ContactInfoView: View {
     // empty", which is a different thing: a removed or stale url still shows the letter, and
     // tapping it opened an empty grey circle (owner's screenshot).
     @State private var heroHasPhoto = false
+    /// Live scroll position of the header, fed by HeroOffsetKey. Drives `collapse`.
+    @State private var heroOffset: CGFloat = 0
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
@@ -210,6 +220,10 @@ struct ContactInfoView: View {
         }
         // Named so the backdrop can read its own offset and stretch on a rubber-band pull.
         .coordinateSpace(name: "profileScroll")
+        // NO animation on this. The scroll IS the animation: animating a value that changes every
+        // frame makes it chase the finger and lag. It only settles when the rubber band does, which
+        // the scroll view already animates for us.
+        .onPreferenceChange(HeroOffsetKey.self) { heroOffset = $0 }
         .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -223,6 +237,25 @@ struct ContactInfoView: View {
         // inset, which is what used to jump the whole page.
         .navigationBarBackButtonHidden(showProfilePhoto)
         .toolbar { navTrailing }
+        // The name RIDES UP into the bar as the header goes. Without it, scrolling past the header
+        // left nothing on screen saying whose profile this is: the title is deliberately empty
+        // because the name used to live in the hero, and the hero now scrolls away.
+        //
+        // A small circle beside a name is the shape the CHAT header already uses, so a scrolled
+        // profile lands on something the app does everywhere else rather than a new invention.
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 7) {
+                    AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
+                    Text(shownName).font(.headline).lineLimit(1)
+                }
+                .opacity(collapse)
+                // Rises the last few points rather than appearing in place, so it reads as the same
+                // name arriving from below and not a second one fading in.
+                .offset(y: (1 - collapse) * 7)
+                .allowsHitTesting(false)
+            }
+        }
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
@@ -655,39 +688,42 @@ struct ContactInfoView: View {
     /// avatar's geometry reporting are all untouched.
     @ViewBuilder private var heroBackdrop: some View {
         GeometryReader { geo in
-            // Pull-to-stretch: `minY` goes positive as the scroll rubber-bands, so the cover grows
-            // upward with the finger instead of tearing away from the top of the screen.
-            let stretch = max(0, geo.frame(in: .named("profileScroll")).minY)
-            ZStack {
-                LinearGradient(colors: AvatarPalette.gradient(for: shownName),
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                // NOT gated on `heroHasPhoto`: that flips only after the avatar finishes loading, so
-                // the backdrop would show the gradient and then swap to the photo a frame later. The
-                // synchronous read already answers the same question, on the first frame, and returns
-                // nil when there is nothing to show.
-                if let u = gatedPhotoUrl, !u.isEmpty,
-                   let img = DiskImageCache.shared.smallImageSync(u) {
-                    // The photo only ever appears here as a wash. The sharp copy is the avatar on
-                    // top, which is why it still reads as a face when the header shrinks.
-                    Image(uiImage: img).resizable().scaledToFill()
-                        .blur(radius: 34, opaque: true)
-                        .overlay(Color.black.opacity(0.06))
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height + stretch)
-            .offset(y: -stretch)
-            // Fades to the page colour so the cards below sit on the normal grey with no seam.
-            .mask(LinearGradient(stops: [
-                .init(color: .black, location: 0),
-                .init(color: .black.opacity(0.55), location: 0.55),
-                .init(color: .clear, location: 1),
-            ], startPoint: .top, endPoint: .bottom))
+            let minY = geo.frame(in: .named("profileScroll")).minY
+            // Pull-to-stretch: minY goes POSITIVE as the scroll rubber-bands.
+            let stretch = max(0, minY)
+            LinearGradient(colors: AvatarPalette.gradient(for: shownName),
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                // SOFTENED, not raw. The same colour that is right on a 44pt circle is a shouting
+                // block across a whole header, and at full strength the yellow and cyan in the
+                // palette make the name on top hard to read. Drawing it at part opacity over the
+                // page lets the page do the softening, which also means it lands correctly in dark
+                // mode (deepened, not bleached) with no second set of hand-tuned colours.
+                .opacity(0.40)
+                // SCALE, never a frame change. Resizing re-measures the view every frame of the
+                // pull; scaling is a GPU transform. `.bottom` anchor so it grows upward off-screen
+                // and the join with the page below never moves.
+                .scaleEffect(x: 1, y: 1 + (stretch / max(geo.size.height, 1)), anchor: .bottom)
+                // Fades to the page colour so the cards below sit on the normal grey with no seam.
+                .mask(LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black.opacity(0.5), location: 0.6),
+                    .init(color: .clear, location: 1),
+                ], startPoint: .top, endPoint: .bottom))
+                // Published so the nav bar can fade its own copy of the name in as this leaves.
+                .preference(key: HeroOffsetKey.self, value: minY)
         }
         // Full bleed: the hero is inside the 16pt page inset, and a cover that stopped at that inset
         // would read as a card rather than a header.
         .padding(.horizontal, -16)
         .ignoresSafeArea(edges: .top)
         .allowsHitTesting(false)
+    }
+
+    /// How far the header has scrolled away, 0 (at rest) to 1 (gone). ONE number, so everything that
+    /// reacts to the scroll stays in step; separate triggers per element drift apart by a frame and
+    /// read as loose. Clamped, so flinging cannot push anything past its end state.
+    private var collapse: Double {
+        min(1, max(0, Double(-heroOffset) / 96))
     }
 
     private var hero: some View {
