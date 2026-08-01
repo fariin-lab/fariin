@@ -70,19 +70,21 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Mostly about how the app FEELS on opening, plus a new look for the profile. Compiled and unit tested, not tested on a phone, so please be rough with it.
+            Fixes for things you spotted in the last build.
 
             OPENING THE APP
-            The grey loading rows on the chat list should be gone. Chats now draw on the very first frame, from a small file we keep on the phone, the way WhatsApp does it. Avatars should no longer flash their coloured letter before the photo appears. Opening a chat should no longer flash grey bubbles, and a link preview picture should be there straight away instead of a beat later.
+            The chat list no longer shows letters stacked in a column while it loads, and no longer ghosts double text as the real chats arrive. It draws from a file on the phone so your chats are there on the first frame.
 
-            PROFILE, NEW LOOK
-            Each person now has their own colour at the top of their profile, and it is the same colour as their circle in your chat list. kasim is violet everywhere, Ikran is red everywhere. Their photo stays sharp in the circle where you can see their face. Pull down and the colour stretches. Scroll and their name rises into the bar at the top, so you always know whose profile you are on.
+            PROFILE
+            The white strip above the colour is gone. Each person's colour now runs all the way up behind the top bar.
 
-            FORWARDING
-            The forward screen now has the normal message box and send button at the bottom, so you type and send in one place instead of reaching to the top corner. When you pick more than one person their faces show above it.
+            FORWARD SCREEN
+            Search moved back to the top, so there are no longer two boxes stacked at the bottom. The message box now looks like a message box instead of a second search bar. And you can swipe the list to put the keyboard away, which was impossible before.
 
-            THE ONE I NEED YOU TO CHECK
-            The blur at the top and bottom of a chat, where messages slide under the bars. Four earlier versions of this broke on your phone, so please look at it carefully. Two questions: does the MIDDLE of the chat look normal, and when a message slides under the top bar does it look like it is going soft, or like there are two of it. If it looks wrong, tell me which of those two.
+            CHAT EDGES
+            The blur at the top and bottom is removed, since it did not draw at all.
 
-            PLEASE TRY: close the app fully and reopen it, and watch the first second; open kasim and Ikran profiles and scroll them; forward a photo to two people; and scroll a chat up and down watching the top and bottom edges.
+            STILL TO COME: opening a chat after fully closing the app still draws the messages a moment late. The fix is agreed and written down, it just needs its own session.
+
+            PLEASE TRY: close the app fully and reopen, watching the first second; open a profile; forward something to two people and try the keyboard and the search.
         run: fastlane beta
