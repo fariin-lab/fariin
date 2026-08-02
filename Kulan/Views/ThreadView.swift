@@ -3815,22 +3815,32 @@ struct ThreadView: View {
     }
 
     /// The gap under the composer, measured to the EDGE OF THE SCREEN rather than to the safe area
-    /// (owner 2026-08-02: 36pt, to match the 36pt sides).
+    /// (owner 2026-08-02: 24pt).
     ///
     /// It has to be a subtraction, not a number. `safeAreaBar` already lifts the bar clear of the
-    /// home indicator, so a flat 36 would land 36 ABOVE that lift — 70pt of empty screen on a phone
-    /// with an indicator and 36pt on one without, which is two different designs from one constant.
-    /// Taking the device's own inset off first makes the gap you can actually see 36 on both.
+    /// home indicator, so a flat 24 would land 24 ABOVE that lift — 58pt of empty screen on a phone
+    /// with an indicator and 24pt on one without, which is two different designs from one constant.
+    /// Taking the device's own inset off first makes the gap you can actually see 24 on both.
+    ///
+    /// AND IT GOES NEGATIVE, deliberately. 24 is LESS than the 34pt inset an indicator phone gets,
+    /// so reaching it means giving part of that lift back — clamping at zero would quietly hand him
+    /// 34 and call it 24. The pill still ends 24pt above the glass, which clears the indicator; it is
+    /// tight, and it is the number he asked for.
     ///
     /// The keyboard case keeps the 8 it has always had. Up there the bar rides the keyboard instead
     /// of the safe area, so the inset is not in play at all and subtracting it would jam the pill
     /// against the keys.
     private var composerBottomGap: CGFloat {
         if inputFocused { return 8 }
-        let inset = UIApplication.shared.connectedScenes
+        return 24 - bottomSafeInset
+    }
+
+    /// The window's own bottom inset. The window's, not the view's: the view's collapses when the
+    /// keyboard appears, and this has to describe the device, not the moment.
+    private var bottomSafeInset: CGFloat {
+        UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
             .max() ?? 34
-        return max(0, 36 - inset)
     }
 
     private var composer: some View {
@@ -3840,9 +3850,14 @@ struct ThreadView: View {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        .padding(.horizontal, 36)   // owner 2026-08-02: 36pt left/right margin (was 16)
+        // 24 at rest, 16 once the keyboard is up (owner 2026-08-02). The composer gets a little wider
+        // exactly when you are typing into it, which is the moment the field needs the room.
+        .padding(.horizontal, inputFocused ? 16 : 24)
         .padding(.top, 6)
         .padding(.bottom, composerBottomGap)
+        // Both margins move with the focus, so they ride the keyboard's own curve instead of snapping
+        // a frame before or after it.
+        .animation(.easeOut(duration: 0.25), value: inputFocused)
         .overlay(alignment: .top) {
             if holdHint {
                 Text("Hold to record, release to send")
