@@ -70,6 +70,18 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            THIS IS THE BUILD TO COMPARE AGAINST 442.
+
+            The composer now rests on the safe area the way iMessage does, instead of sitting a fixed distance from the glass. 442 has your 24pt version. Install both and tell me which one feels right.
+
+            The profile photo no longer fades into a flat colour. It blurs into the page instead, more and more as it goes down, using a real progressive blur written as a Metal shader rather than a gradient. The bottom of the photo IS the background now, so there is no edge where the picture stops.
+
+            The All Media tabs float over the photos properly at last. The photos scroll UNDER the bar, which is what makes the glass look like the Back button's glass instead of a flat capsule. My last attempt at this did nothing, which you spotted.
+
+            PLEASE TRY FIRST: a profile with a photo, in light AND dark, and tell me whether you can still find the line where the photo ends. Then scroll All Media and confirm the photos really do pass under the tab bar. Then the composer in both builds.
+
+            From 442:
+
             Three fixes from your reports on 441.
 
             Swiping through photos in All Media stops flashing. Two causes, both only reachable in a long gallery: the next page could still be empty when you arrived, and the photo after it had not started downloading yet. Both now look two pages ahead instead of one.
