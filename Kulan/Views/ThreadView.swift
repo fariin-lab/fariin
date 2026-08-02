@@ -3814,6 +3814,25 @@ struct ThreadView: View {
         return -(limit + (1 - 1 / (over * c / dim + 1)) * dim)
     }
 
+    /// The gap under the composer, measured to the EDGE OF THE SCREEN rather than to the safe area
+    /// (owner 2026-08-02: 36pt, to match the 36pt sides).
+    ///
+    /// It has to be a subtraction, not a number. `safeAreaBar` already lifts the bar clear of the
+    /// home indicator, so a flat 36 would land 36 ABOVE that lift — 70pt of empty screen on a phone
+    /// with an indicator and 36pt on one without, which is two different designs from one constant.
+    /// Taking the device's own inset off first makes the gap you can actually see 36 on both.
+    ///
+    /// The keyboard case keeps the 8 it has always had. Up there the bar rides the keyboard instead
+    /// of the safe area, so the inset is not in play at all and subtracting it would jam the pill
+    /// against the keys.
+    private var composerBottomGap: CGFloat {
+        if inputFocused { return 8 }
+        let inset = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .max() ?? 34
+        return max(0, 36 - inset)
+    }
+
     private var composer: some View {
         VStack(spacing: 6) {
             if !mentionCandidates.isEmpty { mentionPicker }
@@ -3821,9 +3840,9 @@ struct ThreadView: View {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        .padding(.horizontal, 16)   // spec: 16pt left/right margin
+        .padding(.horizontal, 36)   // owner 2026-08-02: 36pt left/right margin (was 16)
         .padding(.top, 6)
-        .padding(.bottom, 8)
+        .padding(.bottom, composerBottomGap)
         .overlay(alignment: .top) {
             if holdHint {
                 Text("Hold to record, release to send")
