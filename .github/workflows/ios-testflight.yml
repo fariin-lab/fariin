@@ -70,7 +70,9 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Four fixes from your photos of the last build.
+            Five fixes from your photos of the last build.
+
+            Tapping a video in a chat opens it. Before, only the little play circle worked and the rest of the video did nothing.
 
             A profile whose photo is missing or broken now shows the round picture again instead of a tall block of colour. It was checking whether a photo address existed, which is not the same as the photo actually being there.
 
