@@ -70,7 +70,21 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            THIS IS THE BUILD TO COMPARE AGAINST 442.
+            The profile photo should have no line at the bottom at all now. It used to fade to nothing and let the page show through, and a fade to nothing has a visible end — that end was the line you kept feeling. It now fades into the page's own colour instead, so the bottom of the photo IS the background and there is no edge left to find. Please tell me if you can still see it, in light and in dark.
+
+            The photo is taller than the screen is wide now, and there is only ONE image. The blurred copy underneath is gone; the picture itself is the background all the way down, behind your name and behind the buttons.
+
+            Setting a photo no longer changes anything until you press Save. Pick, crop, then press X and nothing happens — it used to upload the moment you finished cropping, so X could not undo it. Remove waits for Save too.
+
+            The crop screen is the same tall shape as the header and marks the band that will be blurred, so you can move a face out of it before you commit.
+
+            Settings uses the same header as a profile, without the call, video and mute buttons. Tapping the photo opens the photo; Edit is still in the top right.
+
+            Everything from 443 is here too: the All Media tabs floating over the photos, the composer on the safe area, and the blur starting at the top of the name.
+
+            PLEASE TRY FIRST: a profile with a photo in light mode AND dark mode, and tell me whether there is still a line where the photo ends. Then set a new photo and press X instead of Save.
+
+            From 443:
 
             The composer now rests on the safe area the way iMessage does, instead of sitting a fixed distance from the glass. 442 has your 24pt version. Install both and tell me which one feels right.
 
