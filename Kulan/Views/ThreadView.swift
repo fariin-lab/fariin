@@ -5329,6 +5329,14 @@ struct MessageBubble: View, Equatable {
                                 .padding(7)
                         }
                     }
+                    // The whole video rect must be the tap target, for the same reason the photo
+                    // bubble says so twenty lines up: its thumbnail is a SecureImageView, which goes
+                    // tap-transparent once loaded so its gated-download tap cannot block the viewer.
+                    // Without this the parent had no hit area left and the only thing still taking
+                    // touches was the play disc overlay — so the video opened when you hit the little
+                    // circle and did nothing anywhere else (owner's report). The photo bubble was
+                    // fixed for this once; the video bubble never was.
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         if message.sendState == .failed { onResend(message) }
                         else if message.sendState == nil { onTapVideo(message) }   // only delivered videos play
