@@ -70,14 +70,22 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Video is back to how it was. My rebuilt controls from the last build broke it, so I took the whole change out rather than patch it, and the player file is now exactly what it was before I touched it.
+            Profiles have a new top. The person's photo now fills the whole width of the screen instead of sitting in a small circle, and their name and username sit on the photo itself.
 
-            I will do that work again, but properly next time: one piece at a time with you looking at each on the phone, instead of me checking it compiles and calling it done.
+            The photo does not stop at a line any more. It dissolves into the page through a soft haze made from the photo's own colours, so the top of the screen reads as one surface in both light and dark mode. The name goes dark on a pale photo and light on a dark one, worked out from the picture, so there is never a black or white box behind the text.
 
-            In Select Chats, a row whose person has a story now slides across with the rest when the checkboxes appear, instead of standing out of line.
+            Voice, video, mute, search and more are now five glass circles with no words under them.
 
-            Everything from the last build is still here: the upload ring that fills as the bytes go, your archive icons, and the message sound icon.
+            Stories moved. If someone has posted, you see up to three small round previews at the top of their profile with the real number beside them, so seven stories shows three circles and "7 Stories". Tap them to watch.
 
-            PLEASE TRY: open a video and scroll, and check it behaves like it used to. Then tap Edit on the chat list and watch the row that has a story ring move with its neighbours.
+            Tap the photo and it opens full screen, growing out of the header and keeping the picture's real shape.
+
+            Setting your own photo is a new screen: move and scale it once, then flip between Avatar and Poster to see how it will look as both the small round picture and the big header, before you keep it.
+
+            Groups got the same header. One difference you may notice: on a group the photo starts below the top bar rather than running under it. That page is built differently underneath and I did not want to rebuild it in the same build as everything else.
+
+            If you prefer the old look, Settings, Privacy and Security, Profile Layout, Classic Circle Profile. Anyone with no photo at all keeps the old circle either way.
+
+            PLEASE TRY: open a profile of someone who has a photo, in light mode and in dark mode, and tell me whether you can still see a line where the photo ends. Then pull down on it, scroll up and down, tap the photo, and set a new photo of your own.
 
         run: fastlane beta
