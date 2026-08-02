@@ -1,56 +1,78 @@
 import SwiftUI
 import UIKit
 
-// The Media / Files / Voice / Links / GIFs row on the All Media page: APPLE'S OWN segmented control,
-// drawn by iOS 26, with nothing repainted.
+// The Media / Files / Voice / Links / GIFs row on the All Media page: a Liquid Glass capsule with a
+// lighter capsule on the selected tab, matching the glass on the Back and "..." buttons above it.
 //
-// This file has now been three things, and the reason it is back to the system control is worth
-// keeping, because the temptation to paint it will come round again.
+// THIS FILE HAS BEEN THE SYSTEM CONTROL TWICE AND OUR OWN TWICE. The reason it is ours, written down
+// so the loop stops here.
 //
-// It was the system control with a flat dark track and a lighter selected slab, which is what the
-// owner asked for in August from a Telegram reference. Then he asked for Signal's Liquid Glass, and
-// since Signal only gets glass by handing their control to the navigation bar as its titleView —
-// which we cannot do without giving up the title and the live count — the bar was hand-drawn: a
-// glass capsule with a moving pill. It looked hand-drawn, and he said so.
+// The system UISegmentedControl paints its OWN track, and that track is what you see — a solid
+// capsule with a white pill on it, exactly what the owner photographed and called "a standard
+// segmented control, not glass". Glass cannot show through a surface that is painted over it. The
+// only way to clear that track is to erase the control's background images, and iOS draws the
+// selected pill onto those same images, which is what made the active tab disappear the first time
+// ("Active tab Is gone… is looks like liquid glass but is not really"). So: system control, or
+// glass. Not both. Signal escapes that choice only by mounting their control as the navigation bar's
+// titleView, where the BAR supplies the glass; we keep our title and our live count, so we cannot.
 //
-// THE SURFACE WAS NEVER THE PROBLEM. Glass only shows when there is something behind it to bend, and
-// this bar sat in a stack ABOVE the grid, so the grid stopped where the bar began and the only thing
-// behind it was flat page. The navigation bar's own back and "..." buttons look right for one reason:
-// the photos scroll underneath them. Fixed where it belonged, in the layout — the bar now floats over
-// the content (`floatingTopBar`) and the grid passes beneath it.
+// The other half of the loop was mine. Glass shows nothing unless something passes behind it, and
+// this bar sat in a stack ABOVE the grid, so the photos stopped where the bar began. I moved it to
+// `safeAreaBar`, which reserves a strip rather than floating when the content is a paged TabView —
+// the owner checked and reported the photos still did not pass under it. It is an overlay now, with
+// the scroll views carrying a matching top content margin, which is what the navigation bar does and
+// the reason ITS glass has always looked right on this screen.
 //
-// With that fixed there is nothing left to hand-draw. Apple's control brings its own iOS 26 glass,
-// its selection indicator, its sliding animation, its hit targets, its Dynamic Type and its VoiceOver
-// traits, none of which can drift from the OS and none of which we then owe by hand. Every colour and
-// font override is gone on purpose: each one was a step away from the thing being asked for.
+// THE PILL IS ONE CAPSULE THAT MOVES. It is never created inside the chosen segment and never
+// removed from the others, so there is no state in which it can fail to exist. Segments are equal
+// shares of the width, so the selected label going semibold cannot resize anything.
 //
-// DO NOT ERASE ITS BACKGROUND IMAGES to force something else behind it. iOS paints the selected pill
-// onto that same surface, and erasing it is what made the active tab vanish once already ("Active tab
-// Is gone… is looks like liquid glass but is not really").
-struct MediaTabBar: UIViewRepresentable {
+// What we owe by hand, having left the system control: Dynamic Type and VoiceOver. The labels carry
+// button and selected traits explicitly and shrink rather than truncate.
+struct MediaTabBar: View {
     let titles: [String]
     @Binding var selection: Int
 
-    func makeUIView(context: Context) -> UISegmentedControl {
-        let control = UISegmentedControl(items: titles)
-        control.selectedSegmentIndex = selection
-        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
-        // Equal shares rather than label-sized segments, so the selected word going bold cannot
-        // resize anything. This is a layout rule, not a repaint.
-        control.apportionsSegmentWidthsByContent = false
-        return control
-    }
+    /// Height of the capsule itself. Stated so the scroll views can reserve a matching top margin —
+    /// a floating bar and the content that must clear it cannot each guess.
+    static let barHeight: CGFloat = 36
+    /// Full vertical slot the bar occupies, including the air above and below it.
+    static let slotHeight: CGFloat = barHeight + 16
 
-    func updateUIView(_ control: UISegmentedControl, context: Context) {
-        context.coordinator.selection = $selection
-        if control.selectedSegmentIndex != selection { control.selectedSegmentIndex = selection }
-    }
+    /// Inset of the moving pill inside the track, per side.
+    private let pad: CGFloat = 3
 
-    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+    var body: some View {
+        // The width comes from the reader rather than from measured state, so the pill is in the
+        // right place on the very first frame — there is no moment where it sits at zero width.
+        GeometryReader { g in
+            let seg = titles.isEmpty ? g.size.width : g.size.width / CGFloat(titles.count)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.white.opacity(0.22))
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+                    .frame(width: max(0, seg - pad * 2), height: max(0, g.size.height - pad * 2))
+                    .offset(x: CGFloat(selection) * seg + pad, y: pad)
 
-    final class Coordinator: NSObject {
-        var selection: Binding<Int>
-        init(selection: Binding<Int>) { self.selection = selection }
-        @objc func changed(_ sender: UISegmentedControl) { selection.wrappedValue = sender.selectedSegmentIndex }
+                HStack(spacing: 0) {
+                    ForEach(Array(titles.enumerated()), id: \.offset) { i, title in
+                        Text(title)
+                            .font(.system(size: 13, weight: i == selection ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                            .onTapGesture { selection = i }
+                            .accessibilityAddTraits(i == selection ? [.isButton, .isSelected] : .isButton)
+                    }
+                }
+            }
+            .frame(width: g.size.width, height: g.size.height)
+            // The same call the Back button's circle makes, so the two read as one material.
+            .liquidGlass(Capsule(), interactive: true)
+            .animation(.snappy(duration: 0.25), value: selection)
+        }
+        .frame(height: Self.barHeight)
     }
 }

@@ -1,4 +1,4 @@
-﻿import SwiftUI
+import SwiftUI
 
 // "Go to Chat" event: the open ThreadView for `cid` pops back to itself (out of the profile/gallery
 // push) and scrolls to + flashes `messageId`. The standard behavior â€” return to the conversation at
@@ -102,12 +102,17 @@ struct MediaGalleryView: View {
             .background(GeometryReader { g in
                 Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
             })
-            // THE TABS FLOAT OVER THE GRID, which is the whole fix. In a VStack the grid stopped
-            // where the bar began, so the only thing behind the bar was flat page — and glass with
-            // nothing behind it has nothing to bend, which is why it read as hand-made next to the
-            // navigation bar's buttons, under which the photos have always scrolled. The bar has not
-            // moved; the content now passes beneath it.
-            .floatingTopBar { if !selecting { tabBar } }
+            // THE TABS FLOAT OVER THE GRID. An OVERLAY, not `safeAreaBar` — that was the previous
+            // attempt and the owner checked it on the phone: the photos still stopped at the bar
+            // rather than passing under it. safeAreaBar floats over a plain ScrollView, but this
+            // content is a paged TabView and the inset reaches the TabView rather than the scroll
+            // views inside it, so all it did was reserve a strip, which is what the old VStack did.
+            //
+            // An overlay cannot reserve anything, so each scroll view carries a matching top content
+            // margin instead (`.contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)`).
+            // Content starts below the bar and scrolls under it — which is exactly what the
+            // navigation bar does, and the reason ITS glass has always looked right on this screen.
+            .overlay(alignment: .top) { if !selecting { tabBar } }
         // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
         // subtitle, the standard circular back button, and a "..." menu on the right â€” instead of
         // a custom left-aligned header.
@@ -155,14 +160,14 @@ struct MediaGalleryView: View {
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
-    // Apple's own segmented control, nothing repainted, floating over the grid. See MediaTabBar for
-    // why every colour and font override was removed and why the hand-drawn capsule that briefly
-    // replaced it is gone: the bar never had a surface problem, it had a layout one.
+    // A Liquid Glass capsule, ours rather than the system control, floating over the grid. See
+    // MediaTabBar for why it cannot be both glass and Apple's control on a page.
     private var tabBar: some View {
         MediaTabBar(titles: Tab.allCases.map(\.label),
                     selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
                                        set: { tab = Tab.allCases[$0] }))
         .padding(.horizontal, 16)
+        .padding(.vertical, 8)   // together with barHeight this is MediaTabBar.slotHeight
     }
 
     // (Deleted: ClearSegmentedTrack. It reached into the segmented control and erased its background
@@ -286,6 +291,10 @@ struct MediaGalleryView: View {
             }
             .padding(.top, 4).padding(.bottom, 12)
         }
+        // Clears the floating tab bar at rest and scrolls UNDER it, which is the whole point of the
+        // bar being an overlay. A content margin does what padding cannot: it moves where the content
+        // STARTS without moving where it is allowed to go.
+        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     // Group items into date sections ("Today", "Yesterday", "This Month", "June", "June 2024"),
@@ -388,6 +397,7 @@ struct MediaGalleryView: View {
                 }
             }
         }
+        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     private func voiceRow(_ m: Message) -> some View {
@@ -424,6 +434,7 @@ struct MediaGalleryView: View {
                 }
             }
         }
+        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     private func linkRow(_ m: Message) -> some View {
@@ -471,6 +482,7 @@ struct MediaGalleryView: View {
                 }
             }
         }
+        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     private func fileRow(_ m: Message) -> some View {
