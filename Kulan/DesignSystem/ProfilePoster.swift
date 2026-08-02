@@ -29,9 +29,20 @@ enum ProfileLayoutStyle: String, CaseIterable, Identifiable {
 
     static let storageKey = "profileLayout"
 
+    /// THE ONLY WAY TO ASK WHICH HEADER TO DRAW. Never read the stored string directly.
+    ///
+    /// While `Flags.profileLayoutChoice` is off, this answers `.modern` whatever is stored. That is
+    /// not belt-and-braces: anyone who picked Classic in build 437 or 439 has "classic" written on
+    /// their device, and hiding the row without this would strand them on the old header with the
+    /// switch back no longer on screen.
+    static func resolved(_ raw: String) -> ProfileLayoutStyle {
+        guard Flags.profileLayoutChoice else { return .modern }
+        return ProfileLayoutStyle(rawValue: raw) ?? .modern
+    }
+
     /// For code that is not a View. Views should use @AppStorage so they redraw on a change.
     static var current: ProfileLayoutStyle {
-        ProfileLayoutStyle(rawValue: UserDefaults.standard.string(forKey: storageKey) ?? "") ?? .modern
+        resolved(UserDefaults.standard.string(forKey: storageKey) ?? "")
     }
 }
 

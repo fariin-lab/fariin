@@ -53,7 +53,7 @@ struct GroupInfoView: View {
     /// `nil` means the poster has not looked yet and counts as yes, so nothing flips in the ordinary
     /// case. Groups with no photo at all keep the round avatar and its camera badge as they were.
     private var useModernHeader: Bool {
-        (ProfileLayoutStyle(rawValue: profileLayout) ?? .modern) == .modern
+        ProfileLayoutStyle.resolved(profileLayout) == .modern
             && conv?.avatarUrl?.isEmpty == false
             && posterPhotoOK != false
     }

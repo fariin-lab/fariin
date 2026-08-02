@@ -101,7 +101,7 @@ struct ContactInfoView: View {
 
     private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
-    private var layoutStyle: ProfileLayoutStyle { ProfileLayoutStyle(rawValue: profileLayout) ?? .modern }
+    private var layoutStyle: ProfileLayoutStyle { ProfileLayoutStyle.resolved(profileLayout) }
 
     /// A poster needs a picture. Someone with no photo keeps the classic circle and its existing
     /// empty state, rather than a header of flat colour pretending to be a portrait.

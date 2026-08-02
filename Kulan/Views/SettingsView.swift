@@ -655,7 +655,7 @@ struct PrivacySettingsView: View {
     @State private var showDefaultDisappear = false
 
     private var profileLayoutStyle: ProfileLayoutStyle {
-        ProfileLayoutStyle(rawValue: profileLayout) ?? .modern
+        ProfileLayoutStyle.resolved(profileLayout)
     }
 
     private func label(_ raw: String) -> String {
@@ -693,16 +693,23 @@ struct PrivacySettingsView: View {
                 Text("Require Face ID to unlock Kulan.")
             }
 
-            Section {
-                NavigationLink { ProfileLayoutPage() } label: {
-                    HStack {
-                        Text("Profile Layout")
-                        Spacer()
-                        Text(profileLayoutStyle.label).foregroundStyle(.secondary)
+            // HIDDEN, not removed (owner, 2026-08-02: "Dont delete just hide… i need Modern Header
+            // defuilt user make cant change it"). The page and the classic header stay wired and
+            // working; this is the only door to them, and it is off the wall. Nobody who already
+            // chose Classic is left on it — ProfileLayoutStyle.resolved answers modern for everyone
+            // while the flag is off, whatever their device has stored.
+            if Flags.profileLayoutChoice {
+                Section {
+                    NavigationLink { ProfileLayoutPage() } label: {
+                        HStack {
+                            Text("Profile Layout")
+                            Spacer()
+                            Text(profileLayoutStyle.label).foregroundStyle(.secondary)
+                        }
                     }
+                } footer: {
+                    Text("How profiles are shown. The modern header fills the top of the page with the profile photo.")
                 }
-            } footer: {
-                Text("How profiles are shown. The modern header fills the top of the page with the profile photo.")
             }
 
             Section {

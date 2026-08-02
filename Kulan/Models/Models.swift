@@ -10,6 +10,11 @@ import FirebaseFirestore
 // contact-screen section, group header tap) is closed until this flips to true.
 enum Flags {
     static let groupsEnabled = false
+    /// Lets a person choose between the modern poster header and the classic circle in Settings.
+    /// OFF (owner, 2026-08-02): everyone gets the modern header and nobody is offered the choice.
+    /// The setting page and the classic header are both kept, wired and working — this only decides
+    /// whether the door to them is on the wall. See ProfileLayoutStyle.resolved.
+    static let profileLayoutChoice = false
 }
 
 struct UserProfile: Identifiable, Equatable {
