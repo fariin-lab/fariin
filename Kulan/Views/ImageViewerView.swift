@@ -393,7 +393,18 @@ struct ImageViewerView: View {
         // the first frame could appear, which is the rest of the "opens late" delay. Only the current
         // page and its immediate neighbours get a real view; the far pages stay empty until you page
         // near them (they were never on screen anyway).
-        if abs(idx - currentIdx) > 1 {
+        // TWO pages either side, not one. The window deliberately LAGS the selection by 0.3s so no
+        // page is built or destroyed while your finger is still down — do not undo that, it is the
+        // "swipe only follows my finger halfway" fix. But with a window of ±1 the lag has a hole in
+        // it: swipe once and you land on a live page, swipe again before the window has caught up and
+        // the page you arrive at is still `Color.clear`. You land on nothing, and it fills in a third
+        // of a second later. That is the flash, and it needs a gallery long enough to swipe through
+        // quickly — which is why All Media shows it and a chat, where you usually open one photo,
+        // does not (owner's report).
+        //
+        // Widening costs two more live pages, bounded to display size by the cache, and changes no
+        // timing at all.
+        if abs(idx - currentIdx) > 2 {
             Color.clear
         } else {
             // PIN THE PAGE TO THE WINDOW, by measurement instead of guesswork. The paging TabView has
@@ -563,9 +574,15 @@ struct ImageViewerView: View {
     }
 
     // Pre-load the pages either side of the current one (idempotent — load() no-ops on cache hits).
+    //
+    // TWO either side, matching the live window. One was enough in a chat, where the photos you are
+    // paging past were decoded into memory by their own bubbles moments earlier. All Media pages
+    // through the whole history, most of which this device has never decoded, so a neighbour has to
+    // be downloaded and decrypted — and one page of lead time is not enough to finish that before you
+    // arrive, which lands you on the spinner.
     private func prefetchNeighbors() {
         guard let idx = gallery.firstIndex(where: { $0.id == current }) else { return }
-        for off in [-1, 1] {
+        for off in [-2, -1, 1, 2] {
             let i = idx + off
             guard gallery.indices.contains(i) else { continue }
             let m = gallery[i]
