@@ -97,14 +97,17 @@ struct MediaGalleryView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !selecting { tabBar }
-            content
-                .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
-                .background(GeometryReader { g in
-                    Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
-                })
-        }
+        content
+            .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
+            .background(GeometryReader { g in
+                Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
+            })
+            // THE TABS FLOAT OVER THE GRID, which is the whole fix. In a VStack the grid stopped
+            // where the bar began, so the only thing behind the bar was flat page — and glass with
+            // nothing behind it has nothing to bend, which is why it read as hand-made next to the
+            // navigation bar's buttons, under which the photos have always scrolled. The bar has not
+            // moved; the content now passes beneath it.
+            .floatingTopBar { if !selecting { tabBar } }
         // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
         // subtitle, the standard circular back button, and a "..." menu on the right â€” instead of
         // a custom left-aligned header.
@@ -152,34 +155,14 @@ struct MediaGalleryView: View {
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
-    // A LIQUID GLASS CAPSULE, drawn by us. It was the system segmented control until 2026-08-02, and
-    // the reason it no longer is belongs here rather than only in MediaTabBar.
-    //
-    // The owner asked for Signal's glass on this bar while keeping it exactly where it is. Signal's
-    // IS a plain UISegmentedControl, styled with one line, `backgroundColor = .clear` — but they give
-    // it to the navigation bar as its titleView, so it inherits the glass the bar already has. On a
-    // page there is nothing behind it to inherit, and that same control can only draw the stock grey
-    // track. Glass here has to be drawn underneath, and making the system control transparent enough
-    // to reveal it means erasing its background images, which is what removed the active tab the last
-    // time ("Active tab Is gone… is looks like liquid glass but is not really") — iOS paints the
-    // selected pill onto that same surface.
-    //
-    // So the position the owner asked for and the surface he asked for cannot both come from the
-    // system control. What replaced it is the shape already proven in the photo picker: the pill is
-    // ONE capsule that moves, never one created inside the chosen segment, so it has no state in
-    // which it can fail to exist. Segments are equal shares of the width, so the selected label going
-    // semibold still cannot resize anything.
-    //
-    // What we give up and now owe ourselves: Dynamic Type and the system's VoiceOver handling. The
-    // labels carry button and selected traits by hand, and shrink rather than truncate.
+    // Apple's own segmented control, nothing repainted, floating over the grid. See MediaTabBar for
+    // why every colour and font override was removed and why the hand-drawn capsule that briefly
+    // replaced it is gone: the bar never had a surface problem, it had a layout one.
     private var tabBar: some View {
         MediaTabBar(titles: Tab.allCases.map(\.label),
                     selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
                                        set: { tab = Tab.allCases[$0] }))
-        .frame(height: 34)
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
     }
 
     // (Deleted: ClearSegmentedTrack. It reached into the segmented control and erased its background

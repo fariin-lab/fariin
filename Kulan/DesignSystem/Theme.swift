@@ -110,6 +110,23 @@ extension View {
             self.safeAreaInset(edge: .bottom, spacing: 0, content: content)
         }
     }
+
+    /// The same thing at the top, and for the same reason. A bar that content stops beneath has the
+    /// plain page behind it, and glass with nothing behind it has nothing to bend — it renders as a
+    /// flat capsule. That is the whole reason the All Media tabs read as hand-made next to the
+    /// navigation bar's buttons, which have the photo grid running under them.
+    ///
+    /// `safeAreaBar` floats the bar OVER the content and lets the content scroll beneath it, which is
+    /// how iOS 26 expects a bar to behave. `safeAreaInset` is the pre-26 fallback and deliberately
+    /// does NOT have this behaviour.
+    @ViewBuilder
+    func floatingTopBar<C: View>(@ViewBuilder content: () -> C) -> some View {
+        if #available(iOS 26.0, *) {
+            self.safeAreaBar(edge: .top, content: content)
+        } else {
+            self.safeAreaInset(edge: .top, spacing: 0, content: content)
+        }
+    }
 }
 
 /// The app's standard 48pt Liquid Glass close button — a round X, used in toolbars in place of a

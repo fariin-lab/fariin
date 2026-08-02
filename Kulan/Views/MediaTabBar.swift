@@ -1,65 +1,56 @@
 import SwiftUI
 import UIKit
 
-// The Media / Files / Voice / Links / GIFs row on the All Media page: a Liquid Glass capsule with a
-// lighter capsule on the selected tab. Same place, same size, same behaviour as before — only the
-// surface changed. It is the Avatar / Poster switch from the photo picker, with five segments
-// instead of two, which is what the owner asked for.
+// The Media / Files / Voice / Links / GIFs row on the All Media page: APPLE'S OWN segmented control,
+// drawn by iOS 26, with nothing repainted.
 //
-// WHY THIS IS NOT THE SYSTEM CONTROL ANY MORE, having deliberately been one until now.
+// This file has now been three things, and the reason it is back to the system control is worth
+// keeping, because the temptation to paint it will come round again.
 //
-// Signal's version of this bar IS a plain UISegmentedControl, and their entire styling is
-// `backgroundColor = .clear`. It looks like glass because they hand it to the navigation bar as its
-// titleView, and it inherits the glass the bar already has. Ours lives on the page, where there is
-// no glass behind it to show through, so that same control can only ever draw the stock grey track.
-// Glass in this position has to be drawn underneath, and making the system control transparent
-// enough to reveal it means erasing its background images — which is exactly what took the active
-// tab away the last time this was attempted ("Active tab Is gone… is looks like liquid glass but is
-// not really"), because iOS draws the selected pill onto that same surface.
+// It was the system control with a flat dark track and a lighter selected slab, which is what the
+// owner asked for in August from a Telegram reference. Then he asked for Signal's Liquid Glass, and
+// since Signal only gets glass by handing their control to the navigation bar as its titleView —
+// which we cannot do without giving up the title and the live count — the bar was hand-drawn: a
+// glass capsule with a moving pill. It looked hand-drawn, and he said so.
 //
-// SO THE PILL IS NOT THE SYSTEM'S ANY MORE, AND IT CANNOT GO MISSING. It is ONE capsule that moves
-// to an offset computed from the selected index. It is never created inside the chosen segment and
-// never removed from the others, so there is no state in which it fails to exist. That was the flaw
-// in the hand-built bar that got reverted; this is the shape that replaced it in the photo picker.
+// THE SURFACE WAS NEVER THE PROBLEM. Glass only shows when there is something behind it to bend, and
+// this bar sat in a stack ABOVE the grid, so the grid stopped where the bar began and the only thing
+// behind it was flat page. The navigation bar's own back and "..." buttons look right for one reason:
+// the photos scroll underneath them. Fixed where it belonged, in the layout — the bar now floats over
+// the content (`floatingTopBar`) and the grid passes beneath it.
 //
-// The other fault of that old bar is closed too: every segment is an equal share of the width, so
-// the selected label going semibold cannot resize anything.
-struct MediaTabBar: View {
+// With that fixed there is nothing left to hand-draw. Apple's control brings its own iOS 26 glass,
+// its selection indicator, its sliding animation, its hit targets, its Dynamic Type and its VoiceOver
+// traits, none of which can drift from the OS and none of which we then owe by hand. Every colour and
+// font override is gone on purpose: each one was a step away from the thing being asked for.
+//
+// DO NOT ERASE ITS BACKGROUND IMAGES to force something else behind it. iOS paints the selected pill
+// onto that same surface, and erasing it is what made the active tab vanish once already ("Active tab
+// Is gone… is looks like liquid glass but is not really").
+struct MediaTabBar: UIViewRepresentable {
     let titles: [String]
     @Binding var selection: Int
 
-    /// Inset of the moving pill inside the track, per side.
-    private let pad: CGFloat = 3
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: titles)
+        control.selectedSegmentIndex = selection
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        // Equal shares rather than label-sized segments, so the selected word going bold cannot
+        // resize anything. This is a layout rule, not a repaint.
+        control.apportionsSegmentWidthsByContent = false
+        return control
+    }
 
-    var body: some View {
-        // The width comes from the reader rather than from measured state, so the pill is in the
-        // right place on the very first frame — there is no moment where it sits at zero width.
-        GeometryReader { g in
-            let seg = titles.isEmpty ? g.size.width : g.size.width / CGFloat(titles.count)
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.22))
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
-                    .frame(width: max(0, seg - pad * 2), height: max(0, g.size.height - pad * 2))
-                    .offset(x: CGFloat(selection) * seg + pad, y: pad)
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.selection = $selection
+        if control.selectedSegmentIndex != selection { control.selectedSegmentIndex = selection }
+    }
 
-                HStack(spacing: 0) {
-                    ForEach(Array(titles.enumerated()), id: \.offset) { i, title in
-                        Text(title)
-                            .font(.system(size: 13, weight: i == selection ? .semibold : .regular))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                            .onTapGesture { selection = i }
-                            .accessibilityAddTraits(i == selection ? [.isButton, .isSelected] : .isButton)
-                    }
-                }
-            }
-            .frame(width: g.size.width, height: g.size.height)
-            .liquidGlass(Capsule())
-            .animation(.snappy(duration: 0.25), value: selection)
-        }
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<Int>
+        init(selection: Binding<Int>) { self.selection = selection }
+        @objc func changed(_ sender: UISegmentedControl) { selection.wrappedValue = sender.selectedSegmentIndex }
     }
 }
