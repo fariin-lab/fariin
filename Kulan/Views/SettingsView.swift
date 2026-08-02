@@ -649,7 +649,14 @@ struct PrivacySettingsView: View {
     @AppStorage("priv.calls") private var privCalls = "everyone"
     @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("priv.groups") private var privGroups = "everyone"
+    // Default "modern", and any value this build does not recognise falls back to modern too — the
+    // new header is the app's layout, the circle is the opt-out.
+    @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var showDefaultDisappear = false
+
+    private var profileLayoutStyle: ProfileLayoutStyle {
+        ProfileLayoutStyle(rawValue: profileLayout) ?? .modern
+    }
 
     private func label(_ raw: String) -> String {
         (Audience(rawValue: raw) ?? .everyone).label
@@ -684,6 +691,18 @@ struct PrivacySettingsView: View {
                 NavigationLink { AppLockPage() } label: { Text("App Lock") }
             } footer: {
                 Text("Require Face ID to unlock Kulan.")
+            }
+
+            Section {
+                NavigationLink { ProfileLayoutPage() } label: {
+                    HStack {
+                        Text("Profile Layout")
+                        Spacer()
+                        Text(profileLayoutStyle.label).foregroundStyle(.secondary)
+                    }
+                }
+            } footer: {
+                Text("How profiles are shown. The modern header fills the top of the page with the profile photo.")
             }
 
             Section {
@@ -978,13 +997,17 @@ struct EditProfileView: View {
                 }
             }
             .fullScreenCover(item: $cropCandidate) { c in
-                TOCropView(image: c.image, circular: true,
-                           onDone: { cropped in
-                               cropCandidate = nil
-                               uploadTask?.cancel()
-                               uploadTask = Task { await uploadCropped(cropped) }
-                           },
-                           onCancel: { cropCandidate = nil })
+                // Our own move-and-scale rather than the general-purpose cropper: a profile photo is
+                // now shown as TWO shapes (the round avatar and the poster header), and the one
+                // thing this screen has to do is let you check both before you commit. The library
+                // cropper can only show one, and its rotation dial and ratio presets are noise here.
+                ProfilePhotoCropper(image: c.image,
+                                    onDone: { cropped in
+                                        cropCandidate = nil
+                                        uploadTask?.cancel()
+                                        uploadTask = Task { await uploadCropped(cropped) }
+                                    },
+                                    onCancel: { cropCandidate = nil })
                     .ignoresSafeArea()
             }
             .alert("Remove profile photo?", isPresented: $confirmRemovePhoto) {

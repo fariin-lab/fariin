@@ -102,6 +102,62 @@ struct AudiencePage: View {
     }
 }
 
+/// Which header every profile draws. Modern is the app's layout; the classic circle stays for
+/// anyone who prefers it, which is why nothing about the old hero was deleted to build the new one.
+///
+/// Each row carries a small drawing of the layout it names, because "Modern Header" and "Classic
+/// Circle Profile" are our words for it and a picture says it without them.
+struct ProfileLayoutPage: View {
+    @AppStorage(ProfileLayoutStyle.storageKey) private var layout = ProfileLayoutStyle.modern.rawValue
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(ProfileLayoutStyle.allCases) { style in
+                    Button {
+                        layout = style.rawValue
+                    } label: {
+                        HStack(spacing: 14) {
+                            sketch(style)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(style.label).foregroundStyle(.primary)
+                                Text(style.blurb).font(.footnote).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if layout == style.rawValue {
+                                Image(systemName: "checkmark").fontWeight(.semibold)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
+            } footer: {
+                Text("Someone with no profile photo always uses the classic circle, so there is never an empty header.")
+            }
+        }
+        .navigationTitle("Profile Layout")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// A 34×46 miniature of the page: a filled top block for the poster, a small circle for the
+    /// classic hero, then two lines standing in for the name and the handle.
+    private func sketch(_ style: ProfileLayoutStyle) -> some View {
+        VStack(spacing: 3) {
+            if style == .modern {
+                RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(0.75))
+                    .frame(width: 34, height: 24)
+            } else {
+                Circle().fill(Color.accentColor.opacity(0.75)).frame(width: 15, height: 15)
+                    .frame(height: 24)
+            }
+            Capsule().fill(Color.secondary.opacity(0.45)).frame(width: 22, height: 3)
+            Capsule().fill(Color.secondary.opacity(0.28)).frame(width: 14, height: 3)
+        }
+        .frame(width: 34, height: 46)
+    }
+}
+
 // App Lock as its own page (reference: "App lock >" row on the main privacy page).
 struct AppLockPage: View {
     @AppStorage("appLockEnabled") private var appLock = false
