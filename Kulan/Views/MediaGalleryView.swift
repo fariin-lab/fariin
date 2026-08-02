@@ -152,30 +152,30 @@ struct MediaGalleryView: View {
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
-    // THE SYSTEM SEGMENTED CONTROL, not a hand-built one (user 2026-07-29: "this all media bar is not
-    // following apple… the active tab and bar is not like app guidelines… it must work like Chats /
-    // Calls / Settings on the home screen").
+    // A LIQUID GLASS CAPSULE, drawn by us. It was the system segmented control until 2026-08-02, and
+    // the reason it no longer is belongs here rather than only in MediaTabBar.
     //
-    // He is right, and the reason is structural. The home bar looks correct because it IS Apple's — a
-    // real TabView, so its selected state, its glass, its motion and its accessibility all come from
-    // the system. This bar was a hand-rolled imitation: five buttons in a glass capsule with a second
-    // glass pill on the selected one, kept in step by a namespace and a morph id. Two glass surfaces
-    // that have to be told they belong together, a font weight that changes on selection and therefore
-    // changes the segment's width, and an active pill sized to its label rather than its share of the
-    // bar. Every one of those is a thing the system already gets right.
+    // The owner asked for Signal's glass on this bar while keeping it exactly where it is. Signal's
+    // IS a plain UISegmentedControl, styled with one line, `backgroundColor = .clear` — but they give
+    // it to the navigation bar as its titleView, so it inherits the glass the bar already has. On a
+    // page there is nothing behind it to inherit, and that same control can only draw the stock grey
+    // track. Glass here has to be drawn underneath, and making the system control transparent enough
+    // to reveal it means erasing its background images, which is what removed the active tab the last
+    // time ("Active tab Is gone… is looks like liquid glass but is not really") — iOS paints the
+    // selected pill onto that same surface.
     //
-    // For switching between mutually exclusive views of one collection, the platform component is the
-    // segmented control, so that is what this is now. Selection indicator, sliding animation, hit
-    // targets, Dynamic Type, VoiceOver traits and the iOS 26 glass treatment all arrive for free and
-    // cannot drift from the OS. Roughly forty lines of custom glass plumbing went with it.
+    // So the position the owner asked for and the surface he asked for cannot both come from the
+    // system control. What replaced it is the shape already proven in the photo picker: the pill is
+    // ONE capsule that moves, never one created inside the chosen segment, so it has no state in
+    // which it can fail to exist. Segments are equal shares of the width, so the selected label going
+    // semibold still cannot resize anything.
+    //
+    // What we give up and now owe ourselves: Dynamic Type and the system's VoiceOver handling. The
+    // labels carry button and selected traits by hand, and shrink rather than truncate.
     private var tabBar: some View {
         MediaTabBar(titles: Tab.allCases.map(\.label),
                     selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
                                        set: { tab = Tab.allCases[$0] }))
-        // STILL the system control (see MediaTabBar) — only its colours changed, to the flat dark
-        // track and lighter selected slab the owner asked for (2026-08-01, Telegram reference). The
-        // rule the earlier hand-built bar broke is kept: nothing is erased, so the system still owns
-        // the selected pill and it cannot go missing again.
         .frame(height: 34)
         .padding(.horizontal, 16)
         .padding(.top, 6)
