@@ -258,6 +258,8 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// this header without call, video or mute buttons, and the gap would otherwise sit there as
     /// unexplained empty space under the name.
     var actionsTopSpacing: CGFloat = 18
+    /// The colour the photo ARRIVES AT. Every page this header sits on is the grouped background.
+    var fadeInto: Color = Color(uiColor: .systemGroupedBackground)
     @ViewBuilder var caption: (Color) -> Caption
     @ViewBuilder var actions: () -> Actions
 
@@ -278,6 +280,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
          bleedUnderBars: Bool = true,
          edgeBleed: CGFloat = 16,
          actionsTopSpacing: CGFloat = 18,
+         fadeInto: Color = Color(uiColor: .systemGroupedBackground),
          @ViewBuilder caption: @escaping (Color) -> Caption,
          @ViewBuilder actions: @escaping () -> Actions) {
         self.name = name
@@ -291,6 +294,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.bleedUnderBars = bleedUnderBars
         self.edgeBleed = edgeBleed
         self.actionsTopSpacing = actionsTopSpacing
+        self.fadeInto = fadeInto
         self.caption = caption
         self.actions = actions
 
@@ -424,11 +428,33 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         // bottom of the photo IS the background: same colours, same place, without the detail. It
         // begins at the top of the name, where the owner drew the line.
         .posterFadeBlur(startFraction: PosterGeometry.blurStart(width: photoSide), radius: 40)
-        // Only the last stretch, and by then it is blurred past recognition, so what dissolves into
-        // the page is a soft field of the photo's own colour rather than a picture with an edge.
+        // IT ARRIVES AT THE PAGE COLOUR. It used to fade to TRANSPARENT and let the page show
+        // through, and a linear alpha ramp has a visible end — the eye finds the point where the
+        // change stops, which is the line he could still feel. Painting the page's own colour over
+        // the photo instead means the bottom row of pixels IS the page: there is no boundary left to
+        // find, because the two are the same colour before they meet.
+        //
+        // The stops are eased, not evenly spaced. An even ramp announces itself at both ends; this
+        // one starts almost imperceptibly and finishes quickly, which is the shape his reference
+        // images use to melt a picture into white.
+        .overlay(
+            LinearGradient(stops: {
+                let s = PosterGeometry.blurStart(width: photoSide)
+                let run = max(0.0001, 1 - s)
+                return [
+                    .init(color: fadeInto.opacity(0),    location: s),
+                    .init(color: fadeInto.opacity(0.10), location: s + run * 0.34),
+                    .init(color: fadeInto.opacity(0.42), location: s + run * 0.62),
+                    .init(color: fadeInto.opacity(0.82), location: s + run * 0.84),
+                    .init(color: fadeInto,               location: 1),
+                ]
+            }(), startPoint: .top, endPoint: .bottom)
+        )
+        // Insurance only: by here the pixels are already the page colour, so this can never show as
+        // an edge — it just guarantees the very last row cannot differ if the page is ever repainted.
         .mask(LinearGradient(stops: [
             .init(color: .black, location: 0),
-            .init(color: .black, location: 0.80),
+            .init(color: .black, location: 0.96),
             .init(color: .clear, location: 1),
         ], startPoint: .top, endPoint: .bottom))
         // SCALE, never a frame change: resizing re-measures every frame of a pull, scaling is one
