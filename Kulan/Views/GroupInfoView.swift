@@ -48,13 +48,12 @@ struct GroupInfoView: View {
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
-    /// Same rule as a person's profile, including the second test: a NON-EMPTY url is not the same
-    /// as a photo, and a stale one would leave a header of flat colour where a picture should be.
-    /// `nil` means the poster has not looked yet and counts as yes, so nothing flips in the ordinary
-    /// case. Groups with no photo at all keep the round avatar and its camera badge as they were.
+    /// Same rule as a person's profile: decided on the first frame from a photo actually in hand,
+    /// never from the url alone, so the header cannot open as a poster and drop to the circle a beat
+    /// later. Groups with no photo — plenty of them — keep the round avatar and its camera badge.
     private var useModernHeader: Bool {
         ProfileLayoutStyle.resolved(profileLayout) == .modern
-            && conv?.avatarUrl?.isEmpty == false
+            && PosterPhoto.readyNow(conv?.avatarUrl)
             && posterPhotoOK != false
     }
 

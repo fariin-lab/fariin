@@ -46,6 +46,29 @@ enum ProfileLayoutStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// Is there a real photo behind this url that can be drawn on the FIRST FRAME?
+///
+/// Asking "is the url non-empty" is a different question and answering it cost two bug reports: a
+/// removed or stale url opened as a poster and fell back to the circle once the load came back empty,
+/// which is a layout visibly rearranging itself a beat after the page opens.
+///
+/// This is the same synchronous probe AvatarView makes in its own initialiser, for the same reason —
+/// it is gated on an in-memory index, so a miss costs a Set lookup rather than a file probe, and a
+/// hit is promoted to memory so each photo pays once per launch. Every route into a profile comes
+/// from a screen that has already drawn this person's avatar, so by the time the profile can be
+/// tapped the answer is already in hand.
+///
+/// THE TRADE, stated: someone whose photo this device has never once loaded opens as the circle for
+/// that visit, even though they do have one. That needs a first-ever view of that person with the
+/// download still in flight, and it corrects itself the next time. A wrong answer that settles is
+/// better than a right answer that arrives after the page has been drawn.
+enum PosterPhoto {
+    static func readyNow(_ url: String?) -> Bool {
+        guard let u = url, !u.isEmpty else { return false }
+        return DiskImageCache.shared.smallImageSync(u) != nil
+    }
+}
+
 // MARK: - What the poster needs to know about a photo
 
 /// A profile photo reduced to the two things the poster header needs, sampled once and kept.
@@ -229,8 +252,10 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
 
         // The avatar for this person is almost always already decoded (chat list, chat header), so
         // the poster opens holding the real photo rather than a colour that swaps a frame later.
+        // Memory AND disk, like AvatarView: memory alone is empty on a cold launch, which left the
+        // header showing its fallback colour for a frame before the photo arrived.
         if let u = photoUrl, !u.isEmpty {
-            let warm = DiskImageCache.shared.memoryImage(for: u)
+            let warm = DiskImageCache.shared.smallImageSync(u)
             _image = State(initialValue: warm)
             _tone = State(initialValue: PosterTone.cached(for: u)
                           ?? warm.flatMap { PosterTone.sample($0, for: u) })

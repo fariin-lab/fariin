@@ -106,17 +106,18 @@ struct ContactInfoView: View {
     /// A poster needs a picture. Someone with no photo keeps the classic circle and its existing
     /// empty state, rather than a header of flat colour pretending to be a portrait.
     ///
-    /// TWO TESTS, NOT ONE. The url is known on the first frame, so it decides the opening layout and
-    /// nothing flips for the ordinary case. But a NON-EMPTY url is not the same as a photo: a
-    /// removed or stale one leaves nothing to draw, which is how a profile opened from Calls came up
-    /// as a slab of pink (owner's screenshot). This page already learned that once — `heroHasPhoto`
-    /// exists for exactly this reason on the avatar — and the poster needed the same lesson. So once
-    /// the poster reports there is genuinely nothing behind the url, we drop to the circle.
+    /// DECIDED ON THE FIRST FRAME, from a photo actually in hand — never from the url alone.
     ///
-    /// `nil` means not known yet and counts as yes, so the common case never starts on the circle
-    /// and jumps.
+    /// Asking whether the url is non-empty is a different question, and it cost two reports. First a
+    /// removed or stale url opened as a full slab of colour. Then, once the poster was made to report
+    /// back, the same profile opened as a poster and DROPPED to the circle a moment later, which the
+    /// owner photographed: "First seceds its showing large page after sacands Its Showing circle".
+    /// Both are the same mistake — deciding late — and the answer is to decide before drawing.
+    ///
+    /// `PosterPhoto.readyNow` is the synchronous cache probe AvatarView already makes for these very
+    /// urls. `posterPhotoOK` stays as a backstop for a cached file that turns out to be unreadable.
     private var useModernHeader: Bool {
-        layoutStyle == .modern && gatedPhotoUrl?.isEmpty == false && posterPhotoOK != false
+        layoutStyle == .modern && PosterPhoto.readyNow(gatedPhotoUrl) && posterPhotoOK != false
     }
 
     /// Chrome sitting on the photo: white on a dark picture, near-black on a pale one. Reads the
