@@ -32,24 +32,27 @@ struct ProfilePhotoCropper: View {
 
     var body: some View {
         GeometryReader { geo in
-            // The window is the full screen width, square — exactly the shape the poster header
-            // draws, so what you frame here is what lands there, pixel for pixel.
-            let side = geo.size.width
-            let hole = CGRect(x: 0, y: (geo.size.height - side) / 2, width: side, height: side)
+            // The window is the full screen width and TALLER than it is wide, the exact shape the
+            // poster header draws — `PosterGeometry.aspect`, shared with it rather than repeated, so
+            // what you frame here cannot be a different shape from what lands there.
+            let w = geo.size.width
+            let h = min(w * PosterGeometry.aspect, geo.size.height)
+            let hole = CGRect(x: 0, y: (geo.size.height - h) / 2, width: w, height: h)
             ZStack {
                 Color.black.ignoresSafeArea()
                 if let source {
                     MoveAndScaleView(image: source, controller: controller)
-                        .frame(width: side, height: side)
+                        .frame(width: w, height: h)
                         .position(x: hole.midX, y: hole.midY)
                 }
                 // Everything outside the window goes quiet. An even-odd fill, so the picture keeps
                 // showing through underneath instead of being hidden — you can see what you are
                 // cutting off.
-                CutoutShape(hole: hole, radius: shape == .avatar ? side / 2 : 0)
+                CutoutShape(hole: hole, radius: shape == .avatar ? min(w, h) / 2 : 0)
                     .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
+                blurBand(in: hole)
                 chrome
             }
         }
@@ -60,6 +63,35 @@ struct ProfilePhotoCropper: View {
             source = Self.straightened(image)
         }
         .animation(.spring(duration: 0.32), value: shape)
+    }
+
+    /// Shows WHICH PART OF THE PICTURE WILL BE BLURRED, before you commit to it (owner: "also User
+    /// Tell Ares It woll be blur like image 3").
+    ///
+    /// The profile header softens the photo from the top of the name downwards, so the bottom of
+    /// what you frame here is not what anyone will actually see. Marking it is the difference between
+    /// a crop you chose and a crop you were surprised by — you can move a face out of this band.
+    ///
+    /// Its top edge comes from `PosterGeometry.blurStart`, the same function the header blurs from,
+    /// so this is a promise the header keeps rather than a drawing that resembles it. Only on the
+    /// Poster shape: the round avatar shows the middle of the crop and is never blurred.
+    @ViewBuilder private func blurBand(in hole: CGRect) -> some View {
+        if shape == .poster {
+            let startY = hole.minY + hole.height * PosterGeometry.blurStart(width: hole.width)
+            VStack(spacing: 0) {
+                Rectangle().fill(.white.opacity(0.28)).frame(height: 0.5)
+                ZStack {
+                    Color.black.opacity(0.18)
+                    Text("Blur")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 4)
+                }
+            }
+            .frame(width: hole.width, height: max(0, hole.maxY - startY))
+            .position(x: hole.midX, y: startY + max(0, hole.maxY - startY) / 2)
+            .allowsHitTesting(false)   // never steals a pan from the photo underneath
+        }
     }
 
     private var chrome: some View {
@@ -208,12 +240,15 @@ final class MoveAndScaleController {
     /// storage nobody sees, so the crop comes down to a sane edge before it leaves.
     private static func capped(_ img: UIImage, maxPx: CGFloat = 1280) -> UIImage {
         let w = img.size.width * img.scale
-        guard w > maxPx else { return img }
-        let side = maxPx / img.scale
+        guard w > maxPx, img.size.width > 0 else { return img }
+        // ASPECT PRESERVED. This used to redraw into a square, which was right while the crop was
+        // square and would have quietly squashed every photo the moment it became 4:5.
+        let scale = maxPx / w
+        let size = CGSize(width: img.size.width * scale, height: img.size.height * scale)
         let fmt = UIGraphicsImageRendererFormat.default()
         fmt.scale = img.scale
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: fmt).image { _ in
-            img.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
         }
     }
 }

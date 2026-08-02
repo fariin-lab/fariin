@@ -166,15 +166,29 @@ final class ProfileStore {
 
     /// Upload a profile photo. Native Data -> Firebase Storage (no Hermes blob
     /// crash). Propagates the URL to the user doc + each conversation's photo map.
-    // Centre-crop to a square + downscale so avatars are small and uniform.
-    static func squareJPEG(_ data: Data, side: CGFloat = 512, quality: CGFloat = 0.8) -> Data {
+    /// Downscale only. THE SHAPE THE USER FRAMED IS THE SHAPE THAT GETS UPLOADED.
+    ///
+    /// This used to centre-crop to a square, which was correct while the cropper only ever produced
+    /// squares. It is not any more: the poster header is taller than it is wide, the cropper now
+    /// frames that exact shape and shows which band will be blurred, and squaring it here would
+    /// silently throw away the part he was just asked to choose. Cropping a second time, behind the
+    /// user, after they have already cropped, is the bug — not the aspect ratio.
+    ///
+    /// The round avatar is unaffected: it centre-crops what it is given at DRAW time, so it takes the
+    /// middle of a tall photo exactly as it took the middle of a square one.
+    ///
+    /// `maxSide` is generous now (was a 512 square): the same file is the small circle in a chat list
+    /// AND a full-width header, and 512 across a whole screen is visibly soft.
+    static func squareJPEG(_ data: Data, maxSide: CGFloat = 1280, quality: CGFloat = 0.85) -> Data {
         guard let img = UIImage(data: data), let cg = img.cgImage else { return data }
-        let w = CGFloat(cg.width), h = CGFloat(cg.height), s = min(w, h)
-        let rect = CGRect(x: (w - s) / 2, y: (h - s) / 2, width: s, height: s)
-        guard let cropped = cg.cropping(to: rect) else { return data }
-        let square = UIImage(cgImage: cropped, scale: 1, orientation: img.imageOrientation)
-        let out = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
-            square.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        guard w > 0, h > 0 else { return data }
+        let scale = min(1, maxSide / max(w, h))
+        guard scale < 1 else { return data }   // already small enough — do not re-encode for nothing
+        let size = CGSize(width: (w * scale).rounded(), height: (h * scale).rounded())
+        let src = UIImage(cgImage: cg, scale: 1, orientation: img.imageOrientation)
+        let out = UIGraphicsImageRenderer(size: size).image { _ in
+            src.draw(in: CGRect(origin: .zero, size: size))
         }
         return out.jpegData(compressionQuality: quality) ?? data
     }

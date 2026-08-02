@@ -46,6 +46,28 @@ enum ProfileLayoutStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// The poster's shape, in ONE place, because the header draws it and the cropper has to promise it.
+/// If these two ever disagree, what you framed is not what you get.
+enum PosterGeometry {
+    /// Height as a multiple of width. 4:5 — TALLER THAN THE SCREEN IS WIDE (owner, 2026-08-02:
+    /// "update Image Size higher make it how long you need").
+    ///
+    /// The height is not decoration. The photo now has to reach past the name and behind the round
+    /// actions, because there is no second copy of it underneath any more: the picture itself is the
+    /// background all the way down. A square stopped at the name and left the rest to a duplicate.
+    static let aspect: CGFloat = 1.25
+
+    /// The name rides up over the photo, at this distance above the photo's own square point.
+    static let nameLift: CGFloat = 44
+
+    /// Fraction of the photo's HEIGHT where the blur begins — the top of the name, which is where
+    /// the owner drew the line. Everything above it stays sharp.
+    static func blurStart(width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 0.7 }
+        return max(0, min(1, (width - nameLift) / (width * aspect)))
+    }
+}
+
 extension View {
     /// Progressive blur down the bottom of this view — the concept from Variablur
     /// (github.com/daprice/Variablur), run through our own single-purpose shader.
@@ -100,18 +122,16 @@ enum PosterPhoto {
 
 // MARK: - What the poster needs to know about a photo
 
-/// A profile photo reduced to the two things the poster header needs, sampled once and kept.
-///
-/// `wash` is the page background under the name and the buttons: a 32×48 downscale of the photo
-/// which the display stretches back up into a soft haze. It is a DOWNSCALE and not a Gaussian blur
-/// on purpose — a real blur of a full-size photo costs milliseconds on every frame the header moves,
-/// and once stretched across a whole header the two are indistinguishable. Being the SAME photo is
-/// the point: the sharp image can dissolve into it with no colour shift at all, which is what makes
-/// the join invisible rather than merely soft.
+/// A profile photo, sampled once and kept, for the two readings the header needs.
 ///
 /// The luma readings are how bright the photo is where text sits, so the name can be dark on a pale
 /// picture and light on a dark one. Guessing white loses badly on a bright photo, and the fix for
 /// that must not be a black box behind the text.
+///
+/// `wash` — a 32×48 downscale — WAS the page background under the name, back when the header was two
+/// images: the sharp photo on top of a stretched copy of itself. That is gone; the photo is taller
+/// now and is its own background all the way down (owner: "dont use dubblecate image"). The tiny
+/// bitmap is kept only because the luma readings are taken from it, and it costs one draw per photo.
 final class PosterTone {
     let wash: UIImage
     let nameBandLuma: Double   // brightness of the strip the name sits on, 0 = black, 1 = white
@@ -292,17 +312,17 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     }
 
     /// The name rides up over the photo's bottom edge, as in the reference.
-    private let nameLift: CGFloat = 44
-
-    /// Where the photo starts handing over: the TOP OF THE NAME, as a fraction of the photo's own
-    /// height. The owner drew the line there — above it the face and shoulders stay untouched, below
-    /// it the picture softens and gives way to the wash. Derived from `nameLift` rather than typed as
-    /// a fraction, so moving the caption moves this with it.
-    private var fadeStart: CGFloat { max(0, 1 - nameLift / max(photoSide, 1)) }
+    /// From `PosterGeometry`, so the number that places the name is the same number the blur starts
+    /// on and the same number the cropper promises.
+    private var nameLift: CGFloat { PosterGeometry.nameLift }
 
     /// The photo is as wide as the SCREEN: the content width this header was given, plus the page
     /// inset it bleeds back out over on each side.
     private var photoSide: CGFloat { width + edgeBleed * 2 }
+
+    /// And TALLER than it is wide, so one picture can be the background for the whole header —
+    /// behind the name and behind the buttons — instead of handing over to a copy of itself.
+    private var photoHeight: CGFloat { photoSide * PosterGeometry.aspect }
 
     /// White on a dark photo, near-black on a bright one. Not a fixed colour, and not a box.
     private var onPhotoText: Color {
@@ -363,60 +383,26 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             }
     }
 
-    /// The artwork, drawn from the top of the SCREEN rather than the top of the content, so the
-    /// photo runs under the status bar and the nav bar the way the reference does.
+    /// ONE PICTURE. No second copy underneath (owner: "dont use dubblecate image… use orginal").
     ///
-    /// The GeometryReader is how the wash learns where this header ENDS. Nothing is drawn outside
-    /// that box: a fixed tail would either overflow — which a List row clips, turning the fade into
-    /// the exact hard line this design exists to remove — or fall short and leave a band of colour
-    /// with an edge on it. Reading the height means the fade always lands on the header's own bottom
-    /// edge, and a long bio simply gives it further to travel.
+    /// There used to be two layers: the sharp photo, and beneath it a tiny stretched copy of the
+    /// same photo tinted toward the page colour, to carry the colour down past the name. It worked,
+    /// and it was still two images pretending to be one — the copy had none of the detail, so where
+    /// the sharp one gave out you were looking at a smear that did not match what was above it.
+    ///
+    /// Now the photo is simply TALLER than the screen is wide and runs the whole height of the
+    /// header, behind the name and behind the buttons, blurring further the lower it goes and giving
+    /// out only at the very bottom. The background under the name IS the photograph, not an
+    /// impression of it.
     private var layers: some View {
-        GeometryReader { g in
-            let total = contentTop + g.size.height   // screen top → this header's bottom
-            ZStack(alignment: .top) {
-                washLayer(total: total)
-                sharpLayer
-            }
-            .frame(width: photoSide, height: total, alignment: .top)
-            .offset(y: -contentTop)
-        }
-        // Out over the page's inset to both screen edges. Safe here and nowhere else: this is
-        // inside a background, so it cannot change the size of the header or of the page.
-        .padding(.horizontal, -edgeBleed)
-        .allowsHitTesting(false)   // the spacer owns the tap; the artwork must never swallow one
+        photoLayer
+            // Out over the page's inset to both screen edges. Safe here and nowhere else: this is
+            // inside a background, so it cannot change the size of the header or of the page.
+            .padding(.horizontal, -edgeBleed)
+            .allowsHitTesting(false)   // the spacer owns the tap; the artwork must never swallow one
     }
 
-    /// Same photo, tiny and stretched, tinted toward the page. Dark mode deepens it, light mode
-    /// lightens it, and both readings come from the photo itself rather than from a palette.
-    private func washLayer(total: CGFloat) -> some View {
-        Group {
-            if let tone {
-                Image(uiImage: tone.wash).resizable().interpolation(.high)
-            } else {
-                LinearGradient(colors: AvatarPalette.gradient(for: name),
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-            }
-        }
-        .frame(width: photoSide, height: total)
-        // Lighter than it was (0.30/0.34). The tint is what pulls the wash toward the page colour,
-        // and it was pulling hard enough that the photo's colours were gone before the cards began —
-        // "fades into a flat white/gray background". With the sharp photo now blurring into this
-        // rather than dissolving into it, the wash can afford to keep more of the picture.
-        .overlay(scheme == .dark ? Color.black.opacity(0.22) : Color.white.opacity(0.26))
-        // Solid everywhere the photo is, then gone by the bottom of the header.
-        .mask(LinearGradient(stops: [
-            .init(color: .black, location: 0),
-            .init(color: .black, location: min(1, photoSide / max(total, 1))),
-            .init(color: .clear, location: 1),
-        ], startPoint: .top, endPoint: .bottom))
-        // SCALE, never a frame change: resizing re-measures every frame of a pull, scaling is one
-        // GPU transform. Anchored at the bottom so the top grows up by exactly the rubber-band
-        // distance and fills the gap the scroll just opened above it.
-        .scaleEffect(1 + stretch / max(total, 1), anchor: .bottom)
-    }
-
-    private var sharpLayer: some View {
+    private var photoLayer: some View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
@@ -425,29 +411,26 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                                startPoint: .topLeading, endPoint: .bottomTrailing)
             }
         }
-        .frame(width: photoSide, height: photoSide)
+        .frame(width: photoSide, height: photoHeight)
         .clipped()
-        // THE PHOTO NEVER STOPS, IT ONLY LOSES ITS DETAIL. Fading it to a colour still ends in a
-        // colour, and the eye finds the line where the picture quit — the owner's screenshot, twice.
-        // Blurring it further and further down means the bottom of the photo IS the background:
-        // the same colours, softened, in the same place. There is no edge to find because nothing
-        // ends. The alpha fade below is now only the last few percent, handing over to the wash,
-        // which is the same photo again.
-        // STARTS AT THE TOP OF THE NAME, not at some fraction of the photo. It began halfway down
-        // and the owner drew a line where he wanted it: the face and the shoulders were being
-        // softened when the only thing that needs to blur is the strip the name sits on and what is
-        // below it. Derived from `nameLift`, the same number that places the caption, so the two
-        // cannot drift apart if either is retuned.
-        .posterFadeBlur(startFraction: fadeStart, radius: 34)
+        // THE PHOTO NEVER STOPS, IT ONLY LOSES ITS DETAIL. Fading a picture to a colour still ends
+        // in a colour and the eye finds the line where it quit — reported twice. Blurring means the
+        // bottom of the photo IS the background: same colours, same place, without the detail. It
+        // begins at the top of the name, where the owner drew the line.
+        .posterFadeBlur(startFraction: PosterGeometry.blurStart(width: photoSide), radius: 40)
+        // Only the last stretch, and by then it is blurred past recognition, so what dissolves into
+        // the page is a soft field of the photo's own colour rather than a picture with an edge.
         .mask(LinearGradient(stops: [
             .init(color: .black, location: 0),
-            // The SAME boundary the blur starts on. Two numbers that are nearly equal read as two
-            // separate edges; one number is one edge, and the photo begins softening and handing
-            // over to the wash in the same place.
-            .init(color: .black, location: Double(fadeStart)),
+            .init(color: .black, location: 0.80),
             .init(color: .clear, location: 1),
         ], startPoint: .top, endPoint: .bottom))
-        .scaleEffect(1 + stretch / max(photoSide, 1), anchor: .bottom)
+        // SCALE, never a frame change: resizing re-measures every frame of a pull, scaling is one
+        // GPU transform. Anchored at the bottom so the top grows up by exactly the rubber-band
+        // distance and fills the gap the scroll just opened above it.
+        .scaleEffect(1 + stretch / max(photoHeight, 1), anchor: .bottom)
+        // Up behind the status bar and the nav bar, from the top of the SCREEN.
+        .offset(y: -contentTop)
         .opacity(photoHidden ? 0 : 1)
         .animation(.easeOut(duration: 0.25), value: image != nil)
     }
