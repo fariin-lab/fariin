@@ -128,6 +128,30 @@ struct CloseXButton: View {
     }
 }
 
+/// One of our own icons inside a MENU row, sized to sit level with the system's SF Symbols.
+///
+/// A menu's SF Symbol comes from the body font, and its visible glyph lands around 15pt inside a
+/// box noticeably bigger than that. So an asset drawn at the size of that BOX reads as oversized
+/// beside it, which is what 20pt did — reported twice, on Chats, Add Story and Archive.
+///
+/// One number in one place. Nine call sites each carrying their own copy is how the first sweep
+/// fixed some and left others, and how the wrong number then had to be found nine times.
+struct MenuIcon: View {
+    let name: String
+    var size: CGFloat = 17
+
+    init(_ name: String, size: CGFloat = 17) {
+        self.name = name
+        self.size = size
+    }
+
+    var body: some View {
+        Image(name).renderingMode(.template)
+            .resizable().scaledToFit()
+            .frame(width: size, height: size)
+    }
+}
+
 struct AvatarView: View {
     let name: String
     var photoUrl: String?

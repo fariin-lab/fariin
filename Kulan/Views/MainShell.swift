@@ -332,8 +332,7 @@ struct CallsView: View {
                                     AppRouter.shared.pendingChatPhoto = call.photoUrl
                                     AppRouter.shared.pendingChatId = call.cid
                                 } label: {
-                                    Label { Text("Chats") } icon: { Image("ic_menu_chat").renderingMode(.template)
-                        .resizable().scaledToFit().frame(width: 20, height: 20) }
+                                    Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat") }
                                 }
                                 Button {
                                     withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
@@ -785,8 +784,7 @@ struct ChatsView: View {
             } label: {
                 Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
                     conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
-                                      : AnyView(Image("ic_pin_menu").renderingMode(.template)
-                                                    .resizable().scaledToFit().frame(width: 20, height: 20))
+                                      : AnyView(MenuIcon("ic_pin_menu"))
                 }
             }
             .tint(.orange)
@@ -873,14 +871,12 @@ struct ChatsView: View {
             }
             Divider()
             Button { showArchived = true } label: {
-                Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template)
-                        .resizable().scaledToFit().frame(width: 20, height: 20) }
+                Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
             }
             // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
             if !storiesOptedOut {
                 Button { showCompose = true } label: {
-                    Label { Text("Add Story") } icon: { Image("ic_stories").renderingMode(.template)
-                        .resizable().scaledToFit().frame(width: 20, height: 20) }
+                    Label { Text("Add Story") } icon: { MenuIcon("ic_stories") }
                 }
             }
         } label: {
@@ -985,8 +981,7 @@ struct ChatsView: View {
             }
         } else {
             Button { Task { await ChatService.markUnread(conv.id) } } label: {
-                Label { Text("Unread") } icon: { Image("ic_menu_unread").renderingMode(.template)
-                        .resizable().scaledToFit().frame(width: 20, height: 20) }
+                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }
             }
         }
         // Native submenu (clean popover) instead of a custom mute sheet.
@@ -1002,13 +997,11 @@ struct ChatsView: View {
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
             Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
                     conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
-                                      : AnyView(Image("ic_pin_menu").renderingMode(.template)
-                                                    .resizable().scaledToFit().frame(width: 20, height: 20))
+                                      : AnyView(MenuIcon("ic_pin_menu"))
                 }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
-            Label { Text("Archive") } icon: { Image("ic_archive").renderingMode(.template)
-                        .resizable().scaledToFit().frame(width: 20, height: 20) }
+            Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
         }
         Button(role: .destructive) { pendingDelete = conv } label: {
             Label("Delete", systemImage: "trash")
