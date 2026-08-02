@@ -70,7 +70,15 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Seven fixes from your reports on the last build.
+            Three fixes from your reports on 441.
+
+            Swiping through photos in All Media stops flashing. Two causes, both only reachable in a long gallery: the next page could still be empty when you arrived, and the photo after it had not started downloading yet. Both now look two pages ahead instead of one.
+
+            Save works the moment you finish cropping a new profile photo. It used to wake up only after the upload finished, so it sat grey for a few seconds with your new picture already on screen. Pressing it now waits for the upload, then closes.
+
+            The composer sits 24pt from the sides, 16pt while the keyboard is up, and 24pt from the bottom of the screen.
+
+            From 441:
 
             Double tap a GIF to react. It never worked, because GIFs were grouped with photos and videos, which give up double tap so they open fast. A GIF opens nothing, so it had nothing to give up.
 
@@ -128,6 +136,6 @@ jobs:
 
             If you prefer the old look, Settings, Privacy and Security, Profile Layout, Classic Circle Profile. Anyone with no photo at all keeps the old circle either way.
 
-            PLEASE TRY FIRST: All Media, tapping every tab and swiping between them, and check the selected tab never disappears. Then the profiles that came up as a block of colour before, from Calls and from a blocked person. Then a profile of someone with a photo, in light mode AND dark mode, and tell me whether you can see a line where the photo ends. Then All Media, tapping every tab and swiping between them, and check the selected tab never disappears. Then someone with a story, to see the small round previews at the top. Then a very bright photo, where the name is supposed to turn dark on its own.
+            PLEASE TRY FIRST: open a photo from All Media and swipe through several, quickly, and tell me whether it still flashes. Then SCROLL the All Media grid and tell me whether the photos pass UNDER the tab bar or stop at it — I need that one answer before I touch that bar again. Then All Media's tabs, checking the selected tab never disappears. Then the profiles that came up as a block of colour before, from Calls and from a blocked person. Then a profile of someone with a photo, in light mode AND dark mode, and tell me whether you can see a line where the photo ends. Then All Media, tapping every tab and swiping between them, and check the selected tab never disappears. Then someone with a story, to see the small round previews at the top. Then a very bright photo, where the name is supposed to turn dark on its own.
 
         run: fastlane beta
