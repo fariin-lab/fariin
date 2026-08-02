@@ -1019,6 +1019,12 @@ struct EditProfileView: View {
                 ProfilePhotoCropper(image: c.image,
                                     onDone: { cropped in
                                         cropCandidate = nil
+                                        // THE MOMENT YOU CROP, not when the upload lands. Setting this
+                                        // on success left Save grey for the whole upload — seconds on a
+                                        // slow connection — with your new photo already on screen, which
+                                        // is the dead button he reported twice. `save()` waits for the
+                                        // upload before it closes, so there is nothing to protect here.
+                                        photoChanged = true
                                         uploadTask?.cancel()
                                         uploadTask = Task { await uploadCropped(cropped) }
                                     },
@@ -1028,6 +1034,7 @@ struct EditProfileView: View {
             .alert("Remove profile photo?", isPresented: $confirmRemovePhoto) {
                 Button("Cancel", role: .cancel) {}
                 Button("Remove", role: .destructive) {
+                    photoChanged = true   // same rule as picking one: the button wakes on the action
                     uploadTask?.cancel()
                     uploadTask = Task { await removePhoto() }
                 }
