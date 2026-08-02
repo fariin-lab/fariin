@@ -78,9 +78,19 @@ struct ProfilePhotoCropper: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 6)
+            // This screen is presented ignoring the safe area, so SwiftUI reports zero insets
+            // inside it and the status bar has to be cleared from the window's own measurement —
+            // the same thing the profile photo viewer does for its close button.
+            .padding(.top, winInsets.top + 4)
             Spacer()
         }
+    }
+
+    /// Real window safe-area insets, since the view's own are zero here.
+    private var winInsets: UIEdgeInsets {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .max(by: { $0.top < $1.top }) ?? .zero
     }
 
     /// Material, not Liquid Glass: glass is reserved for the five actions on the profile page
@@ -153,10 +163,10 @@ final class MoveAndScaleController {
 
     /// A profile photo is drawn at most one screen wide. Anything past that is upload time and
     /// storage nobody sees, so the crop comes down to a sane edge before it leaves.
-    private static func capped(_ img: UIImage, max: CGFloat = 1280) -> UIImage {
+    private static func capped(_ img: UIImage, maxPx: CGFloat = 1280) -> UIImage {
         let w = img.size.width * img.scale
-        guard w > max else { return img }
-        let side = max / img.scale
+        guard w > maxPx else { return img }
+        let side = maxPx / img.scale
         let fmt = UIGraphicsImageRendererFormat.default()
         fmt.scale = img.scale
         return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: fmt).image { _ in

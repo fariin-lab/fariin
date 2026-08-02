@@ -117,6 +117,22 @@ struct ContactInfoView: View {
         (PosterTone.cached(for: gatedPhotoUrl)?.topPrefersDarkText ?? false) ? Color.black.opacity(0.88) : .white
     }
 
+    /// Bottom of the navigation bar in screen coordinates. From the window, because the page's own
+    /// safe-area reading is the scroll view's, not the screen's.
+    private var barBottom: CGFloat {
+        (UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }
+            .max() ?? 59) + 44
+    }
+
+    /// Is the photo still behind the bar? `.zero` counts as yes: the poster has not reported its
+    /// rect on the very first frame, and it always opens with the photo at the top — reading that
+    /// as "no" would flash a bar background over the photo for one frame.
+    private var photoUnderBar: Bool {
+        guard useModernHeader else { return false }
+        return posterRect == .zero || posterRect.maxY > barBottom
+    }
+
     private var dark: Bool { scheme == .dark }
     // Native grouped-list card color: WHITE in light, 0x1C1C1E in dark — the exact
     // fill iOS Settings uses for its rows. It sits on `pageBackground` (grey/black) so
@@ -315,11 +331,14 @@ struct ContactInfoView: View {
                 }
             }
         }
-        // Let the photo run under the bar while the header is open, then hand the bar its own
-        // material once the name has arrived. This changes the bar's BACKGROUND, never its
-        // visibility: toggling visibility resizes the scroll inset, which is what used to jump the
-        // whole page.
-        .toolbarBackground(useModernHeader && collapse < 0.5 ? .hidden : .automatic, for: .navigationBar)
+        // Let the photo run under the bar while it is still there, then hand the bar back its own
+        // material the moment the photo's bottom edge passes it.
+        //
+        // Tied to where the PHOTO is, not to `collapse`: collapse is spent after 96pt of scrolling
+        // and the photo is 393pt tall, so anything driven off it would drop a material over a photo
+        // that is still on screen. This changes the bar's BACKGROUND, never its visibility —
+        // toggling visibility resizes the scroll inset, which is what used to jump the whole page.
+        .toolbarBackground(photoUnderBar ? .hidden : .automatic, for: .navigationBar)
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
