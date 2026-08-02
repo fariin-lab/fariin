@@ -156,6 +156,11 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// Raw scroll offset of the header, for whatever the page fades against it (the nav bar title).
     var onScroll: (CGFloat) -> Void = { _ in }
     var onTap: () -> Void = {}
+    /// Whether a REAL photo is on screen, as opposed to the colour a name falls back to. A non-empty
+    /// url is NOT the same thing — a removed or stale one still leaves nothing to draw — and a poster
+    /// with nothing behind it is a slab of flat colour where a face should be. Same signal, same
+    /// name, as AvatarView, which learned this first.
+    var onPhotoResolved: (Bool) -> Void = { _ in }
     /// Drop the sharp photo while a viewer is flying out of it, so there is one picture on screen
     /// and not the same one twice.
     var photoHidden: Bool = false
@@ -181,6 +186,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
          onPhotoRect: @escaping (CGRect) -> Void = { _ in },
          onScroll: @escaping (CGFloat) -> Void = { _ in },
          onTap: @escaping () -> Void = {},
+         onPhotoResolved: @escaping (Bool) -> Void = { _ in },
          photoHidden: Bool = false,
          bleedUnderBars: Bool = true,
          edgeBleed: CGFloat = 16,
@@ -192,6 +198,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.onPhotoRect = onPhotoRect
         self.onScroll = onScroll
         self.onTap = onTap
+        self.onPhotoResolved = onPhotoResolved
         self.photoHidden = photoHidden
         self.bleedUnderBars = bleedUnderBars
         self.edgeBleed = edgeBleed
@@ -356,17 +363,30 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     }
 
     private func load() async {
-        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else { image = nil; tone = nil; return }
+        // Already holding the bitmap from the cache seed: there is a photo, and the page can be
+        // told on the first frame rather than after a round trip that will not happen.
+        if image != nil { onPhotoResolved(true); return }
+        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else {
+            image = nil; tone = nil; onPhotoResolved(false); return
+        }
         if let cached = await DiskImageCache.shared.image(for: s) {
             image = cached
             tone = PosterTone.sample(cached, for: s)
+            onPhotoResolved(true)
             return
         }
         if let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
             DiskImageCache.shared.store(ui, data: data, for: s)
             image = ui
             tone = PosterTone.sample(ui, for: s)
+            onPhotoResolved(true)
+            return
         }
+        // A url with nothing behind it — removed, stale, or simply unreachable right now. Either way
+        // there is no picture to build a header out of, so say so and let the page fall back to the
+        // circle. Reporting false when we are merely offline is the RIGHT answer too: without the
+        // image, a poster is a slab of flat colour, which is the thing being fixed.
+        onPhotoResolved(false)
     }
 }
 

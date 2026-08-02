@@ -68,6 +68,8 @@ struct ContactInfoView: View {
     @State private var heroOffset: CGFloat = 0
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var posterRect: CGRect = .zero    // poster photo's global square — the modern morph's start/end
+    /// Did a real photo turn up behind the url? nil until the poster has looked. See useModernHeader.
+    @State private var posterPhotoOK: Bool?
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
@@ -104,11 +106,17 @@ struct ContactInfoView: View {
     /// A poster needs a picture. Someone with no photo keeps the classic circle and its existing
     /// empty state, rather than a header of flat colour pretending to be a portrait.
     ///
-    /// Decided from the URL, which is known on the FIRST frame, and not from whether the bitmap has
-    /// arrived — a layout that flips a beat after opening is the page rearranging itself, which this
-    /// screen has already been reported for once.
+    /// TWO TESTS, NOT ONE. The url is known on the first frame, so it decides the opening layout and
+    /// nothing flips for the ordinary case. But a NON-EMPTY url is not the same as a photo: a
+    /// removed or stale one leaves nothing to draw, which is how a profile opened from Calls came up
+    /// as a slab of pink (owner's screenshot). This page already learned that once — `heroHasPhoto`
+    /// exists for exactly this reason on the avatar — and the poster needed the same lesson. So once
+    /// the poster reports there is genuinely nothing behind the url, we drop to the circle.
+    ///
+    /// `nil` means not known yet and counts as yes, so the common case never starts on the circle
+    /// and jumps.
     private var useModernHeader: Bool {
-        layoutStyle == .modern && gatedPhotoUrl?.isEmpty == false
+        layoutStyle == .modern && gatedPhotoUrl?.isEmpty == false && posterPhotoOK != false
     }
 
     /// Chrome sitting on the photo: white on a dark picture, near-black on a pale one. Reads the
@@ -932,6 +940,8 @@ struct ContactInfoView: View {
             // A tap is the PHOTO, always. The story has its own control in the toolbar now, so the
             // "which did you mean" sheet the round avatar needed is gone from this path.
             onTap: { showProfilePhoto = true },
+            // Nothing behind the url → fall back to the circle rather than show a slab of colour.
+            onPhotoResolved: { posterPhotoOK = $0 },
             // While the viewer is open the photo IS the viewer — hiding the header's copy keeps it
             // one picture moving rather than two stacked on each other. The wash stays, so the page
             // behind the viewer keeps its background.

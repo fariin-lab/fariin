@@ -34,6 +34,7 @@ struct GroupInfoView: View {
     @State private var confirmDelete = false
     @State private var showGroupPhoto = false     // tap the poster → the same morph a person's photo uses
     @State private var posterRect: CGRect = .zero // poster photo's global square — the morph's start/end
+    @State private var posterPhotoOK: Bool?       // did a real photo turn up behind the url? see useModernHeader
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
@@ -47,12 +48,14 @@ struct GroupInfoView: View {
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
-    /// Same rule as a person's profile: the poster needs a picture, so a group with no photo keeps
-    /// the round avatar and its camera badge exactly as they were. Plenty of groups have no photo,
-    /// which is why this matters more here than it does on a person.
+    /// Same rule as a person's profile, including the second test: a NON-EMPTY url is not the same
+    /// as a photo, and a stale one would leave a header of flat colour where a picture should be.
+    /// `nil` means the poster has not looked yet and counts as yes, so nothing flips in the ordinary
+    /// case. Groups with no photo at all keep the round avatar and its camera badge as they were.
     private var useModernHeader: Bool {
         (ProfileLayoutStyle(rawValue: profileLayout) ?? .modern) == .modern
             && conv?.avatarUrl?.isEmpty == false
+            && posterPhotoOK != false
     }
 
     var body: some View {
@@ -204,6 +207,8 @@ struct GroupInfoView: View {
             scrollSpace: "groupScroll",
             onPhotoRect: { posterRect = $0 },
             onTap: { showGroupPhoto = true },
+            // Nothing behind the url → fall back to the circle rather than show a slab of colour.
+            onPhotoResolved: { posterPhotoOK = $0 },
             photoHidden: showGroupPhoto,
             // This page is a List, and a List clips its rows. Running the photo up under the bars
             // the way a person's profile does would have it sliced off at the row's top edge, so
