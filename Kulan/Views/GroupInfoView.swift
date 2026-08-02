@@ -32,6 +32,9 @@ struct GroupInfoView: View {
     @State private var joinReqs: [JoinRequest] = []
     @State private var reqListener: ListenerRegistration?
     @State private var confirmDelete = false
+    @State private var showGroupPhoto = false     // tap the poster → the same morph a person's photo uses
+    @State private var posterRect: CGRect = .zero // poster photo's global square — the morph's start/end
+    @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
 
@@ -43,6 +46,14 @@ struct GroupInfoView: View {
     // An admin with the matching right can; members can too when the group's permission toggle is on.
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
+
+    /// Same rule as a person's profile: the poster needs a picture, so a group with no photo keeps
+    /// the round avatar and its camera badge exactly as they were. Plenty of groups have no photo,
+    /// which is why this matters more here than it does on a person.
+    private var useModernHeader: Bool {
+        (ProfileLayoutStyle(rawValue: profileLayout) ?? .modern) == .modern
+            && conv?.avatarUrl?.isEmpty == false
+    }
 
     var body: some View {
         Group {   // pushed from the chat header → uses the parent nav bar (no nested stack)
@@ -97,9 +108,22 @@ struct GroupInfoView: View {
             membersSection
             leaveSection
         }
+        // Named so the poster can read its own offset and stretch on a rubber-band pull.
+        .coordinateSpace(name: "groupScroll")
         .navigationTitle("Group Info")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
+        // Tap the poster → the same in-place morph a person's photo uses: it grows out of the header
+        // and the drag-down flies back into it. An overlay, not a cover, so the page stays behind.
+        .overlay {
+            if showGroupPhoto {
+                ProfilePhotoViewer(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl ?? "",
+                                   sourceFrame: posterRect, poster: true,
+                                   isPresented: $showGroupPhoto)
+                    .ignoresSafeArea()
+            }
+        }
+        .navigationBarBackButtonHidden(showGroupPhoto)
         .onAppear {
             guard reqListener == nil else { return }
             reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }
@@ -159,7 +183,83 @@ struct GroupInfoView: View {
         .fullScreenCover(isPresented: $showCall) { GroupCallView() }
     }
 
-    private var headerSection: some View {
+    @ViewBuilder private var headerSection: some View {
+        if useModernHeader {
+            Section {
+                groupPoster
+                    // Edge to edge: the row's own insets would frame the photo like a card.
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+        } else {
+            classicHeaderSection
+        }
+    }
+
+    private var groupPoster: some View {
+        ProfilePosterHeader(
+            name: conv?.title ?? "Group",
+            photoUrl: conv?.avatarUrl,
+            scrollSpace: "groupScroll",
+            onPhotoRect: { posterRect = $0 },
+            onTap: { showGroupPhoto = true },
+            photoHidden: showGroupPhoto,
+            // This page is a List, and a List clips its rows. Running the photo up under the bars
+            // the way a person's profile does would have it sliced off at the row's top edge, so
+            // here it starts below them. Everything else — the square, the wash, the join into the
+            // page — is the same header.
+            bleedUnderBars: false,
+            edgeBleed: 0,
+            caption: { groupCaption($0) },
+            actions: { groupGlassActions }
+        )
+    }
+
+    /// Name, member count and description, over the photo. Same content the round header showed,
+    /// including the admin's "add a description" prompt — nothing moved into a menu.
+    private func groupCaption(_ text: Color) -> some View {
+        VStack(spacing: 3) {
+            Text(conv?.title ?? "Group").font(.title.weight(.bold)).foregroundStyle(text)
+                .lineLimit(2).multilineTextAlignment(.center)
+            Text(conv?.memberCountLabel ?? " ").font(.subheadline).foregroundStyle(text.opacity(0.82))
+                .frame(minHeight: 20)
+            if let d = conv?.groupDescription, !d.isEmpty {
+                Text(d).font(.footnote).foregroundStyle(text.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 2)
+                    .onTapGesture { if canEditInfo { descText = d; showDescEdit = true } }
+            } else if canEditInfo {
+                Button("Add group description…") { descText = ""; showDescEdit = true }
+                    .font(.footnote).foregroundStyle(text.opacity(0.82))
+                    .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The group's three actions as circles, plus the photo picker for anyone allowed to change it.
+    /// The camera used to be a badge on the corner of the round avatar; a poster has no corner to
+    /// hang it on, so it becomes a peer of the others rather than a new place to hunt for.
+    private var groupGlassActions: some View {
+        HStack(spacing: 0) {
+            Button { startCall(video: false) } label: { PosterActionIcon(icon: "phone.fill") }.tint(.primary)
+            Button { startCall(video: true) } label: { PosterActionIcon(icon: "video.fill") }.tint(.primary)
+            Button { showMute = true } label: { PosterActionIcon(icon: "ic_bell_off") }.tint(.primary)
+            if canEditInfo {
+                PhotosPicker(selection: $avatarItem, matching: .images) {
+                    ZStack {
+                        PosterActionIcon(icon: "camera.fill").opacity(uploadingAvatar ? 0.35 : 1)
+                        if uploadingAvatar { ProgressView() }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(uploadingAvatar)
+            }
+        }
+    }
+
+    private var classicHeaderSection: some View {
         Section {
             VStack(spacing: 10) {
                 if canEditInfo {
