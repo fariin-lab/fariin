@@ -70,7 +70,25 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            Five fixes from your photos of the last build.
+            Seven fixes from your reports on the last build.
+
+            Double tap a GIF to react. It never worked, because GIFs were grouped with photos and videos, which give up double tap so they open fast. A GIF opens nothing, so it had nothing to give up.
+
+            You can react to a shared location now. Contact cards and polls too, which had the same fault and nobody had hit it yet.
+
+            The chat list row stays highlighted while the chat is open, and fades when you come back. Still no arrow. Read out of Signal's own code.
+
+            A profile no longer shows the big header for a second and then swap to the circle. It now knows before it draws anything.
+
+            The All Media tabs are Apple's own control again, floating over the photos so the grid scrolls under them. That is what makes the glass real rather than a flat capsule.
+
+            The Avatar and Poster tabs are gone from the photo picker. There was only ever one crop.
+
+            Save works after you change your profile photo.
+
+            The composer sits 36pt from the sides and 36pt from the bottom of the screen.
+
+            From the build before:
 
             Tapping a video in a chat opens it. Before, only the little play circle worked and the rest of the video did nothing.
 
@@ -110,6 +128,6 @@ jobs:
 
             If you prefer the old look, Settings, Privacy and Security, Profile Layout, Classic Circle Profile. Anyone with no photo at all keeps the old circle either way.
 
-            PLEASE TRY: the profiles that came up as a block of colour before, from Calls and from a blocked person. Then a profile of someone with a photo, in light mode AND dark mode, and tell me whether you can see a line where the photo ends. Then All Media, tapping every tab and swiping between them, and check the selected tab never disappears. Then someone with a story, to see the small round previews at the top. Then a very bright photo, where the name is supposed to turn dark on its own.
+            PLEASE TRY FIRST: All Media, tapping every tab and swiping between them, and check the selected tab never disappears. Then the profiles that came up as a block of colour before, from Calls and from a blocked person. Then a profile of someone with a photo, in light mode AND dark mode, and tell me whether you can see a line where the photo ends. Then All Media, tapping every tab and swiping between them, and check the selected tab never disappears. Then someone with a story, to see the small round previews at the top. Then a very bright photo, where the name is supposed to turn dark on its own.
 
         run: fastlane beta
