@@ -112,6 +112,10 @@ final class ThreadRepository {
     // saw, so we only rebuild a message when its one mutable field actually changes.
     private var byId: [String: Message] = [:]
     private var rawReactions: [String: String] = [:]   // id -> change signature (reactions + text cipher + edited)
+    // Ids the user has just deleted for everyone, whose server write has not come back yet. Applied as
+    // an overlay in rebuild() so the bubble reads as deleted immediately; cleared the moment the real
+    // tombstone (or the message's removal) arrives. See markDeletedLocally.
+    private var locallyDeleted: Set<String> = []
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private(set) var didInitialLoad = false
@@ -203,6 +207,31 @@ final class ThreadRepository {
     // "Delete for me" — hide a single message locally (the doc stays for the other person). Deleting
     // "for everyone" removes the Firestore doc instead (ChatService.deleteMessage).
     func hideForMe(_ id: String) { HiddenMessages.hide(id); refreshItems() }
+
+    /// Optimistic "Delete for Everyone": the bubble becomes a tombstone HERE, the moment the user
+    /// taps, instead of after a doc read, a write and the listener echo — a full network round trip
+    /// with nothing moving on screen, which read as the delete not working.
+    ///
+    /// This is an OVERLAY, not an edit: `byId` keeps the real message and `rebuild` tombstones it on
+    /// the way out. That matters because the delete is not instant on the wire. Editing `byId`
+    /// directly meant any unrelated snapshot arriving in that one-second gap (the other person sends
+    /// something) would rebuild this message from a doc the server has not stripped yet and flash the
+    /// photo back before the write landed. An overlay cannot be undone by a snapshot.
+    ///
+    /// Returns false when there is nothing to do, so the caller knows there is nothing to undo.
+    @discardableResult
+    func markDeletedLocally(_ id: String) -> Bool {
+        guard let m = byId[id], !m.deleted, !locallyDeleted.contains(id) else { return false }
+        locallyDeleted.insert(id)
+        rebuild()
+        return true
+    }
+
+    /// The server refused the delete: drop the overlay and the real message is back, untouched.
+    func restoreAfterFailedDelete(_ id: String) {
+        guard locallyDeleted.remove(id) != nil else { return }
+        rebuild()
+    }
     #if DEBUG
     func addDemoMessage(_ text: String, from authorId: String) {
         messages.append(Message(demoId: UUID().uuidString, from: authorId, text, Date()))
@@ -498,6 +527,13 @@ final class ThreadRepository {
                 byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
             }
         }
+        // The optimistic delete overlay has done its job once the real thing is in hand: the doc now
+        // carries `deleted`, or the message is not here at all (hard-delete fallback, or paged out of
+        // the window, where the overlay is inert anyway). Firestore applies our own write locally
+        // before it reaches the server, so this usually clears on the very next snapshot.
+        if !locallyDeleted.isEmpty {
+            locallyDeleted = locallyDeleted.filter { byId[$0]?.deleted == false }
+        }
         if oldestDoc == nil { oldestDoc = docs.last }
         if !didInitialLoad {
             didInitialLoad = true
@@ -575,6 +611,12 @@ final class ThreadRepository {
 
     private func rebuild() {
         var msgs = byId.values.filter { !hiddenByBlock($0) }
+        // Deletes the user has made but the server has not confirmed yet (see markDeletedLocally).
+        // Ids for messages that are no longer here at all cost nothing and are pruned on the next
+        // confirmed snapshot.
+        if !locallyDeleted.isEmpty {
+            msgs = msgs.map { locallyDeleted.contains($0.id) && !$0.deleted ? $0.tombstoned() : $0 }
+        }
         if disappearSeconds > 0 {   // hide messages past the disappearing timer
             let cutoff = Date().addingTimeInterval(-Double(disappearSeconds))
             msgs = msgs.filter { $0.createdAt >= cutoff }

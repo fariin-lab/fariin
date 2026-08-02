@@ -115,6 +115,37 @@ struct Message: Identifiable, Equatable {
     /// same clientId, so the row updates in place (no delete+insert blink) on confirm.
     var rowId: String { clientId ?? id }
 
+    /// The local half of "Delete for Everyone": the same strip the server applies, applied here the
+    /// moment the user taps, so the bubble becomes a tombstone immediately instead of after a doc
+    /// read, a write and the listener echo (about a second on wifi, far worse on a weak connection,
+    /// which read as a dead button). The repository reverts to the original if the server refuses.
+    ///
+    /// Kept next to `deleted` on purpose: if the server-side strip in `ChatService.deleteMessage`
+    /// ever gains a field, it has to gain one here too, or the optimistic bubble and the confirmed
+    /// one stop matching. contactCard / locationCard / poll need no line of their own, they are
+    /// computed from `text` and `type`, which both go here.
+    func tombstoned() -> Message {
+        var m = self
+        m.deleted = true
+        m.text = ""
+        m.type = "text"
+        m.enc = nil
+        m.imageUrl = nil; m.audioUrl = nil; m.videoUrl = nil; m.fileUrl = nil
+        m.thumbUrl = nil; m.thumbEnc = nil
+        m.fileName = nil; m.fileSize = nil
+        m.duration = nil; m.waveform = []
+        m.width = nil; m.height = nil; m.blurhash = nil
+        m.album = []; m.localAlbum = []; m.localAlbumIsVideo = []
+        m.linkPreview = nil
+        m.replyTo = nil
+        m.reactions = [:]
+        m.mentions = []
+        m.viewOnce = false
+        m.forwarded = false
+        m.localImageData = nil; m.localAudioData = nil; m.localFile = false; m.localMediaURL = nil
+        return m
+    }
+
     /// A link preview that TRAVELLED WITH THE MESSAGE (Signal's model): the sender fetched it, sealed
     /// it, and the recipient renders it without ever contacting the site. All text fields arrive
     /// decrypted here; the image is an encrypted storage blob exactly like a photo's.

@@ -1050,7 +1050,9 @@ struct ThreadView: View {
         }
         .modifier(MessageActionDialogs(cid: cid, title: title, me: me,
                                        pendingDelete: $pendingDelete,
-                                       onDeleteForMe: { m in deleteForMe(m) }))
+                                       onDeleteForMe: { m in deleteForMe(m) },
+                                       onMarkDeleted: { m in repo.markDeletedLocally(m.id) },
+                                       onRestoreDeleted: { m in repo.restoreAfterFailedDelete(m.id) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
@@ -2135,10 +2137,17 @@ struct ThreadView: View {
             for id in ids {
                 guard let m = repo.items.first(where: { $0.id == id }) else { continue }
                 if everyone && m.authorId == me, m.sendState == nil {
+                    // Tombstone locally FIRST, the same as the single-message path. These run one
+                    // after another, so ten selected photos meant ten round trips with the list
+                    // sitting still; now all ten flip at once and the server catches up behind them.
+                    let undoable = await MainActor.run { repo.markDeletedLocally(id) }
                     // The single-message path was fixed to SAY when the server refuses; this one
                     // discarded the result, so a refused bulk delete left the messages in place with
                     // no alert and the selection already dismissed as if it had worked (audit).
-                    if await !ChatService.deleteMessage(cid: cid, messageId: id) { anyRefused = true }
+                    if await !ChatService.deleteMessage(cid: cid, messageId: id) {
+                        anyRefused = true
+                        if undoable { await MainActor.run { repo.restoreAfterFailedDelete(id) } }
+                    }
                 } else {
                     await MainActor.run { deleteForMe(m) }   // also cancels unsent messages properly
                 }
@@ -6144,6 +6153,10 @@ private struct MessageActionDialogs: ViewModifier {
     let me: String
     @Binding var pendingDelete: Message?
     var onDeleteForMe: (Message) -> Void = { _ in }
+    /// Show the bubble as deleted immediately. False = nothing to undo if the server then refuses.
+    var onMarkDeleted: (Message) -> Bool = { _ in false }
+    /// The server refused: take that back.
+    var onRestoreDeleted: (Message) -> Void = { _ in }
     @State private var deleteFailed = false
 
     func body(content: Content) -> some View {
@@ -6166,10 +6179,17 @@ private struct MessageActionDialogs: ViewModifier {
                     // Delete for Me cancels it properly (see ThreadView.deleteForMe).
                     if m.authorId == me, m.sendState == nil {
                         Button("Delete for Everyone", role: .destructive) {
+                            // The bubble becomes a tombstone NOW, and the server work runs behind it.
+                            // deleteMessage reads the doc before writing (it needs the Storage urls),
+                            // so waiting for it meant a whole network round trip with nothing moving
+                            // on screen — the owner read that as the delete not working at all.
+                            let undoable = onMarkDeleted(m)
                             Task {
-                                // Say so when the server refuses. Silence here is what made this read as
-                                // a dead button rather than a failed delete.
+                                // Say so when the server refuses, and put the message back. An
+                                // optimistic tombstone left standing over a message that still exists
+                                // for the other person is a worse lie than the old dead button.
                                 if await !ChatService.deleteMessage(cid: cid, messageId: m.id) {
+                                    if undoable { onRestoreDeleted(m) }
                                     deleteFailed = true
                                 }
                             }
