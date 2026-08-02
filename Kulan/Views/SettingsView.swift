@@ -908,13 +908,11 @@ struct EditProfileView: View {
     @State private var handle = ""
     @State private var about = ""
     @State private var photoItem: PhotosPickerItem?
-    @State private var uploadTask: Task<Void, Never>?
-    @State private var uploading = false
-    @State private var localPreview: UIImage?   // picked photo, shown instantly while uploading
-    /// A photo was picked or removed this visit. It is ALREADY saved — the upload starts the moment
-    /// you crop — but Save has to come alive anyway, because from where you are sitting you changed
-    /// something and the only button that says "done" is dead (owner's report).
-    @State private var photoChanged = false
+    /// A picked photo waiting for Save, and a request to remove one. NOTHING is written to the
+    /// server until Save — pressing X must genuinely undo (owner: "if i click X Button Already image
+    /// profile is going to changed without save… dont Update profile image without save").
+    @State private var pendingPhoto: UIImage?
+    @State private var pendingRemove = false
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var showEditPhoto = false        // Edit Photo menu (Choose / Remove)
@@ -932,6 +930,9 @@ struct EditProfileView: View {
     private var hasUnsavedText: Bool {
         firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
     }
+    /// Anything Save would write. The photo counts now that it is no longer applied the instant it
+    /// is cropped, which is what makes X a real cancel rather than a late goodbye.
+    private var hasUnsavedChanges: Bool { hasUnsavedText || pendingPhoto != nil || pendingRemove }
 
     var body: some View {
         NavigationStack {
@@ -944,9 +945,13 @@ struct EditProfileView: View {
                     VStack(spacing: 12) {
                         Button { showEditPhoto = true } label: {
                             ZStack {
-                                AvatarView(name: firstName, photoUrl: profile.me?.photoUrl, size: 100)
-                                if let localPreview {
-                                    Image(uiImage: localPreview).resizable().scaledToFill()
+                                // `pendingRemove` blanks the url so you see the letter you are about
+                                // to end up with, rather than the photo you just asked to delete.
+                                AvatarView(name: firstName,
+                                           photoUrl: pendingRemove ? nil : profile.me?.photoUrl,
+                                           size: 100)
+                                if let pendingPhoto {
+                                    Image(uiImage: pendingPhoto).resizable().scaledToFill()
                                         .frame(width: 100, height: 100).clipShape(Circle())
                                 }
                             }
@@ -960,7 +965,10 @@ struct EditProfileView: View {
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
-                        .disabled(uploading)
+                        // Was `.disabled(uploading)`, guarding an upload that started the moment you
+                        // cropped. Nothing uploads here any more, so there is nothing to guard: you
+                        // can pick a different photo as many times as you like before pressing Save.
+                        .disabled(saving)
                     }
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear)
@@ -1020,22 +1028,18 @@ struct EditProfileView: View {
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
                 if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .cancellationAction) {
-                        CloseXButton { if hasUnsavedText { confirmDiscard = true } else { dismiss() } }
+                        CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
                     }
                     .sharedBackgroundVisibility(.hidden)
                 } else {
                     ToolbarItem(placement: .cancellationAction) {
-                        CloseXButton { if hasUnsavedText { confirmDiscard = true } else { dismiss() } }
+                        CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
                         .fontWeight(.semibold)
-                        // Alive for a photo change too. The photo is already uploaded, so there is
-                        // nothing left to WRITE — but Save is the only thing on this screen that
-                        // says "done", and leaving it grey after you have visibly changed your
-                        // picture reads as broken. Pressing it waits for the upload and closes.
-                        .disabled(saving || !(hasUnsavedText || photoChanged))
+                        .disabled(saving || !hasUnsavedChanges)
                 }
             }
             .onAppear {
@@ -1053,7 +1057,7 @@ struct EditProfileView: View {
                 Button("Discard Changes", role: .destructive) { dismiss() }
                 Button("Keep Editing", role: .cancel) {}
             } message: {
-                Text("Your name, username or bio edits are not saved yet.")
+                Text("Your changes are not saved yet.")
             }
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }   // ignore our own reset in upload() — don't cancel a live upload
@@ -1078,9 +1082,11 @@ struct EditProfileView: View {
                                         // slow connection — with your new photo already on screen, which
                                         // is the dead button he reported twice. `save()` waits for the
                                         // upload before it closes, so there is nothing to protect here.
-                                        photoChanged = true
-                                        uploadTask?.cancel()
-                                        uploadTask = Task { await uploadCropped(cropped) }
+                                        // HELD, NOT UPLOADED. Nothing reaches the server until Save,
+                                        // so X genuinely cancels. The avatar shows it straight away,
+                                        // so it still feels immediate.
+                                        pendingPhoto = cropped
+                                        pendingRemove = false
                                     },
                                     onCancel: { cropCandidate = nil })
                     .ignoresSafeArea()
@@ -1088,49 +1094,38 @@ struct EditProfileView: View {
             .alert("Remove profile photo?", isPresented: $confirmRemovePhoto) {
                 Button("Cancel", role: .cancel) {}
                 Button("Remove", role: .destructive) {
-                    photoChanged = true   // same rule as picking one: the button wakes on the action
-                    uploadTask?.cancel()
-                    uploadTask = Task { await removePhoto() }
+                    // Also held for Save, for the same reason a picked photo is.
+                    pendingRemove = true
+                    pendingPhoto = nil
                 }
             } message: {
-                Text("Your photo will be removed and your initials will show instead.")
+                Text("Your initials will show instead. Nothing changes until you press Save.")
             }
         }
     }
 
-    // The CROPPED image (from the circular cropper) is what gets uploaded — shown instantly
-    // as a local preview, upload runs silently behind it (the seamless WhatsApp feel kept).
-    private func uploadCropped(_ image: UIImage) async {
-        guard let data = image.jpegData(compressionQuality: 0.92) else { return }
-        uploading = true; error = nil
-        do {
-            if Task.isCancelled { uploading = false; return }
-            localPreview = image
-            try await profile.uploadPhoto(data)
-            localPreview = nil
-            photoChanged = true
-        } catch {
-            localPreview = nil
-            self.error = "Photo upload failed: \(error.localizedDescription)"
+    /// Writes the held photo change. Called ONLY from `save()` — the whole point is that nothing
+    /// reaches the server before then. Returns false if it failed, so Save can stop and leave the
+    /// screen open with the error rather than closing over a photo that never landed.
+    private func applyPendingPhoto() async -> Bool {
+        if pendingRemove {
+            do { try await profile.removePhoto(); pendingRemove = false; return true }
+            catch { self.error = "Could not remove photo: \(error.localizedDescription)"; return false }
         }
-        uploading = false
-    }
-
-    private func removePhoto() async {
-        uploading = true; error = nil
-        do { try await profile.removePhoto(); photoChanged = true }
-        catch { self.error = "Could not remove photo: \(error.localizedDescription)" }
-        uploading = false
+        guard let img = pendingPhoto, let data = img.jpegData(compressionQuality: 0.92) else { return true }
+        do {
+            try await profile.uploadPhoto(data)
+            pendingPhoto = nil
+            return true
+        } catch {
+            self.error = "Photo upload failed: \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func save() async {
-        // The photo upload starts the instant you finish cropping and may still be running. Wait for
-        // it rather than closing the screen over the top of it.
-        await uploadTask?.value
-        // Photo only, nothing typed: it is already saved, so there is nothing to write and no
-        // name/username to validate. Just close, which is all the button meant here.
-        guard hasUnsavedText else { dismiss(); return }
-
+        // Validate the TEXT before writing anything at all, so a rejected username cannot leave the
+        // photo already changed. Everything this screen does is now one action.
         let n = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }
@@ -1142,7 +1137,10 @@ struct EditProfileView: View {
             if let existing = await ChatService.findByHandle(h), existing.id != AuthService.shared.uid {
                 error = "That username is taken"; saving = false; return
             }
-            try await profile.updateProfile(name: n, handle: h, about: about)
+            // The photo goes first, and a failure stops here: closing over a photo that never landed
+            // would tell you it saved when it did not.
+            guard await applyPendingPhoto() else { saving = false; return }
+            if hasUnsavedText { try await profile.updateProfile(name: n, handle: h, about: about) }
             dismiss()
         } catch {
             self.error = "Could not save: \(error.localizedDescription)"
