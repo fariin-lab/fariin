@@ -1891,7 +1891,18 @@ struct ThreadView: View {
         let m = repo.items[idx]
         // No bar on call/system rows (audit): they render no reaction badges, so a picked emoji
         // wrote server-side and was visible to NOBODY on either device.
-        guard m.sendState == nil, !iAmMuted, !m.isFeatureMarker, !m.isCall, !m.isSystem else { return nil }
+        //
+        // `isFeatureMarker` used to stand here and was far too wide. It is true for ANY message
+        // whose text starts `kulan-<name>:`, which is how a shared location, a contact card and a
+        // poll all travel — and those three draw ordinary bubbles and carry reaction badges exactly
+        // like a text message. So long-pressing a location came up with no bar at all (owner's
+        // report), and contacts and polls had the same fault waiting.
+        //
+        // What is excluded instead is the markers with nothing to react TO: the "pinned a message"
+        // notice, which is a system line wearing a text message's clothes, and a message from a
+        // newer build that this one can only draw as a placeholder.
+        guard m.sendState == nil, !iAmMuted, !m.isCall, !m.isSystem,
+              m.pinNotice == nil, !m.isUnsupportedFeature else { return nil }
         return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
     }
 
@@ -4925,7 +4936,11 @@ struct MessageBubble: View, Equatable {
     /// pager. Those bubbles must not carry a double-tap recogniser, because tap counting forces every
     /// single tap to wait and see whether a second one follows.
     private var opensOnTap: Bool {
-        message.isImage || message.isVideo || message.isAlbum || message.isGif
+        // NOT gifs. A gif bubble has no tap action at all — it plays where it sits and opens
+        // nothing — so there is no single tap for the double-tap recogniser to hold up, and the one
+        // reason to give up the shortcut does not apply to it. Listing it here cost the gesture and
+        // bought nothing, which is why double-tap to react did nothing on a gif (owner's report).
+        message.isImage || message.isVideo || message.isAlbum
     }
 
     @ViewBuilder private var reactionBadges: some View {
