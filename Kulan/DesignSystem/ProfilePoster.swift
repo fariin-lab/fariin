@@ -294,6 +294,12 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// The name rides up over the photo's bottom edge, as in the reference.
     private let nameLift: CGFloat = 44
 
+    /// Where the photo starts handing over: the TOP OF THE NAME, as a fraction of the photo's own
+    /// height. The owner drew the line there — above it the face and shoulders stay untouched, below
+    /// it the picture softens and gives way to the wash. Derived from `nameLift` rather than typed as
+    /// a fraction, so moving the caption moves this with it.
+    private var fadeStart: CGFloat { max(0, 1 - nameLift / max(photoSide, 1)) }
+
     /// The photo is as wide as the SCREEN: the content width this header was given, plus the page
     /// inset it bleeds back out over on each side.
     private var photoSide: CGFloat { width + edgeBleed * 2 }
@@ -427,10 +433,18 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         // the same colours, softened, in the same place. There is no edge to find because nothing
         // ends. The alpha fade below is now only the last few percent, handing over to the wash,
         // which is the same photo again.
-        .posterFadeBlur(startFraction: 0.5, radius: 34)
+        // STARTS AT THE TOP OF THE NAME, not at some fraction of the photo. It began halfway down
+        // and the owner drew a line where he wanted it: the face and the shoulders were being
+        // softened when the only thing that needs to blur is the strip the name sits on and what is
+        // below it. Derived from `nameLift`, the same number that places the caption, so the two
+        // cannot drift apart if either is retuned.
+        .posterFadeBlur(startFraction: fadeStart, radius: 34)
         .mask(LinearGradient(stops: [
             .init(color: .black, location: 0),
-            .init(color: .black, location: 0.88),
+            // The SAME boundary the blur starts on. Two numbers that are nearly equal read as two
+            // separate edges; one number is one edge, and the photo begins softening and handing
+            // over to the wash in the same place.
+            .init(color: .black, location: Double(fadeStart)),
             .init(color: .clear, location: 1),
         ], startPoint: .top, endPoint: .bottom))
         .scaleEffect(1 + stretch / max(photoSide, 1), anchor: .bottom)
