@@ -390,8 +390,9 @@ final class ThreadRepository {
     }
 
     // Stable change signature for the MUTABLE fields of a message doc: reactions, the text cipher
-    // (EDITS — the old reactions-only gate meant an edited message never re-rendered), and the edited
-    // flag. Reaction keys are sorted so the signature is deterministic.
+    // (EDITS — the old reactions-only gate meant an edited message never re-rendered), the edited
+    // flag, the album array, and the deleted flag + type (tombstones, see below).
+    // Reaction keys are sorted so the signature is deterministic.
     private func changeSig(_ data: [String: Any]) -> String {
         let raw = (data["reactions"] as? [String: String]) ?? [:]
         let reactions = raw.keys.sorted().map { "\($0)=\(raw[$0] ?? "")" }.joined(separator: ",")
@@ -400,8 +401,21 @@ final class ThreadRepository {
         // the deleted photo stayed on screen until relaunch (audit). Count + urls is enough to notice.
         let album = (data["album"] as? [[String: Any]]) ?? []
         let albumSig = "\(album.count):" + album.compactMap { $0["imageUrl"] as? String }.joined(separator: ",")
+        // DELETED AND TYPE, and this is what made "delete for everyone" look broken on media.
+        // A tombstone is an UPDATE, not a removal: the doc survives with deleted=true, text="",
+        // type="text" and every media field stripped. For a TEXT message the cipher goes from the
+        // user's words to empty, so the signature moved and the bubble redrew. For a photo, gif,
+        // voice note, file or sticker WITHOUT a caption, text was already empty and stayed empty,
+        // reactions and album were empty on both sides, so the signature was byte-identical before
+        // and after. buildCached then handed back the CACHED pre-delete Message and needBuild came
+        // out empty, so the new doc was never even read. The server really had deleted it; this
+        // screen simply never found out, and it survived a relaunch too because rebuild() persists
+        // `messages` into ThreadMessageCache. That is the owner's stuck forwarded gif: not the
+        // Firestore rules, not gifs, just any media message with no caption.
+        let deleted = String(data["deleted"] as? Bool ?? false)
+        let type = data["type"] as? String ?? ""
         return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
-            + "|" + reactions + "|" + albumSig
+            + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
