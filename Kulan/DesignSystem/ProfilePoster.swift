@@ -290,6 +290,10 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     var actionsTopSpacing: CGFloat = 18
     /// The colour the photo ARRIVES AT. Every page this header sits on is the grouped background.
     var fadeInto: Color = Color(uiColor: .systemGroupedBackground)
+    /// An image to draw INSTEAD of fetching one. For previewing a photo that has been cropped but
+    /// not yet saved — there is no url to load, and the whole point of the preview is to show it
+    /// before it exists anywhere.
+    var localImage: UIImage? = nil
     @ViewBuilder var caption: (Color) -> Caption
     @ViewBuilder var actions: () -> Actions
 
@@ -311,6 +315,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
          edgeBleed: CGFloat = 16,
          actionsTopSpacing: CGFloat = 18,
          fadeInto: Color = Color(uiColor: .systemGroupedBackground),
+         localImage: UIImage? = nil,
          @ViewBuilder caption: @escaping (Color) -> Caption,
          @ViewBuilder actions: @escaping () -> Actions) {
         self.name = name
@@ -325,6 +330,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.edgeBleed = edgeBleed
         self.actionsTopSpacing = actionsTopSpacing
         self.fadeInto = fadeInto
+        self.localImage = localImage
         self.caption = caption
         self.actions = actions
 
@@ -343,7 +349,10 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         // the poster opens holding the real photo rather than a colour that swaps a frame later.
         // Memory AND disk, like AvatarView: memory alone is empty on a cold launch, which left the
         // header showing its fallback colour for a frame before the photo arrived.
-        if let u = photoUrl, !u.isEmpty {
+        if let localImage {
+            // Handed the picture directly — a preview of something not saved yet. Nothing to fetch.
+            _image = State(initialValue: localImage)
+        } else if let u = photoUrl, !u.isEmpty {
             let warm = DiskImageCache.shared.smallImageSync(u)
             _image = State(initialValue: warm)
             _tone = State(initialValue: PosterTone.cached(for: u)
@@ -498,6 +507,8 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     }
 
     private func load() async {
+        // A local image IS the picture — nothing to fetch and nothing to report as missing.
+        if localImage != nil { onPhotoResolved(true); return }
         // Already holding the bitmap from the cache seed: there is a photo, and the page can be
         // told on the first frame rather than after a round trip that will not happen.
         if image != nil { onPhotoResolved(true); return }

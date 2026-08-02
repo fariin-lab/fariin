@@ -893,8 +893,110 @@ struct EditProfileView: View {
     /// is cropped, which is what makes X a real cancel rather than a late goodbye.
     private var hasUnsavedChanges: Bool { hasUnsavedText || pendingPhoto != nil || pendingRemove }
 
+    enum EditTab: String, CaseIterable, Identifiable {
+        case circle, large
+        var id: String { rawValue }
+        var label: String { self == .circle ? "Circle" : "Large" }
+    }
+    @State private var tab: EditTab = .circle
+
+    /// PREVIEW ONLY — how your profile will look to somebody else, with nothing to press.
+    ///
+    /// The same `ProfilePosterHeader` everyone else's profile draws, not a drawing of it, so what you
+    /// see here is what they get. It is handed the CROPPED image directly rather than a url, because
+    /// the whole point is to show a photo that has not been saved anywhere yet.
+    ///
+    /// The five circles are icons, not buttons — there is nobody to call from your own preview, and a
+    /// control that looks pressable and does nothing is worse than no control.
+    private var largePreview: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ProfilePosterHeader(
+                    name: previewName,
+                    photoUrl: profile.me?.posterUrl ?? profile.me?.photoUrl,
+                    scrollSpace: "editPreview",
+                    localImage: pendingRemove ? nil : (pendingPoster ?? pendingPhoto),
+                    caption: { text in
+                        VStack(spacing: 3) {
+                            Text(previewName).font(.title.weight(.bold)).foregroundStyle(text)
+                                .lineLimit(2).multilineTextAlignment(.center)
+                            Text(handle.isEmpty ? " " : "@\(handle)")
+                                .font(.subheadline).foregroundStyle(text.opacity(0.82))
+                                .frame(minHeight: 20)
+                        }
+                        .frame(maxWidth: .infinity)
+                    },
+                    actions: {
+                        HStack(spacing: 0) {
+                            PosterActionIcon(icon: "phone.fill")
+                            PosterActionIcon(icon: "video.fill")
+                            PosterActionIcon(icon: "ic_bell_off")
+                            PosterActionIcon(icon: "magnifyingglass")
+                            PosterActionIcon(icon: "ellipsis")
+                        }
+                    }
+                )
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+        }
+        .coordinateSpace(name: "editPreview")
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
+    private var previewName: String {
+        let n = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? (profile.me?.name ?? "You") : n
+    }
+
     var body: some View {
         NavigationStack {
+            // TWO TABS, ONE SCREEN. Circle is where you edit; Large is only ever a look at the
+            // result. Tabs of the same screen rather than a pushed page, so Save and X stay put and
+            // one set of pending changes feeds both — a preview on its own page would need the
+            // unsaved photo threaded into it and could drift out of step with the form.
+            Group {
+                if tab == .large { largePreview } else { editForm }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .cancellationAction) {
+                        CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .cancellationAction) {
+                        CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
+                    }
+                }
+                ToolbarItem(placement: .principal) {
+                    Picker("", selection: $tab) {
+                        ForEach(EditTab.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 190)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .fontWeight(.semibold)
+                        .disabled(saving || !hasUnsavedChanges)
+                }
+            }
+            // On the SCREEN, with the X that raises it, so it works from either tab.
+            .interactiveDismissDisabled(hasUnsavedChanges)
+            .confirmationDialog("Discard changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
+            } message: {
+                Text("Your changes are not saved yet.")
+            }
+        }
+    }
+
+    private var editForm: some View {
+        Group {
             Form {
                 // Avatar header on the plain grouped background (Contacts / Settings edit style).
                 Section {
@@ -981,26 +1083,9 @@ struct EditProfileView: View {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
             }
-            .navigationTitle("Edit Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
-                if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .cancellationAction) {
-                        CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .cancellationAction) {
-                        CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .fontWeight(.semibold)
-                        .disabled(saving || !hasUnsavedChanges)
-                }
-            }
+            // X and Save moved OUT to the screen (see `body`). They belong to the whole screen, not
+            // to the form: attached here they vanished the moment you switched to the Large tab,
+            // leaving a preview with no way to save it and no way out.
             .onAppear {
                 let parts = (profile.me?.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
                 firstName = parts.first ?? ""
@@ -1010,14 +1095,8 @@ struct EditProfileView: View {
                 origFirst = firstName; origLast = lastName
                 origHandle = handle; origAbout = about
             }
-            // A swipe-down with unsaved text edits must not silently discard them either.
-            .interactiveDismissDisabled(hasUnsavedText)
-            .confirmationDialog("Discard changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
-                Button("Discard Changes", role: .destructive) { dismiss() }
-                Button("Keep Editing", role: .cancel) {}
-            } message: {
-                Text("Your changes are not saved yet.")
-            }
+            // The discard prompt moved OUT to the screen with the X that raises it — left here it
+            // did not exist on the Large tab, so X would set the flag and nothing would appear.
             .onChange(of: photoItem) { _, item in
                 guard let item else { return }   // ignore our own reset in upload() — don't cancel a live upload
                 // Picking a photo now opens a CIRCULAR move-and-scale cropper first, so you
