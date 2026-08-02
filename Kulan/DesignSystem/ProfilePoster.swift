@@ -204,7 +204,9 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         let win = UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }
             .max(by: { $0.bounds.width < $1.bounds.width })
-        _width = State(initialValue: win?.bounds.width ?? 393)
+        // `width` is the CONTENT width this header is handed, which is the screen less the page's
+        // inset on both sides — `photoSide` adds the bleed back to reach the screen edges.
+        _width = State(initialValue: (win?.bounds.width ?? 393) - edgeBleed * 2)
         _contentTop = State(initialValue: bleedUnderBars ? (win?.safeAreaInsets.top ?? 59) + 44 : 0)
 
         // The avatar for this person is almost always already decoded (chat list, chat header), so
@@ -220,7 +222,9 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// The name rides up over the photo's bottom edge, as in the reference.
     private let nameLift: CGFloat = 44
 
-    private var photoSide: CGFloat { width }
+    /// The photo is as wide as the SCREEN: the content width this header was given, plus the page
+    /// inset it bleeds back out over on each side.
+    private var photoSide: CGFloat { width + edgeBleed * 2 }
 
     /// White on a dark photo, near-black on a bright one. Not a fixed colour, and not a box.
     private var onPhotoText: Color {
@@ -232,18 +236,19 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             photoSpacer
             caption(onPhotoText)
                 .padding(.top, -nameLift)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 8)
                 // A shadow, never a plate: it lifts the text off a busy photo without putting a
                 // shape behind it, and it costs nothing on a photo that is already dark.
                 .shadow(color: .black.opacity(tone?.namePrefersDarkText == true ? 0 : 0.35), radius: 8, y: 1)
             actions()
                 .padding(.top, 18)
-                .padding(.horizontal, 16)
         }
         .padding(.bottom, 6)
-        // Full bleed: the page insets its content, and a header that stopped at that inset would
-        // read as a card rather than as the top of the screen.
-        .padding(.horizontal, -edgeBleed)
+        // THE BLEED LIVES ON THE ARTWORK, NEVER ON THIS FRAME. Widening the header itself widens
+        // the page's VStack — a stack grows to fit its widest child — and the page's own 16pt inset
+        // then pushes everything sideways: a strip of empty page down one edge and the photo running
+        // off the other. A background does not change the size of what it sits behind, which is the
+        // only reason this can reach both screen edges without moving anything.
         .background(alignment: .top) { layers }
         .task(id: photoUrl) { await load() }
     }
@@ -269,8 +274,10 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                 // once: re-reading it while scrolling would drag the photo along with the finger
                 // instead of letting it scroll away.
                 if bleedUnderBars, !topLocked, r.minY > 0 { contentTop = r.minY; topLocked = true }
-                // The photo's full square in global coords — its bottom edge is this box's bottom.
-                onPhotoRect(CGRect(x: r.minX, y: r.maxY - r.width, width: r.width, height: r.width))
+                // The photo's full square in global coords — wider than this box by the bleed on
+                // each side, and its bottom edge is this box's bottom.
+                onPhotoRect(CGRect(x: r.minX - edgeBleed, y: r.maxY - photoSide,
+                                   width: photoSide, height: photoSide))
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(scrollSpace)).minY } action: { v in
                 stretch = max(0, v)   // positive only while the scroll rubber-bands
@@ -293,9 +300,12 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                 washLayer(total: total)
                 sharpLayer
             }
-            .frame(width: width, height: total, alignment: .top)
+            .frame(width: photoSide, height: total, alignment: .top)
             .offset(y: -contentTop)
         }
+        // Out over the page's inset to both screen edges. Safe here and nowhere else: this is
+        // inside a background, so it cannot change the size of the header or of the page.
+        .padding(.horizontal, -edgeBleed)
         .allowsHitTesting(false)   // the spacer owns the tap; the artwork must never swallow one
     }
 
@@ -310,7 +320,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                                startPoint: .topLeading, endPoint: .bottomTrailing)
             }
         }
-        .frame(width: width, height: total)
+        .frame(width: photoSide, height: total)
         .overlay(scheme == .dark ? Color.black.opacity(0.30) : Color.white.opacity(0.34))
         // Solid everywhere the photo is, then gone by the bottom of the header.
         .mask(LinearGradient(stops: [
@@ -333,7 +343,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                                startPoint: .topLeading, endPoint: .bottomTrailing)
             }
         }
-        .frame(width: width, height: photoSide)
+        .frame(width: photoSide, height: photoSide)
         .clipped()
         .mask(LinearGradient(stops: [
             .init(color: .black, location: 0),

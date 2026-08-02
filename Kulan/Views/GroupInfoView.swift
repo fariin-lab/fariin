@@ -290,33 +290,14 @@ struct GroupInfoView: View {
                     Button("Add group description…") { descText = ""; showDescEdit = true }
                         .font(.footnote)
                 }
-                // Same clean action row as the user profile (icon-in-pill + caption below).
-                HStack(spacing: 10) {
-                    groupAction("video.fill", "Video") { startCall(video: true) }
-                    groupAction("phone.fill", "Voice") { startCall(video: false) }
-                    groupAction("bell.slash.fill", "Mute") { showMute = true }
-                }
-                .padding(.top, 8)
+                // The SAME row the poster shows, for the same reason a person's no-photo profile
+                // uses it: labelled pills here and glass circles there is two designs in one app.
+                groupGlassActions
+                    .padding(.top, 8)
             }
             .frame(maxWidth: .infinity)
             .listRowBackground(Color.clear)
         }
-    }
-
-    // Matches ContactInfoView.tileLabel — icon in a pill, caption below, neutral color.
-    private func groupAction(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                Image(systemName: icon)
-                    .font(.system(size: 22))
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                Text(label).font(.caption).foregroundStyle(.primary)
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     private func startCall(video: Bool) {

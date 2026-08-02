@@ -181,7 +181,10 @@ struct ContactInfoView: View {
             posterHeader
         } else {
             hero
-            quickActions
+            // The SAME row the poster shows. Someone with no photo keeps the round avatar above it,
+            // but there is no reason their actions should be labelled pills while everyone else's
+            // are glass circles — that is two designs in one app for no reason (owner's screenshot).
+            glassActions
         }
         if source == .calls, lastCall != nil { callLogCard }
         notesCard.padding(.top, 8)   // between the tiles and the settings card (owner's screenshot)
@@ -960,10 +963,12 @@ struct ContactInfoView: View {
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
 
-    /// The same five actions the tiles offer, as icon-only circles. Order follows the reference:
-    /// voice, video, mute, search, more. Every rule the tiles enforce is enforced here too — a
-    /// blocked person cannot be called, your own profile cannot call itself, and Search only exists
-    /// where there is a chat to search.
+    /// The five actions as icon-only glass circles, on BOTH headers — the labelled pills they
+    /// replaced are gone, so there is one row to keep right instead of two that drift. Order follows
+    /// the reference: voice, video, mute, search, more.
+    ///
+    /// Every rule the pills enforced is enforced here: a blocked person cannot be called, your own
+    /// profile cannot call itself, and Search only appears where there is a chat to search.
     private var glassActions: some View {
         HStack(spacing: 0) {
             if source == .calls {
@@ -991,42 +996,6 @@ struct ContactInfoView: View {
         }
     }
 
-    // Context-aware row. From Calls: Message (open the chat) leads. From a chat: Search
-    // trails (pops back and opens the in-chat search bar). Video and Voice call live.
-    private var quickActions: some View {
-        HStack(spacing: 12) {
-            if source == .calls {
-                actionTile("message", "message.fill") { openChat = true }
-            }
-            // Your OWN profile: no call-yourself buttons, and NO message-self yet (opening a self-chat crashed —
-            // that's the upcoming "My Space" feature, built separately). Friends keep video/voice.
-            // `!blocked` (audit): tapping Block then the voice tile one inch above it still rang the
-            // blocked person — the tiles only checked THEIR privacy, never my own block.
-            if !isSelf && canCallThem && !blocked {
-                actionTile("video", "video.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) }
-                actionTile("voice", "phone.fill") { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) }
-            }
-            // Native menu (pops up) instead of a custom action sheet. When ALREADY muted, the menu
-            // is just "Muted until <time>" + Unmute — the durations only appear when the chat is unmuted.
-            // NOT on your own profile (audit): its "me_me" cid has no conversation, so picking a
-            // duration wrote a mutedBy map into a phantom server doc.
-            if !isSelf {
-                Menu { muteMenuItems } label: {
-                    tileLabel(muted ? "unmute" : "mute", muted ? "ic_bell" : "ic_bell_off")
-                }
-                .tint(.primary)
-            }
-            // Only a CHAT-opened profile has the search bar to pop back to — from a story (or your
-            // own profile) this tile was a dead button wired to the default no-op (audit).
-            if source == .chat && !isSelf {
-                actionTile("search", "magnifyingglass") { onSearch() }
-            }
-            // "More" tile (…): the menu that used to sit in the nav bar.
-            if !isSelf {
-                Menu { moreMenuItems } label: { tileLabel("more", "ellipsis") }.tint(.primary)
-            }
-        }
-    }
 
 
     // Shareable contact link (opens/starts a chat with this user in Kulan).
@@ -1075,28 +1044,6 @@ struct ContactInfoView: View {
             }
         }
     }
-
-    private func actionTile(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) { tileLabel(title, icon) }.tint(.primary)
-    }
-
-    private func tileLabel(_ title: String, _ icon: String) -> some View {
-        VStack(spacing: 7) {
-            Group {
-                if icon.hasPrefix("ic_") {
-                    Image(icon).renderingMode(.template).resizable().scaledToFit().frame(width: 24, height: 24)
-                } else {
-                    Image(systemName: icon).font(.system(size: 22))
-                }
-            }
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(cardColor, in: Capsule())   // pill tile, icon only
-            Text(title).font(.caption).foregroundStyle(.primary)   // label below the tile
-        }
-    }
-
 
     private var mediaCard: some View {
         VStack(alignment: .leading, spacing: 10) {
