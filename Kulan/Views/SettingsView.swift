@@ -51,6 +51,8 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var showEdit = false
     @State private var showQR = false
+    @State private var showOwnPhoto = false      // tapping the poster opens the photo, not Edit
+    @State private var posterRect: CGRect = .zero
 
     private var inviteText: String {
         let h = profile.me?.handle ?? ""
@@ -61,8 +63,18 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    Button { showEdit = true } label: { profileHeader }
-                        .buttonStyle(.plain)
+                    if PosterPhoto.readyNow(profile.me?.photoUrl) {
+                        // The SAME header a profile draws, minus the actions — there is nobody to
+                        // call, video or mute here (owner: "dont add button like call video mute").
+                        // Tapping opens the photo, exactly as it does on a profile; Edit is in the
+                        // nav bar and stays there.
+                        selfPoster
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                    } else {
+                        Button { showEdit = true } label: { profileHeader }
+                            .buttonStyle(.plain)
+                    }
                 }
                 .listRowBackground(Color.clear)
 
@@ -106,6 +118,17 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            // Tapping your own poster opens the photo, the same in-place morph a profile uses. An
+            // overlay, not a cover, so the page stays behind it and the drag-down can melt it away.
+            .overlay {
+                if showOwnPhoto {
+                    ProfilePhotoViewer(name: profile.me?.name ?? "You",
+                                       photoUrl: profile.me?.photoUrl ?? "",
+                                       sourceFrame: posterRect, poster: true,
+                                       isPresented: $showOwnPhoto)
+                        .ignoresSafeArea()
+                }
+            }
             .listSectionSpacing(20)   // Signal's steady card rhythm — .compact left the gaps uneven
             .contentMargins(.top, 4, for: .scrollContent)   // remove the big gap above the avatar
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
@@ -123,6 +146,37 @@ struct SettingsView: View {
             .sheet(isPresented: $showEdit) { EditProfileView() }
             .sheet(isPresented: $showQR) { MyQRView() }
         }
+    }
+
+    /// Your own poster, with an empty action row. Same component and therefore the same photo shape,
+    /// the same blur and the same behaviour as everybody else's profile — if it were rebuilt here it
+    /// would drift the first time either was retuned.
+    ///
+    /// `bleedUnderBars: false` and `edgeBleed: 0` because Settings is a List, and a List clips its
+    /// rows: the photo would be sliced off at the row's top edge otherwise. Same reason as the group
+    /// screen.
+    private var selfPoster: some View {
+        ProfilePosterHeader(
+            name: profile.me?.name ?? "You",
+            photoUrl: profile.me?.photoUrl,
+            scrollSpace: "settingsScroll",
+            onPhotoRect: { posterRect = $0 },
+            onTap: { showOwnPhoto = true },
+            bleedUnderBars: false,
+            edgeBleed: 0,
+            actionsTopSpacing: 0,
+            caption: { text in
+                VStack(spacing: 3) {
+                    Text(profile.me?.name ?? "You").font(.title.weight(.bold)).foregroundStyle(text)
+                        .lineLimit(2).multilineTextAlignment(.center)
+                    Text((profile.me?.handle).map { $0.isEmpty ? " " : "@\($0)" } ?? " ")
+                        .font(.subheadline).foregroundStyle(text.opacity(0.82))
+                        .frame(minHeight: 20)
+                }
+                .frame(maxWidth: .infinity)
+            },
+            actions: { EmptyView() }
+        )
     }
 
     // Centered profile header (mockup style): big avatar, name, @handle. Tap to edit.

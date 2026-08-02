@@ -254,6 +254,10 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// How much page inset to undo so the photo reaches both screen edges. A ScrollView page insets
     /// its content by 16; a List row with `listRowInsets(EdgeInsets())` already has none.
     var edgeBleed: CGFloat = 16
+    /// Air between the caption and the action row. ZERO when there is no action row — Settings uses
+    /// this header without call, video or mute buttons, and the gap would otherwise sit there as
+    /// unexplained empty space under the name.
+    var actionsTopSpacing: CGFloat = 18
     @ViewBuilder var caption: (Color) -> Caption
     @ViewBuilder var actions: () -> Actions
 
@@ -273,6 +277,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
          photoHidden: Bool = false,
          bleedUnderBars: Bool = true,
          edgeBleed: CGFloat = 16,
+         actionsTopSpacing: CGFloat = 18,
          @ViewBuilder caption: @escaping (Color) -> Caption,
          @ViewBuilder actions: @escaping () -> Actions) {
         self.name = name
@@ -285,6 +290,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.photoHidden = photoHidden
         self.bleedUnderBars = bleedUnderBars
         self.edgeBleed = edgeBleed
+        self.actionsTopSpacing = actionsTopSpacing
         self.caption = caption
         self.actions = actions
 
@@ -339,7 +345,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                 // shape behind it, and it costs nothing on a photo that is already dark.
                 .shadow(color: .black.opacity(tone?.namePrefersDarkText == true ? 0 : 0.35), radius: 8, y: 1)
             actions()
-                .padding(.top, 18)
+                .padding(.top, actionsTopSpacing)
         }
         .padding(.bottom, 6)
         // THE BLEED LIVES ON THE ARTWORK, NEVER ON THIS FRAME. Widening the header itself widens
