@@ -9,9 +9,14 @@ import UIKit
 /// header, in group members. Owner: "the user is never shown the circular avatar that is used
 /// throughout the app."
 ///
-/// So: frame the CIRCLE first, tick, then frame the HEADER, tick. Each stage starts the picture
-/// fresh at its own zoom, because a framing chosen for one shape is a bad starting point for the
-/// other. Two images come out and both are saved.
+/// So: frame the CIRCLE first, tick, then frame the HEADER, tick. Two images come out and both are
+/// saved.
+///
+/// ONE scroll view across both stages, not one each. It used to be rebuilt on the tick, which meant
+/// the picture you had just framed was thrown away and replaced by a fresh one at its own zoom — a
+/// hard cut, and the owner's "the animation is not looks good". The window now MORPHS from the circle
+/// to the tall rectangle while the photo underneath keeps the same point centred, zooming only as far
+/// as it must to cover the bigger window. What you framed in the circle is where the header opens.
 ///
 /// The pan and the pinch are UIScrollView's own, not gestures written by hand. This is Apple's
 /// move-and-scale, the machinery every cropper on the platform is built on, and this app has been
@@ -45,13 +50,13 @@ struct ProfilePhotoCropper: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 if let source {
+                    // NO `.id` PER STAGE. Changing it destroys the scroll view and builds another,
+                    // which is what made the tick jump: a new one opens centred at its own zoom with
+                    // no memory of what you framed. It survives the stage change now and re-derives
+                    // its zoom floor from its own bounds, so it can be resized instead of replaced.
                     MoveAndScaleView(image: source, controller: controller)
                         .frame(width: size.width, height: size.height)
                         .position(x: hole.midX, y: hole.midY)
-                        // NEW SCROLL VIEW PER STAGE. Its zoom floor and offset are computed once, for
-                        // one window size; reusing it across two different windows would leave the
-                        // second stage with the first one's maths and a photo that cannot cover it.
-                        .id(stage == .avatar ? "crop-avatar" : "crop-poster")
                 }
                 // Everything outside the window goes quiet. An even-odd fill, so the picture keeps
                 // showing through underneath instead of being hidden — you can see what you are
@@ -60,9 +65,15 @@ struct ProfilePhotoCropper: View {
                     .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
-                if stage == .poster { blurBand(in: hole) }
+                if stage == .poster {
+                    blurBand(in: hole).transition(.opacity)
+                }
                 chrome
             }
+            // ONE animation for the whole change, so the window, the dimming, the photo and the two
+            // lines of title move together. A spring rather than a curve: the window is growing into
+            // a shape, and a shape that settles reads as a thing arriving instead of a screen swap.
+            .animation(.snappy(duration: 0.42, extraBounce: 0.06), value: stage)
         }
         .task {
             // A library photo often carries an orientation flag rather than rotated pixels, and the
@@ -147,6 +158,9 @@ struct ProfilePhotoCropper: View {
                     Text(title).font(.system(size: 17, weight: .semibold))
                     Text(subtitle).font(.system(size: 12)).opacity(0.7)
                 }
+                // Crossfades the words instead of swapping them on a frame, which is the one part of
+                // the change the eye lands on while the window is still moving.
+                .contentTransition(.opacity)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 4)
                 Spacer(minLength: 8)
@@ -195,16 +209,22 @@ struct ProfilePhotoCropper: View {
     }
 }
 
-/// The dimming with a hole in it. One rounded rect whose radius carries the whole animation: at
-/// zero it is the poster's square, at half the side it IS a circle, and in between the two shapes
+/// The dimming with a hole in it. One rounded rect that carries the whole animation: at a radius of
+/// half its side it IS a circle, at zero it is the poster's rectangle, and in between the two shapes
 /// melt into each other — which is the clearest way to say "these are the same crop".
+///
+/// The RECT animates as well as the radius. Radius alone left the hole jumping to its new size and
+/// position on the first frame and only rounding down from there, so the melt never happened.
 private struct CutoutShape: Shape {
     var hole: CGRect
     var radius: CGFloat
 
-    var animatableData: CGFloat {
-        get { radius }
-        set { radius = newValue }
+    var animatableData: AnimatablePair<CGRect.AnimatableData, CGFloat> {
+        get { AnimatablePair(hole.animatableData, radius) }
+        set {
+            hole.animatableData = newValue.first
+            radius = newValue.second
+        }
     }
 
     func path(in rect: CGRect) -> Path {
@@ -287,10 +307,12 @@ private struct MoveAndScaleView: UIViewRepresentable {
     }
 }
 
-/// The scroll view configures itself the first time it has a real size.
+/// The scroll view configures itself the first time it has a real size, and RE-configures whenever
+/// that size changes — which is what the stage change is, once the view stopped being rebuilt.
 private final class CropScrollView: UIScrollView {
     let imageView: UIImageView
     private var configured = false
+    private var lastSize: CGSize = .zero
 
     init(image: UIImage) {
         imageView = UIImageView(image: image)
@@ -314,21 +336,58 @@ private final class CropScrollView: UIScrollView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let side = bounds.width
-        guard !configured, side > 0, let size = imageView.image?.size,
-              size.width > 0, size.height > 0 else { return }
-        configured = true
+        guard bounds.width > 0, bounds.height > 0,
+              let size = imageView.image?.size, size.width > 0, size.height > 0 else { return }
 
-        imageView.frame = CGRect(origin: .zero, size: size)
-        contentSize = size
-        // The photo must always COVER the window, so the smallest allowed zoom is whichever edge
-        // runs out first. Anything below that could frame empty space.
-        let fit = max(side / size.width, side / size.height)
+        // The photo must always COVER the window, so the smallest allowed zoom is whichever edge runs
+        // out first. BOTH edges: this used to measure height against the window's WIDTH, which was
+        // harmless while the crop was square and left the tall poster window short of photo the
+        // moment it became 4:5.
+        let fit = max(bounds.width / size.width, bounds.height / size.height)
+
+        if !configured {
+            configured = true
+            imageView.frame = CGRect(origin: .zero, size: size)
+            contentSize = size
+            minimumZoomScale = fit
+            maximumZoomScale = fit * 4
+            zoomScale = fit
+            // Open centred on the middle of the photo, which is where a face usually is.
+            center(on: CGPoint(x: size.width / 2, y: size.height / 2))
+            lastSize = bounds.size
+            return
+        }
+
+        // A pinch or a pan relayouts too. Only a change of WINDOW is our business.
+        guard bounds.size != lastSize else { return }
+        lastSize = bounds.size
+
+        // Keep whatever is in the middle in the middle. Read it BEFORE touching the zoom, or it is
+        // measured against the number we are about to change. This runs on every frame of the morph,
+        // so the photo tracks the growing window instead of being re-placed once at the end.
+        let held = imageCenter()
         minimumZoomScale = fit
-        maximumZoomScale = fit * 4
-        zoomScale = fit
-        // Open centred on the middle of the photo, which is where a face usually is.
-        contentOffset = CGPoint(x: (size.width * fit - side) / 2,
-                                y: (size.height * fit - side) / 2)
+        maximumZoomScale = max(fit * 4, zoomScale)
+        // Only ever zoom IN, and only as far as covering the new window demands. Snapping back to
+        // `fit` would throw away a zoom the user chose in the circle.
+        if zoomScale < fit { zoomScale = fit }
+        center(on: held)
+    }
+
+    /// The point of the PHOTO currently under the middle of the window, in the photo's own points.
+    private func imageCenter() -> CGPoint {
+        let z = max(zoomScale, 0.0001)
+        return CGPoint(x: (contentOffset.x + bounds.width / 2) / z,
+                       y: (contentOffset.y + bounds.height / 2) / z)
+    }
+
+    /// Put that point back under the middle, without letting the edge of the photo into the window.
+    private func center(on point: CGPoint) {
+        guard let size = imageView.image?.size else { return }
+        let z = zoomScale
+        let maxX = max(0, size.width * z - bounds.width)
+        let maxY = max(0, size.height * z - bounds.height)
+        contentOffset = CGPoint(x: min(max(0, point.x * z - bounds.width / 2), maxX),
+                                y: min(max(0, point.y * z - bounds.height / 2), maxY))
     }
 }
