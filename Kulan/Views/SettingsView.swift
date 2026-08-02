@@ -857,6 +857,10 @@ struct EditProfileView: View {
     @State private var uploadTask: Task<Void, Never>?
     @State private var uploading = false
     @State private var localPreview: UIImage?   // picked photo, shown instantly while uploading
+    /// A photo was picked or removed this visit. It is ALREADY saved — the upload starts the moment
+    /// you crop — but Save has to come alive anyway, because from where you are sitting you changed
+    /// something and the only button that says "done" is dead (owner's report).
+    @State private var photoChanged = false
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var showEditPhoto = false        // Edit Photo menu (Choose / Remove)
@@ -973,7 +977,11 @@ struct EditProfileView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
                         .fontWeight(.semibold)
-                        .disabled(saving || !hasUnsavedText)   // nothing to save → Save sleeps (no ghost tap)
+                        // Alive for a photo change too. The photo is already uploaded, so there is
+                        // nothing left to WRITE — but Save is the only thing on this screen that
+                        // says "done", and leaving it grey after you have visibly changed your
+                        // picture reads as broken. Pressing it waits for the upload and closes.
+                        .disabled(saving || !(hasUnsavedText || photoChanged))
                 }
             }
             .onAppear {
@@ -1039,6 +1047,7 @@ struct EditProfileView: View {
             localPreview = image
             try await profile.uploadPhoto(data)
             localPreview = nil
+            photoChanged = true
         } catch {
             localPreview = nil
             self.error = "Photo upload failed: \(error.localizedDescription)"
@@ -1048,12 +1057,19 @@ struct EditProfileView: View {
 
     private func removePhoto() async {
         uploading = true; error = nil
-        do { try await profile.removePhoto() }
+        do { try await profile.removePhoto(); photoChanged = true }
         catch { self.error = "Could not remove photo: \(error.localizedDescription)" }
         uploading = false
     }
 
     private func save() async {
+        // The photo upload starts the instant you finish cropping and may still be running. Wait for
+        // it rather than closing the screen over the top of it.
+        await uploadTask?.value
+        // Photo only, nothing typed: it is already saved, so there is nothing to write and no
+        // name/username to validate. Just close, which is all the button meant here.
+        guard hasUnsavedText else { dismiss(); return }
+
         let n = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }
