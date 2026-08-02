@@ -46,6 +46,35 @@ enum ProfileLayoutStyle: String, CaseIterable, Identifiable {
     }
 }
 
+extension View {
+    /// Progressive blur down the bottom of this view — the concept from Variablur
+    /// (github.com/daprice/Variablur), run through our own single-purpose shader.
+    ///
+    /// TWO PASSES, horizontal then vertical, because a Gaussian is separable: a true 2D blur costs
+    /// samples squared while two 1D passes cost samples doubled and land on the same picture. That is
+    /// what makes it affordable on a header that moves while you scroll.
+    ///
+    /// - Parameter startFraction: where the blur begins, as a fraction of the view's height.
+    /// - Parameter radius: the radius reached at the very bottom.
+    func posterFadeBlur(startFraction: CGFloat, radius: CGFloat, maxSamples: Int = 10) -> some View {
+        visualEffect { content, geo in
+            let startY = Float(geo.size.height * startFraction)
+            let r = Float(radius)
+            let s = Float(maxSamples)
+            let offset = CGSize(width: radius, height: radius)
+            return content
+                .layerEffect(
+                    ShaderLibrary.default.posterFadeBlur(
+                        .boundingRect, .float(startY), .float(r), .float(s), .float(0)),
+                    maxSampleOffset: offset)
+                .layerEffect(
+                    ShaderLibrary.default.posterFadeBlur(
+                        .boundingRect, .float(startY), .float(r), .float(s), .float(1)),
+                    maxSampleOffset: offset)
+        }
+    }
+}
+
 /// Is there a real photo behind this url that can be drawn on the FIRST FRAME?
 ///
 /// Asking "is the url non-empty" is a different question and answering it cost two bug reports: a
@@ -364,7 +393,11 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             }
         }
         .frame(width: photoSide, height: total)
-        .overlay(scheme == .dark ? Color.black.opacity(0.30) : Color.white.opacity(0.34))
+        // Lighter than it was (0.30/0.34). The tint is what pulls the wash toward the page colour,
+        // and it was pulling hard enough that the photo's colours were gone before the cards began —
+        // "fades into a flat white/gray background". With the sharp photo now blurring into this
+        // rather than dissolving into it, the wash can afford to keep more of the picture.
+        .overlay(scheme == .dark ? Color.black.opacity(0.22) : Color.white.opacity(0.26))
         // Solid everywhere the photo is, then gone by the bottom of the header.
         .mask(LinearGradient(stops: [
             .init(color: .black, location: 0),
@@ -388,9 +421,16 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         }
         .frame(width: photoSide, height: photoSide)
         .clipped()
+        // THE PHOTO NEVER STOPS, IT ONLY LOSES ITS DETAIL. Fading it to a colour still ends in a
+        // colour, and the eye finds the line where the picture quit — the owner's screenshot, twice.
+        // Blurring it further and further down means the bottom of the photo IS the background:
+        // the same colours, softened, in the same place. There is no edge to find because nothing
+        // ends. The alpha fade below is now only the last few percent, handing over to the wash,
+        // which is the same photo again.
+        .posterFadeBlur(startFraction: 0.5, radius: 34)
         .mask(LinearGradient(stops: [
             .init(color: .black, location: 0),
-            .init(color: .black, location: 0.62),
+            .init(color: .black, location: 0.88),
             .init(color: .clear, location: 1),
         ], startPoint: .top, endPoint: .bottom))
         .scaleEffect(1 + stretch / max(photoSide, 1), anchor: .bottom)
