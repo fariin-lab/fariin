@@ -66,11 +66,7 @@ struct ProfilePhotoCropper: View {
             HStack {
                 circleButton("xmark") { onCancel() }
                 Spacer(minLength: 8)
-                Picker("", selection: $shape) {
-                    ForEach(CropShape.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 200)
+                shapeToggle
                 Spacer(minLength: 8)
                 circleButton("checkmark") {
                     guard let cropped = controller.crop() else { onCancel(); return }
@@ -93,16 +89,59 @@ struct ProfilePhotoCropper: View {
             .max(by: { $0.top < $1.top }) ?? .zero
     }
 
-    /// Material, not Liquid Glass: glass is reserved for the five actions on the profile page
-    /// (owner's rule), and this screen is not that page.
+    /// The Avatar / Poster switch, as real Liquid Glass rather than the system segmented control,
+    /// which drew a flat dark pill with a solid white thumb and looked nothing like the rest of iOS
+    /// 26 (owner's screenshot).
+    ///
+    /// THE SELECTED PILL IS ONE VIEW THAT MOVES. It is never rebuilt inside whichever half is
+    /// chosen. A hand-built segmented bar in this app has already lost its active pill once by doing
+    /// exactly that, and it was reverted; a single capsule sliding to a fixed offset has nothing to
+    /// vanish. The offsets are arithmetic on a stated width, so there is no measurement to be late.
+    ///
+    /// The pill is a translucent fill on the glass, not a second sheet of glass on top of the first:
+    /// stacking glass on glass muddies both, and Apple's own selected segment is a lighter face on
+    /// the bar rather than another pane. Lighter, not darker as in the reference drawing — darker
+    /// disappears against the black this screen shows behind a photo.
+    private var shapeToggle: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(.white.opacity(0.22))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.30), lineWidth: 0.5))
+                .frame(width: toggleWidth / 2 - 8, height: toggleHeight - 8)
+                .offset(x: shape == .avatar ? 4 : toggleWidth / 2 + 4)
+            HStack(spacing: 0) {
+                ForEach(CropShape.allCases) { s in
+                    Text(s.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: toggleHeight)
+                        .contentShape(Rectangle())
+                        .onTapGesture { shape = s }
+                }
+            }
+        }
+        .frame(width: toggleWidth, height: toggleHeight)
+        .liquidGlass(Capsule())
+    }
+
+    private let toggleWidth: CGFloat = 210
+    private let toggleHeight: CGFloat = 44
+
+    /// Glass, matching the switch between them, so the three read as one set. This screen was
+    /// deliberately kept off glass at first — it is reserved for the five actions on the profile
+    /// page — but the owner asked for this bar to be glass, and a frosted circle beside a glass
+    /// capsule looks like a mistake.
     private func circleButton(_ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .background(.ultraThinMaterial, in: Circle())
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
     }
 
     /// Redraw with the orientation baked in, so `cgImage` and `size` finally agree.
