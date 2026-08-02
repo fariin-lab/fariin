@@ -17,8 +17,9 @@ struct ProfilePhotoCropper: View {
     var onDone: (UIImage) -> Void
     var onCancel: () -> Void
 
-    /// Poster first: it shows the whole area that actually gets saved, and the circle is a piece of
-    /// it. Checking the tighter shape second is the natural order.
+    /// The square that actually gets saved. While `Flags.profileCropShapePreview` is off there is no
+    /// switch on screen and this never changes, so the window is always the poster's square — which
+    /// is the only crop there has ever been. The circle is inscribed in it.
     @State private var shape: CropShape = .poster
     @State private var source: UIImage?
     @State private var controller = MoveAndScaleController()
@@ -66,7 +67,10 @@ struct ProfilePhotoCropper: View {
             HStack {
                 circleButton("xmark") { onCancel() }
                 Spacer(minLength: 8)
-                shapeToggle
+                // HIDDEN, not removed. With one layout for everyone there is no type of picture to
+                // choose, and the switch only ever previewed the same crop as two shapes. `shape`
+                // stays on .poster, which is the square that gets saved either way.
+                if Flags.profileCropShapePreview { shapeToggle }
                 Spacer(minLength: 8)
                 circleButton("checkmark") {
                     guard let cropped = controller.crop() else { onCancel(); return }

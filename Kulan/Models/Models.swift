@@ -15,6 +15,11 @@ enum Flags {
     /// The setting page and the classic header are both kept, wired and working — this only decides
     /// whether the door to them is on the wall. See ProfileLayoutStyle.resolved.
     static let profileLayoutChoice = false
+    /// Shows the Avatar / Poster switch while you are framing a profile photo, so you can preview the
+    /// same crop as both shapes. OFF (owner, 2026-08-02): "why user Chose Type of picture juts Hide
+    /// this… only Show new design No tabs." Nothing about the crop changes — it was always ONE square
+    /// and the circle is inscribed in it — so this only decides whether the preview is offered.
+    static let profileCropShapePreview = false
 }
 
 struct UserProfile: Identifiable, Equatable {
