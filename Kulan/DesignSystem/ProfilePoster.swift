@@ -381,7 +381,9 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
 /// story) or three (your own, which cannot call itself) is still balanced instead of bunched.
 struct PosterActionIcon: View {
     let icon: String        // an "ic_*" asset from our own set, or an SF Symbol name
-    var diameter: CGFloat = 56
+    /// 60pt, the owner's number off a device photo. The glyph is a fraction of it rather than a
+    /// second number to remember, so the circle and what is inside it can never fall out of step.
+    var diameter: CGFloat = 60
 
     var body: some View {
         Group {
