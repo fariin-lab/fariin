@@ -67,6 +67,8 @@ struct ContactInfoView: View {
     /// Live scroll position of the header, fed by HeroOffsetKey. Drives `collapse`.
     @State private var heroOffset: CGFloat = 0
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
+    @State private var posterRect: CGRect = .zero    // poster photo's global square — the modern morph's start/end
+    @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
     @State private var showAvatarChoice = false     // has BOTH a story and a photo → ask which to open
@@ -97,6 +99,24 @@ struct ContactInfoView: View {
 
     private var shownName: String { ContactNames.shared.name(for: otherUid) ?? name }
 
+    private var layoutStyle: ProfileLayoutStyle { ProfileLayoutStyle(rawValue: profileLayout) ?? .modern }
+
+    /// A poster needs a picture. Someone with no photo keeps the classic circle and its existing
+    /// empty state, rather than a header of flat colour pretending to be a portrait.
+    ///
+    /// Decided from the URL, which is known on the FIRST frame, and not from whether the bitmap has
+    /// arrived — a layout that flips a beat after opening is the page rearranging itself, which this
+    /// screen has already been reported for once.
+    private var useModernHeader: Bool {
+        layoutStyle == .modern && gatedPhotoUrl?.isEmpty == false
+    }
+
+    /// Chrome sitting on the photo: white on a dark picture, near-black on a pale one. Reads the
+    /// sampling the poster already did, so nothing is measured twice.
+    private var toolbarOnPhoto: Color {
+        (PosterTone.cached(for: gatedPhotoUrl)?.topPrefersDarkText ?? false) ? Color.black.opacity(0.88) : .white
+    }
+
     private var dark: Bool { scheme == .dark }
     // Native grouped-list card color: WHITE in light, 0x1C1C1E in dark — the exact
     // fill iOS Settings uses for its rows. It sits on `pageBackground` (grey/black) so
@@ -117,8 +137,13 @@ struct ContactInfoView: View {
             // profile stays visible behind and the drag can melt the white away.
             .overlay {
                 if showProfilePhoto {
+                    // The modern header flies out of the POSTER square and keeps the photo's own
+                    // shape when it lands; the classic one keeps the circle it has always grown out
+                    // of. Same machinery either way — only the start rect and the final shape differ.
                     ProfilePhotoViewer(name: shownName, photoUrl: gatedPhotoUrl ?? "",
-                                       sourceFrame: avatarFrame, isPresented: $showProfilePhoto)
+                                       sourceFrame: useModernHeader ? posterRect : avatarFrame,
+                                       poster: useModernHeader,
+                                       isPresented: $showProfilePhoto)
                         // THE VIEWER OWNS THE WHOLE SCREEN. Without this the overlay is the page's
                         // frame, which stops below the status bar, and the viewer's chrome was being
                         // drawn up into the safe area by ignoring it one layer further in — drawn
@@ -133,8 +158,15 @@ struct ContactInfoView: View {
     @ViewBuilder private var sections: some View {
         // The extra .padding(.top, 8) on each block below + the container's 20 = Signal's ~28pt
         // section rhythm (owner's circled side-by-side: ours sat tight and uneven against theirs).
-        hero
-        quickActions
+        if useModernHeader {
+            // One block, not two: the poster owns the name AND the round actions, because both sit
+            // on the wash it draws and neither can be positioned without knowing where the photo
+            // ends.
+            posterHeader
+        } else {
+            hero
+            quickActions
+        }
         if source == .calls, lastCall != nil { callLogCard }
         notesCard.padding(.top, 8)   // between the tiles and the settings card (owner's screenshot)
         if !isSelf { settingsCard.padding(.top, 8) }
@@ -253,17 +285,41 @@ struct ContactInfoView: View {
         // profile lands on something the app does everywhere else rather than a new invention.
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 7) {
-                    AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
-                    Text(shownName).font(.headline).lineLimit(1)
+                ZStack {
+                    // The story control, in the one strip of the photo nothing else occupies —
+                    // between Back and Edit. It hands over to the name as the header leaves, so the
+                    // middle of the bar is never empty and never holds two things at once.
+                    if useModernHeader, !showProfilePhoto, let g = publicStory, !g.stories.isEmpty {
+                        Button { storyViewerGroup = g } label: {
+                            StoryStackBadge(group: g, textColor: toolbarOnPhoto)
+                        }
+                        .buttonStyle(.plain)
+                        // Same zoom hero the classic avatar declared, moved to whatever is actually
+                        // on screen: the story grows out of these circles and the drag-down rides
+                        // back into them. The two never coexist, so the id is never claimed twice.
+                        .matchedTransitionSource(id: "profile-story", in: mediaNS)
+                        .opacity(1 - collapse)
+                        // Dead once it has faded, so a name scrolled into its place can never be
+                        // tapped into somebody's story.
+                        .allowsHitTesting(collapse < 0.4)
+                    }
+                    HStack(spacing: 7) {
+                        AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
+                        Text(shownName).font(.headline).lineLimit(1)
+                    }
+                    .opacity(collapse)
+                    // Rises the last few points rather than appearing in place, so it reads as the same
+                    // name arriving from below and not a second one fading in.
+                    .offset(y: (1 - collapse) * 7)
+                    .allowsHitTesting(false)
                 }
-                .opacity(collapse)
-                // Rises the last few points rather than appearing in place, so it reads as the same
-                // name arriving from below and not a second one fading in.
-                .offset(y: (1 - collapse) * 7)
-                .allowsHitTesting(false)
             }
         }
+        // Let the photo run under the bar while the header is open, then hand the bar its own
+        // material once the name has arrived. This changes the bar's BACKGROUND, never its
+        // visibility: toggling visibility resizes the scroll inset, which is what used to jump the
+        // whole page.
+        .toolbarBackground(useModernHeader && collapse < 0.5 ? .hidden : .automatic, for: .navigationBar)
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
@@ -820,6 +876,102 @@ struct ContactInfoView: View {
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
     }
 
+    // Native menu (pops up) instead of a custom action sheet. When ALREADY muted, the menu is just
+    // "Muted until <time>" + Unmute — the durations only appear when the chat is unmuted. NOT on
+    // your own profile (audit): its "me_me" cid has no conversation, so picking a duration wrote a
+    // mutedBy map into a phantom server doc. Shared by both headers so the two can never drift.
+    @ViewBuilder private var muteMenuItems: some View {
+        if muted {
+            Section(muteUntilLabel) {
+                Button("Unmute") { muted = false; mutedUntil = 0; Task { await ChatService.setMute(cid, until: 0) } }
+            }
+        } else {
+            Section("Mute this chat for…") {
+                Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
+                Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
+                Button("1 day") { setMuted(ChatService.muteUntil(24)) }
+                Button("1 week") { setMuted(ChatService.muteUntil(168)) }
+                Button("Always") { setMuted(ChatService.muteUntil(nil)) }
+            }
+        }
+    }
+
+    // MARK: - Modern header
+
+    private var posterHeader: some View {
+        ProfilePosterHeader(
+            name: shownName,
+            photoUrl: gatedPhotoUrl,
+            scrollSpace: "profileScroll",
+            onPhotoRect: { posterRect = $0 },
+            // The poster reports the same number the old hero published, so the nav bar's title
+            // still rides in on `collapse` with nothing else changed.
+            onScroll: { heroOffset = $0 },
+            // A tap is the PHOTO, always. The story has its own control in the toolbar now, so the
+            // "which did you mean" sheet the round avatar needed is gone from this path.
+            onTap: { showProfilePhoto = true },
+            // While the viewer is open the photo IS the viewer — hiding the header's copy keeps it
+            // one picture moving rather than two stacked on each other. The wash stays, so the page
+            // behind the viewer keeps its background.
+            photoHidden: showProfilePhoto,
+            caption: { posterCaption($0) },
+            actions: { glassActions }
+        )
+    }
+
+    /// Name, @handle and bio, sitting on the photo. Same content and the same anti-jump trick as the
+    /// classic hero: the @handle line is always reserved, so the async profile fetch fills it in
+    /// without pushing the buttons down.
+    private func posterCaption(_ text: Color) -> some View {
+        VStack(spacing: 3) {
+            Text(shownName).font(.title.weight(.bold)).foregroundStyle(text)
+                .lineLimit(2).multilineTextAlignment(.center)
+            Text(handle.isEmpty ? " " : "@\(handle)")
+                .font(.subheadline).foregroundStyle(text.opacity(0.82))
+                .frame(minHeight: 20)
+            if !gatedAbout.isEmpty {
+                Text(gatedAbout)
+                    .font(.subheadline).foregroundStyle(text.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 2)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .animation(.easeOut(duration: 0.22), value: gatedAbout)
+    }
+
+    /// The same five actions the tiles offer, as icon-only circles. Order follows the reference:
+    /// voice, video, mute, search, more. Every rule the tiles enforce is enforced here too — a
+    /// blocked person cannot be called, your own profile cannot call itself, and Search only exists
+    /// where there is a chat to search.
+    private var glassActions: some View {
+        HStack(spacing: 0) {
+            if source == .calls {
+                Button { openChat = true } label: { PosterActionIcon(icon: "message.fill") }.tint(.primary)
+            }
+            if !isSelf && canCallThem && !blocked {
+                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) } label: {
+                    PosterActionIcon(icon: "phone.fill")
+                }.tint(.primary)
+                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) } label: {
+                    PosterActionIcon(icon: "video.fill")
+                }.tint(.primary)
+            }
+            if !isSelf {
+                Menu { muteMenuItems } label: {
+                    PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off")
+                }.tint(.primary)
+            }
+            if source == .chat && !isSelf {
+                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass") }.tint(.primary)
+            }
+            if !isSelf {
+                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis") }.tint(.primary)
+            }
+        }
+    }
+
     // Context-aware row. From Calls: Message (open the chat) leads. From a chat: Search
     // trails (pops back and opens the in-chat search bar). Video and Voice call live.
     private var quickActions: some View {
@@ -840,21 +992,7 @@ struct ContactInfoView: View {
             // NOT on your own profile (audit): its "me_me" cid has no conversation, so picking a
             // duration wrote a mutedBy map into a phantom server doc.
             if !isSelf {
-                Menu {
-                    if muted {
-                        Section(muteUntilLabel) {
-                            Button("Unmute") { muted = false; mutedUntil = 0; Task { await ChatService.setMute(cid, until: 0) } }
-                        }
-                    } else {
-                        Section("Mute this chat for…") {
-                            Button("1 hour") { setMuted(ChatService.muteUntil(1)) }
-                            Button("8 hours") { setMuted(ChatService.muteUntil(8)) }
-                            Button("1 day") { setMuted(ChatService.muteUntil(24)) }
-                            Button("1 week") { setMuted(ChatService.muteUntil(168)) }
-                            Button("Always") { setMuted(ChatService.muteUntil(nil)) }
-                        }
-                    }
-                } label: {
+                Menu { muteMenuItems } label: {
                     tileLabel(muted ? "unmute" : "mute", muted ? "ic_bell" : "ic_bell_off")
                 }
                 .tint(.primary)
@@ -1097,10 +1235,30 @@ struct SharedMediaGridView: View {
 // avatar — never presented as a page/cover. While the finger holds and moves the photo (or
 // swipes down), the white theme backdrop melts away with drag distance so the profile shows
 // through behind; release far enough closes into the avatar, otherwise it springs back.
+/// One shape for both morphs: a rounded rect whose radius is animated, which at half the shorter
+/// side IS a circle. The classic viewer keeps its circle by holding the radius at w/2 the whole way;
+/// the poster holds it at zero. Nothing branches at draw time.
+private struct ViewerShape: Shape {
+    var corner: CGFloat
+
+    var animatableData: CGFloat {
+        get { corner }
+        set { corner = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(corner, min(rect.width, rect.height) / 2)
+        return Path(roundedRect: rect, cornerRadius: r, style: .circular)
+    }
+}
+
 // Chat media keeps its own always-black viewer — that's for real photos, this is a portrait.
 // Profile photos are plain URLs (not E2EE) served from the same DiskImageCache AvatarView
 // fills, so it opens instantly.
-private struct ProfilePhotoViewer: View {
+//
+// Internal rather than file-private because a group's photo opens exactly the same way, and a
+// second copy of a morph this carefully tuned is a second copy to keep in step.
+struct ProfilePhotoViewer: View {
     /// Real window safe-area insets. The photo viewer draws full-bleed (its container ignores the safe
     /// area), so SwiftUI reports zero insets inside it and chrome has to be positioned from these.
     private var winInsets: UIEdgeInsets {
@@ -1111,14 +1269,18 @@ private struct ProfilePhotoViewer: View {
 
     let name: String
     let photoUrl: String
-    let sourceFrame: CGRect          // the hero avatar, in global coords — morph start AND end
+    let sourceFrame: CGRect          // the hero avatar (or the poster square), in global coords — morph start AND end
+    /// Poster mode: grow out of the square header and land at the photo's OWN aspect ratio, square
+    /// corners throughout. Off: the round-avatar morph this viewer was built for, unchanged.
+    var poster: Bool = false
     @Binding var isPresented: Bool
     @State private var image: UIImage?
 
-    init(name: String, photoUrl: String, sourceFrame: CGRect, isPresented: Binding<Bool>) {
+    init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false, isPresented: Binding<Bool>) {
         self.name = name
         self.photoUrl = photoUrl
         self.sourceFrame = sourceFrame
+        self.poster = poster
         _isPresented = isPresented
         // The avatar this grows out of is already on screen, so its bitmap is already in memory.
         // Seeding here means the morph begins holding the photo, instead of a grey disc that swaps
@@ -1136,6 +1298,30 @@ private struct ProfilePhotoViewer: View {
         return Double(progress) * max(0, 1 - dist / 260)
     }
 
+    /// The picture's own shape. 1 until the bitmap is here, which is only ever the frame before the
+    /// morph starts — and a square start is exactly what the poster header is showing anyway.
+    private var imageAspect: CGFloat {
+        guard let image, image.size.height > 0 else { return 1 }
+        return image.size.width / image.size.height
+    }
+
+    /// The header dissolves its photo into the page over the bottom third. The viewer starts life
+    /// wearing that same fade, so the first frame is indistinguishable from what was already on
+    /// screen, and opens to the whole picture as it lifts. Without it the photo pops solid the
+    /// instant it leaves the header, which is exactly the kind of one-frame jump this screen keeps
+    /// being reported for. `Color.black` in the classic case is a mask that does nothing.
+    @ViewBuilder private var liftMask: some View {
+        if poster {
+            LinearGradient(stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 0.62 + 0.38 * progress),
+                .init(color: .clear, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        } else {
+            Color.black
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
             let origin = geo.frame(in: .global).origin
@@ -1143,8 +1329,18 @@ private struct ProfilePhotoViewer: View {
             // 48 (24pt inset each side), with no upper cap — so on a wide phone the circle keeps
             // growing instead of stopping at an arbitrary maximum, which is what our `min(…, 360)` did.
             let d = geo.size.width - 48
-            // Interpolate the circle between the avatar's frame and the screen center.
-            let size = sourceFrame.width + (d - sourceFrame.width) * progress
+            // POSTER: the full width at the picture's OWN aspect ratio, or limited by height when the
+            // picture is taller than the screen — so it lands showing everything, cropping nothing,
+            // and running off nothing. The frame's shape travels from the header's square to the
+            // photo's real one, which is why the crop opens up as it flies instead of the image
+            // stretching.
+            let targetW = poster ? min(geo.size.width, geo.size.height * imageAspect) : d
+            let targetH = poster ? targetW / imageAspect : targetW
+            // Interpolate between the header's rect and where it is going.
+            let w = sourceFrame.width  + (targetW - sourceFrame.width)  * progress
+            let h = sourceFrame.height + (targetH - sourceFrame.height) * progress
+            // Round the whole way as an avatar; square the whole way as a poster.
+            let corner = poster ? 0 : w / 2
             let srcX = sourceFrame.midX - origin.x, srcY = sourceFrame.midY - origin.y
             let x = srcX + (geo.size.width / 2 - srcX) * progress + drag.width
             let y = srcY + (geo.size.height / 2 - srcY) * progress + drag.height
@@ -1158,8 +1354,9 @@ private struct ProfilePhotoViewer: View {
                         Color(.secondarySystemFill)   // placeholder keeps the morph shape while loading
                     }
                 }
-                .frame(width: size, height: size)
-                .clipShape(Circle())   // round from first frame to last — it never becomes a page
+                .frame(width: w, height: h)
+                .clipShape(ViewerShape(corner: corner))   // one shape from first frame to last — it never becomes a page
+                .mask { liftMask }
                 .scaleEffect(zoom)
                 .position(x: x, y: y)
                 .gesture(
