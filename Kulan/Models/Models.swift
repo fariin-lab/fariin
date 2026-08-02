@@ -28,6 +28,9 @@ struct UserProfile: Identifiable, Equatable {
     var handle: String
     var about: String
     var photoUrl: String?
+    /// The TALL header framing. A separate crop of the same picture, chosen separately, because a
+    /// face centred for a full-width header is not centred for a 40pt circle. nil = never set one.
+    var posterUrl: String?
     var publicKeyB64: String?
     var privacy: [String: String]   // per-field audience: "everyone" | "contacts" | "nobody"
     /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
@@ -48,6 +51,7 @@ struct UserProfile: Identifiable, Equatable {
         self.about = data["about"] as? String ?? ""
         if let ts = data["deletionScheduledFor"] as? Timestamp { self.deletionScheduledFor = ts.dateValue() }
         self.photoUrl = data["photoUrl"] as? String
+        self.posterUrl = data["posterUrl"] as? String
         self.publicKeyB64 = data["publicKey"] as? String
         self.privacy = (data["privacy"] as? [String: String]) ?? [:]
     }
@@ -404,6 +408,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var users: [String]
     var names: [String: String]
     var photos: [String: String]
+    /// Per-member TALL header photo, mirroring `photos`. Carried on the conversation for the same
+    /// reason the avatar is: a profile has to know on its FIRST frame whether it has one to draw,
+    /// and a value fetched from the user document arrives after the page is already on screen.
+    var posters: [String: String]
     var lastMessageCipher: String
     var lastImageUrl: String?          // last message's image (when it's a photo) → list thumbnail
     var lastImageEnc: EncMeta?         // enc meta to decrypt that thumbnail
@@ -455,6 +463,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.users = data["users"] as? [String] ?? []
         self.names = data["names"] as? [String: String] ?? [:]
         self.photos = data["photos"] as? [String: String] ?? [:]
+        self.posters = data["posters"] as? [String: String] ?? [:]
         self.lastMessageCipher = data["lastMessage"] as? String ?? ""
         self.lastImageUrl = data["lastImageUrl"] as? String
         self.lastImageEnc = (data["lastImageEnc"] as? [String: Any]).flatMap(EncMeta.init(map:))
@@ -513,6 +522,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return names[other] ?? "User"
     }
     func photoUrl(for me: String) -> String? { photos[otherUid(me)] }
+    /// nil when they have never set a poster — the profile then draws the classic circle, which is
+    /// also what everyone who last set a photo before this existed will get until they set a new one.
+    func posterUrl(for me: String) -> String? { posters[otherUid(me)] }
 
     // ── Group helpers ──
     var isGroup: Bool { convType == "group" }

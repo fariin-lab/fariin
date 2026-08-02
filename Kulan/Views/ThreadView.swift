@@ -649,7 +649,10 @@ struct ThreadView: View {
             if isGroup {
                 if Flags.groupsEnabled { GroupInfoView(cid: cid) }
             } else {
-                ContactInfoView(cid: cid, name: title, photoUrl: photoUrl, onSearch: {
+                // The conversation already carries their tall crop, so the header can draw it on the
+                // first frame instead of waiting for a fetch. Absent → falls back to the avatar.
+                ContactInfoView(cid: cid, name: title, photoUrl: photoUrl,
+                                posterUrl: conversation?.posterUrl(for: me), onSearch: {
                     showContactInfo = false   // pop back to the chat…
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
                 })

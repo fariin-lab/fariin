@@ -51,8 +51,6 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var showEdit = false
     @State private var showQR = false
-    @State private var showOwnPhoto = false      // tapping the poster opens the photo, not Edit
-    @State private var posterRect: CGRect = .zero
 
     private var inviteText: String {
         let h = profile.me?.handle ?? ""
@@ -63,18 +61,16 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    if PosterPhoto.readyNow(profile.me?.photoUrl) {
-                        // The SAME header a profile draws, minus the actions — there is nobody to
-                        // call, video or mute here (owner: "dont add button like call video mute").
-                        // Tapping opens the photo, exactly as it does on a profile; Edit is in the
-                        // nav bar and stays there.
-                        selfPoster
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                    } else {
-                        Button { showEdit = true } label: { profileHeader }
-                            .buttonStyle(.plain)
-                    }
+                    // THE CIRCLE, restored on the owner's word after seeing the poster here.
+                    //
+                    // It read badly for a reason worth keeping: a List row cannot bleed, so the
+                    // poster arrived as a rounded CARD rather than as the top of the page, and it is
+                    // the only place in the app where you look at your own header directly above your
+                    // own name — so the name appeared twice, once in the photo's caption and once
+                    // under it. A profile page earns the poster because the photo IS the top of the
+                    // screen there. Settings does not.
+                    Button { showEdit = true } label: { profileHeader }
+                        .buttonStyle(.plain)
                 }
                 .listRowBackground(Color.clear)
 
@@ -118,17 +114,6 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            // Tapping your own poster opens the photo, the same in-place morph a profile uses. An
-            // overlay, not a cover, so the page stays behind it and the drag-down can melt it away.
-            .overlay {
-                if showOwnPhoto {
-                    ProfilePhotoViewer(name: profile.me?.name ?? "You",
-                                       photoUrl: profile.me?.photoUrl ?? "",
-                                       sourceFrame: posterRect, poster: true,
-                                       isPresented: $showOwnPhoto)
-                        .ignoresSafeArea()
-                }
-            }
             .listSectionSpacing(20)   // Signal's steady card rhythm — .compact left the gaps uneven
             .contentMargins(.top, 4, for: .scrollContent)   // remove the big gap above the avatar
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
@@ -146,37 +131,6 @@ struct SettingsView: View {
             .sheet(isPresented: $showEdit) { EditProfileView() }
             .sheet(isPresented: $showQR) { MyQRView() }
         }
-    }
-
-    /// Your own poster, with an empty action row. Same component and therefore the same photo shape,
-    /// the same blur and the same behaviour as everybody else's profile — if it were rebuilt here it
-    /// would drift the first time either was retuned.
-    ///
-    /// `bleedUnderBars: false` and `edgeBleed: 0` because Settings is a List, and a List clips its
-    /// rows: the photo would be sliced off at the row's top edge otherwise. Same reason as the group
-    /// screen.
-    private var selfPoster: some View {
-        ProfilePosterHeader(
-            name: profile.me?.name ?? "You",
-            photoUrl: profile.me?.photoUrl,
-            scrollSpace: "settingsScroll",
-            onPhotoRect: { posterRect = $0 },
-            onTap: { showOwnPhoto = true },
-            bleedUnderBars: false,
-            edgeBleed: 0,
-            actionsTopSpacing: 0,
-            caption: { text in
-                VStack(spacing: 3) {
-                    Text(profile.me?.name ?? "You").font(.title.weight(.bold)).foregroundStyle(text)
-                        .lineLimit(2).multilineTextAlignment(.center)
-                    Text((profile.me?.handle).map { $0.isEmpty ? " " : "@\($0)" } ?? " ")
-                        .font(.subheadline).foregroundStyle(text.opacity(0.82))
-                        .frame(minHeight: 20)
-                }
-                .frame(maxWidth: .infinity)
-            },
-            actions: { EmptyView() }
-        )
     }
 
     // Centered profile header (mockup style): big avatar, name, @handle. Tap to edit.
@@ -908,10 +862,15 @@ struct EditProfileView: View {
     @State private var handle = ""
     @State private var about = ""
     @State private var photoItem: PhotosPickerItem?
-    /// A picked photo waiting for Save, and a request to remove one. NOTHING is written to the
-    /// server until Save — pressing X must genuinely undo (owner: "if i click X Button Already image
-    /// profile is going to changed without save… dont Update profile image without save").
-    @State private var pendingPhoto: UIImage?
+    /// TWO framings of the picked photo, waiting for Save, plus a request to remove. NOTHING is
+    /// written to the server until Save — pressing X must genuinely undo (owner: "dont Update profile
+    /// image without save").
+    ///
+    /// Two, not one: the circle people see in every list and the tall one on the profile header are
+    /// framed separately, because a face centred for a full-width header is not centred for a 40pt
+    /// circle.
+    @State private var pendingPhoto: UIImage?     // the circle — every avatar in the app
+    @State private var pendingPoster: UIImage?    // the tall one — the profile header
     @State private var pendingRemove = false
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
@@ -1075,17 +1034,13 @@ struct EditProfileView: View {
                 // thing this screen has to do is let you check both before you commit. The library
                 // cropper can only show one, and its rotation dial and ratio presets are noise here.
                 ProfilePhotoCropper(image: c.image,
-                                    onDone: { cropped in
+                                    onDone: { avatar, poster in
                                         cropCandidate = nil
-                                        // THE MOMENT YOU CROP, not when the upload lands. Setting this
-                                        // on success left Save grey for the whole upload — seconds on a
-                                        // slow connection — with your new photo already on screen, which
-                                        // is the dead button he reported twice. `save()` waits for the
-                                        // upload before it closes, so there is nothing to protect here.
                                         // HELD, NOT UPLOADED. Nothing reaches the server until Save,
-                                        // so X genuinely cancels. The avatar shows it straight away,
-                                        // so it still feels immediate.
-                                        pendingPhoto = cropped
+                                        // so X genuinely cancels. The avatar below updates straight
+                                        // away, so it still feels immediate.
+                                        pendingPhoto = avatar
+                                        pendingPoster = poster
                                         pendingRemove = false
                                     },
                                     onCancel: { cropCandidate = nil })
@@ -1097,6 +1052,7 @@ struct EditProfileView: View {
                     // Also held for Save, for the same reason a picked photo is.
                     pendingRemove = true
                     pendingPhoto = nil
+                    pendingPoster = nil
                 }
             } message: {
                 Text("Your initials will show instead. Nothing changes until you press Save.")
@@ -1114,8 +1070,15 @@ struct EditProfileView: View {
         }
         guard let img = pendingPhoto, let data = img.jpegData(compressionQuality: 0.92) else { return true }
         do {
+            // The circle first, because it is the one that appears everywhere: if the poster upload
+            // fails halfway, you are left with a correct avatar rather than a correct header and a
+            // stale face in every list.
             try await profile.uploadPhoto(data)
+            if let poster = pendingPoster, let pdata = poster.jpegData(compressionQuality: 0.92) {
+                try await profile.uploadPoster(pdata)
+            }
             pendingPhoto = nil
+            pendingPoster = nil
             return true
         } catch {
             self.error = "Photo upload failed: \(error.localizedDescription)"

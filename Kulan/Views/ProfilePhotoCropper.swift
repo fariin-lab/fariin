@@ -1,58 +1,66 @@
 import SwiftUI
 import UIKit
 
-/// Setting your profile photo: move and scale it once, and check it as BOTH shapes before you
-/// commit — the round avatar the app shows in every list, and the poster header at the top of your
-/// profile.
+/// Setting your profile photo, in TWO framings of the same picture.
 ///
-/// ONE CROP, TWO PREVIEWS. The circle is inscribed in the square, so a single square crop serves
-/// both and there is nothing to keep in sync — the tabs change the mask, never the picture. That is
-/// also why the backend is untouched: what gets uploaded is still one square photo at one url.
+/// The circle and the tall header are not two views of one crop, and pretending they were is what
+/// this replaces. A face centred for a full-width header is not centred for a 40pt circle in a chat
+/// list, and the circle is what people actually see — in the chat list, on stories, in the message
+/// header, in group members. Owner: "the user is never shown the circular avatar that is used
+/// throughout the app."
+///
+/// So: frame the CIRCLE first, tick, then frame the HEADER, tick. Each stage starts the picture
+/// fresh at its own zoom, because a framing chosen for one shape is a bad starting point for the
+/// other. Two images come out and both are saved.
 ///
 /// The pan and the pinch are UIScrollView's own, not gestures written by hand. This is Apple's
-/// move-and-scale, which is the same machinery every cropper on the platform is built on, and this
-/// app has been bitten before by hand-rolled gesture code.
+/// move-and-scale, the machinery every cropper on the platform is built on, and this app has been
+/// bitten before by hand-rolled gesture code.
 struct ProfilePhotoCropper: View {
     let image: UIImage
-    var onDone: (UIImage) -> Void
+    /// (avatar, poster) — the circle for every list in the app, the tall one for the profile header.
+    var onDone: (UIImage, UIImage) -> Void
     var onCancel: () -> Void
 
-    /// The square that actually gets saved. While `Flags.profileCropShapePreview` is off there is no
-    /// switch on screen and this never changes, so the window is always the poster's square — which
-    /// is the only crop there has ever been. The circle is inscribed in it.
-    @State private var shape: CropShape = .poster
+    enum Stage { case avatar, poster }
+
+    @State private var stage: Stage = .avatar
+    @State private var avatarResult: UIImage?
     @State private var source: UIImage?
     @State private var controller = MoveAndScaleController()
 
-    enum CropShape: String, CaseIterable, Identifiable {
-        case avatar, poster
-        var id: String { rawValue }
-        var title: String { self == .avatar ? "Avatar" : "Poster" }
-    }
-
     var body: some View {
         GeometryReader { geo in
-            // The window is the full screen width and TALLER than it is wide, the exact shape the
-            // poster header draws — `PosterGeometry.aspect`, shared with it rather than repeated, so
-            // what you frame here cannot be a different shape from what lands there.
+            // AVATAR: a circle, as big as the screen allows. POSTER: full width, taller than wide,
+            // the exact shape the header draws — `PosterGeometry.aspect`, shared with it rather than
+            // repeated, so what you frame cannot be a different shape from what lands.
             let w = geo.size.width
-            let h = min(w * PosterGeometry.aspect, geo.size.height)
-            let hole = CGRect(x: 0, y: (geo.size.height - h) / 2, width: w, height: h)
+            let circle = min(w - 48, geo.size.height - 200)
+            let size = stage == .avatar
+                ? CGSize(width: circle, height: circle)
+                : CGSize(width: w, height: min(w * PosterGeometry.aspect, geo.size.height))
+            let hole = CGRect(x: (geo.size.width - size.width) / 2,
+                              y: (geo.size.height - size.height) / 2,
+                              width: size.width, height: size.height)
             ZStack {
                 Color.black.ignoresSafeArea()
                 if let source {
                     MoveAndScaleView(image: source, controller: controller)
-                        .frame(width: w, height: h)
+                        .frame(width: size.width, height: size.height)
                         .position(x: hole.midX, y: hole.midY)
+                        // NEW SCROLL VIEW PER STAGE. Its zoom floor and offset are computed once, for
+                        // one window size; reusing it across two different windows would leave the
+                        // second stage with the first one's maths and a photo that cannot cover it.
+                        .id(stage == .avatar ? "crop-avatar" : "crop-poster")
                 }
                 // Everything outside the window goes quiet. An even-odd fill, so the picture keeps
                 // showing through underneath instead of being hidden — you can see what you are
                 // cutting off.
-                CutoutShape(hole: hole, radius: shape == .avatar ? min(w, h) / 2 : 0)
+                CutoutShape(hole: hole, radius: stage == .avatar ? size.width / 2 : 0)
                     .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
-                blurBand(in: hole)
+                if stage == .poster { blurBand(in: hole) }
                 chrome
             }
         }
@@ -62,7 +70,40 @@ struct ProfilePhotoCropper: View {
             // to think about it.
             source = Self.straightened(image)
         }
-        .animation(.spring(duration: 0.32), value: shape)
+    }
+
+    private var title: String {
+        stage == .avatar ? "Avatar" : "Profile photo"
+    }
+
+    private var subtitle: String {
+        stage == .avatar
+            ? "Shown in chats, stories and groups"
+            : "Shown at the top of your profile"
+    }
+
+    /// The tick. On the avatar stage it keeps the circle and moves on; on the poster stage it hands
+    /// both images back. Nothing is uploaded here — Edit Profile holds them until Save.
+    private func advance() {
+        guard let cropped = controller.crop() else { return }
+        if stage == .avatar {
+            avatarResult = cropped
+            stage = .poster
+        } else if let avatar = avatarResult {
+            onDone(avatar, cropped)
+        }
+    }
+
+    /// X. From the poster stage it steps BACK to the circle rather than throwing the whole thing
+    /// away — you are two taps in and losing both for one wrong move is the kind of thing that makes
+    /// people stop changing their photo.
+    private func back() {
+        if stage == .poster {
+            avatarResult = nil
+            stage = .avatar
+        } else {
+            onCancel()
+        }
     }
 
     /// Shows WHICH PART OF THE PICTURE WILL BE BLURRED, before you commit to it (owner: "also User
@@ -76,7 +117,7 @@ struct ProfilePhotoCropper: View {
     /// so this is a promise the header keeps rather than a drawing that resembles it. Only on the
     /// Poster shape: the round avatar shows the middle of the crop and is never blurred.
     @ViewBuilder private func blurBand(in hole: CGRect) -> some View {
-        if shape == .poster {
+        if stage == .poster {
             let startY = hole.minY + hole.height * PosterGeometry.blurStart(width: hole.width)
             VStack(spacing: 0) {
                 Rectangle().fill(.white.opacity(0.28)).frame(height: 0.5)
@@ -97,17 +138,19 @@ struct ProfilePhotoCropper: View {
     private var chrome: some View {
         VStack {
             HStack {
-                circleButton("xmark") { onCancel() }
+                circleButton("xmark") { back() }
                 Spacer(minLength: 8)
-                // HIDDEN, not removed. With one layout for everyone there is no type of picture to
-                // choose, and the switch only ever previewed the same crop as two shapes. `shape`
-                // stays on .poster, which is the square that gets saved either way.
-                if Flags.profileCropShapePreview { shapeToggle }
-                Spacer(minLength: 8)
-                circleButton("checkmark") {
-                    guard let cropped = controller.crop() else { onCancel(); return }
-                    onDone(cropped)
+                // Says which of the two you are framing AND where it will be seen. Without the second
+                // line "Avatar" is our word for it, and the whole reason this screen has two steps is
+                // that people did not know the circle existed.
+                VStack(spacing: 1) {
+                    Text(title).font(.system(size: 17, weight: .semibold))
+                    Text(subtitle).font(.system(size: 12)).opacity(0.7)
                 }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.5), radius: 4)
+                Spacer(minLength: 8)
+                circleButton("checkmark") { advance() }
             }
             .padding(.horizontal, 16)
             // This screen is presented ignoring the safe area, so SwiftUI reports zero insets
@@ -124,45 +167,6 @@ struct ProfilePhotoCropper: View {
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
             .max(by: { $0.top < $1.top }) ?? .zero
     }
-
-    /// The Avatar / Poster switch, as real Liquid Glass rather than the system segmented control,
-    /// which drew a flat dark pill with a solid white thumb and looked nothing like the rest of iOS
-    /// 26 (owner's screenshot).
-    ///
-    /// THE SELECTED PILL IS ONE VIEW THAT MOVES. It is never rebuilt inside whichever half is
-    /// chosen. A hand-built segmented bar in this app has already lost its active pill once by doing
-    /// exactly that, and it was reverted; a single capsule sliding to a fixed offset has nothing to
-    /// vanish. The offsets are arithmetic on a stated width, so there is no measurement to be late.
-    ///
-    /// The pill is a translucent fill on the glass, not a second sheet of glass on top of the first:
-    /// stacking glass on glass muddies both, and Apple's own selected segment is a lighter face on
-    /// the bar rather than another pane. Lighter, not darker as in the reference drawing — darker
-    /// disappears against the black this screen shows behind a photo.
-    private var shapeToggle: some View {
-        ZStack(alignment: .leading) {
-            Capsule()
-                .fill(.white.opacity(0.22))
-                .overlay(Capsule().strokeBorder(.white.opacity(0.30), lineWidth: 0.5))
-                .frame(width: toggleWidth / 2 - 8, height: toggleHeight - 8)
-                .offset(x: shape == .avatar ? 4 : toggleWidth / 2 + 4)
-            HStack(spacing: 0) {
-                ForEach(CropShape.allCases) { s in
-                    Text(s.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: toggleHeight)
-                        .contentShape(Rectangle())
-                        .onTapGesture { shape = s }
-                }
-            }
-        }
-        .frame(width: toggleWidth, height: toggleHeight)
-        .liquidGlass(Capsule())
-    }
-
-    private let toggleWidth: CGFloat = 210
-    private let toggleHeight: CGFloat = 44
 
     /// Glass, matching the switch between them, so the three read as one set. This screen was
     /// deliberately kept off glass at first — it is reserved for the five actions on the profile

@@ -193,6 +193,39 @@ final class ProfileStore {
         return out.jpegData(compressionQuality: quality) ?? data
     }
 
+    /// The TALL header framing, stored beside the avatar rather than instead of it.
+    ///
+    /// Two images, because they are two different crops of one picture and the user now chooses each
+    /// separately: the circle for every list in the app, this for the profile header. One file cannot
+    /// serve both without centre-cropping one of them badly.
+    ///
+    /// Written to `users/{uid}.posterUrl` AND to each conversation's `posters` map, mirroring exactly
+    /// how the avatar is propagated. The conversation copy is what lets a profile decide on its FIRST
+    /// frame whether it has a poster to draw — reading it from the user document would arrive after
+    /// the page is on screen, which is the flicker that was already fixed once.
+    func uploadPoster(_ rawData: Data) async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let data = Self.squareJPEG(rawData)
+        let ref = Storage.storage().reference().child("profiles/\(uid)-poster.jpg")
+        let meta = StorageMetadata(); meta.contentType = "image/jpeg"
+        _ = try await ref.putDataAsync(data, metadata: meta)
+        let url = try await ref.downloadURL().absoluteString
+        if let ui = UIImage(data: data) { DiskImageCache.shared.store(ui, data: data, for: url) }
+        try await db.collection("users").document(uid).setData(["posterUrl": url], merge: true)
+
+        // Best effort, and deliberately not fatal. Group conversations field-whitelist what a
+        // non-admin may write, so a rules refusal here must not fail the whole save — the poster is
+        // already on the user document, and a profile opened without the conversation copy simply
+        // falls back to the circle rather than showing nothing.
+        if let snap = try? await db.collection("conversations")
+            .whereField("users", arrayContains: uid).getDocuments() {
+            for d in snap.documents {
+                try? await d.reference.updateData(["posters.\(uid)": url])
+            }
+        }
+        me = await fetch(uid)
+    }
+
     func uploadPhoto(_ rawData: Data) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let data = Self.squareJPEG(rawData)

@@ -24,6 +24,10 @@ struct ContactInfoView: View {
     let cid: String
     let name: String
     let photoUrl: String?
+    /// Their TALL header crop, if they have one and this entry point knows it. nil FALLS BACK to the
+    /// avatar, which the header centre-crops — so a profile opened from Calls or a story still gets a
+    /// poster, and so does everyone who set their photo before two crops existed.
+    var posterUrl: String? = nil
     var source: ProfileSource = .chat
     var isSelf: Bool = false   // your OWN profile (opened from your own story) → no call-yourself buttons
     var onSearch: () -> Void = {}   // "search" tile → pop back to the chat and open in-chat search
@@ -117,7 +121,7 @@ struct ContactInfoView: View {
     /// `PosterPhoto.readyNow` is the synchronous cache probe AvatarView already makes for these very
     /// urls. `posterPhotoOK` stays as a backstop for a cached file that turns out to be unreadable.
     private var useModernHeader: Bool {
-        layoutStyle == .modern && PosterPhoto.readyNow(gatedPhotoUrl) && posterPhotoOK != false
+        layoutStyle == .modern && PosterPhoto.readyNow(gatedPosterUrl) && posterPhotoOK != false
     }
 
     /// Chrome sitting on the photo: white on a dark picture, near-black on a pale one. Reads the
@@ -165,7 +169,10 @@ struct ContactInfoView: View {
                     // The modern header flies out of the POSTER square and keeps the photo's own
                     // shape when it lands; the classic one keeps the circle it has always grown out
                     // of. Same machinery either way — only the start rect and the final shape differ.
-                    ProfilePhotoViewer(name: shownName, photoUrl: gatedPhotoUrl ?? "",
+                    // Opens whichever image the header is showing, so the photo that flies out is the
+                    // one that was on screen rather than a different crop of it.
+                    ProfilePhotoViewer(name: shownName,
+                                       photoUrl: (useModernHeader ? gatedPosterUrl : gatedPhotoUrl) ?? "",
                                        sourceFrame: useModernHeader ? posterRect : avatarFrame,
                                        poster: useModernHeader,
                                        isPresented: $showProfilePhoto)
@@ -763,6 +770,13 @@ struct ContactInfoView: View {
     private var gatedPhotoUrl: String? {
         PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? photoUrl : nil
     }
+    /// What the HEADER draws: their tall crop when there is one, otherwise the avatar. Behind the
+    /// same privacy gate as the avatar — a poster is the same photograph, so hiding one and showing
+    /// the other would be a hole in the setting rather than a fallback.
+    private var gatedPosterUrl: String? {
+        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) else { return nil }
+        return (posterUrl?.isEmpty == false) ? posterUrl : photoUrl
+    }
     private var gatedAbout: String {
         PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) ? about : ""
     }
@@ -931,7 +945,10 @@ struct ContactInfoView: View {
     private var posterHeader: some View {
         ProfilePosterHeader(
             name: shownName,
-            photoUrl: gatedPhotoUrl,
+            // The TALL crop, falling back to the avatar. The avatar keeps its own url everywhere
+            // else on this page — the toolbar circle, the classic hero, the story lookup — because
+            // those are all the round one.
+            photoUrl: gatedPosterUrl,
             scrollSpace: "profileScroll",
             onPhotoRect: { posterRect = $0 },
             // The poster reports the same number the old hero published, so the nav bar's title
