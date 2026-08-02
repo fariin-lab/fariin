@@ -109,14 +109,44 @@ extension View {
 /// from a screen that has already drawn this person's avatar, so by the time the profile can be
 /// tapped the answer is already in hand.
 ///
-/// THE TRADE, stated: someone whose photo this device has never once loaded opens as the circle for
-/// that visit, even though they do have one. That needs a first-ever view of that person with the
-/// download still in flight, and it corrects itself the next time. A wrong answer that settles is
-/// better than a right answer that arrives after the page has been drawn.
+/// I GOT THIS TRADE WRONG ONCE, and the correction is the whole shape of this type.
+///
+/// It used to answer NO whenever the bitmap was not already cached, on the reasoning that every route
+/// into a profile comes from a screen that has just drawn that person's avatar. True — except for a
+/// photo that has only just been SET. A new picture is a new url this device has never downloaded, so
+/// the check said "no photo" and the header fell back to the circle. I called that case rare; it
+/// happens every single time anybody changes their picture, which is not rare at all (owner: "this
+/// bug only occurs after setting a new profile picture").
+///
+/// So the default is now YES, and only a url PROVEN to have nothing behind it says no. Proven, not
+/// guessed: the header reports back after trying, and the answer is remembered on disk. So a dead url
+/// costs one poster-then-circle flip the first time it is ever opened, and none after that, while a
+/// freshly set photo — the common case — is right immediately.
 enum PosterPhoto {
+    private static let missingKey = "posterPhotoMissing"
+    private static var missing = Set(UserDefaults.standard.stringArray(forKey: missingKey) ?? [])
+
     static func readyNow(_ url: String?) -> Bool {
         guard let u = url, !u.isEmpty else { return false }
-        return DiskImageCache.shared.smallImageSync(u) != nil
+        // Already in hand → certainly yes, and no flip is possible.
+        if DiskImageCache.shared.smallImageSync(u) != nil { return true }
+        // Not in hand → assume it is real. Only a url we have already watched fail says otherwise.
+        return !missing.contains(u)
+    }
+
+    /// Called by the header once it knows. Remembering the failures is what stops a dead url from
+    /// flipping the layout on every visit instead of only the first.
+    static func remember(_ url: String?, hasPhoto: Bool) {
+        guard let u = url, !u.isEmpty else { return }
+        if hasPhoto {
+            guard missing.remove(u) != nil else { return }
+        } else {
+            guard !missing.contains(u) else { return }
+            missing.insert(u)
+            // Bounded: a device that has met a lot of stale urls should not grow this forever.
+            if missing.count > 200 { missing = Set(missing.prefix(200)) }
+        }
+        UserDefaults.standard.set(Array(missing), forKey: missingKey)
     }
 }
 

@@ -110,16 +110,13 @@ struct ContactInfoView: View {
     /// A poster needs a picture. Someone with no photo keeps the classic circle and its existing
     /// empty state, rather than a header of flat colour pretending to be a portrait.
     ///
-    /// DECIDED ON THE FIRST FRAME, from a photo actually in hand — never from the url alone.
+    /// DECIDED ON THE FIRST FRAME, and a url is assumed real until proven otherwise.
     ///
-    /// Asking whether the url is non-empty is a different question, and it cost two reports. First a
-    /// removed or stale url opened as a full slab of colour. Then, once the poster was made to report
-    /// back, the same profile opened as a poster and DROPPED to the circle a moment later, which the
-    /// owner photographed: "First seceds its showing large page after sacands Its Showing circle".
-    /// Both are the same mistake — deciding late — and the answer is to decide before drawing.
-    ///
-    /// `PosterPhoto.readyNow` is the synchronous cache probe AvatarView already makes for these very
-    /// urls. `posterPhotoOK` stays as a backstop for a cached file that turns out to be unreadable.
+    /// This has been wrong in both directions. Requiring only a non-empty url meant a stale one opened
+    /// as a slab of colour. Requiring the bitmap to be CACHED fixed that but broke something far more
+    /// common: a photo that was only just set is a new url this device has never downloaded, so every
+    /// freshly changed picture fell back to the circle. See `PosterPhoto` for the rule that replaced
+    /// both — cached means yes, known-bad means no, anything else is assumed to be a real photo.
     private var useModernHeader: Bool {
         layoutStyle == .modern && PosterPhoto.readyNow(gatedPosterUrl) && posterPhotoOK != false
     }
@@ -958,7 +955,11 @@ struct ContactInfoView: View {
             // "which did you mean" sheet the round avatar needed is gone from this path.
             onTap: { showProfilePhoto = true },
             // Nothing behind the url → fall back to the circle rather than show a slab of colour.
-            onPhotoResolved: { posterPhotoOK = $0 },
+            onPhotoResolved: {
+                posterPhotoOK = $0
+                // Remember it, so a dead url costs one flip ever rather than one per visit.
+                PosterPhoto.remember(gatedPosterUrl, hasPhoto: $0)
+            },
             // While the viewer is open the photo IS the viewer — hiding the header's copy keeps it
             // one picture moving rather than two stacked on each other. The wash stays, so the page
             // behind the viewer keeps its background.

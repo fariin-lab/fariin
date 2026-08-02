@@ -48,9 +48,9 @@ struct GroupInfoView: View {
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
-    /// Same rule as a person's profile: decided on the first frame from a photo actually in hand,
-    /// never from the url alone, so the header cannot open as a poster and drop to the circle a beat
-    /// later. Groups with no photo — plenty of them — keep the round avatar and its camera badge.
+    /// Same rule as a person's profile: a url is assumed real unless this device has already watched
+    /// that exact url come back empty. Groups with no photo at all — plenty of them — keep the round
+    /// avatar and its camera badge.
     private var useModernHeader: Bool {
         ProfileLayoutStyle.resolved(profileLayout) == .modern
             && PosterPhoto.readyNow(conv?.avatarUrl)
@@ -207,7 +207,10 @@ struct GroupInfoView: View {
             onPhotoRect: { posterRect = $0 },
             onTap: { showGroupPhoto = true },
             // Nothing behind the url → fall back to the circle rather than show a slab of colour.
-            onPhotoResolved: { posterPhotoOK = $0 },
+            onPhotoResolved: {
+                posterPhotoOK = $0
+                PosterPhoto.remember(conv?.avatarUrl, hasPhoto: $0)
+            },
             photoHidden: showGroupPhoto,
             // This page is a List, and a List clips its rows. Running the photo up under the bars
             // the way a person's profile does would have it sliced off at the row's top edge, so
