@@ -70,6 +70,18 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            Three fixes from your photos of the last build.
+
+            The profile photo reaches both edges of the screen now. There was a strip of empty page down the left and the photo ran off the right.
+
+            Someone with no profile picture gets the same round glass buttons as everyone else. They still had the old ones with words underneath.
+
+            The buttons are in the order you asked for everywhere, on people and on groups: voice call, video call, mute, search, more.
+
+            And the Avatar / Poster switch when you set a photo is real glass instead of the plain grey one iOS gives you.
+
+            Everything from the last build is still here:
+
             Profiles have a new top. The person's photo now fills the whole width of the screen instead of sitting in a small circle, and their name and username sit on the photo itself.
 
             The photo does not stop at a line any more. It dissolves into the page through a soft haze made from the photo's own colours, so the top of the screen reads as one surface in both light and dark mode. The name goes dark on a pale photo and light on a dark one, worked out from the picture, so there is never a black or white box behind the text.
@@ -86,6 +98,6 @@ jobs:
 
             If you prefer the old look, Settings, Privacy and Security, Profile Layout, Classic Circle Profile. Anyone with no photo at all keeps the old circle either way.
 
-            PLEASE TRY: open a profile of someone who has a photo, in light mode and in dark mode, and tell me whether you can still see a line where the photo ends. Then pull down on it, scroll up and down, tap the photo, and set a new photo of your own.
+            PLEASE TRY: a profile of someone with a photo, in light mode AND dark mode, and tell me whether you can see a line where the photo ends. Then someone with a story, to see the small round previews at the top. Then tap the photo to open it full screen and drag down to close. Then a group. Then someone with a very bright photo, where the name is supposed to turn dark on its own.
 
         run: fastlane beta
