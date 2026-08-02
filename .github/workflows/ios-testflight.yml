@@ -70,6 +70,18 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            Setting a photo now has TWO steps, because the circle and the big header are two different crops of the same picture.
+
+            First you frame the CIRCLE — that is what shows in chats, stories, the message header and group members. Tick. Then you frame the TALL header for your profile page, with the Blur band marked. Tick. Then Save. X on the second step goes back to the circle instead of throwing both away.
+
+            Both are saved. A face centred for a full-width header is not centred for a small circle, so they are no longer forced to be the same crop.
+
+            Settings is back to the round picture. The big header did not belong there — it came out as a card rather than the top of a page, with your name showing twice.
+
+            PLEASE TRY FIRST: set a new photo and go through both steps. Check the circle looks right in the chat list AND that the header looks right on your profile. Then press X on the second step and confirm it takes you back to the circle.
+
+            From the last build:
+
             The profile photo should have no line at the bottom at all now. It used to fade to nothing and let the page show through, and a fade to nothing has a visible end — that end was the line you kept feeling. It now fades into the page's own colour instead, so the bottom of the photo IS the background and there is no edge left to find. Please tell me if you can still see it, in light and in dark.
 
             The photo is taller than the screen is wide now, and there is only ONE image. The blurred copy underneath is gone; the picture itself is the background all the way down, behind your name and behind the buttons.
