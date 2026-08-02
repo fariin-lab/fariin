@@ -3814,34 +3814,29 @@ struct ThreadView: View {
         return -(limit + (1 - 1 / (over * c / dim + 1)) * dim)
     }
 
-    /// The gap under the composer, measured to the EDGE OF THE SCREEN rather than to the safe area
-    /// (owner 2026-08-02: 24pt).
+    /// THE PLATFORM'S OWN MODEL, not a number measured to the glass (owner, build 443: "sit
+    /// naturally on the safe area, just like iMessage, rather than floating above it").
     ///
-    /// It has to be a subtraction, not a number. `safeAreaBar` already lifts the bar clear of the
-    /// home indicator, so a flat 24 would land 24 ABOVE that lift — 58pt of empty screen on a phone
-    /// with an indicator and 24pt on one without, which is two different designs from one constant.
-    /// Taking the device's own inset off first makes the gap you can actually see 24 on both.
+    /// Read out of Signal's ConversationInputToolbar, which is the closest open implementation of the
+    /// convention iMessage follows. Two things define it:
     ///
-    /// AND IT GOES NEGATIVE, deliberately. 24 is LESS than the 34pt inset an indicator phone gets,
-    /// so reaching it means giving part of that lift back — clamping at zero would quietly hand him
-    /// 34 and call it 24. The pill still ends 24pt above the glass, which clears the indicator; it is
-    /// tight, and it is the number he asked for.
+    ///   contentView.bottomAnchor.constraint(equalTo: bottomAnchor)   // the BAR's bottom, not the
+    ///                                                                // safe area's
+    ///   vMargin: 0.5 * (initialToolbarHeight - initialTextBoxHeight) // 0.5 * (56 - 40) = 8
     ///
-    /// The keyboard case keeps the 8 it has always had. Up there the bar rides the keyboard instead
-    /// of the safe area, so the inset is not in play at all and subtracting it would jam the pill
-    /// against the keys.
-    private var composerBottomGap: CGFloat {
-        if inputFocused { return 8 }
-        return 24 - bottomSafeInset
-    }
-
-    /// The window's own bottom inset. The window's, not the view's: the view's collapses when the
-    /// keyboard appears, and this has to describe the device, not the moment.
-    private var bottomSafeInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-            .max() ?? 34
-    }
+    /// So the BAR's bottom edge rests on the safe area line and the system's inset is what lifts it
+    /// clear of the home indicator; inside the bar the pill is centred, which leaves 8pt under it.
+    /// `safeAreaBar` already does the first half for us, so the whole of our side is that 8.
+    ///
+    /// THE DEVICE-SPECIFIC PART IS THAT THERE ISN'T ONE, and that is the point of doing it this way.
+    /// The previous version subtracted the device's inset to hit a fixed distance from the glass,
+    /// which meant carrying our own idea of what every iPhone needs. Here iOS supplies it: 34pt of
+    /// lift on an indicator phone, none on a Home-button one, and the 8 sits on top of whatever that
+    /// is. Nothing to keep in step with new hardware.
+    ///
+    /// The keyboard case is the same 8, and now for a reason rather than by exception: up there the
+    /// bar rides the keyboard, which is simply a different edge to rest on.
+    private var composerBottomGap: CGFloat { 8 }
 
     private var composer: some View {
         VStack(spacing: 6) {
