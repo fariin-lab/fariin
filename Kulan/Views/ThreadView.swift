@@ -1681,7 +1681,12 @@ struct ThreadView: View {
                 let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
                 // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
                 let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)"
+                // DELETED must be here for the same reason it must be in ThreadRepository.changeSig:
+                // a tombstone on uncaptioned media changes NO other field this string reads (text ""
+                // before and after, no reactions, no album), so the row never reconfigured and the
+                // photo stayed on screen until a neighbour change repainted it — which read as the
+                // delete landing on the PREVIOUS message instead of the one just picked.
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)"
             }
             sigCache.key = key
             sigCache.base = out
