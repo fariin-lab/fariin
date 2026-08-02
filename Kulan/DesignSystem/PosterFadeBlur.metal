@@ -26,6 +26,20 @@ inline half posterGaussian(half distance, half sigma) {
     return exp(-(distance * distance) / (2.0h * sigma * sigma));
 }
 
+/// Sample, but never off the edge of the layer.
+///
+/// Outside its bounds a layer is TRANSPARENT, so a plain `layer.sample()` near an edge averages real
+/// pixels with nothing and comes back part-transparent — the page shows through as a pale strip down
+/// each side, getting worse as the radius grows toward the bottom. Clamping to the last real pixel
+/// (edge addressing, the standard fix for a separable blur) means every sample is opaque, so the
+/// photo keeps reaching both edges of the screen all the way down.
+inline half4 posterSample(SwiftUI::Layer layer, float2 pos, float4 bounds) {
+    const float2 lo = float2(bounds[0], bounds[1]);
+    const float2 hi = float2(bounds[0] + max(bounds[2] - 1.0, 0.0),
+                             bounds[1] + max(bounds[3] - 1.0, 0.0));
+    return layer.sample(clamp(pos, lo, hi));
+}
+
 /// - Parameter pos: pixel position, relative to the view's bounding rect.
 /// - Parameter bounds: the view's bounding rect (x, y, width, height).
 /// - Parameter startY: where the blur begins. Above this the pixel is returned untouched.
@@ -55,14 +69,14 @@ inline half posterGaussian(half distance, half sigma) {
     const half2 axis = vertical == 0.0 ? half2(1.0h, 0.0h) : half2(0.0h, 1.0h);
 
     half weight = posterGaussian(0.0h, sigma);
-    half4 sum = layer.sample(pos) * weight;
+    half4 sum = posterSample(layer, pos, bounds) * weight;
     half total = weight;
 
     for (half d = interval; d <= r; d += interval) {
         const half w = posterGaussian(d, sigma);
         const float2 offset = float2(axis * d);
-        sum += layer.sample(pos + offset) * w;
-        sum += layer.sample(pos - offset) * w;
+        sum += posterSample(layer, pos + offset, bounds) * w;
+        sum += posterSample(layer, pos - offset, bounds) * w;
         total += w * 2.0h;
     }
 

@@ -35,7 +35,7 @@ struct MediaTabBar: View {
 
     /// Height of the capsule itself. Stated so the scroll views can reserve a matching top margin —
     /// a floating bar and the content that must clear it cannot each guess.
-    static let barHeight: CGFloat = 36
+    static let barHeight: CGFloat = 42
     /// Full vertical slot the bar occupies, including the air above and below it.
     static let slotHeight: CGFloat = barHeight + 16
 
@@ -52,12 +52,16 @@ struct MediaTabBar: View {
                     .fill(.white.opacity(0.22))
                     .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
                     .frame(width: max(0, seg - pad * 2), height: max(0, g.size.height - pad * 2))
-                    .offset(x: CGFloat(selection) * seg + pad, y: pad)
+                    // X ONLY. A leading-aligned ZStack still centres its children VERTICALLY, so the
+                    // pill already has `pad` of air above and below it — the `y: pad` that used to be
+                    // here pushed it down onto the bottom of the track and left a double gap at the
+                    // top. That lopsided pill is the "active bar position is wrong" the owner saw.
+                    .offset(x: CGFloat(selection) * seg + pad)
 
                 HStack(spacing: 0) {
                     ForEach(Array(titles.enumerated()), id: \.offset) { i, title in
                         Text(title)
-                            .font(.system(size: 13, weight: i == selection ? .semibold : .regular))
+                            .font(.system(size: 14, weight: i == selection ? .semibold : .regular))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -69,6 +73,9 @@ struct MediaTabBar: View {
                 }
             }
             .frame(width: g.size.width, height: g.size.height)
+            // Belt and braces on the pill: at the track's widest corner it clears the edge by under a
+            // point, so a rounding error is enough to make it poke out. Clipping makes that impossible.
+            .clipShape(Capsule())
             // The same call the Back button's circle makes, so the two read as one material.
             .liquidGlass(Capsule(), interactive: true)
             .animation(.snappy(duration: 0.25), value: selection)
