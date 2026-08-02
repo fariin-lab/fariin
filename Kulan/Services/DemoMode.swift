@@ -37,8 +37,16 @@ enum DemoMode {
         let kasimImg = cache("demo-kasim-s", .systemBlue, .systemPurple, "Kasim")
         let aminImg = cache("demo-amin-s", .systemTeal, .systemGreen, "Amin")
 
+        // Profile portraits. Built here so both the chat list and the story rings hand the same url
+        // to the poster header, and so the whole set exists before any row asks for it.
+        let mePhoto    = profilePhoto("me",    .systemIndigo, .systemPurple, "K")
+        let kasimPhoto = profilePhoto("kasim", .systemBlue,   .systemCyan,   "K")
+        let aminPhoto  = profilePhoto("amin",  .systemTeal,   .systemGreen,  "A")
+        let amranPhoto = profilePhoto("amran", .systemOrange, .systemPink,   "A")
+        let aishaPhoto = profilePhoto("aisha", .systemPink,   .systemRed,    "A")
+
         StoriesRepository.shared.mine = StoryGroup(
-            authorUid: me, name: "You", photoUrl: nil,
+            authorUid: me, name: "You", photoUrl: mePhoto,
             stories: [
                 Story(id: "demo-s1", authorUid: me, createdAt: now.addingTimeInterval(-3600),
                       expiresAt: now.addingTimeInterval(20 * 3600), mediaUrl: aImg, allowsReplies: true,
@@ -54,11 +62,11 @@ enum DemoMode {
             ], lastViewedAt: nil, isMine: true)
 
         StoriesRepository.shared.others = [
-            StoryGroup(authorUid: "demo-kasim", name: "Kasim", photoUrl: nil,
+            StoryGroup(authorUid: "demo-kasim", name: "Kasim", photoUrl: kasimPhoto,
                        stories: [Story(id: "demo-k1", authorUid: "demo-kasim", createdAt: now.addingTimeInterval(-7200),
                                        expiresAt: now.addingTimeInterval(16 * 3600), mediaUrl: kasimImg, allowsReplies: true)],
                        lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo-amin", name: "Amin", photoUrl: nil,
+            StoryGroup(authorUid: "demo-amin", name: "Amin", photoUrl: aminPhoto,
                        stories: [Story(id: "demo-am1", authorUid: "demo-amin", createdAt: now.addingTimeInterval(-5000),
                                        expiresAt: now.addingTimeInterval(17 * 3600), mediaUrl: aminImg, allowsReplies: true)],
                        lastViewedAt: nil, isMine: false),
@@ -67,23 +75,76 @@ enum DemoMode {
         // Demo chat rows (real plaintext previews; the opened conversation renders straight from
         // messages(for:) below — no Firestore, no decryption).
         ConversationsRepository.shared.conversations = [
-            chat("demo-kasim", me, "demo-kasim", "Kasim", now.addingTimeInterval(-240),  "Perfect, thanks 🙏"),
-            chat("demo-amin",  me, "demo-amin",  "Amin",  now.addingTimeInterval(-3600), "📄 Contract-final.pdf"),
-            chat("demo-amran", me, "demo-amran", "Amran", now.addingTimeInterval(-9000), "😂 that clip is gold"),
-            chat("demo-aisha", me, "demo-aisha", "Aisha", now.addingTimeInterval(-86400),"Let's catch up this weekend"),
-            chat("demo-omar",  me, "demo-omar",  "Omar",  now.addingTimeInterval(-172800),"Sounds good, see you there 👍"),
+            chat("demo-kasim", me, "demo-kasim", "Kasim", now.addingTimeInterval(-240),  "Perfect, thanks 🙏", kasimPhoto),
+            chat("demo-amin",  me, "demo-amin",  "Amin",  now.addingTimeInterval(-3600), "📄 Contract-final.pdf", aminPhoto),
+            chat("demo-amran", me, "demo-amran", "Amran", now.addingTimeInterval(-9000), "😂 that clip is gold", amranPhoto),
+            chat("demo-aisha", me, "demo-aisha", "Aisha", now.addingTimeInterval(-86400),"Let's catch up this weekend", aishaPhoto),
+            // Deliberately LEFT WITHOUT A PHOTO, so the preview also shows the other half of the rule:
+            // no picture means the classic circle, never an empty poster.
+            chat("demo-omar",  me, "demo-omar",  "Omar",  now.addingTimeInterval(-172800),"Sounds good, see you there 👍", ""),
         ]
         ConversationsRepository.shared.hasLoaded = true
     }
 
-    private static func chat(_ id: String, _ me: String, _ other: String, _ name: String, _ at: Date, _ last: String) -> Conversation {
+    private static func chat(_ id: String, _ me: String, _ other: String, _ name: String, _ at: Date,
+                             _ last: String, _ photo: String) -> Conversation {
         Conversation(id: id, data: [
             "users": [me, other],
             "names": [other: name, me: "You"],
+            // Without this every demo person is a coloured letter, so the preview could never show
+            // the poster header at all — it needs a real photo before it will draw (owner: "the
+            // preview demo chats add profile picture").
+            "photos": [other: photo],
             "lastSender": other,
             "lastMessage": last,
             "updatedAt": Timestamp(date: at),
         ])
+    }
+
+    /// A square portrait for a demo person, stored WHERE THE REAL PHOTO PATH LOOKS FOR IT.
+    ///
+    /// `cache(_:)` puts its images in URLCache, which is where the story viewer reads. Profile photos
+    /// are read somewhere else entirely: AvatarView seeds itself synchronously from DiskImageCache,
+    /// and the poster header refuses to draw unless `PosterPhoto.readyNow` finds the bitmap there on
+    /// the FIRST frame. A demo photo living only in URLCache is invisible to both, so it goes in both.
+    ///
+    /// Blobs, not a plain gradient. A flat gradient blurs to itself, so the progressive fade at the
+    /// bottom of the poster would be impossible to judge — there has to be detail for it to destroy.
+    private static func profilePhoto(_ key: String, _ c1: UIColor, _ c2: UIColor, _ initial: String) -> String {
+        let urlStr = "https://kulan.local/pp-\(key).jpg"
+        guard !cached.contains("pp-\(key)"), let url = URL(string: urlStr) else { return urlStr }
+        cached.insert("pp-\(key)")
+        let size = CGSize(width: 900, height: 900)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                  colors: [c1.cgColor, c2.cgColor] as CFArray, locations: [0, 1]) {
+                ctx.cgContext.drawLinearGradient(g, start: .zero,
+                                                 end: CGPoint(x: size.width, y: size.height), options: [])
+            }
+            // Something for the blur to eat.
+            let blobs: [(CGFloat, CGFloat, CGFloat, UIColor)] = [
+                (0.28, 0.30, 0.30, .white), (0.72, 0.22, 0.18, .black),
+                (0.60, 0.68, 0.34, .white), (0.18, 0.78, 0.22, .black),
+            ]
+            for (x, y, r, c) in blobs {
+                ctx.cgContext.setFillColor(c.withAlphaComponent(0.16).cgColor)
+                ctx.cgContext.fillEllipse(in: CGRect(x: size.width * (x - r / 2), y: size.height * (y - r / 2),
+                                                     width: size.width * r, height: size.height * r))
+            }
+            let p = NSMutableParagraphStyle(); p.alignment = .center
+            (initial as NSString).draw(in: CGRect(x: 0, y: size.height / 2 - 190, width: size.width, height: 400),
+                                       withAttributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.92),
+                                                        .font: UIFont.systemFont(ofSize: 300, weight: .heavy),
+                                                        .paragraphStyle: p])
+        }
+        if let data = img.jpegData(compressionQuality: 0.9) {
+            DiskImageCache.shared.store(img, data: data, for: urlStr)
+            let resp = URLResponse(url: url, mimeType: "image/jpeg",
+                                   expectedContentLength: data.count, textEncodingName: nil)
+            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: data),
+                                                for: URLRequest(url: url))
+        }
+        return urlStr
     }
 
     // The full (plaintext) conversation shown when a demo chat is opened — text, photos, files, links.
