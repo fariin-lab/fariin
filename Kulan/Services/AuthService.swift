@@ -284,6 +284,39 @@ final class AuthService: NSObject {
         try await Auth.auth().sendPasswordReset(withEmail: email)
     }
 
+    // MARK: - Signing in with a code, for when the password is gone
+
+    /// Ask for a six-digit code by email. The owner's reference was Discord's "check your email for
+    /// a login link"; a CODE rather than a link on his pick, because a link that opens the app needs
+    /// a domain association and only works when the mail is on the same phone, and a code works from
+    /// any device and any mail app.
+    ///
+    /// SAYS NOTHING ABOUT WHETHER THE ACCOUNT EXISTS. The server answers the same either way, so this
+    /// screen cannot be used to find out who has an account here.
+    func requestLoginCode(email: String) async throws {
+        _ = try await Functions.functions(region: "me-central1")
+            .httpsCallable("requestLoginCode")
+            .call(["email": email])
+    }
+
+    /// Trade the code for a session. The server checks it and mints a CUSTOM TOKEN — the only way to
+    /// sign a user in from our own backend without their password. A wrong or expired code throws,
+    /// and the message the server sends is already in plain words.
+    @discardableResult
+    func signInWithLoginCode(email: String, code: String) async throws -> String {
+        let result = try await Functions.functions(region: "me-central1")
+            .httpsCallable("verifyLoginCode")
+            .call(["email": email, "code": code])
+        guard let data = result.data as? [String: Any], let token = data["token"] as? String else {
+            throw NSError(domain: "Kulan", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not sign you in. Try again."])
+        }
+        let signIn = try await Auth.auth().signIn(withCustomToken: token)
+        uid = signIn.user.uid
+        reportLogin()
+        return signIn.user.uid
+    }
+
     // MARK: - Sign-in methods (Account settings: see what's connected, connect another)
 
     /// The sign-in doors Kulan supports, in the order Account settings lists them.

@@ -267,8 +267,17 @@ struct AuthMethodView: View {
                         self.error = flow.errorDescription
                     } else if !cancelled {
                         // Real failures speak like a person — never a raw NSError on the front door.
-                        self.error = ns.code == 17020 ? "No internet connection. Try again."
-                                                      : "Couldn't sign in. Please try again."
+                        //
+                        // 17012 is the ONE that used to land here as "Couldn't sign in": the address
+                        // already has an account made a DIFFERENT way. The project is set to one
+                        // account per email, so this is Firebase refusing to make a second one, not
+                        // a failure — and the person needs to be told which door to use rather than
+                        // asked to try again at the one that cannot work.
+                        switch ns.code {
+                        case 17020: self.error = "No internet connection. Try again."
+                        case 17012: self.error = "This email already has an account, made a different way. Use the button you signed up with, or log in with a code."
+                        default:    self.error = "Couldn't sign in. Please try again."
+                        }
                     }
                 }
             }
@@ -327,6 +336,17 @@ struct EmailAuthView: View {
                 .opacity(email.isEmpty || password.isEmpty ? 0.55 : 1)
 
                 if mode == .login {
+                    // The way in when the password is gone, offered BEFORE the reset link: getting a
+                    // code and being in beats setting a new password you also have to remember.
+                    NavigationLink {
+                        LoginCodeView(email: email, onAuthed: onAuthed)
+                    } label: {
+                        Text("Log in with a code instead")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .padding(.top, 2)
+
                     Button(resetSent ? "Reset email sent — check your inbox" : "Forgot password?") {
                         guard !email.isEmpty else { error = "Type your email above first."; return }
                         Task {
@@ -401,6 +421,9 @@ struct EmailAuthView: View {
         case 17011: return "No account with that email. Create one instead."
         case 17007: return "This email already has an account. Go back and choose Log In instead."
         case 17020: return "No internet connection. Try again."
+        // Same story from the email door: the address belongs to an account created with Google or
+        // Apple, so there is no password to be right.
+        case 17012: return "This email already has an account, made with Google or Apple. Go back and use that button, or log in with a code."
         default: return error.localizedDescription
         }
     }
