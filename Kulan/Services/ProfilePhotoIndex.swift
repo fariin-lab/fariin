@@ -113,7 +113,11 @@ enum ProfilePhotoIndex {
         store[uid] = next
         // Bounded: this is a convenience cache, not a database. Dropping entries costs one
         // fall-back-to-the-url open, never a wrong answer that sticks.
-        if store.count > 400 { store = Dictionary(uniqueKeysWithValues: store.prefix(300)) }
+        // `prefix` on a Dictionary yields LABELLED (key:value:) pairs, which is not what
+        // `uniqueKeysWithValues:` takes — hence the map back to a plain pair.
+        if store.count > 400 {
+            store = Dictionary(uniqueKeysWithValues: store.prefix(300).map { ($0.key, $0.value) })
+        }
         persist()
     }
 
