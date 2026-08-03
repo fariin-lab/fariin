@@ -33,6 +33,7 @@ struct GroupInfoView: View {
     @State private var reqListener: ListenerRegistration?
     @State private var confirmDelete = false
     @State private var showGroupPhoto = false     // tap the poster → the same morph a person's photo uses
+    @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     @State private var posterRect: CGRect = .zero // poster photo's global square — the morph's start/end
     @State private var posterPhotoOK: Bool?       // did a real photo turn up behind the url? see useModernHeader
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
@@ -121,11 +122,25 @@ struct GroupInfoView: View {
             if showGroupPhoto {
                 ProfilePhotoViewer(name: conv?.title ?? "Group", photoUrl: conv?.avatarUrl ?? "",
                                    sourceFrame: posterRect, poster: true,
+                                   closeSignal: photoCloseTick,
                                    isPresented: $showGroupPhoto)
                     .ignoresSafeArea()
             }
         }
         .navigationBarBackButtonHidden(showGroupPhoto)
+        // Same rule as ContactInfoView: the top strip belongs to the navigation bar, which sits
+        // above the viewer overlay and eats its touches — so the viewer's X is a bar item here,
+        // wired to the viewer through closeSignal.
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if showGroupPhoto {
+                    Button { photoCloseTick &+= 1 } label: {
+                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                    }
+                    .tint(.primary)
+                }
+            }
+        }
         .onAppear {
             guard reqListener == nil else { return }
             reqListener = GroupInviteService.joinRequests(cid: cid) { joinReqs = $0 }

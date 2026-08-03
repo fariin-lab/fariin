@@ -64,6 +64,7 @@ struct ContactInfoView: View {
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
+    @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     // A REAL photo is on screen (not the letter fallback). The tap gate used to be "url isn't
     // empty", which is a different thing: a removed or stale url still shows the letter, and
     // tapping it opened an empty grey circle (owner's screenshot).
@@ -172,6 +173,7 @@ struct ContactInfoView: View {
                                        photoUrl: (useModernHeader ? gatedPosterUrl : gatedPhotoUrl) ?? "",
                                        sourceFrame: useModernHeader ? posterRect : avatarFrame,
                                        poster: useModernHeader,
+                                       closeSignal: photoCloseTick,
                                        isPresented: $showProfilePhoto)
                         // THE VIEWER OWNS THE WHOLE SCREEN. Without this the overlay is the page's
                         // frame, which stops below the status bar, and the viewer's chrome was being
@@ -308,6 +310,21 @@ struct ContactInfoView: View {
         // inset, which is what used to jump the whole page.
         .navigationBarBackButtonHidden(showProfilePhoto)
         .toolbar { navTrailing }
+        // The photo viewer's X, as a BAR ITEM in the back button's place. The top strip belongs to
+        // the navigation bar, which sits above the viewer overlay and eats its touches — an X drawn
+        // inside the overlay up there is visible through the transparent bar and dead to the finger
+        // (three device reports). The strip's owner holds the button; the tick reaches the viewer
+        // as closeSignal and runs its normal reverse morph.
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if showProfilePhoto {
+                    Button { photoCloseTick &+= 1 } label: {
+                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                    }
+                    .tint(.primary)
+                }
+            }
+        }
         // The name RIDES UP into the bar as the header goes. Without it, scrolling past the header
         // left nothing on screen saying whose profile this is: the title is deliberately empty
         // because the name used to live in the hero, and the hero now scrolls away.
@@ -1253,28 +1270,29 @@ private struct ViewerShape: Shape {
 // Internal rather than file-private because a group's photo opens exactly the same way, and a
 // second copy of a morph this carefully tuned is a second copy to keep in step.
 struct ProfilePhotoViewer: View {
-    /// Real window safe-area insets. The photo viewer draws full-bleed (its container ignores the safe
-    /// area), so SwiftUI reports zero insets inside it and chrome has to be positioned from these.
-    private var winInsets: UIEdgeInsets {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
-            .max(by: { $0.top < $1.top }) ?? .zero
-    }
-
     let name: String
     let photoUrl: String
     let sourceFrame: CGRect          // the hero avatar (or the poster square), in global coords — morph start AND end
     /// Poster mode: grow out of the square header and land at the photo's OWN aspect ratio, square
     /// corners throughout. Off: the round-avatar morph this viewer was built for, unchanged.
     var poster: Bool = false
+    /// Close REQUEST from outside — the parent bumps this when its toolbar X is tapped, and the
+    /// viewer runs the same reverse morph as a drag or backdrop tap. The X lives in the parent's
+    /// NAVIGATION BAR because the top strip belongs to UIKit's bar, which sits above this whole
+    /// overlay and eats its touches: every in-overlay X drawn up there was visible through the
+    /// transparent bar and dead to the finger — this bug came back three times before the strip's
+    /// owner was made to hold the button.
+    var closeSignal: Int = 0
     @Binding var isPresented: Bool
     @State private var image: UIImage?
 
-    init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false, isPresented: Binding<Bool>) {
+    init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false,
+         closeSignal: Int = 0, isPresented: Binding<Bool>) {
         self.name = name
         self.photoUrl = photoUrl
         self.sourceFrame = sourceFrame
         self.poster = poster
+        self.closeSignal = closeSignal
         _isPresented = isPresented
         // The avatar this grows out of is already on screen, so its bitmap is already in memory.
         // Seeding here means the morph begins holding the photo, instead of a grey disc that swaps
@@ -1374,32 +1392,14 @@ struct ProfilePhotoViewer: View {
                             else { withAnimation(.spring(duration: 0.3)) { drag = .zero } }
                         }
                 )
-                // Just the X (user spec): no name label — the photo is the subject, and the page's own
-                // back/Edit chrome is hidden while this is open so nothing else floats over it.
-                //
-                // IN the ZStack, not in an overlay of it. As an overlay that ignored the safe area, the
-                // button was drawn into a strip its own parent did not occupy: visible, and dead to
-                // touch. Here it shares one coordinate space with the backdrop and the photo, both of
-                // which take taps, so if they can be pressed so can this.
-                //
-                // The viewer now owns the whole screen (see .ignoresSafeArea() where it is presented),
-                // so this space starts at the screen corner and winInsets is measured from the same
-                // place. `.position` places the CENTRE, so the button's top edge sits 8pt below the
-                // safe-area line — the line chrome must not cross — and the centre follows from its
-                // own size.
-                Button { close() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)          // 48pt Liquid Glass, same as every
-                        .liquidGlass(Circle(), interactive: true)   // other full-screen close button
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .position(x: 16 + 24, y: winInsets.top + 8 + 24)
-                .opacity(progress == 1 && drag == .zero && !closing ? 1 : 0)   // chrome only at rest
-                .animation(.easeOut(duration: 0.15), value: drag == .zero)
+                // NO in-overlay X. Its strip belongs to the parent's navigation bar (a UIKit view
+                // ABOVE this overlay), which ate every touch aimed at the corner: three rounds of
+                // rearranging the button inside this file changed nothing because the thief was
+                // never in this file. The X is now a toolbar item on the presenting page, wired
+                // back here through `closeSignal` — see the property's comment.
             }
         }
+        .onChange(of: closeSignal) { _, _ in close() }
         .onAppear {
             // ONE FRAME AT THE START, THEN ANIMATE. This is why opening jumped while closing was
             // smooth: closing changes a view that is already on screen, so there is a previous frame
