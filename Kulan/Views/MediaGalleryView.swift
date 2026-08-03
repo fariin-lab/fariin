@@ -97,27 +97,30 @@ struct MediaGalleryView: View {
     }
 
     var body: some View {
-        content
-            .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
-            .background(GeometryReader { g in
-                Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
-            })
-            // THE TABS FLOAT OVER THE GRID. An OVERLAY, not `safeAreaBar` — that was the previous
-            // attempt and the owner checked it on the phone: the photos still stopped at the bar
-            // rather than passing under it. safeAreaBar floats over a plain ScrollView, but this
-            // content is a paged TabView and the inset reaches the TabView rather than the scroll
-            // views inside it, so all it did was reserve a strip, which is what the old VStack did.
-            //
-            // An overlay cannot reserve anything, so each scroll view carries a matching top content
-            // margin instead (`.contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)`).
-            // Content starts below the bar and scrolls under it — which is exactly what the
-            // navigation bar does, and the reason ITS glass has always looked right on this screen.
-            .overlay(alignment: .top) { if !selecting { tabBar } }
-        // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
-        // subtitle, the standard circular back button, and a "..." menu on the right â€” instead of
-        // a custom left-aligned header.
+        VStack(spacing: 0) {
+            if !selecting { countLine }
+            content
+                .overlay { loadingOverlay }   // spinner until the first load finishes (no empty flash)
+                // Measured on the CONTENT, not on this stack: `gridFrame` is the region the
+                // drag-close clips a flying photo through, and it must not include the count line.
+                .background(GeometryReader { g in
+                    Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in gridFrame = f }
+                })
+        }
+        // NATIVE nav bar: the standard circular back button, the tab control in the centre and a
+        // "..." menu on the right.
+        //
+        // THE TABS LIVE IN THE NAVIGATION BAR NOW, which is the whole point (owner, third round on
+        // this bar: "identical to the Calls All/Missed segmented control in both appearance and
+        // behaviour"). The Calls bar is a `Picker` + `.pickerStyle(.segmented)` in `.principal`, and
+        // so is this one. Nothing here styles it, clears it or draws behind it.
+        //
+        // THAT PLACEMENT *IS* THE APPEARANCE. A segmented control on a page paints its own grey
+        // track because there is no bar to inherit from; in a bar it takes the bar's glass. Every
+        // attempt to get one without the other — hand-drawn glass, then erasing the track — is what
+        // made this file swing four times. The control does not travel with its looks; the bar
+        // lends them.
         .navigationTitle("All Media")
-        .navigationSubtitle(subtitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode â†’ only the X, no back
         .toolbar { toolbar }
@@ -158,16 +161,17 @@ struct MediaGalleryView: View {
 
     // (The old custom header is gone â€” the native nav bar now carries the title + count.)
 
-    // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
+    // MARK: - The count, which the tab control displaced
 
-    // Apple's segmented control, the same one the Calls page uses for All / Missed (owner's order,
-    // 2026-08-03). See MediaTabBar for why it cannot be both that and Liquid Glass on a page.
-    private var tabBar: some View {
-        MediaTabBar(titles: Tab.allCases.map(\.label),
-                    selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
-                                       set: { tab = Tab.allCases[$0] }))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)   // together with barHeight this is MediaTabBar.slotHeight
+    /// "21 photos, 0 videos". It was the navigation SUBTITLE, and the tab control now occupies that
+    /// centre slot, so it sits here instead — one quiet line under the bar, above the tabs, still
+    /// live and still counting the tab you are on.
+    private var countLine: some View {
+        Text(subtitle)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 2).padding(.bottom, 8)
     }
 
     // (Deleted: ClearSegmentedTrack. It reached into the segmented control and erased its background
@@ -211,6 +215,17 @@ struct MediaGalleryView: View {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
         } else {
+            // The Calls page's control, in the Calls page's slot. No width of its own: five segments
+            // need whatever the bar can spare, where All / Missed could afford a fixed 150.
+            ToolbarItem(placement: .principal) {
+                Picker("", selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
+                                              set: { tab = Tab.allCases[$0] })) {
+                    ForEach(Array(Tab.allCases.enumerated()), id: \.offset) { i, t in
+                        Text(t.label).tag(i)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
     }
@@ -298,7 +313,6 @@ struct MediaGalleryView: View {
         // Clears the floating tab bar at rest and scrolls UNDER it, which is the whole point of the
         // bar being an overlay. A content margin does what padding cannot: it moves where the content
         // STARTS without moving where it is allowed to go.
-        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     // Group items into date sections ("Today", "Yesterday", "This Month", "June", "June 2024"),
@@ -434,7 +448,6 @@ struct MediaGalleryView: View {
                 }
             }
         }
-        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     private func voiceRow(_ m: Message) -> some View {
@@ -471,7 +484,6 @@ struct MediaGalleryView: View {
                 }
             }
         }
-        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     private func linkRow(_ m: Message) -> some View {
@@ -519,7 +531,6 @@ struct MediaGalleryView: View {
                 }
             }
         }
-        .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
     }
 
     private func fileRow(_ m: Message) -> some View {
