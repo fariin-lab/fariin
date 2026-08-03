@@ -1309,10 +1309,14 @@ struct ThreadView: View {
                     } label: { Label("See All", systemImage: "list.bullet") }
                 } label: {
                     // Upright pin in a bordered circle (reference: image-2 style).
+                    // 22 in 36 is Signal's own proportion for this button: their banner pin is a
+                    // 24pt glyph with `contentInsets .init(margin: 6)`, so the glyph owns two thirds
+                    // of the button. 17 in 34 was half of it, which is the "too small" he reported —
+                    // the same wrong number, from the same wrong reasoning, as the menu icons.
                     Image("ic_pin_bar").renderingMode(.template).resizable().scaledToFit()
-                        .frame(width: 17, height: 17)
+                        .frame(width: MenuIcon.standard, height: MenuIcon.standard)
                         .foregroundStyle(.primary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 36, height: 36)
                         .overlay(Circle().strokeBorder(.primary.opacity(0.35), lineWidth: 1.5))
                         .contentShape(Circle())
                 }
