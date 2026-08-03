@@ -130,7 +130,10 @@ struct StoryTextCard: View {
             }
             .foregroundStyle(style.ink)
         }
-        .onAppear { focused = true }
+        // NO KEYBOARD ON ARRIVAL (owner 2026-08-03: "dont open keyboard in story when i click text
+        // tab"). Tapping TEXT is choosing a MODE, not asking to type — and a keyboard that arrives
+        // uninvited covers the colour button, the Aa and the CAMERA/TEXT switch you may have come
+        // to use. Tap the card when you want to write; the background already listens.
         .onChange(of: focused) { _, f in withAnimation(.easeInOut(duration: 0.2)) { typing = f } }
         // X with text typed → confirm before throwing the status away (don't lose it on a stray tap).
         // A native ALERT, not confirmationDialog: over a full-screen presentation the dialog renders
