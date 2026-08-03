@@ -772,8 +772,9 @@ struct ChatsView: View {
                 Task { await ChatService.setArchived(conv.id, true) }
             } label: {
                 // The SOLID archive drawing, which is the one he sent for the swipe specifically.
-                Label { Text("Archive") } icon: { Image("ic_archive_fill").renderingMode(.template)
-                        .resizable().scaledToFit().frame(width: 22, height: 22) }
+                // MenuIcon, not a frame-modified Image: swipe actions drop view modifiers the same
+                // way menus do, so the frame(22) never applied (see MenuIcon).
+                Label { Text("Archive") } icon: { MenuIcon("ic_archive_fill", size: 20) }
             }
             .tint(.gray)
             Button { pendingMute = conv } label: { Label("Mute", systemImage: "bell.slash.fill") }
@@ -788,8 +789,11 @@ struct ChatsView: View {
                 Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
             } label: {
                 Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
+                    // Size 20 on the swipe: SF Symbols in swipe buttons draw near that, and the
+                    // menu's 17 left the pin visibly smaller there once MenuIcon started actually
+                    // applying its size (it renders a pre-sized UIImage now — see MenuIcon).
                     conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
-                                      : AnyView(MenuIcon("ic_pin_menu"))
+                                      : AnyView(MenuIcon("ic_pin_menu", size: 20))
                 }
             }
             .tint(.orange)

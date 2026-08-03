@@ -146,10 +146,28 @@ struct MenuIcon: View {
         self.size = size
     }
 
+    // A PRE-RENDERED UIImage at the target point size, NOT a frame-modified Image. Menus and
+    // swipe actions convert their SwiftUI labels into native UIKit elements, and that conversion
+    // DROPS view modifiers — .resizable().frame(17) simply never applied, so every custom asset
+    // rendered at its intrinsic size and towered over the SF Symbols beside it (owner's Unread /
+    // Archive / Add Story / swipe-Pin screenshots, the second time this symptom came back).
+    // Baking the size into the bitmap is the one thing the conversion cannot ignore.
     var body: some View {
-        Image(name).renderingMode(.template)
-            .resizable().scaledToFit()
-            .frame(width: size, height: size)
+        Image(uiImage: Self.rendered(name, size)).renderingMode(.template)
+    }
+
+    private static var cache: [String: UIImage] = [:]
+    private static func rendered(_ name: String, _ size: CGFloat) -> UIImage {
+        let key = "\(name)|\(size)"
+        if let hit = cache[key] { return hit }
+        guard let src = UIImage(named: name), src.size.width > 0, src.size.height > 0 else { return UIImage() }
+        let scale = min(size / src.size.width, size / src.size.height)
+        let target = CGSize(width: src.size.width * scale, height: src.size.height * scale)
+        let img = UIGraphicsImageRenderer(size: target).image { _ in
+            src.draw(in: CGRect(origin: .zero, size: target))
+        }.withRenderingMode(.alwaysTemplate)
+        cache[key] = img
+        return img
     }
 }
 

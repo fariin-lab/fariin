@@ -1259,6 +1259,22 @@ struct ThreadView: View {
                     AnimatedGifView(url: url)
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else if let m = msg, m.isFile {
+                    // A pinned FILE showed a blank bar (owner screenshot): no branch here and its
+                    // snippet is empty text. The document preview (PDF page 1 / image pixels) rides
+                    // thumbUrl exactly as the bubble draws it; other file types keep the doc glyph.
+                    if let t = m.thumbUrl, !t.isEmpty {
+                        SecureImageView(imageUrl: t, enc: m.thumbEnc, cid: cid)
+                            .frame(width: 26, height: 32)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+                    } else {
+                        Image(systemName: "doc.fill").font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 26, height: 32)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
@@ -1269,7 +1285,7 @@ struct ThreadView: View {
                     }
                     Text(msg.map { m in
                         m.isAlbum ? (m.text.isEmpty ? "\(m.album.count) Photos" : m.text)
-                        : (m.isGif ? "GIF" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : m.safeText))))
+                        : (m.isGif ? "GIF" : (m.isImage ? (m.viewOnce ? "View-once photo" : "Photo") : (m.isVideo ? "Video" : (m.isAudio ? "Voice message" : (m.isFile ? (m.fileName ?? "File") : m.safeText)))))
                     } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
