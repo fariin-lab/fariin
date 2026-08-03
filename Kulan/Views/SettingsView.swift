@@ -961,8 +961,16 @@ struct EditProfileView: View {
     @State private var pendingRemove = false
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
-    @State private var showEditPhoto = false        // Edit Photo menu (Choose / Remove)
+    @State private var showEditPhoto = false        // the Edit Photo sheet
+    /// What that sheet was asked for. Read and cleared in its onDismiss, never acted on inline.
+    @State private var photoAction: ProfilePhotoAction?
     @State private var showPhotoPicker = false       // programmatic PhotosPicker present
+    @State private var showCamera = false            // Apple's camera, for Take photo
+    /// Is there a picture to remove: one you just picked, or a saved one you have not already asked
+    /// to drop. Without the second half the X kept offering to remove a photo that was already gone.
+    private var hasPictureToRemove: Bool {
+        pendingPhoto != nil || (!pendingRemove && profile.me?.photoUrl?.isEmpty == false)
+    }
     @State private var saving = false
     @State private var error: String?
     // What the fields held when the sheet opened — closing with UNSAVED text edits asks
@@ -1201,14 +1209,25 @@ struct EditProfileView: View {
                     // one silently never present — tapping "Edit Photo" did nothing.
                     // Bottom sheet, not confirmationDialog (iOS 26 anchors that to the button as a
                     // callout). The picked action runs in the sheet's onDismiss, which is also what
-                    // lets the photo picker / remove alert present at all from here.
-                    .bottomActionSheet("Profile Photo", isPresented: $showEditPhoto, actions: {
-                        var a: [SheetAction] = [SheetAction("Choose Photo") { showPhotoPicker = true }]
-                        if profile.me?.photoUrl?.isEmpty == false {
-                            a.append(SheetAction("Remove Photo", role: .destructive) { confirmRemovePhoto = true })
+                    // lets the camera / photo picker / remove alert present at all from here.
+                    //
+                    // The three words it used to list are now the owner's drawing: the picture
+                    // itself, an X on it for remove, Take photo and Choose photo underneath.
+                    .sheet(isPresented: $showEditPhoto, onDismiss: {
+                        guard let a = photoAction else { return }
+                        photoAction = nil
+                        switch a {
+                        case .camera:  showCamera = true
+                        case .library: showPhotoPicker = true
+                        case .remove:  confirmRemovePhoto = true
                         }
-                        return a
-                    }())
+                    }) {
+                        ProfilePhotoSheet(name: firstName,
+                                          photoUrl: pendingRemove ? nil : profile.me?.photoUrl,
+                                          pendingImage: pendingPhoto,
+                                          canRemove: hasPictureToRemove,
+                                          action: $photoAction)
+                    }
                     .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                 }
 
@@ -1268,6 +1287,19 @@ struct EditProfileView: View {
                           let img = UIImage(data: data) else { photoItem = nil; return }
                     await MainActor.run { cropCandidate = CropItem(image: img); photoItem = nil }
                 }
+            }
+            // Apple's camera, for Take photo. A captured picture goes to the SAME two-stage cropper
+            // a chosen one does, so both are framed the same way and only one path can be wrong.
+            //
+            // Deliberately a sibling of the cropper's own cover on THIS chain, which is ThreadView's
+            // proven camera-to-editor shape (ThreadView.swift:686). Left on the avatar row it would
+            // have been one presentation asking a different view to start another while it closes,
+            // which is the shape of every "nothing happens" bug this screen has had.
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { data in
+                    if let ui = UIImage(data: data) { cropCandidate = CropItem(image: ui) }
+                }
+                .ignoresSafeArea()
             }
             .fullScreenCover(item: $cropCandidate) { c in
                 // Our own move-and-scale rather than the general-purpose cropper: a profile photo is
