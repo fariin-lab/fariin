@@ -372,7 +372,40 @@ struct MediaGalleryView: View {
             // only when i stay profile, not inside All Media").
             .modifier(MediaRectReporter(id: m.id, scope: .gallery, cornerRadius: 0))
             .onTapGesture { tap(m) }
-            .contextMenu { if !selecting { itemMenu(m) } }
+            .contextMenu {
+                if !selecting { itemMenu(m) }
+            } preview: {
+                mediaPreview(m)
+            }
+    }
+
+    /// The lifted preview behind the long-press menu (owner 2026-08-03: "show real preview, big
+    /// preview, apple native, not custom").
+    ///
+    /// With no `preview:` closure iOS lifts THE VIEW YOU PRESSED, and here that is a grid tile a
+    /// third of a screen wide — his screenshot. Handing it the picture at a real size is still the
+    /// native preview: same lift, same platter, same menu. Only the content is ours.
+    ///
+    /// SIZED FROM THE MESSAGE'S OWN PIXEL DIMENSIONS, so a tall photo comes up tall and nothing is
+    /// letterboxed inside the platter. A message with no dimensions recorded falls back to a square,
+    /// and every number is clamped: UIKit throws an assertion on a preview with a NaN centre, which
+    /// is the shape of the crash already on file from build 425.
+    @ViewBuilder private func mediaPreview(_ m: Message) -> some View {
+        let screen = UIScreen.main.bounds
+        let w0 = m.width ?? 0, h0 = m.height ?? 0
+        let ratio = (w0 > 0 && h0 > 0) ? CGFloat(h0 / w0) : 1
+        let safeRatio = min(max(ratio, 0.3), 2.2)          // extreme panoramas stay a sane shape
+        let w = max(80, min(screen.width * 0.86, screen.height * 0.6 / safeRatio))
+        thumbnail(m)
+            .scaledToFill()
+            .frame(width: w, height: w * safeRatio)
+            .clipped()
+            .overlay {
+                if m.isVideo {
+                    Image(systemName: "play.circle.fill").font(.system(size: 44))
+                        .foregroundStyle(.white.opacity(0.95)).shadow(radius: 4)
+                }
+            }
     }
 
     @ViewBuilder private func thumbnail(_ m: Message) -> some View {
