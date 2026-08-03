@@ -1660,7 +1660,11 @@ struct ThreadView: View {
         //   firstUnreadId - the unread divider changes a row's content AND its height by ~33pt.
         //   iBlocked      - read state is forced to 0 when blocked; the uikit model cache already keyed
         //                   on this, the SwiftUI side did not, so ticks disagreed between row types.
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)"
+        // storiesVersion: a quoted story dying (deleted or expired) changes a story-reply row's
+        // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
+        // signature path. Reading it here also makes the body observe story changes at all.
+        let storiesRepo = StoriesRepository.shared
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -1681,12 +1685,18 @@ struct ThreadView: View {
                 let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
                 // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
                 let match = term.isEmpty ? "-" : (m.text.localizedCaseInsensitiveContains(term) ? "M\(term.hashValue)" : "-")
+                // Story-reply rows: the card ⇄ "Story unavailable" flip must reconfigure AND
+                // re-measure the row (same availability rule as storyReplyExpired).
+                let story: String = {
+                    guard let r = m.replyTo, r.isStatus else { return "-" }
+                    return storiesRepo.didLoad && !storiesRepo.hasLive(storyId: r.id, author: r.authorId) ? "G" : "L"
+                }()
                 // DELETED must be here for the same reason it must be in ThreadRepository.changeSig:
                 // a tombstone on uncaptioned media changes NO other field this string reads (text ""
                 // before and after, no reactions, no album), so the row never reconfigured and the
                 // photo stayed on screen until a neighbour change repainted it — which read as the
                 // delete landing on the PREVIOUS message instead of the one just picked.
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -5995,6 +6005,15 @@ struct MessageBubble: View, Equatable {
     /// never captured a thumbnail is treated the same way, because there is nothing to show either.
     private func storyReplyExpired(_ reply: ReplyRef) -> Bool {
         if reply.storyThumbUrl?.isEmpty ?? true { return true }
+        // DELETED counts as gone, not just the 24-hour clock (owner order): the author pulling
+        // their story down should flip this card to "Story unavailable" the same as expiry —
+        // before this, the card kept rendering a thumbnail whose story no longer existed (grey
+        // box once the file was gone). The stories repository hears deletions AND expiries live,
+        // and it is the exact resolution the card's TAP uses, so show and tap now agree. Absence
+        // only counts once the repository has actually loaded — an empty unloaded repo would
+        // otherwise read as "everything deleted" for the first beat of a cold start.
+        let stories = StoriesRepository.shared
+        if stories.didLoad, !stories.hasLive(storyId: reply.id, author: reply.authorId) { return true }
         return Date().timeIntervalSince(message.createdAt) > 24 * 3600
     }
 

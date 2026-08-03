@@ -480,6 +480,24 @@ final class StoriesRepository {
     private let db = Firestore.firestore()
     var mine: StoryGroup?            // my own story (the "My Status" cell)
     var others: [StoryGroup] = []    // friends' stories, unseen-first
+    // True once rebuild() has PUBLISHED at least once — i.e. the groups above are real knowledge,
+    // not just "nothing arrived yet". The story-reply card in a chat flips to "Story unavailable"
+    // when a quoted story is absent from the groups, and absence is only meaningful after this:
+    // an unloaded repo is empty too, and treating that as "deleted" would mark every quoted story
+    // unavailable for the first beat of a cold start.
+    private(set) var didLoad = false
+    // Bumped on every publish. ThreadView keys its row-signature cache on it, so a story dying
+    // (deleted or expired) re-signs and re-MEASURES the story-reply rows — the card (140pt) and
+    // the "Story unavailable" line differ in height, and a hosted cell only re-measures through
+    // the signature path.
+    private(set) var storiesVersion = 0
+
+    /// Is this exact story still live (visible to me, unexpired)? The same resolution the reply
+    /// card's tap uses to open it — so what the card SHOWS and what the tap DOES cannot disagree.
+    func hasLive(storyId: String, author: String) -> Bool {
+        (others + [mine].compactMap { $0 })
+            .contains { $0.authorUid == author && $0.stories.contains { $0.id == storyId } }
+    }
 
     // Live inputs. Listener callbacks arrive on the MAIN queue (Firestore default); rebuild()
     // snapshots them there and regroups off-main.
@@ -503,6 +521,8 @@ final class StoriesRepository {
         othersStories = []; mineStories = []
         profileCache = [:]
         mine = nil; others = []
+        didLoad = false          // the next account starts unknown, not "everything deleted"
+        storiesVersion &+= 1
         StoryRowCache.clear()   // the next account must never see this account's story row
     }
 
@@ -782,6 +802,8 @@ final class StoriesRepository {
                 }
             }
             self.mine = mg; self.others = gs
+            self.didLoad = true
+            self.storiesVersion &+= 1
             // Persist the freshly built row so the NEXT cold start paints it on the first frame.
             StoryRowCache.save(uid: me, mine: mg, others: gs, profiles: self.profileCache)
             self.scheduleExpiryTick(nextExpiry)
