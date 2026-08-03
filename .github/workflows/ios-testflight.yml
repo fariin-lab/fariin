@@ -70,6 +70,16 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            THE STORIES ROW, three fixes, and they are on their own in this build so anything that goes wrong in that row is easy to blame.
+
+            The white circle on My Story is smaller. You said it looked like you had uploaded a story when you had not, and you were right: a white ring around a face is the shape a posted story wears. It is an add button, so it is sized like a badge now. The moment you actually have a story posted, that circle goes back to full size with the real ring, matching everyone else in the row.
+
+            The uploading circle is now exactly the circle it turns into. Same size, same position, same lift off the photo. It was bigger and sat higher and further in, because the spinning ring was making that whole piece wider than the picture inside it.
+
+            ALL MEDIA: long press a photo or a video and you get a proper big preview instead of the little tile. Still Apple's own preview, just given the picture at a size worth looking at, and sized to the photo's real shape so a tall one comes up tall.
+
+            From 450:
+
             ADD STORY OPENS THE CAMERA now, full screen, built to the picture you sent. The close button and the flash sit on the preview, the zoom and the shutter at its foot, and underneath there is the pictures button on the left, the CAMERA and TEXT tabs in the middle and flip on the right. The old picker page is not gone, it is what the pictures button opens, because that is the only way to post a VIDEO story.
 
             PLEASE TRY FIRST: take a photo and post it, then open the pictures button and post a video, then TEXT. One thing is missing on purpose. Your picture has a second button beside the flash. In Signal that takes a burst of photos and sends them together. We have nothing like it and I do not ship a button that does nothing, so tell me what you want there.
