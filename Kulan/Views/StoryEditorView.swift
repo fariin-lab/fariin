@@ -262,6 +262,8 @@ struct StoryEditorView: View {
                     }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
                 }
+
+                cropOverlay
             }
             .coordinateSpace(name: "canvas")
             .onAppear { canvasSize = geo.size; recomputeEdited() }
@@ -288,20 +290,6 @@ struct StoryEditorView: View {
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
             // flows get the same compact fitted sheet.
             ShareStorySheet(image: s.data, caption: s.caption, onPosted: { onPosted(); dismiss() })
-        }
-        .fullScreenCover(isPresented: $showCrop) {
-            // OUR crop, not the library (owner 2026-08-03: "use my owner crop… remove that library in
-            // story"). `ChatCropView` is the one the chat's image editor uses, so cropping a story and
-            // cropping a photo you are sending are now the same screen with the same gestures. It
-            // dismisses itself, which clears `showCrop`.
-            //
-            // Still from the CURRENT cropped result when there is one, so re-opening crop refines
-            // instead of resetting to the original.
-            ChatCropView(image: croppedSource ?? source) { cropped in
-                croppedSource = cropped
-                recomputeEdited()
-            }
-                .ignoresSafeArea()
         }
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -345,7 +333,9 @@ struct StoryEditorView: View {
                     // Aa / crop / draw grouped in ONE dark capsule (target design), not separate circles.
                     HStack(spacing: 22) {
                         capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on the photo
-                        capsuleTool("crop", active: croppedSource != nil) { showCrop = true }
+                        capsuleTool("crop", active: croppedSource != nil) {
+                            withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
+                        }
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
                     }
                     .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
@@ -357,6 +347,32 @@ struct StoryEditorView: View {
             }
         }
         .padding(.horizontal, 16)
+    }
+
+    /// Crop, presented INLINE with a cross-fade — the chat editor's own `cropOverlay`, move for move
+    /// (owner 2026-08-03: "make the animation like when i stay edit page then i click crop").
+    ///
+    /// It was a fullScreenCover, which slides up from the bottom like a new screen; cropping is not
+    /// somewhere you go, it is something you do to the picture in front of you, and a cross-fade in
+    /// place says that.
+    ///
+    /// AND IT FIXES THE X IN THE STATUS BAR, which is the same report. The cover carried an
+    /// `.ignoresSafeArea()` left over from the library cropper that used to live there and wanted
+    /// full bleed. ChatCropView paints its own black to the edges and places its X and its Done with
+    /// `safeAreaInset`, so telling it to ignore the safe area drove the top bar under the clock.
+    /// Inline, it sits in this screen's own safe area exactly as it does inside the chat.
+    @ViewBuilder private var cropOverlay: some View {
+        if showCrop {
+            // From the CURRENT cropped result when there is one, so re-opening crop refines instead
+            // of resetting to the original.
+            ChatCropView(image: croppedSource ?? source, inline: true,
+                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
+                croppedSource = cropped
+                recomputeEdited()
+            }
+            .transition(.opacity)
+            .zIndex(20)
+        }
     }
 
     /// OUR pen bar, the same one the chat's image editor uses: a colour track, undo, pen vs
