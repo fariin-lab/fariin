@@ -1041,6 +1041,22 @@ struct StoryViewer: View {
 
     private func lifecycleGlue(_ v: some View) -> some View {
         v
+        // WARM THE MEMORY CACHE FOR THE STORY YOU ARE WATCHING, because that is the one whose card
+        // you are about to pull up (owner 2026-08-03: the flash happens "only first time i enter
+        // app… if i clear app then again i enter").
+        //
+        // That "only the first time" is the whole diagnosis. `StoryImage` already seeds itself from
+        // MEMORY so a rebuilt card draws instantly — but memory starts empty on every cold launch,
+        // and the photo is only on DISK. So the first pull of a session had nothing to seed from and
+        // showed the skeleton; every pull after it was warm and fine.
+        //
+        // Reading it here rather than in the card is what keeps the gesture clean: this runs off the
+        // main thread the moment a story appears, seconds before any finger arrives, where a
+        // synchronous disk read inside the drag would trade his flash for a stutter.
+        .task(id: currentStoryId) {
+            guard let url = currentStory?.previewUrl, !url.isEmpty else { return }
+            _ = await DiskImageCache.shared.image(for: url)
+        }
         .onChange(of: isUploadingItem) { _, up in
             NotificationCenter.default.post(name: .init(up ? "pauseStory" : "resumeStory"), object: nil)
         }
