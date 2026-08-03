@@ -97,58 +97,12 @@ extension View {
     }
 }
 
-/// Is there a real photo behind this url that can be drawn on the FIRST FRAME?
-///
-/// Asking "is the url non-empty" is a different question and answering it cost two bug reports: a
-/// removed or stale url opened as a poster and fell back to the circle once the load came back empty,
-/// which is a layout visibly rearranging itself a beat after the page opens.
-///
-/// This is the same synchronous probe AvatarView makes in its own initialiser, for the same reason —
-/// it is gated on an in-memory index, so a miss costs a Set lookup rather than a file probe, and a
-/// hit is promoted to memory so each photo pays once per launch. Every route into a profile comes
-/// from a screen that has already drawn this person's avatar, so by the time the profile can be
-/// tapped the answer is already in hand.
-///
-/// I GOT THIS TRADE WRONG ONCE, and the correction is the whole shape of this type.
-///
-/// It used to answer NO whenever the bitmap was not already cached, on the reasoning that every route
-/// into a profile comes from a screen that has just drawn that person's avatar. True — except for a
-/// photo that has only just been SET. A new picture is a new url this device has never downloaded, so
-/// the check said "no photo" and the header fell back to the circle. I called that case rare; it
-/// happens every single time anybody changes their picture, which is not rare at all (owner: "this
-/// bug only occurs after setting a new profile picture").
-///
-/// So the default is now YES, and only a url PROVEN to have nothing behind it says no. Proven, not
-/// guessed: the header reports back after trying, and the answer is remembered on disk. So a dead url
-/// costs one poster-then-circle flip the first time it is ever opened, and none after that, while a
-/// freshly set photo — the common case — is right immediately.
-enum PosterPhoto {
-    private static let missingKey = "posterPhotoMissing"
-    private static var missing = Set(UserDefaults.standard.stringArray(forKey: missingKey) ?? [])
-
-    static func readyNow(_ url: String?) -> Bool {
-        guard let u = url, !u.isEmpty else { return false }
-        // Already in hand → certainly yes, and no flip is possible.
-        if DiskImageCache.shared.smallImageSync(u) != nil { return true }
-        // Not in hand → assume it is real. Only a url we have already watched fail says otherwise.
-        return !missing.contains(u)
-    }
-
-    /// Called by the header once it knows. Remembering the failures is what stops a dead url from
-    /// flipping the layout on every visit instead of only the first.
-    static func remember(_ url: String?, hasPhoto: Bool) {
-        guard let u = url, !u.isEmpty else { return }
-        if hasPhoto {
-            guard missing.remove(u) != nil else { return }
-        } else {
-            guard !missing.contains(u) else { return }
-            missing.insert(u)
-            // Bounded: a device that has met a lot of stale urls should not grow this forever.
-            if missing.count > 200 { missing = Set(missing.prefix(200)) }
-        }
-        UserDefaults.standard.set(Array(missing), forKey: missingKey)
-    }
-}
+/// The old `PosterPhoto` lived here: a guess about whether a url had a picture behind it, made from
+/// whether the bitmap happened to be cached and then corrected by whether the download succeeded. It
+/// is gone. Both halves could answer after the page had drawn, so both could rearrange the layout
+/// under the reader, and its record of failures was written to disk — where "you were offline once"
+/// became "this person has no photo", permanently. The header now asks [ProfilePhotoIndex], which
+/// answers from the users document, synchronously, and never changes its mind mid-visit.
 
 // MARK: - What the poster needs to know about a photo
 
@@ -269,11 +223,6 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// Raw scroll offset of the header, for whatever the page fades against it (the nav bar title).
     var onScroll: (CGFloat) -> Void = { _ in }
     var onTap: () -> Void = {}
-    /// Whether a REAL photo is on screen, as opposed to the colour a name falls back to. A non-empty
-    /// url is NOT the same thing — a removed or stale one still leaves nothing to draw — and a poster
-    /// with nothing behind it is a slab of flat colour where a face should be. Same signal, same
-    /// name, as AvatarView, which learned this first.
-    var onPhotoResolved: (Bool) -> Void = { _ in }
     /// Drop the sharp photo while a viewer is flying out of it, so there is one picture on screen
     /// and not the same one twice.
     var photoHidden: Bool = false
@@ -309,7 +258,6 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
          onPhotoRect: @escaping (CGRect) -> Void = { _ in },
          onScroll: @escaping (CGFloat) -> Void = { _ in },
          onTap: @escaping () -> Void = {},
-         onPhotoResolved: @escaping (Bool) -> Void = { _ in },
          photoHidden: Bool = false,
          bleedUnderBars: Bool = true,
          edgeBleed: CGFloat = 16,
@@ -324,7 +272,6 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.onPhotoRect = onPhotoRect
         self.onScroll = onScroll
         self.onTap = onTap
-        self.onPhotoResolved = onPhotoResolved
         self.photoHidden = photoHidden
         self.bleedUnderBars = bleedUnderBars
         self.edgeBleed = edgeBleed
@@ -372,6 +319,13 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// And TALLER than it is wide, so one picture can be the background for the whole header —
     /// behind the name and behind the buttons — instead of handing over to a copy of itself.
     private var photoHeight: CGFloat { photoSide * PosterGeometry.aspect }
+
+    /// Their initial, for the no-bitmap state. Same rule as `AvatarView`, so the letter you see in a
+    /// list and the letter you see here are always the same one.
+    private var initial: String {
+        let c = name.trimmingCharacters(in: .whitespaces).first
+        return c.map { String($0).uppercased() } ?? "?"
+    }
 
     /// White on a dark photo, near-black on a bright one. Not a fixed colour, and not a box.
     private var onPhotoText: Color {
@@ -456,8 +410,23 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
+                // A LARGE AVATAR, NOT A SLAB. This state is reached whenever the bitmap is not here
+                // YET (a photo just set on another device, a cold launch, no signal) — and it used to
+                // be flat colour, which looked broken enough that the page would rather rearrange its
+                // whole layout than show it. That rearranging was the bug. Their letter on their own
+                // two colours — the same pair `AvatarView` fills their circle with, so it is the same
+                // person either way — is a legitimate thing to look at, so the header can simply hold
+                // its shape until the picture arrives.
                 LinearGradient(colors: AvatarPalette.gradient(for: name),
                                startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .overlay {
+                        Text(initial)
+                            .font(.system(size: photoSide * 0.34, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.92))
+                            // The letter sits where a face would, not in the middle of a frame whose
+                            // lower third is behind the name.
+                            .offset(y: -photoHeight * 0.12)
+                    }
             }
         }
         .frame(width: photoSide, height: photoHeight)
@@ -506,33 +475,29 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         .animation(.easeOut(duration: 0.25), value: image != nil)
     }
 
+    /// FETCH THE PICTURE. It reports nothing back, on purpose.
+    ///
+    /// There used to be an `onPhotoResolved` here, and the profile page hung its LAYOUT on it: no
+    /// picture behind the url meant fall back to the circle. That is the flicker, and it is not
+    /// fixable from inside this function, because "the download failed" and "there is no photo" are
+    /// not the same fact — the first is usually a train tunnel. Whether somebody has a photo is a
+    /// question about their users document, and [ProfilePhotoIndex] answers it before this view is
+    /// ever built. All that is left here is loading an image, and holding the person's letter until
+    /// it arrives.
     private func load() async {
-        // A local image IS the picture — nothing to fetch and nothing to report as missing.
-        if localImage != nil { onPhotoResolved(true); return }
-        // Already holding the bitmap from the cache seed: there is a photo, and the page can be
-        // told on the first frame rather than after a round trip that will not happen.
-        if image != nil { onPhotoResolved(true); return }
-        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else {
-            image = nil; tone = nil; onPhotoResolved(false); return
-        }
+        if localImage != nil { return }      // handed the picture directly — nothing to fetch
+        if image != nil { return }           // already seeded from the cache
+        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else { image = nil; tone = nil; return }
         if let cached = await DiskImageCache.shared.image(for: s) {
             image = cached
             tone = PosterTone.sample(cached, for: s)
-            onPhotoResolved(true)
             return
         }
         if let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
             DiskImageCache.shared.store(ui, data: data, for: s)
             image = ui
             tone = PosterTone.sample(ui, for: s)
-            onPhotoResolved(true)
-            return
         }
-        // A url with nothing behind it — removed, stale, or simply unreachable right now. Either way
-        // there is no picture to build a header out of, so say so and let the page fall back to the
-        // circle. Reporting false when we are merely offline is the RIGHT answer too: without the
-        // image, a poster is a slab of flat colour, which is the thing being fixed.
-        onPhotoResolved(false)
     }
 }
 

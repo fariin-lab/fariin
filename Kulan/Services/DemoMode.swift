@@ -105,8 +105,10 @@ enum DemoMode {
     ///
     /// `cache(_:)` puts its images in URLCache, which is where the story viewer reads. Profile photos
     /// are read somewhere else entirely: AvatarView seeds itself synchronously from DiskImageCache,
-    /// and the poster header refuses to draw unless `PosterPhoto.readyNow` finds the bitmap there on
-    /// the FIRST frame. A demo photo living only in URLCache is invisible to both, so it goes in both.
+    /// and the poster header reads the same store. A demo photo living only in URLCache is invisible
+    /// to both, so it goes in both. (The header no longer DECIDES anything from the cache — that was
+    /// `PosterPhoto`, now replaced by [ProfilePhotoIndex] — but it still draws from it, and a demo
+    /// contact whose bitmap is missing would show their letter on a full-size poster.)
     ///
     /// Blobs, not a plain gradient. A flat gradient blurs to itself, so the progressive fade at the
     /// bottom of the poster would be impossible to judge — there has to be detail for it to destroy.

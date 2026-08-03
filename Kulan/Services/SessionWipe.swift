@@ -17,6 +17,9 @@ enum SessionWipe {
         Drafts.shared.clear()                   // unsent plaintext
         PlayedVoice.shared.clear()
         ContactNames.shared.clear()
+        // Who has a profile photo, and who may see it — both are answers about OTHER people, read
+        // through the last account's contact relationships. The next account must ask again.
+        ProfilePhotoIndex.reset()
         SendQueue.removeAll()                   // queued unsent plaintext
         PendingOutbox.removeAll()               // forwarded bubbles waiting for a chat to be opened
         AudioCache.removeAll()                  // decrypted voice notes on disk

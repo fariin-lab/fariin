@@ -43,7 +43,7 @@ final class ProfileStore {
         guard !uid.isEmpty,
               let snap = try? await db.collection("users").document(uid).getDocument(source: .cache),
               let data = snap.data() else { return nil }
-        return UserProfile(id: uid, data: data)
+        return Self.indexed(UserProfile(id: uid, data: data))
     }
 
     func fetch(_ uid: String) async -> UserProfile? {
@@ -51,11 +51,20 @@ final class ProfileStore {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
             guard let data = snap.data() else { return nil }
-            return UserProfile(id: uid, data: data)
+            return Self.indexed(UserProfile(id: uid, data: data))
         } catch {
             print("profile fetch failed:", error)
             return nil
         }
+    }
+
+    /// EVERY read of a users document passes through here, so the profile header's synchronous index
+    /// fills itself from work the app already does — building a conversation, opening a profile,
+    /// listing a group's members. One hook, rather than a remember-to-call-it at each site.
+    /// See [ProfilePhotoIndex] for why the header cannot ask the network this question.
+    private static func indexed(_ p: UserProfile) -> UserProfile {
+        ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl, privacy: p.privacy)
+        return p
     }
 
     func updateProfile(name: String, handle: String, about: String = "") async throws {
@@ -287,16 +296,34 @@ final class ProfileStore {
     /// and delete the storage object so the old image is really gone, not just unlinked.
     func removePhoto() async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        try await db.collection("users").document(uid).setData(["photoUrl": ""], merge: true)
+        // BOTH CROPS, EVERYWHERE. This used to clear only `photoUrl` and `photos.{uid}`, and the
+        // poster is a SECOND stored image with its own field, its own conversation mirror and its
+        // own file — so removing your picture left a full `posterUrl` behind, and everyone else's
+        // copy of your profile still described you as somebody with a photo. That is what opened the
+        // tall header on people who had no picture at all, and the header then corrected itself a
+        // beat later when the load came back empty (owner: "after a few seconds they switch back").
+        // A half-cleared record is the bug; clearing all of it is the fix.
+        try await db.collection("users").document(uid)
+            .setData(["photoUrl": "", "posterUrl": ""], merge: true)
 
         let snap = try await db.collection("conversations")
             .whereField("users", arrayContains: uid).getDocuments()
-        let batch = db.batch()
-        for d in snap.documents { batch.updateData(["photos.\(uid)": ""], forDocument: d.reference) }
-        try await batch.commit()
+        let fields: [String: Any] = ["photos.\(uid)": "", "posters.\(uid)": ""]
+        // 1:1s in one batch (any-field rules, cannot be refused); GROUPS per document and
+        // best-effort, because their rules whitelist fields and one refusal must not roll back the
+        // 1:1 clears — the same split `uploadProfileImages` makes for the same reason.
+        let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
+        let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
+        if !oneToOnes.isEmpty {
+            let batch = db.batch()
+            for d in oneToOnes { batch.updateData(fields, forDocument: d.reference) }
+            try await batch.commit()
+        }
+        for d in groups { try? await d.reference.updateData(fields) }
 
         // Best-effort: a failed storage delete must not leave the profile half-updated.
         try? await Storage.storage().reference().child("profiles/\(uid).jpg").delete()
+        try? await Storage.storage().reference().child("profiles/\(uid)-poster.jpg").delete()
 
         me = await fetch(uid)
     }

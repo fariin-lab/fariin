@@ -35,7 +35,6 @@ struct GroupInfoView: View {
     @State private var showGroupPhoto = false     // tap the poster → the same morph a person's photo uses
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     @State private var posterRect: CGRect = .zero // poster photo's global square — the morph's start/end
-    @State private var posterPhotoOK: Bool?       // did a real photo turn up behind the url? see useModernHeader
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
 
     struct MemberAction: Identifiable { let id: String; let name: String; let isAdmin: Bool }
@@ -49,13 +48,16 @@ struct GroupInfoView: View {
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
-    /// Same rule as a person's profile: a url is assumed real unless this device has already watched
-    /// that exact url come back empty. Groups with no photo at all — plenty of them — keep the round
-    /// avatar and its camera badge.
+    /// A group needs no index and no guesswork: its photo lives on the conversation document itself,
+    /// which is the authority AND is already on this device through the live listener. So the url is
+    /// the answer, on the first frame, for as long as the page is open. Groups with no photo — plenty
+    /// of them — keep the round avatar and its camera badge.
+    ///
+    /// (A person's profile is the hard case, because it is opened with a MIRROR of their photo rather
+    /// than their own record. That is what [ProfilePhotoIndex] is for.)
     private var useModernHeader: Bool {
         ProfileLayoutStyle.resolved(profileLayout) == .modern
-            && PosterPhoto.readyNow(conv?.avatarUrl)
-            && posterPhotoOK != false
+            && !(conv?.avatarUrl ?? "").isEmpty
     }
 
     var body: some View {
@@ -221,11 +223,8 @@ struct GroupInfoView: View {
             scrollSpace: "groupScroll",
             onPhotoRect: { posterRect = $0 },
             onTap: { showGroupPhoto = true },
-            // Nothing behind the url → fall back to the circle rather than show a slab of colour.
-            onPhotoResolved: {
-                posterPhotoOK = $0
-                PosterPhoto.remember(conv?.avatarUrl, hasPhoto: $0)
-            },
+            // No layout feedback from the download: the conversation document already said whether
+            // there is a photo, and a failed fetch means offline as often as it means gone.
             photoHidden: showGroupPhoto,
             // This page is a List, and a List clips its rows. Running the photo up under the bars
             // the way a person's profile does would have it sliced off at the row's top edge, so

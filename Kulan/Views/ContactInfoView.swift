@@ -32,6 +32,47 @@ struct ContactInfoView: View {
     var isSelf: Bool = false   // your OWN profile (opened from your own story) → no call-yourself buttons
     var onSearch: () -> Void = {}   // "search" tile → pop back to the chat and open in-chat search
 
+    /// THE HEADER'S SHAPE, DECIDED ONCE, BEFORE THE FIRST FRAME, AND NEVER AGAIN.
+    ///
+    /// Latched in `init` on purpose. Every input that used to decide this arrived at its own moment —
+    /// a download finishing, a users document landing, a privacy map filling in — and each one could
+    /// rearrange the page under the reader (owner, 2026-08-03: "no flickering, switching, or delayed
+    /// updates. This is one of the most important parts of my app"). A photo that changes while you
+    /// are looking still updates the PICTURE, because that is just an image swapping inside a frame
+    /// that stays where it is; what cannot change is which layout you are looking at. The next time
+    /// this page is opened it is built again, from an index the visit itself has corrected.
+    ///
+    /// [ProfilePhotoIndex] holds the whole rule and the reasons behind it.
+    @State private var headerFacts: ProfilePhotoIndex.Header
+
+    init(cid: String, name: String, photoUrl: String?, posterUrl: String? = nil,
+         source: ProfileSource = .chat, isSelf: Bool = false,
+         onSearch: @escaping () -> Void = {}) {
+        self.cid = cid
+        self.name = name
+        self.photoUrl = photoUrl
+        self.posterUrl = posterUrl
+        self.source = source
+        self.isSelf = isSelf
+        self.onSearch = onSearch
+        let me = AuthService.shared.uid ?? ""
+        let other = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+        // PREFER THE CONVERSATION'S OWN COPY over the url this screen was pushed with. Both are
+        // mirrors, but not equally fresh: the conversation's is rewritten by the same operation that
+        // writes the users document, while a call record keeps the photo somebody had at the time of
+        // the call and a story group keeps the one they had when they posted. Those two are how a
+        // deleted photo survives, and this is a synchronous read of a repository the app already
+        // keeps live. The passed-in url still answers when there is no conversation yet.
+        // When there IS a conversation its answer is used whole, including "no photo" — that is the
+        // half a stale call record gets wrong.
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid && !$0.isGroup }
+        _headerFacts = State(initialValue: ProfilePhotoIndex.header(
+            uid: other,
+            fallbackPhoto: conv.map { $0.photoUrl(for: me) } ?? photoUrl,
+            fallbackPoster: conv.map { $0.posterUrl(for: me) } ?? posterUrl,
+            iAmContact: PrivacyPrefs.isContact(other)))
+    }
+
     @State private var handle = ""
     @State private var about = ""
     @State private var targetPrivacy: [String: String] = [:]   // their audience map (users doc)
@@ -73,8 +114,6 @@ struct ContactInfoView: View {
     @State private var heroOffset: CGFloat = 0
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
     @State private var posterRect: CGRect = .zero    // poster photo's global square — the modern morph's start/end
-    /// Did a real photo turn up behind the url? nil until the poster has looked. See useModernHeader.
-    @State private var posterPhotoOK: Bool?
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
@@ -108,19 +147,12 @@ struct ContactInfoView: View {
 
     private var layoutStyle: ProfileLayoutStyle { ProfileLayoutStyle.resolved(profileLayout) }
 
-    /// A poster needs a picture. Someone with no photo keeps the classic circle and its existing
-    /// empty state, rather than a header of flat colour pretending to be a portrait.
+    /// A poster needs a picture: somebody with no photo keeps the classic circle and its own empty
+    /// state, rather than a header of flat colour pretending to be a portrait.
     ///
-    /// DECIDED ON THE FIRST FRAME, and a url is assumed real until proven otherwise.
-    ///
-    /// This has been wrong in both directions. Requiring only a non-empty url meant a stale one opened
-    /// as a slab of colour. Requiring the bitmap to be CACHED fixed that but broke something far more
-    /// common: a photo that was only just set is a new url this device has never downloaded, so every
-    /// freshly changed picture fell back to the circle. See `PosterPhoto` for the rule that replaced
-    /// both — cached means yes, known-bad means no, anything else is assumed to be a real photo.
-    private var useModernHeader: Bool {
-        layoutStyle == .modern && PosterPhoto.readyNow(gatedPosterUrl) && posterPhotoOK != false
-    }
+    /// One reader of one latched fact. No cache probe, no download report, nothing that can answer
+    /// later than the first frame — see `headerFacts`.
+    private var useModernHeader: Bool { layoutStyle == .modern && headerFacts.hasPhoto }
 
     /// Chrome sitting on the photo: white on a dark picture, near-black on a pale one. Reads the
     /// sampling the poster already did, so nothing is measured twice.
@@ -781,15 +813,17 @@ struct ContactInfoView: View {
     // live call tiles (audit). The callee-side call gate already used the message-history rule, so
     // the two disagreed.
     private var iAmContact: Bool { PrivacyPrefs.isContact(otherUid) }
+    /// The circle's picture. `headerFacts` already applied the audience it knew about at open time;
+    /// the live check stays as well, so a privacy map that lands DURING the visit still hides the
+    /// picture. It can no longer move the layout — the image goes, the shape of the page does not.
     private var gatedPhotoUrl: String? {
-        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? photoUrl : nil
+        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? headerFacts.photoUrl : nil
     }
     /// What the HEADER draws: their tall crop when there is one, otherwise the avatar. Behind the
     /// same privacy gate as the avatar — a poster is the same photograph, so hiding one and showing
     /// the other would be a hole in the setting rather than a fallback.
     private var gatedPosterUrl: String? {
-        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) else { return nil }
-        return (posterUrl?.isEmpty == false) ? posterUrl : photoUrl
+        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? headerFacts.posterUrl : nil
     }
     private var gatedAbout: String {
         PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) ? about : ""
@@ -971,12 +1005,10 @@ struct ContactInfoView: View {
             // A tap is the PHOTO, always. The story has its own control in the toolbar now, so the
             // "which did you mean" sheet the round avatar needed is gone from this path.
             onTap: { showProfilePhoto = true },
-            // Nothing behind the url → fall back to the circle rather than show a slab of colour.
-            onPhotoResolved: {
-                posterPhotoOK = $0
-                // Remember it, so a dead url costs one flip ever rather than one per visit.
-                PosterPhoto.remember(gatedPosterUrl, hasPhoto: $0)
-            },
+            // NO LAYOUT FEEDBACK FROM THE DOWNLOAD. A failed load means "offline" as often as it
+            // means "gone", and either way the answer lands seconds after the page did. The header
+            // draws their letter on their own colour while it has no bitmap, which is a real large
+            // avatar rather than a slab, so there is nothing left for a late answer to correct.
             // While the viewer is open the photo IS the viewer — hiding the header's copy keeps it
             // one picture moving rather than two stacked on each other. The wash stays, so the page
             // behind the viewer keeps its background.
