@@ -443,6 +443,10 @@ struct StoriesRow: View {
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.25)))
 
                 UploadingAvatarRing(name: meName, photoUrl: mePhoto)   // my avatar + clean spinning ring
+                    // The same shadow `card()` puts under every other circle in the row. Without it
+                    // this one sat flat on the photo while its neighbours lifted off theirs, which is
+                    // the last way the uploading circle differed from the one it turns into.
+                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
                     .padding(8)
             }
             Text("Uploading…").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).frame(width: cardW)
@@ -1964,9 +1968,15 @@ struct UploadingAvatarRing: View {
         // hangs off its own 32pt avatar at the same 37.
         AvatarView(name: name, photoUrl: photoUrl, size: 32)
             .overlay {
+                // EVERY NUMBER HERE IS StoryRingView'S, so the ring you watch while it uploads is the
+                // same ring you get when it has uploaded: 32pt circle, 37pt frame, 2.0 line, and the
+                // `.inset(by: lineWidth / 2)` that keeps the stroke INSIDE that frame. Without the
+                // inset a stroke straddles its path, so a 2.5pt line reached 38.25 — a ring that grew
+                // by a point and a quarter the moment the upload finished.
                 Circle()
+                    .inset(by: 1)
                     .trim(from: 0, to: 0.72)
-                    .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .frame(width: 37, height: 37)
                     .rotationEffect(.degrees(spin ? 360 : 0))
             }
