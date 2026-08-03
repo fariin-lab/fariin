@@ -13,7 +13,7 @@ struct StoryRingView: View {
     var body: some View {
         // Ring spec (default dark theme):
         //  • UNSEEN gradient storyUnseenColors = 0x34C76F (green) → 0x3DA1FD (blue)
-        //  • SEEN solid storySeenColors = 0x48484A (grey)
+        //  • SEEN solid 0x505052 (grey) — the owner's exact hex, 2026-08-03
         //  • the SEEN ring is thinner than the unseen ring (inactiveLineWidth < activeLineWidth)
         //  • segment gap = activeLineWidth * 2  (points along the circumference)
         GeometryReader { geo in
@@ -23,7 +23,7 @@ struct StoryRingView: View {
             let seenW = max(1, lineWidth * 0.66)                       // inactiveLineWidth
             let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
                                                         startPoint: .top, endPoint: .bottom))
-            let grey = AnyShapeStyle(Color(hex: 0x48484A))
+            let grey = AnyShapeStyle(Color(hex: 0x505052))
             let gapPts: CGFloat = n > 1 ? activeW * 2.0 : 0           // spacing = activeLineWidth·2
             let gap = d > 0 ? gapPts / (CGFloat.pi * d) : 0
             let seg = 1.0 / CGFloat(n)
