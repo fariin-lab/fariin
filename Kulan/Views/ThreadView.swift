@@ -1816,10 +1816,10 @@ struct ThreadView: View {
         // forward, copy, edit, pin or save. Offering them would produce empty copies and quotes of a
         // message that no longer exists. Clearing it from your own side is the only thing left.
         if m.deleted {
-            // The SAME Delete action as any other message, so its dialog offers both: Delete for Me
-            // clears the marker from your side only, and Delete for Everyone (yours, sent) removes
-            // the marker itself from both. A second delete on a tombstone is a hard delete, since
-            // there is no content left to protect and the owner asked for the trace gone too.
+            // The SAME Delete action as any other message, but its dialog offers ONLY Delete for Me
+            // (owner order): the message is already deleted for everyone, so the one thing left is
+            // clearing the marker from your own side. The dialog enforces this — its Delete for
+            // Everyone button is gated on !deleted.
             out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 selecting = true; selectedIds = [m.id]
@@ -1909,7 +1909,10 @@ struct ThreadView: View {
         // What is excluded instead is the markers with nothing to react TO: the "pinned a message"
         // notice, which is a system line wearing a text message's clothes, and a message from a
         // newer build that this one can only draw as a placeholder.
-        guard m.sendState == nil, !iAmMuted, !m.isCall, !m.isSystem,
+        // No bar on a tombstone either: the deleted placeholder renders no badges (reactionCounts
+        // is empty for it by construction), so a picked emoji would write server-side and show to
+        // nobody — the same invisible-reaction trap the call/system exclusion above closed.
+        guard m.sendState == nil, !iAmMuted, !m.isCall, !m.isSystem, !m.deleted,
               m.pinNotice == nil, !m.isUnsupportedFeature else { return nil }
         return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
     }
@@ -2143,8 +2146,10 @@ struct ThreadView: View {
     }
 
     // Does the current selection include any of MY messages (→ "Delete for Everyone" is offered)?
+    // Tombstones don't count: they are already deleted for everyone (owner order), so a selection
+    // of only placeholders offers Delete for Me alone, same as the single-message dialog.
     private var selectionHasMine: Bool {
-        repo.items.contains { selectedIds.contains($0.id) && $0.authorId == me }
+        repo.items.contains { selectedIds.contains($0.id) && $0.authorId == me && !$0.deleted }
     }
 
     // everyone == true: my messages are removed for everyone, others hidden locally (mixed selection).
@@ -2155,7 +2160,7 @@ struct ThreadView: View {
             var anyRefused = false
             for id in ids {
                 guard let m = repo.items.first(where: { $0.id == id }) else { continue }
-                if everyone && m.authorId == me, m.sendState == nil {
+                if everyone && m.authorId == me, m.sendState == nil, !m.deleted {
                     // Tombstone locally FIRST, the same as the single-message path. These run one
                     // after another, so ten selected photos meant ten round trips with the list
                     // sitting still; now all ten flip at once and the server catches up behind them.
@@ -4870,7 +4875,13 @@ struct MessageBubble: View, Equatable {
     // Aggregate uid->emoji into (emoji, count, mine), most-popular first (standard logic,
     // our own pill design). Ties broken by emoji for a stable order.
     private var reactionCounts: [(emoji: String, count: Int, mine: Bool)] {
-        Dictionary(grouping: message.reactions.values, by: { $0 })
+        // A tombstone is a placeholder, never a reactable message — and this empty return is
+        // STRUCTURAL, not cosmetic: reactions on a tombstone can still exist in flight (a reaction
+        // landing in the same instant as the delete, an old build writing onto the stripped doc),
+        // and every badge, overhang and tap surface derives from this one value. Empty here means
+        // a deleted row cannot render or respond to reactions no matter what the data says.
+        guard !message.deleted else { return [] }
+        return Dictionary(grouping: message.reactions.values, by: { $0 })
             .map { (emoji: $0.key, count: $0.value.count, mine: message.reactions[myUid] == $0.key) }
             .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
     }
@@ -6251,7 +6262,9 @@ private struct MessageActionDialogs: ViewModifier {
                     // call hits a doc that does not exist, is refused, and the failure alert then
                     // claims "still there for both of you" about a message that was never delivered.
                     // Delete for Me cancels it properly (see ThreadView.deleteForMe).
-                    if m.authorId == me, m.sendState == nil {
+                    // NOT for a tombstone either (owner order): it was already deleted for everyone;
+                    // the only thing left to do is clear the marker from your own side.
+                    if m.authorId == me, m.sendState == nil, !m.deleted {
                         Button("Delete for Everyone", role: .destructive) {
                             // The bubble becomes a tombstone NOW, and the server work runs behind it.
                             // deleteMessage reads the doc before writing (it needs the Storage urls),
