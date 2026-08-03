@@ -4609,15 +4609,6 @@ struct MessageBubble: View, Equatable {
     // light/dark — see Theme.defaultBubble).
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
 
-    /// The deleted-message capsule's colour. ONE swatch, not the gradient: this is a wash behind a
-    /// material, and a gradient at 12% is a gradient nobody can see.
-    ///
-    /// BOTH SIDES, deliberately. The chat colour is MY bubble colour, but a placeholder is a notice
-    /// about the conversation rather than a message from one person, and giving the two sides
-    /// different placeholders would say something that is not true about who deleted what — the
-    /// sentence already says that.
-    private var tombstoneTint: Color { chatColor?.swatch ?? Theme.defaultBubble(dark) }
-    private var tombstoneRing: Color { tombstoneTint.opacity(dark ? 0.55 : 0.45) }
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
     private var onMyBubble: Color { .white }
@@ -5310,24 +5301,24 @@ struct MessageBubble: View, Equatable {
             HStack(spacing: 6) {
                 Image(systemName: "trash.slash")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary.opacity(0.7))
+                    .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary.opacity(0.7))
                 Text(isMe ? "You deleted this message" : "This message was deleted")
                     .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isMe ? onMyBubble : .secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
-            // Material FIRST, so it is still legible over a photo wallpaper (a flat tint alone was
-            // not), then a WASH OF THE CHAT COLOUR over it (owner 2026-08-03: "when i change color
-            // bubble is using old color", and he picked the soft tint over a full coloured bubble
-            // when asked). The register does not change — quiet capsule, secondary text, no time and
-            // no tick — it just belongs to the colour you chose instead of ignoring it.
+            // THE BUBBLE'S OWN FILL, no tint and no material (owner 2026-08-03, correcting the soft
+            // tint he had just picked: "always use same color like other bubble, no different
+            // colour, if i change color change it"). So: my side takes the chat colour exactly as a
+            // message does, their side takes the received grey, and both follow a colour change the
+            // moment it is made because they read the same `myFill` every other bubble reads.
             //
-            // The RING carries most of the recognition: a hairline at 45% of the colour reads as
-            // that colour at a glance, where a fill strong enough to do the same would be the loud
-            // placeholder he rejected on 447.
-            .background(.ultraThinMaterial, in: Capsule())
-            .background(tombstoneTint.opacity(dark ? 0.22 : 0.12), in: Capsule())
-            .overlay(Capsule().strokeBorder(tombstoneRing, lineWidth: 0.5))
+            // This deliberately reverses the neutral placeholder from 447 on his word. The reason it
+            // went neutral then still stands and is worth knowing if it is ever reported again: a
+            // placeholder in a vivid bubble is louder than the message it replaced. Two things keep
+            // it quieter than the original version he rejected — it is still a CAPSULE rather than a
+            // bubble, and it still carries no time and no tick.
+            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)), in: Capsule())
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
