@@ -127,6 +127,28 @@ struct StoryImage: View {
     var cardFillThreshold: CGFloat? = nil
     @State private var image: UIImage?
     @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
+
+    /// FIRST-FRAME SEED FROM MEMORY, and this is the story-card flash (owner 2026-08-03: "when i
+    /// scroll up and scroll down is flashing", with a shot of the card as a plain grey rectangle —
+    /// that rectangle is `SkeletonFill`).
+    ///
+    /// `image` is per-instance @State and `load()` begins with an `await`, so EVERY newly created
+    /// StoryImage draws the skeleton for at least one frame even when the bytes are already in
+    /// memory. Pulling the viewers sheet hands the card over between two different views — the morph
+    /// card that flies down and the carousel card that receives it — so a fresh instance appears
+    /// mid-drag, and one skeleton frame under a moving finger is exactly the flash he sees.
+    ///
+    /// Memory only, never the disk: this runs during a gesture and `AvatarView`'s synchronous disk
+    /// read is licensed by avatars being a few KB. A story is a full-screen photo. A miss simply
+    /// falls through to `load()` as before.
+    init(url: String, fitBlur: Bool = false, bakedBars: Bool = false, cardFillThreshold: CGFloat? = nil) {
+        self.url = url
+        self.fitBlur = fitBlur
+        self.bakedBars = bakedBars
+        self.cardFillThreshold = cardFillThreshold
+        if let warm = DiskImageCache.shared.memoryImage(url) { _image = State(initialValue: warm) }
+    }
+
     var body: some View {
         Group {
             if let image {
