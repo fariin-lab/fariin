@@ -255,9 +255,24 @@ struct StoryCameraView: View {
                                       onClose: { onClose() })
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: previewCorner, style: .continuous))
-                .padding(.horizontal, 6)
+                // WHILE TYPING THE CARD MEETS THE KEYBOARD (owner 2026-08-03, circling the two bottom
+                // corners: "left and right i see empty black"). The card normally floats with 6pt of
+                // black down each side and rounded corners all round, which reads as a card. Once the
+                // keyboard is up it is not floating any more, it is the top half of the screen — so
+                // the side margins go and the bottom corners square off, and the colour runs into the
+                // keyboard instead of leaving two black wedges beside the Aa and the tick.
+                //
+                // The TOP keeps its radius and its 6pt either way: that edge is under the status bar,
+                // not against anything.
+                .clipShape(UnevenRoundedRectangle(
+                    topLeadingRadius: previewCorner,
+                    bottomLeadingRadius: typing ? 0 : previewCorner,
+                    bottomTrailingRadius: typing ? 0 : previewCorner,
+                    topTrailingRadius: previewCorner,
+                    style: .continuous))
+                .padding(.horizontal, typing ? 0 : 6)
                 .padding(.top, 6)
+                .animation(.easeInOut(duration: 0.2), value: typing)
 
                 // Gone while the keyboard is up, as he drew it: the card takes that space instead,
                 // and the switch would otherwise be riding on top of the keyboard.
