@@ -70,6 +70,28 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            LOG IN WITH A CODE, no password needed. On the login screen tap "Log in with a code instead", type your email, and we send you a six digit number. Type it and you are in. Your phone will usually offer the number straight from the notification so you never type it. The code lasts 10 minutes, works once, and dies after five wrong tries.
+
+            Also: if you signed up with email and then press Continue with Google, the app now tells you that instead of saying it could not sign you in. One email is always one account here.
+
+            THE STORY CAMERA X BUTTON WORKS. You were right, the touch area was tiny. The picture was small inside a big circle and only the picture was taking taps. The X, the flash, the flip and the zoom buttons all take taps across their whole button now.
+
+            TEXT STORIES ARE PART OF THE CAMERA PAGE, built to the picture you sent: X top left, colour button top right, Aa bottom left, a tick while the keyboard is up, and the CAMERA and TEXT switch still there underneath with a blue NEXT. Because the switch stays on screen you can move between camera and text without closing anything, and what you typed survives the trip.
+
+            THE STORY EDITOR USES OUR OWN CROP AND OUR OWN PEN. The outside cropper is gone from the app entirely; cropping a story is now the same screen as cropping a photo you send. The pen has our own colour bar instead of Apple's floating palette. The caption bar is Liquid Glass, tinted just enough that white text stays readable on a bright photo.
+
+            ALL MEDIA TABS MOVED INTO THE TOP BAR, so they are literally the same control, in the same place, as All and Missed on the Calls page. That is where the glass comes from. The photo count moved to a line under the bar.
+
+            OPENING SOMEBODY'S PROFILE FROM THEIR STORY opens the full profile, not a half sheet. That is why the name and the story circles were sitting on top of each other.
+
+            STORY CARDS STOP FLASHING when you pull the viewers sheet up and down. A card that already has its photo now draws it instead of showing the grey loading block for a frame.
+
+            A DELETED MESSAGE USES YOUR CHAT COLOUR now, and follows it when you change it.
+
+            MY STORY: the white ring around your picture and the white edge around the plus are thinner. The picture itself is back to the same size as everyone else's.
+
+            From 451:
+
             THE STORIES ROW, three fixes, and they are on their own in this build so anything that goes wrong in that row is easy to blame.
 
             The white circle on My Story is smaller. You said it looked like you had uploaded a story when you had not, and you were right: a white ring around a face is the shape a posted story wears. It is an add button, so it is sized like a badge now. The moment you actually have a story posted, that circle goes back to full size with the real ring, matching everyone else in the row.
