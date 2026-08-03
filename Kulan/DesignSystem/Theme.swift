@@ -129,19 +129,32 @@ struct CloseXButton: View {
     }
 }
 
-/// One of our own icons inside a MENU row, sized to sit level with the system's SF Symbols.
+/// One of our own icons inside a MENU row or a swipe button, sized to sit level with the system's
+/// SF Symbols beside it.
 ///
-/// A menu's SF Symbol comes from the body font, and its visible glyph lands around 15pt inside a
-/// box noticeably bigger than that. So an asset drawn at the size of that BOX reads as oversized
-/// beside it, which is what 20pt did — reported twice, on Chats, Add Story and Archive.
+/// ONE NUMBER, MEASURED AGAINST THREE REPORTS RATHER THAN REASONED FROM THE FONT:
 ///
-/// One number in one place. Nine call sites each carrying their own copy is how the first sweep
-/// fixed some and left others, and how the wrong number then had to be found nine times.
+///  · **64pt** — the artwork's natural size. Every SVG in the set declares `width="64"` over a
+///    24-unit viewBox, so with no size applied at all that is what UIKit drew, and it towered.
+///  · **17pt** — the body font's point size. Too small, reported on build 448: "you made all of
+///    them too small. Use the same dimensions as the other icons". A symbol's point size is not
+///    its image size; UIKit gives an SF Symbol an image box around a quarter taller than the text
+///    it is measured from, and our artwork fills its box edge to edge where a symbol's glyph sits
+///    inside its own with room around it.
+///  · **22pt** — that image box. Ours drawn to the same box is the same size on screen, which is
+///    what "the same dimensions as the other icons" asks for.
+///
+/// Kept in one place. Nine call sites each carrying a copy is how the first sweep fixed some and
+/// missed others, and how a wrong number then had to be found nine times.
 struct MenuIcon: View {
     let name: String
-    var size: CGFloat = 17
+    var size: CGFloat = MenuIcon.standard
 
-    init(_ name: String, size: CGFloat = 17) {
+    /// The size of an SF Symbol's image box at body size. Menus and swipe buttons both use it, so
+    /// our icons are the same size as each other as well as the same size as the system's.
+    static let standard: CGFloat = 22
+
+    init(_ name: String, size: CGFloat = MenuIcon.standard) {
         self.name = name
         self.size = size
     }
