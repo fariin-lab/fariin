@@ -220,6 +220,7 @@ struct StoryCameraView: View {
                                 .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .frame(width: 46, height: 44)
+                                .contentShape(Rectangle())   // the whole 46×44, not just the bolt
                         }
                         .buttonStyle(.plain)
                     }
@@ -282,6 +283,9 @@ struct StoryCameraView: View {
                     .foregroundStyle(.white)
                     .frame(width: 46, height: 46)
                     .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5))
+                    // Same fix as the X above, applied here before it is reported here: a ring drawn
+                    // around a glyph is not a surface you can press.
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Flip camera")
@@ -339,12 +343,18 @@ struct StoryCameraView: View {
 
     // MARK: Pieces
 
+    /// THE `.contentShape` IS THE WHOLE POINT OF THIS FUNCTION, not decoration (owner on 450: "the X
+    /// button is not working, touch area is soo small"). `.frame(44, 44)` gives a 17pt glyph a 44pt
+    /// LAYOUT slot, but it does not give it a 44pt HIT area — the taps that count are still the ones
+    /// that land on the glyph itself, so the visible circle was mostly dead. `CloseXButton` in
+    /// Theme.swift has carried this line since the day it was written; I left it out here.
     private func chromeIcon(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
+            .frame(width: 46, height: 46)
             .liquidGlass(Circle(), interactive: true)
+            .contentShape(Circle())
     }
 
     private func zoomButton(_ level: CGFloat, _ label: String) -> some View {
@@ -359,6 +369,7 @@ struct StoryCameraView: View {
                 .foregroundStyle(on ? .yellow : .white)
                 .frame(minWidth: on ? 44 : 34, minHeight: 34)
                 .background(.black.opacity(on ? 0.35 : 0.22), in: Capsule())
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
