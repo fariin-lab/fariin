@@ -11,7 +11,7 @@ import AVFoundation
 // its root now instead of a cover it raised.
 //
 //  • Camera: capture → StoryEditorView.
-//  • CAMERA / TEXT switch → StoryTextComposer → audience sheet.
+//  • CAMERA / TEXT switch → the text card on the same page → NEXT → audience sheet.
 //  • Library button → the Photos / Albums grid, which is the only path that also takes VIDEO.
 struct AddStorySheet: View {
     var onPosted: () -> Void = {}
@@ -27,10 +27,8 @@ struct AddStorySheet: View {
     /// same rule the camera cover used to need here.
     @State private var pendingLibraryImage: UIImage?
     @State private var pendingLibraryVideo: URL?
-    @State private var pendingTextStory: StoryShareData?   // text story held until the composer cover dismisses
-    @State private var shareTextStory: StoryShareData?     // then shown to the audience sheet
+    @State private var shareTextStory: StoryShareData?     // finished text story → the audience sheet
     @State private var showLibrary = false
-    @State private var showText = false
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -38,7 +36,9 @@ struct AddStorySheet: View {
         StoryCameraView(
             onCapture: { d in if let ui = UIImage(data: d) { editorImage = EditorImage(ui) } },
             onClose: { dismiss() },
-            onTextMode: { showText = true },
+            // TEXT is a mode of the camera page now, not a cover raised over it, so the finished
+            // story arrives here already rendered and goes straight to the audience sheet.
+            onTextStory: { d in shareTextStory = StoryShareData(data: d) },
             onLibrary: { showLibrary = true })
         .fullScreenCover(item: $editorImage) { item in
             StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
@@ -51,12 +51,6 @@ struct AddStorySheet: View {
             else if let url = pendingLibraryVideo { pendingLibraryVideo = nil; editorVideo = EditorVideo(url) }
         }) { libraryPage }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
-        .fullScreenCover(isPresented: $showText, onDismiss: {
-            if let s = pendingTextStory { pendingTextStory = nil; shareTextStory = s }
-        }) {
-            StoryTextComposer(onShare: { d in pendingTextStory = StoryShareData(data: d); showText = false },
-                              onClose: { showText = false })
-        }
         .sheet(item: $shareTextStory) { s in
             ShareStorySheet(image: s.data, onPosted: { onPosted(); dismiss() })
         }

@@ -144,36 +144,68 @@ struct CameraPreview: UIViewRepresentable {
 struct StoryCameraView: View {
     var onCapture: (Data) -> Void
     var onClose: () -> Void
-    var onTextMode: () -> Void = {}
+    /// A finished TEXT story, already rendered to the image the pipeline posts.
+    var onTextStory: (Data) -> Void = { _ in }
     /// Bottom-left. Opens the photo/album grid rather than Apple's picker, so a story can still be a
     /// VIDEO — the system picker here would hand back an image and quietly drop that.
     var onLibrary: () -> Void = {}
 
+    /// CAMERA and TEXT are two things this ONE page can show, which is what the switch at the bottom
+    /// promises. Text used to be a separate full-screen cover, so choosing it took the switch off
+    /// screen and there was no way back except closing the whole thing.
+    private enum Mode { case camera, text }
+
     @StateObject private var cam = StoryCamera()
+    @State private var mode: Mode = .camera
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
     @State private var libraryThumb: UIImage?
+    // Text mode's state lives HERE, not in the card, so switching to the camera and back does not
+    // throw away what he typed.
+    @State private var storyText = ""
+    @State private var styleIndex = 0
+    @State private var fontIndex = 0
+    @State private var typing = false
     @Environment(\.scenePhase) private var scenePhase
 
     private let previewCorner: CGFloat = 40
     private let barHeight: CGFloat = 88
 
+    private var hasText: Bool { !storyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
-                preview
-                    .clipShape(RoundedRectangle(cornerRadius: previewCorner, style: .continuous))
-                    .padding(.horizontal, 6)
-                    .padding(.top, 6)
-                bottomBar
-                    .frame(height: barHeight)
+                Group {
+                    if mode == .camera {
+                        preview
+                    } else {
+                        StoryTextCard(text: $storyText, styleIndex: $styleIndex,
+                                      fontIndex: $fontIndex, typing: $typing,
+                                      onClose: { onClose() })
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: previewCorner, style: .continuous))
+                .padding(.horizontal, 6)
+                .padding(.top, 6)
+
+                // Gone while the keyboard is up, as he drew it: the card takes that space instead,
+                // and the switch would otherwise be riding on top of the keyboard.
+                if !typing {
+                    bottomBar
+                        .frame(height: barHeight)
+                }
             }
         }
         .onAppear { cam.onCapture = onCapture; cam.start(); loadLibraryThumb() }
         .onDisappear { cam.stop() }
         .onChange(of: scenePhase) { _, phase in   // free the camera when backgrounded
             if phase == .active { cam.start() } else { cam.stop() }
+        }
+        // The camera is a power draw with nothing to show while text is on screen.
+        .onChange(of: mode) { _, m in
+            if m == .camera { cam.start() } else { cam.stop() }
         }
     }
 
@@ -267,7 +299,39 @@ struct StoryCameraView: View {
 
     // MARK: Black bar under the card
 
-    private var bottomBar: some View {
+    @ViewBuilder private var bottomBar: some View {
+        if mode == .text { textBar } else { cameraBar }
+    }
+
+    /// TEXT mode: the switch, and NEXT. No library and no flip — neither has anything to do here,
+    /// and his drawing has neither.
+    private var textBar: some View {
+        HStack {
+            Spacer(minLength: 0)
+            modePicker
+            Spacer(minLength: 10)
+            Button {
+                if let data = renderTextStory(text: storyText, styleIndex: styleIndex, fontIndex: fontIndex) {
+                    onTextStory(data)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("NEXT").font(.system(size: 15, weight: .bold)).kerning(0.5)
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18).frame(height: 42)
+                .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
+                            in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!hasText)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private var cameraBar: some View {
         HStack {
             Button { onLibrary() } label: { libraryCard }
                 .buttonStyle(.plain)
@@ -321,8 +385,8 @@ struct StoryCameraView: View {
 
     private var modePicker: some View {
         HStack(spacing: 0) {
-            modeLabel("CAMERA", selected: true) {}
-            modeLabel("TEXT", selected: false) { onTextMode() }
+            modeLabel("CAMERA", selected: mode == .camera) { withAnimation(.snappy(duration: 0.2)) { mode = .camera } }
+            modeLabel("TEXT", selected: mode == .text) { withAnimation(.snappy(duration: 0.2)) { mode = .text } }
         }
         .padding(4)
         .background(.white.opacity(0.14), in: Capsule())
