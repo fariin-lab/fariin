@@ -586,10 +586,10 @@ struct ChatsView: View {
     @State private var showNew = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
     @State private var path = NavigationPath()
-    /// The chat currently open, so its row stays highlighted underneath it — Signal's `selectRow` on
-    /// open and `deselectRow` on return, which is what makes their highlight outlive the finger.
-    /// Cleared whenever the stack comes back to the list, so it has nothing to get stuck on.
-    @State private var openedChatId: String?
+    // NO "CURRENTLY OPEN CHAT" HIGHLIGHT. There was one here, and it is gone on the owner's word
+    // (2026-08-03): "highlight only while the user's finger is touching it… never during the back
+    // swipe". The whole highlight is Apple's pressed state now and nothing of ours — see the note at
+    // the row's Button.
     @State private var pendingDelete: Conversation?
     @State private var pendingMute: Conversation?
     // Multi-select edit mode.
@@ -730,8 +730,19 @@ struct ChatsView: View {
         // NavigationLink row draws the disclosure chevron and there is no API to turn it off
         // (user: "remove the arrow in chat list"). The link ALSO set the List's selection, and
         // SwiftUI never cleared it on the way back; fixed in the two onChange handlers on the List.
+        // THE HIGHLIGHT IS ENTIRELY APPLE'S, and this is the whole of it: a plain-styled Button in a
+        // List row lets the cell's own pressed state paint. It arrives on touch down, stays while a
+        // long press waits for the menu, and clears the moment the finger lifts or a scroll steals
+        // the touch. Nothing of ours is involved, so there is nothing that can be left behind.
+        //
+        // A row used to stay lit while its chat was open (Signal's `selectRow`, build 441). It is
+        // deleted. On a phone that highlight is only ever VISIBLE during the back swipe, because
+        // that is the one moment the list is on screen with a chat still on the stack — and it was
+        // being cleared by `path.count` reaching zero, which happens when the pop FINISHES. So the
+        // grey sat there at full strength for the whole gesture. Signal solves that by deselecting
+        // inside the navigation transition's own animation, which SwiftUI gives no way to reach; the
+        // owner chose the simpler end of that trade deliberately: no state, no grey, nothing to fade.
         Button {
-            openedChatId = conv.id   // the row stays lit under the chat, like Signal's selectRow
             path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                    photo: conv.displayPhoto(me)))
         } label: {
@@ -818,18 +829,12 @@ struct ChatsView: View {
                 voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
             .equatable()   // skip rebuild when this conversation is unchanged
             .frame(maxWidth: .infinity, alignment: .leading)
-            // THE OPEN CHAT'S ROW STAYS LIT. Signal's ChatListCell paints its own background whenever
-            // the cell is `isSelected || isHighlighted`, and the controller calls selectRow when a
-            // chat opens and deselectRow when you come back — which is why their highlight survives
-            // the push instead of dying with the finger. Ours had only the pressed half.
-            //
-            // Painted HERE, on the row's own content, and NOT through the List's selection binding.
-            // That binding is what produced the stuck grey row twice: a selection set outside edit
-            // mode renders as a permanent fill and SwiftUI never cleared it. This is derived from one
-            // piece of state that is wiped the moment the stack returns to the list, so there is no
-            // state it can strand in. It is not `.listRowBackground` either — forcing that made the
-            // swiped row paint a slab over its own content (the blank-row-on-swipe report).
-            .background(conv.id == openedChatId ? Color(uiColor: .secondarySystemFill) : Color.clear)
+            // NO BACKGROUND OF OUR OWN. A fill painted here used to mark the open chat; it is gone
+            // (see the Button above). Do not bring one back on this modifier, or on the List's
+            // selection binding, or on `.listRowBackground`: the binding stranded a permanent grey
+            // row twice, and listRowBackground painted a slab over the row's own content while it
+            // was swiped. The cell's pressed state is the only highlight this row has, and it is
+            // drawn by UIKit underneath everything here.
             .contentShape(Rectangle())   // whole row tappable (incl. empty space)
             .contextMenu {
                 chatMenu(conv)
@@ -1176,12 +1181,6 @@ struct ChatsView: View {
             // drag); reveal them only when we're fully back at the root list.
             .onChange(of: path.count) {
                 showHeaderIcons = path.isEmpty
-                // Back at the list → let the open chat's row go, fading rather than blinking off.
-                // Signal's deselectRow(animated:), and the one thing that guarantees the highlight
-                // can never be left behind: it is released by RETURNING, not by any tap.
-                if path.isEmpty, openedChatId != nil {
-                    withAnimation(.easeOut(duration: 0.25)) { openedChatId = nil }
-                }
             }
             .sheet(isPresented: $showCompose) {   // premium Add-Story picker (bottom sheet) → editor
                 AddStorySheet { Task { await StoriesRepository.shared.load(force: true) } }
