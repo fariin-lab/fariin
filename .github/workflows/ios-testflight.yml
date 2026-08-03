@@ -70,42 +70,30 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            The white lines down the left and right of a profile photo are gone. That was the blur running off the edge of the picture and averaging in nothing, so the page showed through. Worst toward the bottom, which is where you marked it.
+            THE DELETE SYSTEM, all layers fixed. Deleting a photo, gif, voice note or file for everyone flips it to the placeholder instantly, on both phones, even if they are offline. No more nothing-happens, no more the-previous-one-deletes-instead, no more a-voice-note-coming-back. Part of this fix is on the server, so it applies the moment you update.
 
-            The pill on the All Media bar sits in the middle of its slot again instead of resting on the bottom edge, and the bar is 42pt.
+            The placeholder is a quiet capsule now, not a loud bubble in your chat colour. Same fixed look in every chat, readable over any wallpaper.
 
-            Edit Profile has Circle and Large tabs at the top. Large is a view-only preview of your big header, so you can see both crops of the same photo before you save.
+            A deleted message is completely dead: reactions vanish the instant you delete, no reaction bar on long-press, no double-tap, no swipe to reply. Long-press gives Delete (your side only, since it is already gone for everyone) and Select.
 
-            PLEASE TRY FIRST: a profile with a photo, in light AND dark, and look hard at the far left and far right edges going down past the name. Then All Media, tapping every tab.
+            A deleted STORY flips your reply card to Story unavailable, instead of showing a preview of nothing.
+
+            An emoji-only story reply shows as the big emoji under the story card, not squeezed in a grey box.
+
+            The X on a full-screen profile photo works now. The invisible top bar was stealing the tap, so the X is a real bar button now, on people and groups both.
+
+            The photo cropper's window morphs from the circle to the tall frame between the two steps instead of cutting.
+
+            PLEASE TRY FIRST, with two phones: delete a photo with no caption for everyone, then a voice note, then a gif. Each must flip to the placeholder instantly on your phone and within a second or two on the other one, and deleting one message must never touch another. Then long-press a placeholder: only Delete and Select. Then tap a profile photo and press the X.
+
+            From 446:
+
+            The white lines down the left and right of a profile photo are gone. The pill on the All Media bar sits in the middle of its slot again, and the bar is 42pt. Edit Profile has Circle and Large tabs, so you can see both crops of the same photo before you save.
 
             From 444:
 
-            Setting a photo has TWO steps, because the circle and the big header are two different crops of the same picture. First you frame the CIRCLE, which is what shows in chats, stories, the message header and group members. Tick. Then you frame the TALL header, with the Blur band marked. Tick. Then Save. X on the second step goes back to the circle instead of throwing both away.
+            Setting a photo has TWO steps: first you frame the CIRCLE that shows in chats and groups, then the TALL header with the Blur band marked. Save writes both. Nothing changes until you press Save.
 
-            Settings is back to the round picture. The big header came out as a card rather than the top of a page, with your name showing twice.
-
-            The profile photo has no line at the bottom. It used to fade to nothing and let the page through, and a fade to nothing has a visible end. That end was the line you kept feeling. It fades into the page's own colour now, so the bottom of the photo IS the background.
-
-            The photo is taller than the screen is wide and there is only ONE image. The blurred copy underneath is gone.
-
-            Setting a photo changes nothing until you press Save. Pick, crop, press X and nothing happens. Remove waits for Save too.
-
-            From 443:
-
-            The composer rests on the safe area the way iMessage does. 442 has the 24pt version. Install both and tell me which one feels right.
-
-            The All Media tabs float over the photos, which scroll UNDER the bar. That is what makes the glass read like the Back button's.
-
-            From 441:
-
-            Double tap a GIF to react. You can react to a shared location, a contact card and a poll.
-
-            The chat list row stays highlighted while the chat is open and fades when you come back. No arrow.
-
-            A profile no longer shows the big header for a second and then swaps to the circle.
-
-            Profile Layout is gone from Privacy and Security. Everyone gets the new header.
-
-            Earlier: profiles have a new top. The photo fills the whole width instead of sitting in a small circle, the name and username sit on it, and the name goes dark on a pale photo and light on a dark one. Voice, video, mute, search and more are five glass circles with no words under them. Up to three story previews sit at the top with the real number beside them. Tap the photo to open it full screen.
+            The profile photo has no line at the bottom. It fades into the page's own colour, so the bottom of the photo IS the background.
 
         run: fastlane beta
