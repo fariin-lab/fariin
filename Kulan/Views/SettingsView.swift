@@ -51,6 +51,9 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var showEdit = false
     @State private var showQR = false
+    @State private var showPhoto = false          // tap the avatar → full-screen photo morph
+    @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
+    @State private var avatarFrame: CGRect = .zero   // the circle's global rect — the morph's start and end
 
     private var inviteText: String {
         let h = profile.me?.handle ?? ""
@@ -69,8 +72,13 @@ struct SettingsView: View {
                     // own name — so the name appeared twice, once in the photo's caption and once
                     // under it. A profile page earns the poster because the photo IS the top of the
                     // screen there. Settings does not.
-                    Button { showEdit = true } label: { profileHeader }
-                        .buttonStyle(.plain)
+                    //
+                    // TWO taps, not one (owner order: "when click profile picture go and open
+                    // picture, don't go edit page"): the PICTURE opens the photo full screen, the
+                    // way every other avatar in the app does; the name under it still opens Edit,
+                    // and the Edit button is always there. No photo = nothing to view, so the
+                    // circle falls back to Edit, which is where a photo gets added.
+                    profileHeader
                 }
                 .listRowBackground(Color.clear)
 
@@ -118,14 +126,38 @@ struct SettingsView: View {
             .contentMargins(.top, 4, for: .scrollContent)   // remove the big gap above the avatar
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
             .toolbar {
+                // While the photo viewer is open, the leading slot holds its X — the top strip
+                // belongs to the navigation bar, which eats overlay touches (same rule as
+                // ContactInfoView) — and QR/Edit/Done step aside so nothing floats over the photo.
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { showQR = true } label: { Image(systemName: "qrcode") }.tint(.primary)
+                    if showPhoto {
+                        Button { photoCloseTick &+= 1 } label: {
+                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                        }
+                        .tint(.primary)
+                    } else {
+                        Button { showQR = true } label: { Image(systemName: "qrcode") }.tint(.primary)
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Edit") { showEdit = true }.tint(.primary)
+                    if !showPhoto { Button("Edit") { showEdit = true }.tint(.primary) }
                 }
                 if !asTab {
-                    ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if !showPhoto { Button("Done") { dismiss() } }
+                    }
+                }
+            }
+            // The same in-place morph a contact's photo uses: grows out of the circle, drag melts
+            // the page away, closes back into it.
+            .overlay {
+                if showPhoto {
+                    ProfilePhotoViewer(name: profile.me?.name ?? "",
+                                       photoUrl: profile.me?.photoUrl ?? "",
+                                       sourceFrame: avatarFrame,
+                                       closeSignal: photoCloseTick,
+                                       isPresented: $showPhoto)
+                        .ignoresSafeArea()
                 }
             }
             .sheet(isPresented: $showEdit) { EditProfileView() }
@@ -137,11 +169,26 @@ struct SettingsView: View {
     private var profileHeader: some View {
         VStack(spacing: 8) {
             AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 96)
-            Text(profile.me?.name ?? "You")
-                .font(.title2.weight(.bold)).foregroundStyle(.primary)
-            if let h = profile.me?.handle, !h.isEmpty {
-                Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
+                // The morph's source rect, and the hidden-while-open swap, same as ContactInfoView's
+                // hero: the viewer flies out of this circle and back into it.
+                .background(GeometryReader { g in
+                    Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in avatarFrame = f }
+                })
+                .opacity(showPhoto ? 0 : 1)
+                .contentShape(Circle())
+                .onTapGesture {
+                    if let url = profile.me?.photoUrl, !url.isEmpty { showPhoto = true }
+                    else { showEdit = true }
+                }
+            VStack(spacing: 8) {
+                Text(profile.me?.name ?? "You")
+                    .font(.title2.weight(.bold)).foregroundStyle(.primary)
+                if let h = profile.me?.handle, !h.isEmpty {
+                    Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
+                }
             }
+            .contentShape(Rectangle())
+            .onTapGesture { showEdit = true }
         }
         .frame(maxWidth: .infinity)
         .padding(.bottom, 4)
@@ -1149,13 +1196,12 @@ struct EditProfileView: View {
         }
         guard let img = pendingPhoto, let data = img.jpegData(compressionQuality: 0.92) else { return true }
         do {
-            // The circle first, because it is the one that appears everywhere: if the poster upload
-            // fails halfway, you are left with a correct avatar rather than a correct header and a
-            // stale face in every list.
-            try await profile.uploadPhoto(data)
-            if let poster = pendingPoster, let pdata = poster.jpegData(compressionQuality: 0.92) {
-                try await profile.uploadPoster(pdata)
-            }
+            // ONE pass: both crops upload in parallel, one user-doc write, one conversation
+            // sweep. This used to be uploadPhoto then uploadPoster in sequence — two uploads,
+            // three conversation sweeps, three profile re-fetches — which is the "Save takes too
+            // long" the owner reported.
+            try await profile.uploadProfileImages(circle: data,
+                                                  poster: pendingPoster?.jpegData(compressionQuality: 0.92))
             pendingPhoto = nil
             pendingPoster = nil
             return true
@@ -1176,7 +1222,10 @@ struct EditProfileView: View {
         }
         saving = true; error = nil
         do {
-            if let existing = await ChatService.findByHandle(h), existing.id != AuthService.shared.uid {
+            // Only ask the server about the handle when the handle CHANGED — this lookup is a
+            // network round trip, and it was running on every save, photo-only saves included.
+            if h.lowercased() != origHandle.lowercased(),
+               let existing = await ChatService.findByHandle(h), existing.id != AuthService.shared.uid {
                 error = "That username is taken"; saving = false; return
             }
             // The photo goes first, and a failure stops here: closing over a photo that never landed

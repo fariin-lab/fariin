@@ -203,50 +203,70 @@ final class ProfileStore {
     /// how the avatar is propagated. The conversation copy is what lets a profile decide on its FIRST
     /// frame whether it has a poster to draw — reading it from the user document would arrive after
     /// the page is on screen, which is the flicker that was already fixed once.
-    func uploadPoster(_ rawData: Data) async throws {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        let data = Self.squareJPEG(rawData)
-        let ref = Storage.storage().reference().child("profiles/\(uid)-poster.jpg")
+    // One blob → its download URL. The two profile crops ride this concurrently from
+    // uploadProfileImages, which is most of why Save stopped taking so long.
+    private func putJPEG(_ data: Data, path: String) async throws -> String {
+        let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = "image/jpeg"
         _ = try await ref.putDataAsync(data, metadata: meta)
-        let url = try await ref.downloadURL().absoluteString
-        if let ui = UIImage(data: data) { DiskImageCache.shared.store(ui, data: data, for: url) }
-        try await db.collection("users").document(uid).setData(["posterUrl": url], merge: true)
-
-        // Best effort, and deliberately not fatal. Group conversations field-whitelist what a
-        // non-admin may write, so a rules refusal here must not fail the whole save — the poster is
-        // already on the user document, and a profile opened without the conversation copy simply
-        // falls back to the circle rather than showing nothing.
-        if let snap = try? await db.collection("conversations")
-            .whereField("users", arrayContains: uid).getDocuments() {
-            for d in snap.documents {
-                try? await d.reference.updateData(["posters.\(uid)": url])
-            }
-        }
-        me = await fetch(uid)
+        return try await ref.downloadURL().absoluteString
     }
 
-    func uploadPhoto(_ rawData: Data) async throws {
+    /// The photo half of Edit Profile's Save, as ONE pass. This replaced uploadPhoto +
+    /// uploadPoster called in sequence, which was the owner's "save takes too long": two storage
+    /// uploads one after the other, THREE separate conversation sweeps (photo batch, poster
+    /// per-doc loop awaited one at a time, then the name's), and a profile re-fetch after each.
+    /// Now the two blobs upload IN PARALLEL (wall time = the slower one, not the sum), the user
+    /// doc takes both urls in one write, ONE conversation query feeds one combined fan-out, and
+    /// the profile is re-fetched once.
+    ///
+    /// Fan-out shape: 1:1 conversations go in ONE fatal batch — the circle in every chat list is
+    /// the point of the save, and 1:1 rules accept any field so the batch cannot be refused for a
+    /// rules reason. GROUP docs are written per-doc, best-effort, concurrently: the rules now let
+    /// a plain member touch their own names/photos/posters entry (own-uid map diff, deployed
+    /// 2026-08-03), but a refusal there must degrade to "that group falls back on the user doc",
+    /// never fail the save — and one refused group in a shared batch would have killed the 1:1
+    /// writes with it.
+    func uploadProfileImages(circle rawCircle: Data, poster rawPoster: Data?) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let data = Self.squareJPEG(rawData)
-        let ref = Storage.storage().reference().child("profiles/\(uid).jpg")
-        let meta = StorageMetadata(); meta.contentType = "image/jpeg"
-        _ = try await ref.putDataAsync(data, metadata: meta)
-        let url = try await ref.downloadURL().absoluteString
+        let circleData = Self.squareJPEG(rawCircle)
+        let posterData = rawPoster.map { Self.squareJPEG($0) }
 
-        // Seed the cache BEFORE publishing the URL: every AvatarView cache-hits the new
+        let circleURL: String
+        var posterURL: String?
+        if let posterData {
+            async let c = putJPEG(circleData, path: "profiles/\(uid).jpg")
+            async let p = putJPEG(posterData, path: "profiles/\(uid)-poster.jpg")
+            (circleURL, posterURL) = try await (c, p)
+        } else {
+            circleURL = try await putJPEG(circleData, path: "profiles/\(uid).jpg")
+        }
+
+        // Seed the cache BEFORE publishing the URLs: every AvatarView cache-hits the new
         // photo the instant photoUrl lands — no re-download, no placeholder blink. Also
         // covers the change-photo case where the URL stays identical (same storage path)
         // and a stale cached image would otherwise keep showing.
-        if let ui = UIImage(data: data) { DiskImageCache.shared.store(ui, data: data, for: url) }
+        if let ui = UIImage(data: circleData) { DiskImageCache.shared.store(ui, data: circleData, for: circleURL) }
+        if let posterURL, let posterData, let ui = UIImage(data: posterData) {
+            DiskImageCache.shared.store(ui, data: posterData, for: posterURL)
+        }
 
-        try await db.collection("users").document(uid).setData(["photoUrl": url], merge: true)
+        var userFields: [String: Any] = ["photoUrl": circleURL]
+        if let posterURL { userFields["posterUrl"] = posterURL }
+        try await db.collection("users").document(uid).setData(userFields, merge: true)
 
+        var convFields: [String: Any] = ["photos.\(uid)": circleURL]
+        if let posterURL { convFields["posters.\(uid)"] = posterURL }
         let snap = try await db.collection("conversations")
             .whereField("users", arrayContains: uid).getDocuments()
-        let batch = db.batch()
-        for d in snap.documents { batch.updateData(["photos.\(uid)": url], forDocument: d.reference) }
-        try await batch.commit()
+        let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
+        let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
+        if !oneToOnes.isEmpty {
+            let batch = db.batch()
+            for d in oneToOnes { batch.updateData(convFields, forDocument: d.reference) }
+            try await batch.commit()
+        }
+        for d in groups { try? await d.reference.updateData(convFields) }
 
         me = await fetch(uid)
     }
