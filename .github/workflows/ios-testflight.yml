@@ -70,6 +70,20 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            NO PICTURE MEANS THE CIRCLE, everywhere. You showed me an account with no picture that still opened with the big header. Yesterday's fix moved the decision onto your account record, and a record can name a photo that is not there any more, so the app believed in a picture it could not draw. It now asks one more question before it draws anything: is there really a picture behind this. Nothing to load means the circle. This is checked on a person's profile opened from a chat, from the Calls list and from a story, on a group, and on your own preview in Edit Profile.
+
+            PLEASE TRY FIRST: an account with no picture, and one with a picture, opened all three ways. The right layout on the very first frame, and it must not change while you are looking at it.
+
+            MENU AND SWIPE ICONS are the same size as the rest now. You said the last ones came out too small. They did, because I sized them to the text instead of to the picture box that a normal icon fills, and this time the number is one number for menus and for swipe buttons together.
+
+            EDIT PROFILE, the Large tab is now called Preview and it is a card deck. Your card in front, the same card peeking out either side and tilted, your name and username on the card itself.
+
+            ALL MEDIA no longer flashes when you swipe fast. Swiping quickly through photos there could land you on an empty page for a moment. A chat never did this because a chat opens one photo with nothing to swipe to. Photos further ahead are now drawn instead of left blank, and the neighbours start loading the moment you move.
+
+            THE CHAT LIST no longer keeps a row lit under the chat you opened. It only lights while your finger is on it, which is what you asked for. The grey that stayed on all through the back swipe is gone.
+
+            From 448:
+
             PROFILE PICTURES, the big one. Some people who have a photo were opening with the small circle, and some people with no photo were opening with the big header and then switching back a second later. Both are fixed, and one half of it was in the data: removing your picture only cleared half of it and left the tall crop behind, so every other phone still had a record saying you had a photo. The app no longer guesses at all. It asks your account record, has the answer before it draws anything, and keeps that answer for the whole visit.
 
             PLEASE TRY FIRST: open the profile of somebody WITH a photo and somebody WITHOUT one, and reach each of them three ways - from the chat, from the Calls list, and from their story. Every time it must be right on the very first frame and must never change while you are looking at it. Then remove your own photo and check what your friend's phone shows you as.
