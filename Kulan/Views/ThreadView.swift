@@ -5159,7 +5159,10 @@ struct MessageBubble: View, Equatable {
     private var replySwipeGesture: some Gesture {
         DragGesture(minimumDistance: 18)
             .onChanged { v in
-                guard message.sendState == nil, !VoiceScrubState.active else { return }
+                // No reply-swipe on a tombstone: there is nothing to quote, and the composer would
+                // open a reply box pointing at "You deleted this message" (owner report). Gated here
+                // at the movement source — dragX never moves, so onEnded can never fire a reply.
+                guard message.sendState == nil, !message.deleted, !VoiceScrubState.active else { return }
                 // THE WAVEFORM IS A NO-REPLY ZONE (user's "red area"). Refused for the whole touch,
                 // whichever way it goes, because the flag is raised on the waveform's first movement -
                 // earlier than this gesture's own 18pt threshold. Ownership, not arbitration: the two
