@@ -29,10 +29,9 @@ packages:
   # header→profile tap, swipe-down dismiss, exact Instagram sizing, transitions).
   StoryUI:
     path: StoryUI
-  # Gold-standard iOS image cropper (zoom/rotate/aspect/reset) — TimOliver/TOCropViewController.
-  TOCropViewController:
-    url: https://github.com/TimOliver/TOCropViewController
-    from: "2.7.0"
+  # (TOCropViewController removed 2026-08-03 on the owner's word: "use my owner crop… remove that
+  # library". The story editor was its only caller and now uses ChatCropView, which is ours and is
+  # what the chat's image editor has always used. One cropper in the app instead of two.)
 
 targets:
   Kulan:
@@ -121,8 +120,6 @@ targets:
         product: LiveKit
       - package: StoryUI
         product: StoryUI
-      - package: TOCropViewController
-        product: CropViewController
     # Attaching the tests to the app's own scheme is what makes `xcodebuild test -scheme Kulan`
     # find them. Without it the scheme has no test action and the command passes having run nothing,
     # which is worse than failing.

@@ -38,6 +38,11 @@ struct StoryEditorView: View {
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
+    // Our own pen palette, the same three controls ChatImageEditor drives PencilKit with. Defaults
+    // match it too, so a pen is a pen wherever you pick one up in this app.
+    @State private var penHue = 0.01             // 0 = white end of the track; 0.01 = red
+    @State private var penWidth: CGFloat = 6
+    @State private var isHighlighter = false
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
     @State private var canvasSize: CGSize = .zero
     // Pinch-zoom + pan the photo directly on the canvas (baked WYSIWYG into the post). Driven by UIKit
@@ -177,7 +182,16 @@ struct StoryEditorView: View {
                 if isDrawing {
                     // Must live in the SAME space (geo) as the photo + overlays + the flatten capture rect,
                     // otherwise strokes bake shifted down by the top inset and the bottom band is clipped.
-                    DrawingCanvas(drawing: $drawing, isActive: true)
+                    //
+                    // OUR PEN, NOT APPLE'S PALETTE (owner 2026-08-03: "use my owner pen"). PencilKit still
+                    // draws the strokes — it is the drawing engine, not a look — but its tool picker is off
+                    // and the ink comes from our own bar, exactly as ChatImageEditor has always done it.
+                    DrawingCanvas(drawing: $drawing, isActive: true,
+                                  penColor: penHue == 0 ? .white
+                                                        : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                                  showsToolPicker: false,
+                                  inkType: isHighlighter ? .marker : .pen,
+                                  penWidth: penWidth)
                         .frame(width: geo.size.width, height: geo.size.height)
                 } else if !drawing.bounds.isEmpty {
                     // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
@@ -225,9 +239,16 @@ struct StoryEditorView: View {
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
                 // Bottom bar — ONLY this rises above the keyboard (caption docks above it, toolbar hides).
-                // While DRAWING, hide it entirely so the PencilKit pen palette owns the bottom (no overlap
-                // with the caption pill / Aa / crop / send). The top "Done" exits drawing.
-                if !isDrawing {
+                // While DRAWING, OUR pen bar takes the bottom instead. It used to be hidden entirely so
+                // Apple's PencilKit palette could own that strip; the palette is gone now, so the space
+                // belongs to the colour track and the three tools.
+                if isDrawing {
+                    VStack {
+                        Spacer()
+                        penBar.padding(.bottom, 8)
+                    }
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
+                } else {
                     VStack {
                         Spacer()
                         bottomBar
@@ -269,11 +290,17 @@ struct StoryEditorView: View {
             ShareStorySheet(image: s.data, caption: s.caption, onPosted: { onPosted(); dismiss() })
         }
         .fullScreenCover(isPresented: $showCrop) {
-            // Crop from the current cropped result if present, so re-opening crop refines instead of
-            // resetting to the original (TOCropViewController, TimOliver — proven crop engine).
-            TOCropView(image: croppedSource ?? source,
-                       onDone: { cropped in croppedSource = cropped; showCrop = false; recomputeEdited() },
-                       onCancel: { showCrop = false })
+            // OUR crop, not the library (owner 2026-08-03: "use my owner crop… remove that library in
+            // story"). `ChatCropView` is the one the chat's image editor uses, so cropping a story and
+            // cropping a photo you are sending are now the same screen with the same gestures. It
+            // dismisses itself, which clears `showCrop`.
+            //
+            // Still from the CURRENT cropped result when there is one, so re-opening crop refines
+            // instead of resetting to the original.
+            ChatCropView(image: croppedSource ?? source) { cropped in
+                croppedSource = cropped
+                recomputeEdited()
+            }
                 .ignoresSafeArea()
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -294,9 +321,14 @@ struct StoryEditorView: View {
                         .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
                 }
                 .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)   // user spec: 40px
-                // Dark pill (like every other app + our own ChatImageEditor): the light Liquid Glass
-                // made the white caption text/placeholder unreadable on bright photos (user screenshot).
-                .background(Color.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
+                // glass"). Plain glass was here once and came back off: on a bright photo it went pale
+                // and the white placeholder disappeared into it, which he photographed. `tint` is
+                // Apple's own glass tint, so this is still real glass and not a dark pill pretending —
+                // it just carries enough of its own darkness that white text always has something to
+                // sit on. The text keeps its hairline shadow for the same reason.
+                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous),
+                             tint: .black.opacity(0.28))
                 // Light photos made the white caption text invisible (user screenshot: white-on-
                 // white). A soft bar shadow lifts the pill off bright backgrounds...
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
@@ -325,6 +357,52 @@ struct StoryEditorView: View {
             }
         }
         .padding(.horizontal, 16)
+    }
+
+    /// OUR pen bar, the same one the chat's image editor uses: a colour track, undo, pen vs
+    /// highlighter, a width that cycles, and a tick to finish. Nothing here is Apple's palette.
+    private var penBar: some View {
+        let currentColor = penHue == 0 ? Color.white : Color(hue: penHue, saturation: 1, brightness: 1)
+        return VStack(spacing: 14) {
+            GradientSlider(value: $penHue, track: LinearGradient(
+                colors: [.white] + stride(from: 0.02, through: 1.0, by: 0.08).map { Color(hue: $0, saturation: 1, brightness: 1) },
+                startPoint: .leading, endPoint: .trailing))
+                .padding(.horizontal, 20)
+            HStack(spacing: 12) {
+                penTool("arrow.uturn.backward") {
+                    var strokes = drawing.strokes
+                    if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
+                }
+                penTool("pencil.tip", active: !isHighlighter) { isHighlighter = false }
+                penTool("highlighter", active: isHighlighter) { isHighlighter = true }
+                Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
+                    Circle().fill(currentColor).frame(width: min(penWidth + 6, 26), height: min(penWidth + 6, 26))
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Button { isDrawing = false } label: {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .environment(\.colorScheme, .dark)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private func penTool(_ icon: String, active: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 17, weight: .medium))
+                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+        }
+        .buttonStyle(.plain)
     }
 
     // Plain icon button inside the dark tool capsule (no per-button background — the capsule is the bg).
