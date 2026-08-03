@@ -4608,6 +4608,16 @@ struct MessageBubble: View, Equatable {
     // Fill behind MY bubbles: the custom chat colour if set, else the default systemBlue (adaptive
     // light/dark — see Theme.defaultBubble).
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
+
+    /// The deleted-message capsule's colour. ONE swatch, not the gradient: this is a wash behind a
+    /// material, and a gradient at 12% is a gradient nobody can see.
+    ///
+    /// BOTH SIDES, deliberately. The chat colour is MY bubble colour, but a placeholder is a notice
+    /// about the conversation rather than a message from one person, and giving the two sides
+    /// different placeholders would say something that is not true about who deleted what — the
+    /// sentence already says that.
+    private var tombstoneTint: Color { chatColor?.swatch ?? Theme.defaultBubble(dark) }
+    private var tombstoneRing: Color { tombstoneTint.opacity(dark ? 0.55 : 0.45) }
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
     private var onMyBubble: Color { .white }
@@ -5306,10 +5316,18 @@ struct MessageBubble: View, Equatable {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
-            // Material, not a colour: legible over a photo wallpaper (a flat 4% tint was not),
-            // and the same fixed register as the date pill in every theme.
+            // Material FIRST, so it is still legible over a photo wallpaper (a flat tint alone was
+            // not), then a WASH OF THE CHAT COLOUR over it (owner 2026-08-03: "when i change color
+            // bubble is using old color", and he picked the soft tint over a full coloured bubble
+            // when asked). The register does not change — quiet capsule, secondary text, no time and
+            // no tick — it just belongs to the colour you chose instead of ignoring it.
+            //
+            // The RING carries most of the recognition: a hairline at 45% of the colour reads as
+            // that colour at a glance, where a fill strong enough to do the same would be the loud
+            // placeholder he rejected on 447.
             .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(dark ? 0.16 : 0.10), lineWidth: 0.5))
+            .background(tombstoneTint.opacity(dark ? 0.22 : 0.12), in: Capsule())
+            .overlay(Capsule().strokeBorder(tombstoneRing, lineWidth: 0.5))
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
