@@ -5219,16 +5219,27 @@ struct MessageBubble: View, Equatable {
         // grey box. The slashed circle and the italic are what make it read as "removed" rather than
         // as a message that failed to load.
         if message.deleted {
+            // A deleted message is a NOTICE, not a message — so it must not wear the bubble. The
+            // first version reused the bubble fill, which meant the sender's side took the chat
+            // colour and the placeholder screamed in purple (owner screenshot, with iMessage's
+            // quiet "You unsent a message" capsule as the reference). This is our own take on that
+            // register: a fixed neutral capsule on BOTH sides — hairline ring, near-transparent
+            // fill, secondary text — identical in every chat colour, still sitting on the sender's
+            // side so the conversation flow keeps who-did-what. No time or tick: a notice has no
+            // delivery state to report.
             HStack(spacing: 6) {
-                Image(systemName: "trash.slash").font(.system(size: 13))
+                Image(systemName: "trash.slash")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary.opacity(0.7))
                 Text(isMe ? "You deleted this message" : "This message was deleted")
-                    .font(.system(size: 16)).italic()
-                metaRow
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
             }
-            .foregroundStyle(isMe ? onMyBubble.opacity(0.75) : Color.secondary)
-            .padding(.horizontal, 15).padding(.vertical, 10)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            // Material, not a colour: legible over a photo wallpaper (a flat 4% tint was not),
+            // and the same fixed register as the date pill in every theme.
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(dark ? 0.16 : 0.10), lineWidth: 0.5))
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
