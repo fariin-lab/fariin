@@ -160,8 +160,8 @@ struct MediaGalleryView: View {
 
     // MARK: - Tab bar (Media / Files / Voice / Links / GIFs)
 
-    // A Liquid Glass capsule, ours rather than the system control, floating over the grid. See
-    // MediaTabBar for why it cannot be both glass and Apple's control on a page.
+    // Apple's segmented control, the same one the Calls page uses for All / Missed (owner's order,
+    // 2026-08-03). See MediaTabBar for why it cannot be both that and Liquid Glass on a page.
     private var tabBar: some View {
         MediaTabBar(titles: Tab.allCases.map(\.label),
                     selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
@@ -188,7 +188,11 @@ struct MediaGalleryView: View {
             grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs").tag(Tab.gifs)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .animation(.easeInOut(duration: 0.22), value: tab)
+        // NO `.animation(value: tab)` HERE, AND THIS IS THE SWIPE LAG HE REPORTED. A paged TabView
+        // flips `tab` as your finger crosses the midpoint, WHILE YOU ARE STILL DRAGGING, and an
+        // animation attached to the TabView animates the whole five-tab subtree on that same frame.
+        // The drag is already the animation; a second one over all of it is what dropped frames
+        // under his finger. Same lesson as the photo pager: nothing heavy on the commit frame.
     }
 
     // Shown until the first load finishes, so the empty state never flashes while loading.
