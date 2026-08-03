@@ -1099,8 +1099,10 @@ struct EditProfileView: View {
     private var previewArt: PreviewArt? {
         if pendingRemove { return nil }
         if let img = pendingPoster ?? pendingPhoto { return .local(img) }
-        if let p = profile.me?.posterUrl, !p.isEmpty { return .remote(p) }
-        if let p = profile.me?.photoUrl, !p.isEmpty { return .remote(p) }
+        // `hasPicture`, not "is the string empty" — the same last question every profile header
+        // asks, so your own preview cannot claim a photo the app cannot draw.
+        if let p = profile.me?.posterUrl, ProfilePhotoIndex.hasPicture(p) { return .remote(p) }
+        if let p = profile.me?.photoUrl, ProfilePhotoIndex.hasPicture(p) { return .remote(p) }
         return nil
     }
 

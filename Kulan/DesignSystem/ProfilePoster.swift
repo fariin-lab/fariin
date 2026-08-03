@@ -491,13 +491,22 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         if let cached = await DiskImageCache.shared.image(for: s) {
             image = cached
             tone = PosterTone.sample(cached, for: s)
+            ProfilePhotoIndex.noteLoad(s, ok: true)
             return
         }
         if let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
             DiskImageCache.shared.store(ui, data: data, for: s)
             image = ui
             tone = PosterTone.sample(ui, for: s)
+            ProfilePhotoIndex.noteLoad(s, ok: true)
+            return
         }
+        // A FACT ABOUT A URL, not a signal about this layout — the distinction that matters here.
+        // Nothing reads this to decide what THIS view does; it is filed for the next profile that
+        // has to answer "circle or big photo" before it draws. The old `onPhotoResolved` fed the
+        // live layout from this same moment, which is why the header rearranged itself seconds
+        // after you opened it.
+        ProfilePhotoIndex.noteLoad(s, ok: false)
     }
 }
 

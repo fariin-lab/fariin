@@ -48,16 +48,17 @@ struct GroupInfoView: View {
     private var canEditInfo: Bool { can(.changeInfo) || (conv?.membersCanEditInfo ?? false) }
     private var canAdd: Bool { can(.inviteUsers) || (conv?.membersCanAdd ?? false) }
 
-    /// A group needs no index and no guesswork: its photo lives on the conversation document itself,
-    /// which is the authority AND is already on this device through the live listener. So the url is
-    /// the answer, on the first frame, for as long as the page is open. Groups with no photo — plenty
-    /// of them — keep the round avatar and its camera badge.
+    /// A group needs no index lookup: its photo lives on the conversation document itself, which is
+    /// the authority AND is already on this device through the live listener. But it needs the same
+    /// last question a person's profile asks — is there a PICTURE behind that url — because a url
+    /// whose file is gone would otherwise draw a letter where a face should be. Groups with no photo,
+    /// and plenty have none, keep the round avatar and its camera badge.
     ///
     /// (A person's profile is the hard case, because it is opened with a MIRROR of their photo rather
     /// than their own record. That is what [ProfilePhotoIndex] is for.)
     private var useModernHeader: Bool {
         ProfileLayoutStyle.resolved(profileLayout) == .modern
-            && !(conv?.avatarUrl ?? "").isEmpty
+            && ProfilePhotoIndex.hasPicture(conv?.avatarUrl)
     }
 
     var body: some View {

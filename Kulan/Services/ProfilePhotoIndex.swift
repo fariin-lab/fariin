@@ -65,23 +65,65 @@ enum ProfilePhotoIndex {
     ///     the conversation repository.
     static func header(uid: String, fallbackPhoto: String?, fallbackPoster: String?,
                        iAmContact: Bool) -> Header {
+        let none = Header(hasPhoto: false, photoUrl: nil, posterUrl: nil)
+        // Which urls this person is described by. The record wins when we have it; otherwise the
+        // urls this screen was handed, which are right whenever the mirror is fresh.
+        let photo: String?
+        let poster: String?
         if let f = facts(uid) {
-            // Authoritative. The circle decides; the poster is only ever a nicer crop of it.
-            guard !f.photo.isEmpty else { return Header(hasPhoto: false, photoUrl: nil, posterUrl: nil) }
-            guard allowsPhoto(f.audience, iAmContact: iAmContact) else {
-                return Header(hasPhoto: false, photoUrl: nil, posterUrl: nil)
-            }
-            return Header(hasPhoto: true,
-                          photoUrl: f.photo,
-                          posterUrl: f.poster.isEmpty ? f.photo : f.poster)
+            guard allowsPhoto(f.audience, iAmContact: iAmContact) else { return none }
+            // The circle decides. The poster is a second crop of the same photograph and cannot
+            // exist without one, so an empty photoUrl is a person with no picture whatever a
+            // leftover posterUrl still says.
+            photo = f.photo.isEmpty ? nil : f.photo
+            poster = f.poster.isEmpty ? nil : f.poster
+        } else {
+            photo = (fallbackPhoto?.isEmpty == false) ? fallbackPhoto : nil
+            poster = (fallbackPoster?.isEmpty == false) ? fallbackPoster : nil
         }
-        // Never met this person's document. The url we were handed is the best fact available, and
-        // it is right whenever the mirror is fresh — which the remove-photo fix now keeps it.
-        let photo = (fallbackPhoto?.isEmpty == false) ? fallbackPhoto : nil
-        guard let photo else { return Header(hasPhoto: false, photoUrl: nil, posterUrl: nil) }
-        let poster = (fallbackPoster?.isEmpty == false) ? fallbackPoster : photo
-        return Header(hasPhoto: true, photoUrl: photo, posterUrl: poster)
+        // A URL IS NOT A PICTURE. This is the half that was missing, and it is what put the big
+        // header on somebody who plainly has none (owner, on 448, about an account whose record
+        // still names a photo that is not there any more: "no profile picture user still is using
+        // large… if user non profile picture use circle profile, that's").
+        guard let photo, hasPicture(photo) else { return none }
+        // Same test for the tall crop: a dead poster url falls back to the circle photo rather than
+        // drawing a letter where a face should be.
+        let usablePoster: String
+        if let poster, hasPicture(poster) { usablePoster = poster } else { usablePoster = photo }
+        return Header(hasPhoto: true, photoUrl: photo, posterUrl: usablePoster)
     }
+
+    /// IS THERE A PICTURE BEHIND THIS URL — answered now, without a fetch.
+    ///
+    /// Three certainties and one assumption:
+    ///  · no url at all → no.
+    ///  · **the bytes are on this device** → yes. `isCached` is an in-memory index check, not a file
+    ///    probe and not a decode, so this is free to ask on any frame.
+    ///  · **a load already came back empty for this exact url** → no. Learned from the avatars: the
+    ///    chat list, the calls list and the story row all draw this same url long before a profile
+    ///    can be tapped, so the answer is normally in hand by then.
+    ///  · anything else → yes, assume it is real. This is the photo somebody has JUST set, which is
+    ///    a url this device has never downloaded — calling that "no photo" is the opposite bug, and
+    ///    it was reported too ("this bug only occurs after setting a new profile picture").
+    static func hasPicture(_ url: String?) -> Bool {
+        guard let u = url, !u.isEmpty else { return false }
+        if DiskImageCache.shared.isCached(u) { return true }
+        return !failedURLs.contains(u)
+    }
+
+    /// What happened when something tried to draw this url. Called by every avatar in the app.
+    ///
+    /// DELIBERATELY NOT PERSISTED. Its predecessor wrote failures to disk, and since a failed
+    /// download means "you were in a tunnel" as often as it means "the photo is gone", one bad
+    /// moment demoted somebody to a circle permanently, on that device, with nothing that could
+    /// undo it. In memory only: the worst a wrong answer can cost is one launch, and a success is
+    /// remembered anyway — by the bytes themselves, in the cache.
+    static func noteLoad(_ url: String?, ok: Bool) {
+        guard let u = url, !u.isEmpty else { return }
+        if ok { failedURLs.remove(u) } else { failedURLs.insert(u) }
+    }
+
+    private static var failedURLs = Set<String>()
 
     static func facts(_ uid: String) -> Facts? {
         guard !uid.isEmpty else { return nil }

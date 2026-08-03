@@ -242,11 +242,22 @@ struct AvatarView: View {
 
     private func load() async {
         guard hasPhoto, let s = photoUrl, let url = URL(string: s) else { image = nil; return }
-        if let cached = await DiskImageCache.shared.image(for: s) { image = cached; return }
+        if let cached = await DiskImageCache.shared.image(for: s) {
+            image = cached
+            ProfilePhotoIndex.noteLoad(s, ok: true)
+            return
+        }
         if let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
             DiskImageCache.shared.store(ui, data: data, for: s)
             image = ui
+            ProfilePhotoIndex.noteLoad(s, ok: true)
+            return
         }
+        // NOTHING BEHIND THE URL. Told to the index, because the profile header has to answer
+        // "circle or big photo" before it draws and cannot wait for a download of its own. Avatars
+        // are everywhere — the chat list, the calls list, the story row — so by the time a profile
+        // can be tapped, one of them has usually already found this out. See ProfilePhotoIndex.
+        ProfilePhotoIndex.noteLoad(s, ok: false)
     }
 
     private var fallback: some View {
