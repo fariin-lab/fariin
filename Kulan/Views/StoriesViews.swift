@@ -467,22 +467,29 @@ struct StoriesRow: View {
                     // My Story with a filled cover (story preview OR profile photo): small avatar +
                     // ring + green + badge. With no stories the story ring is absent, so a clean white
                     // border makes the circle stand out against the (identical) photo behind it.
-                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: 34)
+                    // SMALLER THAN THE OTHER CARDS' CIRCLES, ON PURPOSE (owner 2026-08-03, with it
+                    // circled: "the white circle profile, its looks like uploaded story, can you
+                    // make it small"). A white ring around a face is the shape a POSTED story wears,
+                    // so at the size of a real story ring this read as one on a card that has
+                    // nothing posted. It is an add button, and now it is sized like a badge.
+                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: 26)
                         .overlay {
                             if seen.isEmpty {
                                 Circle().strokeBorder(.white, lineWidth: 2)
                             } else {
-                                StoryRingView(seen: seen).frame(width: 39, height: 39)
+                                // With stories posted this IS a story ring, and it keeps its old
+                                // proportion to the circle it wraps.
+                                StoryRingView(seen: seen).frame(width: 30, height: 30)
                             }
                         }
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 16)).symbolRenderingMode(.palette)
+                                .font(.system(size: 13)).symbolRenderingMode(.palette)
                                 // Black badge (matches the settings icon color); flips white in dark mode.
                                 .foregroundStyle(Color(.systemBackground), Color.primary)
                                 // Same white rim as the big add-badge — cut cleanly into the ring.
                                 .background(Circle().fill(Color(.systemBackground)).padding(-2))
-                                .offset(x: 4, y: 4)
+                                .offset(x: 3, y: 3)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
                         }
