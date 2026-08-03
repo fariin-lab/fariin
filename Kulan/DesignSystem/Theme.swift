@@ -146,9 +146,24 @@ struct CloseXButton: View {
 ///
 /// Kept in one place. Nine call sites each carrying a copy is how the first sweep fixed some and
 /// missed others, and how a wrong number then had to be found nine times.
+/// THE THIRD REPORT SAYS BOX SIZE IS NOT WHAT ANYONE SEES (owner, chat-list menu, 2026-08-03:
+/// "mute and pin delete that icons… use same size like other icons coz now looks small", with Unread
+/// and Archive circled as the right size).
+///
+/// Everything above was about the BOX. A drawing does not fill its box by the same amount as the
+/// next drawing: an SF Symbol is designed with air around its glyph so it can sit beside text, and
+/// his own pin is a slim shape inside a 24-unit square. Give those the same 22pt box and they still
+/// come out visibly smaller than an envelope or an archive tray that reaches its edges.
+///
+/// So the number is applied to the INK — the actual marked pixels — and not to the canvas around it.
+/// Each icon is measured once, trimmed to what it actually draws, and scaled so its longest side is
+/// `standard`. Icons then match each other by construction rather than by a number picked to suit
+/// whichever one was reported last, which is what the three previous rounds each did.
 struct MenuIcon: View {
     let name: String
     var size: CGFloat = MenuIcon.standard
+    /// An Apple symbol rather than one of ours. Same treatment: symbols carry the most air of all.
+    var system = false
 
     /// The size of an SF Symbol's image box at body size. Menus and swipe buttons both use it, so
     /// our icons are the same size as each other as well as the same size as the system's.
@@ -159,6 +174,12 @@ struct MenuIcon: View {
         self.size = size
     }
 
+    init(system name: String, size: CGFloat = MenuIcon.standard) {
+        self.name = name
+        self.size = size
+        self.system = true
+    }
+
     // A PRE-RENDERED UIImage at the target point size, NOT a frame-modified Image. Menus and
     // swipe actions convert their SwiftUI labels into native UIKit elements, and that conversion
     // DROPS view modifiers — .resizable().frame(17) simply never applied, so every custom asset
@@ -166,21 +187,65 @@ struct MenuIcon: View {
     // Archive / Add Story / swipe-Pin screenshots, the second time this symptom came back).
     // Baking the size into the bitmap is the one thing the conversion cannot ignore.
     var body: some View {
-        Image(uiImage: Self.rendered(name, size)).renderingMode(.template)
+        Image(uiImage: Self.rendered(name, size, system)).renderingMode(.template)
     }
 
     private static var cache: [String: UIImage] = [:]
-    private static func rendered(_ name: String, _ size: CGFloat) -> UIImage {
-        let key = "\(name)|\(size)"
+    private static func rendered(_ name: String, _ size: CGFloat, _ system: Bool) -> UIImage {
+        let key = "\(system ? "sf:" : "")\(name)|\(size)"
         if let hit = cache[key] { return hit }
-        guard let src = UIImage(named: name), src.size.width > 0, src.size.height > 0 else { return UIImage() }
-        let scale = min(size / src.size.width, size / src.size.height)
-        let target = CGSize(width: src.size.width * scale, height: src.size.height * scale)
+        // Symbols are asked for at a large point size for the same reason the SVGs are 64pt: the ink
+        // is measured on something big, so the measurement does not turn on a few edge pixels.
+        let source: UIImage? = system
+            ? UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 64))
+            : UIImage(named: name)
+        guard let src = source, src.size.width > 0, src.size.height > 0 else { return UIImage() }
+        let ink = inkRect(src) ?? CGRect(origin: .zero, size: src.size)
+        let scale = min(size / ink.width, size / ink.height)
+        let target = CGSize(width: ink.width * scale, height: ink.height * scale)
         let img = UIGraphicsImageRenderer(size: target).image { _ in
-            src.draw(in: CGRect(origin: .zero, size: target))
+            // Draw the WHOLE icon, shifted so the ink lands at the origin; what falls outside the
+            // target is exactly the air being trimmed.
+            src.draw(in: CGRect(x: -ink.minX * scale, y: -ink.minY * scale,
+                                width: src.size.width * scale, height: src.size.height * scale))
         }.withRenderingMode(.alwaysTemplate)
         cache[key] = img
         return img
+    }
+
+    /// Where an icon actually marks, in its own point coordinates. Rasterised at a fixed 64pt so a
+    /// vector asset measures the same as a bitmap one, then read once down the alpha channel. Cached
+    /// with the rendered image above, so this runs once per icon per launch.
+    private static func inkRect(_ src: UIImage) -> CGRect? {
+        let side: CGFloat = 64
+        let s = min(side / src.size.width, side / src.size.height)
+        let box = CGSize(width: max(1, src.size.width * s), height: max(1, src.size.height * s))
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = 1
+        let raster = UIGraphicsImageRenderer(size: box, format: fmt).image { _ in
+            src.draw(in: CGRect(origin: .zero, size: box))
+        }
+        guard let cg = raster.cgImage else { return nil }
+        let w = cg.width, h = cg.height
+        guard w > 0, h > 0 else { return nil }
+        var alpha = [UInt8](repeating: 0, count: w * h)
+        guard let ctx = CGContext(data: &alpha, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
+                                  bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            let row = y * w
+            for x in 0..<w where alpha[row + x] > 8 {   // 8, not 0: antialiasing leaves a faint halo
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        return CGRect(x: CGFloat(minX) / s, y: CGFloat(minY) / s,
+                      width: CGFloat(maxX - minX + 1) / s, height: CGFloat(maxY - minY + 1) / s)
     }
 }
 

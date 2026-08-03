@@ -788,11 +788,15 @@ struct ChatsView: View {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive_fill") }
             }
             .tint(.gray)
-            Button { pendingMute = conv } label: { Label("Mute", systemImage: "bell.slash.fill") }
+            // Apple's symbols go through MenuIcon too now: it trims each icon to its ink, so a
+            // symbol's built-in air no longer makes it read smaller than our drawings beside it.
+            Button { pendingMute = conv } label: {
+                Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash.fill") }
+            }
             .tint(.indigo)
             Button(role: .destructive) {
                 pendingDelete = conv
-            } label: { Label("Delete", systemImage: "trash.fill") }
+            } label: { Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") } }
             .tint(.red)
         }
         .swipeActions(edge: .leading) {
@@ -802,7 +806,7 @@ struct ChatsView: View {
                 Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
                     // No size of its own. One number for menus and swipes alike, so a report about
                     // one place cannot leave the other behind — see MenuIcon.standard.
-                    conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
+                    conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash"))
                                       : AnyView(MenuIcon("ic_pin_menu"))
                 }
             }
@@ -1002,7 +1006,7 @@ struct ChatsView: View {
                 Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
                 NotificationCleaner.clear(cid: conv.id)
             } label: {
-                Label("Read", systemImage: "envelope.open")
+                Label { Text("Read") } icon: { MenuIcon(system: "envelope.open") }
             }
         } else {
             Button { Task { await ChatService.markUnread(conv.id) } } label: {
@@ -1018,10 +1022,10 @@ struct ChatsView: View {
             Button("Mute for 8 hours") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(8)) } }
             Button("Mute for 1 week") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(168)) } }
             Button("Mute Always") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) } }
-        } label: { Label("Mute", systemImage: "bell.slash") }
+        } label: { Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash") } }
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
             Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
-                    conv.isPinned(me) ? AnyView(Image(systemName: "pin.slash"))
+                    conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash"))
                                       : AnyView(MenuIcon("ic_pin_menu"))
                 }
         }
@@ -1029,7 +1033,7 @@ struct ChatsView: View {
             Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
         }
         Button(role: .destructive) { pendingDelete = conv } label: {
-            Label("Delete", systemImage: "trash")
+            Label { Text("Delete") } icon: { MenuIcon(system: "trash") }
         }
     }
     // Batch ops run the per-chat writes CONCURRENTLY (was sequential = N round-trips in series).
