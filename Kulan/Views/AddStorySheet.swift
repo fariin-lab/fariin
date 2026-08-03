@@ -36,6 +36,9 @@ struct AddStorySheet: View {
         StoryCameraView(
             onCapture: { d in if let ui = UIImage(data: d) { editorImage = EditorImage(ui) } },
             onClose: { dismiss() },
+            // A recorded clip goes to the SAME editor a library video opens in, so a story filmed
+            // here and a story picked from Photos are trimmed and captioned the same way.
+            onVideo: { url in editorVideo = EditorVideo(url) },
             // TEXT is a mode of the camera page now, not a cover raised over it, so the finished
             // story arrives here already rendered and goes straight to the audience sheet.
             onTextStory: { d in shareTextStory = StoryShareData(data: d) },
