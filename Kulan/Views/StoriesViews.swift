@@ -481,23 +481,31 @@ struct StoriesRow: View {
                     // must match everyone else's in the row — 32 with a 37 ring, same as the branch
                     // below. Sizing both states together was my first pass and it would have made his
                     // own posted ring smaller than his friends' for no reason.
-                    let addButton = seen.isEmpty
-                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: addButton ? 26 : 32)
+                    // THE CIRCLE AND THE PLUS ARE THE SIZE THEY ALWAYS WERE, and the avatar is 32 in
+                    // BOTH states so it matches every other story circle in the row exactly — his
+                    // requirement, stated twice. Shrinking the avatar was my reading of "make it
+                    // small" and it was wrong; what he was pointing at is the WHITE, not the picture.
+                    //
+                    // So only the two white circles are lighter: the ring around the avatar is a
+                    // 1pt hairline instead of a 2pt band, and the white rim behind the plus hugs the
+                    // glyph instead of standing 2pt off it. Together those were the heavy blob in
+                    // the corner of the card.
+                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: 32)
                         .overlay {
-                            if addButton {
-                                Circle().strokeBorder(.white, lineWidth: 2)
+                            if seen.isEmpty {
+                                Circle().strokeBorder(.white, lineWidth: 1)
                             } else {
                                 StoryRingView(seen: seen).frame(width: 37, height: 37)
                             }
                         }
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: "plus.circle.fill")
-                                .font(.system(size: addButton ? 13 : 16)).symbolRenderingMode(.palette)
+                                .font(.system(size: 16)).symbolRenderingMode(.palette)
                                 // Black badge (matches the settings icon color); flips white in dark mode.
                                 .foregroundStyle(Color(.systemBackground), Color.primary)
-                                // Same white rim as the big add-badge — cut cleanly into the ring.
-                                .background(Circle().fill(Color(.systemBackground)).padding(-2))
-                                .offset(x: addButton ? 3 : 4, y: addButton ? 3 : 4)
+                                // The white rim, now a hairline: -0.5 instead of -2.
+                                .background(Circle().fill(Color(.systemBackground)).padding(-0.5))
+                                .offset(x: 4, y: 4)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
                         }
