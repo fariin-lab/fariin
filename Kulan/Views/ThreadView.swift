@@ -941,9 +941,13 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showPinnedSheet) {
             PinnedMessagesSheet(
-                // items, not messages — same hidden-filter reason as the pin bar above.
-                pinned: repo.pinnedMessageIds.compactMap { id in repo.items.first { $0.id == id } }
-                    .sorted { $0.createdAt < $1.createdAt },
+                // items, not messages — same hidden-filter reason as the pin bar above, and the same
+                // fetched-by-id fallback: this list had the identical hole, so "See All" quietly
+                // showed you only the pins that happened to be on screen.
+                pinned: visiblePinIds.compactMap { id in
+                    repo.items.first { $0.id == id } ?? repo.pinnedPreviews[id]
+                }
+                .sorted { $0.createdAt < $1.createdAt },
                 me: me, cid: cid, title: title,
                 nameFor: { personName($0) },
                 canUnpin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
@@ -1220,10 +1224,14 @@ struct ThreadView: View {
     /// thing Delete for Me must never do. So the local half is filtered here instead, and the bar
     /// disappears for me while their bar keeps working.
     ///
-    /// Only HIDDEN ids are dropped, never merely-unloaded ones: a pin outside the loaded window
-    /// still resolves to nil and must keep showing "Tap to view" until `ensureLoaded` fills it in.
+    /// Merely-unloaded ids are NOT dropped: `repo.pinnedPreviews` fetches those by id, so a pin
+    /// older than the loaded window has a real name and a real snippet like any other.
+    ///
+    /// Ids the repository has PROVEN are gone are dropped, which is Signal's rule — their banner
+    /// shows nothing rather than a placeholder for a message it cannot resolve. Proven means a read
+    /// came back saying the document does not exist, never a read that merely failed.
     private var visiblePinIds: [String] {
-        repo.pinnedMessageIds.filter { !HiddenMessages.isHidden($0) }
+        repo.pinnedMessageIds.filter { !HiddenMessages.isHidden($0) && !repo.pinnedGone.contains($0) }
     }
 
     // Liquid-Glass pinned-message bar below the nav (tap to scroll to it; pin.slash to unpin).
@@ -1235,7 +1243,12 @@ struct ThreadView: View {
             // repo.ITEMS, not repo.messages (audit): items is the hidden-filtered list the chat
             // renders, so a pin the user deleted "for me" kept showing its author, snippet and photo
             // here while tapping it correctly said the message was gone.
-            let msg = repo.items.first { $0.id == pid }
+            //
+            // …then `pinnedPreviews`, which is the pin fetched by its own id. The window is what is on
+            // SCREEN and a pin is usually older than that, so the window alone is why this bar has
+            // been reading "Pinned Message / Tap to view". The window still goes first: it holds the
+            // live copy, so an edit or a reaction shows here without a second fetch.
+            let msg = repo.items.first { $0.id == pid } ?? repo.pinnedPreviews[pid]
             let author = msg.map { personName($0.authorId) } ?? "Pinned Message"
             HStack(spacing: 10) {
                 // Vertical count indicator (one bar per pin, current highlighted).
@@ -1299,13 +1312,12 @@ struct ThreadView: View {
                         } label: { Label("Unpin", systemImage: "pin.slash") }
                     }
                     Button {
-                        // Load EVERY pin before the sheet builds — its list resolves against the
-                        // loaded window, and out-of-window pins silently vanished from See All
-                        // (audit). ensureLoaded is a no-op for pins already in the window.
-                        Task {
-                            for id in repo.pinnedMessageIds { await repo.ensureLoaded(id) }
-                            await MainActor.run { showPinnedSheet = true }
-                        }
+                        // Opens straight away now. This used to page older history for EVERY pin
+                        // before the sheet could build — up to 12 pages each, five times over, with
+                        // the menu just sitting there — because the list could only resolve pins that
+                        // were in the window. `pinnedPreviews` already holds them, so there is
+                        // nothing to wait for and nothing to load into memory.
+                        showPinnedSheet = true
                     } label: { Label("See All", systemImage: "list.bullet") }
                 } label: {
                     // Upright pin in a bordered circle (reference: image-2 style).
@@ -1327,14 +1339,23 @@ struct ThreadView: View {
             .liquidGlass(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .onTapGesture {
-                // A pin older than the loaded window resolved nil here, so the very bar that said
-                // "Tap to view" did nothing (audit). Same ensureLoaded pattern as the sheet's onTap;
-                // for in-window pins ensureLoaded is a no-op and this stays instant.
+                // Three outcomes, and only one of them used to exist.
+                //
+                // `ensureLoaded` pages older history looking for the message and gives up after 12
+                // pages, about 480 messages. Everything past that was reported as "Pinned message was
+                // deleted", which is not true and was never likely to be: delete-for-everyone already
+                // drops the pin (ChatService.removePinnedMessage), so a pin that still exists is
+                // almost never a deleted message. It is simply too old to reach by paging.
+                //
+                // So: jump to it when we can reach it. Say deleted only when the repository has PROVEN
+                // it is gone. Otherwise the message is real and out of reach, and the pinned list can
+                // show it to him — which is the one thing that beats a sentence explaining why not.
                 Task {
                     await repo.ensureLoaded(pid)
                     await MainActor.run {
                         if repo.items.contains(where: { $0.id == pid }) { flashAndScroll(pid) }
-                        else { showJumpToast("Pinned message was deleted") }
+                        else if repo.pinnedGone.contains(pid) { showJumpToast("Pinned message was deleted") }
+                        else { showPinnedSheet = true }
                     }
                 }
                 if ids.count > 1 { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin

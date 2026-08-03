@@ -144,6 +144,54 @@ final class ThreadRepository {
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
     var pinnedMessageIds: [String] = []   // up to 5 pinned messages (standard)
 
+    // THE PINNED MESSAGES THEMSELVES, fetched by id and independent of how far back the chat is
+    // loaded. This is Signal's model, read from their source: `pinnedMessageData(for:)` reads the
+    // message out of their own database, and their banner shows nothing at all rather than a
+    // placeholder (ConversationViewController+PinnedMessages.swift:93, +Banners.swift:1204).
+    //
+    // Ours used to resolve a pin against the loaded window, which is the screen, not the chat. A pin
+    // is usually old and old messages are not loaded until you scroll back, so the bar had nothing to
+    // draw and said "Pinned Message / Tap to view" — the owner's report, twice.
+    //
+    // At most five documents, one read each, only when the pin list changes.
+    private(set) var pinnedPreviews: [String: Message] = [:]
+    /// Pins whose document is REALLY gone. Only ever set from a snapshot that came back and said the
+    /// document does not exist — never from an error, because a failed read means "no signal" as
+    /// often as it means "deleted", and treating those the same is what put the word "deleted" in
+    /// front of him for a message that was merely old.
+    private(set) var pinnedGone: Set<String> = []
+    private var pinnedFetching: Set<String> = []
+
+    /// Keep `pinnedPreviews` in step with the pin list: forget what is no longer pinned, take
+    /// anything already in the window for free, and fetch the rest by id.
+    private func syncPinnedPreviews() {
+        let ids = Set(pinnedMessageIds)
+        pinnedPreviews = pinnedPreviews.filter { ids.contains($0.key) }
+        pinnedGone = pinnedGone.filter { ids.contains($0) }
+        for id in ids where pinnedPreviews[id] == nil && !pinnedFetching.contains(id) {
+            if let inWindow = byId[id] { keepPinned(inWindow); continue }
+            pinnedFetching.insert(id)
+            db.collection("conversations").document(cid).collection("messages").document(id)
+                .getDocument { [weak self] snap, _ in
+                    guard let self else { return }
+                    self.pinnedFetching.remove(id)
+                    guard let snap else { return }        // error: leave it unknown, try again next time
+                    guard snap.exists, let data = snap.data() else {
+                        self.pinnedGone.insert(id)        // the document really is not there
+                        return
+                    }
+                    self.keepPinned(Message(id: id, data: data, cid: self.cid, crypto: Crypto.shared))
+                }
+        }
+    }
+
+    /// A TOMBSTONE counts as gone. Delete-for-everyone already unpins, so this only catches the case
+    /// where that write was refused and the pin outlived the message — but the pin bar must never be
+    /// the one place in the app still showing something you deleted.
+    private func keepPinned(_ m: Message) {
+        if m.deleted { pinnedGone.insert(m.id) } else { pinnedPreviews[m.id] = m }
+    }
+
     init(cid: String) {
         self.cid = cid
         // Restore anything still unsent from a previous visit to this chat, BEFORE the cached window is
@@ -328,6 +376,7 @@ final class ThreadRepository {
                 let newPinned: [String] = (d?["pinnedMessageIds"] as? [String])
                     ?? ((d?["pinnedMessageId"] as? String).flatMap { $0.isEmpty ? nil : [$0] } ?? [])
                 let newDisappear = (d?["disappearSeconds"] as? NSNumber)?.intValue ?? 0
+                let pinsChanged = newPinned != self.pinnedMessageIds
                 let needsRebuild = newBlocked   != self.iBlocked               ||
                                    newBlockedAt != self.myBlockedAtMillis      ||
                                    newClearedAt != self.myBlockClearedAtMillis ||
@@ -338,6 +387,9 @@ final class ThreadRepository {
                 self.myBlockClearedAtMillis = newClearedAt
                 self.pinnedMessageIds       = newPinned
                 self.disappearSeconds       = newDisappear
+                // Only when the list actually changed: this snapshot also fires for every typing
+                // flicker and every read receipt.
+                if pinsChanged { self.syncPinnedPreviews() }
                 if needsRebuild { self.rebuild() }
             }
         // The other user's presence (online / last active) — 1:1 only (no single "other" in a group).
