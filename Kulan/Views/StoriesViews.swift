@@ -521,13 +521,28 @@ struct StoriesRow: View {
                             }
                         }
                         .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 16)).symbolRenderingMode(.palette)
-                                // Black badge (matches the settings icon color); flips white in dark mode.
-                                .foregroundStyle(Color(.systemBackground), Color.primary)
-                                // The white rim, now a hairline: -0.5 instead of -2.
-                                .background(Circle().fill(Color(.systemBackground)).padding(-0.5))
-                                .offset(x: 4, y: 4)
+                            // DRAWN, NOT A SYMBOL, and only so the white rim can be 1pt like the ring
+                            // above it (owner: "why is the badge white big, make it same like the
+                            // avatar circle, don't change the + size").
+                            //
+                            // `plus.circle.fill` carries its own air inside its box, so a background
+                            // disc padded 0.5 past that BOX showed two or three points of white past
+                            // the black circle you can actually see. Box is not ink — the same thing
+                            // that made the menu icons wrong. A circle we fill ourselves fills its
+                            // frame exactly, so -1 is one point of white, measured from the edge you
+                            // are looking at.
+                            //
+                            // Still 16pt, still black-on-white flipping in dark mode, still overhanging
+                            // by 4. Only the white changed.
+                            ZStack {
+                                Circle().fill(Color.primary)
+                                Image(systemName: "plus")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Color(.systemBackground))
+                            }
+                            .frame(width: 16, height: 16)
+                            .background(Circle().fill(Color(.systemBackground)).padding(-1))
+                            .offset(x: 4, y: 4)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
                         }
