@@ -981,9 +981,12 @@ struct EditProfileView: View {
     private var hasUnsavedChanges: Bool { hasUnsavedText || pendingPhoto != nil || pendingRemove }
 
     enum EditTab: String, CaseIterable, Identifiable {
+        // The raw value is the stored/AppStorage-free tab identity only; the LABEL is what he reads.
+        // "Large" named a layout; this tab shows what other people see, so it says Preview (his
+        // word, 2026-08-03).
         case circle, large
         var id: String { rawValue }
-        var label: String { self == .circle ? "Circle" : "Large" }
+        var label: String { self == .circle ? "Circle" : "Preview" }
     }
     @State private var tab: EditTab = .circle
 
@@ -1003,57 +1006,102 @@ struct EditProfileView: View {
     /// `ProfilePosterHeader.photoSpacer` states outright and works around.
     private var largePreview: some View {
         GeometryReader { g in
-            let cardW = max(0, g.size.width - 56)
+            // Narrower than the page, because the cards behind it need somewhere to be seen. His
+            // drawing puts the front card at roughly three quarters of the width.
+            let cardW = max(0, g.size.width * 0.74)
             ScrollView {
-                VStack(spacing: 22) {
-                    posterCard(width: cardW)
-                    VStack(spacing: 4) {
-                        Text(previewName)
-                            .font(.title2.weight(.bold)).foregroundStyle(.primary)
-                            .lineLimit(2)
-                        // A blank line rather than no line: the card must not jump up and down
-                        // while a handle is being typed.
-                        Text(handle.isEmpty ? " " : "@\(handle)")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 28)
-                .padding(.bottom, 44)
+                previewDeck(width: cardW)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 34)
+                    .padding(.bottom, 44)
             }
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 
-    /// The card itself: the 4:5 crop the Large layout takes, at `PosterGeometry.aspect` so the
-    /// preview and the thing it previews can never disagree about the shape.
-    @ViewBuilder private func posterCard(width: CGFloat) -> some View {
-        // The unsaved crop wins over anything already stored — the whole point of a preview is to
-        // show the photo before it exists anywhere. Poster crop first, circle crop second.
-        let local: UIImage? = pendingRemove ? nil : (pendingPoster ?? pendingPhoto)
-        let url: String? = {
-            if pendingRemove { return nil }
-            if let p = profile.me?.posterUrl, !p.isEmpty { return p }
-            if let p = profile.me?.photoUrl, !p.isEmpty { return p }
-            return nil
-        }()
-        if local != nil || url != nil {
-            Group {
-                if let local {
-                    Image(uiImage: local).resizable().scaledToFill()
-                } else if let url {
-                    PosterPreviewImage(url: url)
-                }
+    /// A DECK: the card you are previewing, with the same card peeking from both screen edges,
+    /// smaller and tilted (owner's drawing, 2026-08-03 — asked whether the edge pieces were real he
+    /// answered "a card deck, decorative"). The two behind are scenery: no gesture, no paging, and
+    /// nothing to press.
+    @ViewBuilder private func previewDeck(width: CGFloat) -> some View {
+        if let art = previewArt {
+            ZStack {
+                deckSide(art, width: width, side: -1)
+                deckSide(art, width: width, side: 1)
+                frontCard(art, width: width)
             }
-            .frame(width: width, height: width * PosterGeometry.aspect)
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            // Reserve exactly the front card's height. The tilted neighbours are drawn from the
+            // same box and must not lengthen the page or the whole deck drifts up as they lean.
+            .frame(height: width * PosterGeometry.aspect)
         } else {
-            // No photo, no card: a big empty rectangle would be inventing a layout you will never
-            // have. A profile with no picture shows the circle, so the preview shows the circle.
+            // No photo, no deck: a stack of empty rectangles would be inventing a layout you will
+            // never have. A profile with no picture shows the circle, so the preview shows one.
             AvatarView(name: previewName, photoUrl: nil, size: 140)
                 .padding(.vertical, 28)
         }
+    }
+
+    /// The card in front: the 4:5 crop the big header takes, at `PosterGeometry.aspect` so the
+    /// preview and the thing it previews can never disagree about the shape — with the name and
+    /// handle INSIDE it, on a dark plate near the bottom, exactly as he drew it.
+    private func frontCard(_ art: PreviewArt, width: CGFloat) -> some View {
+        cardArtwork(art, width: width, corner: 32)
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 2) {
+                    Text(previewName)
+                        .font(.title3.weight(.bold)).foregroundStyle(.white)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    // A blank line rather than no line, so the plate keeps its height while a
+                    // handle is being typed.
+                    Text(handle.isEmpty ? " " : "@\(handle)")
+                        .font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 22).padding(.vertical, 10)
+                .background(Color.black.opacity(0.38),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.bottom, 26)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+    }
+
+    /// One of the two behind. Scaled down, pushed almost all the way off its own edge, and leaned
+    /// away from the middle, so what is left on screen is the sliver in his drawing.
+    private func deckSide(_ art: PreviewArt, width: CGFloat, side: CGFloat) -> some View {
+        cardArtwork(art, width: width, corner: 26)
+            .scaleEffect(0.84)
+            .rotationEffect(.degrees(side * 5))
+            .offset(x: side * width * 0.82)
+            .allowsHitTesting(false)
+    }
+
+    /// The picture itself at the card's size. One place, so the front card and the two behind can
+    /// never end up showing different crops of the same photograph.
+    private func cardArtwork(_ art: PreviewArt, width: CGFloat, corner: CGFloat) -> some View {
+        Group {
+            switch art {
+            case .local(let img): Image(uiImage: img).resizable().scaledToFill()
+            case .remote(let url): PosterPreviewImage(url: url)
+            }
+        }
+        .frame(width: width, height: width * PosterGeometry.aspect)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+    }
+
+    /// Which picture the preview is of. The unsaved crop wins over anything already stored — the
+    /// whole point of a preview is to show the photo before it exists anywhere — and the poster crop
+    /// wins over the circle one.
+    private enum PreviewArt {
+        case local(UIImage)
+        case remote(String)
+    }
+    private var previewArt: PreviewArt? {
+        if pendingRemove { return nil }
+        if let img = pendingPoster ?? pendingPhoto { return .local(img) }
+        if let p = profile.me?.posterUrl, !p.isEmpty { return .remote(p) }
+        if let p = profile.me?.photoUrl, !p.isEmpty { return .remote(p) }
+        return nil
     }
 
     private var previewName: String {
