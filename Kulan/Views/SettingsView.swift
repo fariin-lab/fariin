@@ -910,6 +910,37 @@ struct StorySettingsView: View {
 // A picked image awaiting the circular profile cropper (Identifiable for fullScreenCover).
 private struct CropItem: Identifiable { let id = UUID(); let image: UIImage }
 
+/// The saved profile photo, for the Large preview card. Plain url, not E2EE, from the same store
+/// every avatar in the app is filled from — so it is already in hand and the card opens holding the
+/// picture instead of flashing a grey rectangle first.
+private struct PosterPreviewImage: View {
+    let url: String
+    @State private var image: UIImage?
+
+    init(url: String) {
+        self.url = url
+        // MEMORY only. `smallImageSync` would also read the disk, but its own documentation bars
+        // full-size photos from the main thread and a poster is one — the task below fetches it.
+        _image = State(initialValue: DiskImageCache.shared.memoryImage(for: url))
+    }
+
+    var body: some View {
+        Group {
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else { Color(uiColor: .secondarySystemGroupedBackground) }
+        }
+        .task(id: url) {
+            if image != nil { return }
+            if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
+            guard let u = URL(string: url),
+                  let (data, _) = try? await MediaSession.shared.data(from: u),
+                  let ui = UIImage(data: data) else { return }
+            DiskImageCache.shared.store(ui, data: data, for: url)
+            image = ui
+        }
+    }
+}
+
 struct EditProfileView: View {
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
@@ -956,48 +987,73 @@ struct EditProfileView: View {
     }
     @State private var tab: EditTab = .circle
 
-    /// PREVIEW ONLY — how your profile will look to somebody else, with nothing to press.
+    /// PREVIEW ONLY — your picture at the shape the Large layout crops it to, your name, your
+    /// handle. Nothing else and nothing to press (owner, 2026-08-03: "minimalist and clear").
     ///
-    /// The same `ProfilePosterHeader` everyone else's profile draws, not a drawing of it, so what you
-    /// see here is what they get. It is handed the CROPPED image directly rather than a url, because
-    /// the whole point is to show a photo that has not been saved anywhere yet.
+    /// A CARD, deliberately not `ProfilePosterHeader` itself. That header is the real profile PAGE:
+    /// it bleeds to both screen edges, runs up under the bars and melts into the page below it.
+    /// Those are the right instincts on a page you scroll and the wrong ones inside a sheet, where
+    /// the same drawing reads as a photograph that ran out rather than as a preview of anything —
+    /// and the five round actions belong to a person you can call, which on your own profile is
+    /// nobody. **THE REAL PROFILE PAGE IS NOT TOUCHED BY ANY OF THIS** (his order, in as many
+    /// words): the redesign lives on this tab alone.
     ///
-    /// The five circles are icons, not buttons — there is nobody to call from your own preview, and a
-    /// control that looks pressable and does nothing is worse than no control.
+    /// The GeometryReader is what makes the card the right height on the first frame. A ratio would
+    /// have nothing to divide: scrolling content is proposed an unspecified height, the same trap
+    /// `ProfilePosterHeader.photoSpacer` states outright and works around.
     private var largePreview: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ProfilePosterHeader(
-                    name: previewName,
-                    photoUrl: profile.me?.posterUrl ?? profile.me?.photoUrl,
-                    scrollSpace: "editPreview",
-                    localImage: pendingRemove ? nil : (pendingPoster ?? pendingPhoto),
-                    caption: { text in
-                        VStack(spacing: 3) {
-                            Text(previewName).font(.title.weight(.bold)).foregroundStyle(text)
-                                .lineLimit(2).multilineTextAlignment(.center)
-                            Text(handle.isEmpty ? " " : "@\(handle)")
-                                .font(.subheadline).foregroundStyle(text.opacity(0.82))
-                                .frame(minHeight: 20)
-                        }
-                        .frame(maxWidth: .infinity)
-                    },
-                    actions: {
-                        HStack(spacing: 0) {
-                            PosterActionIcon(icon: "phone.fill")
-                            PosterActionIcon(icon: "video.fill")
-                            PosterActionIcon(icon: "ic_bell_off")
-                            PosterActionIcon(icon: "magnifyingglass")
-                            PosterActionIcon(icon: "ellipsis")
-                        }
+        GeometryReader { g in
+            let cardW = max(0, g.size.width - 56)
+            ScrollView {
+                VStack(spacing: 22) {
+                    posterCard(width: cardW)
+                    VStack(spacing: 4) {
+                        Text(previewName)
+                            .font(.title2.weight(.bold)).foregroundStyle(.primary)
+                            .lineLimit(2)
+                        // A blank line rather than no line: the card must not jump up and down
+                        // while a handle is being typed.
+                        Text(handle.isEmpty ? " " : "@\(handle)")
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
-                )
-                Spacer(minLength: 0)
+                    .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
+                .padding(.bottom, 44)
             }
-            .padding(.horizontal, 16)
         }
-        .coordinateSpace(name: "editPreview")
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
+    /// The card itself: the 4:5 crop the Large layout takes, at `PosterGeometry.aspect` so the
+    /// preview and the thing it previews can never disagree about the shape.
+    @ViewBuilder private func posterCard(width: CGFloat) -> some View {
+        // The unsaved crop wins over anything already stored — the whole point of a preview is to
+        // show the photo before it exists anywhere. Poster crop first, circle crop second.
+        let local: UIImage? = pendingRemove ? nil : (pendingPoster ?? pendingPhoto)
+        let url: String? = {
+            if pendingRemove { return nil }
+            if let p = profile.me?.posterUrl, !p.isEmpty { return p }
+            if let p = profile.me?.photoUrl, !p.isEmpty { return p }
+            return nil
+        }()
+        if local != nil || url != nil {
+            Group {
+                if let local {
+                    Image(uiImage: local).resizable().scaledToFill()
+                } else if let url {
+                    PosterPreviewImage(url: url)
+                }
+            }
+            .frame(width: width, height: width * PosterGeometry.aspect)
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        } else {
+            // No photo, no card: a big empty rectangle would be inventing a layout you will never
+            // have. A profile with no picture shows the circle, so the preview shows the circle.
+            AvatarView(name: previewName, photoUrl: nil, size: 140)
+                .padding(.vertical, 28)
+        }
     }
 
     private var previewName: String {
