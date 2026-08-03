@@ -5671,7 +5671,8 @@ struct MessageBubble: View, Equatable {
             .frame(width: maxBubbleWidth)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-        } else if jumbomojiCount > 0, message.replyTo == nil, firstLinkURL == nil {
+        } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
+                  firstLinkURL == nil {
             // JUMBOMOJI — Signal's behaviour, read from their source (2026-07-28) rather than eyeballed.
             //
             //   DisplayableText.swift:
@@ -5693,6 +5694,11 @@ struct MessageBubble: View, Equatable {
             // the emoji-only test AND stripped before counting, so "🙂 🙂" is two; and borderless applies
             // only to a TEXT-ONLY message, so an emoji-only REPLY keeps its bubble — which is why the
             // quote and link-preview cases are excluded here rather than inside the count.
+            //
+            // EXCEPT a STORY reply (owner order): its quote is the card drawn ABOVE the bubble by
+            // storyReplyHeader, never inside content — so nothing shares the bubble with the emoji
+            // and there is no reason to box it. An emoji story reply renders exactly like an emoji
+            // message, card on top.
             //
             // Signal's borderless message keeps the bubble VIEW and makes it transparent
             // (isBubbleTransparent), so the text insets and the footer position are unchanged. Same here:
