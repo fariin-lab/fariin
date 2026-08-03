@@ -70,30 +70,24 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            THE DELETE SYSTEM, all layers fixed. Deleting a photo, gif, voice note or file for everyone flips it to the placeholder instantly, on both phones, even if they are offline. No more nothing-happens, no more the-previous-one-deletes-instead, no more a-voice-note-coming-back. Part of this fix is on the server, so it applies the moment you update.
+            PROFILE PICTURES, the big one. Some people who have a photo were opening with the small circle, and some people with no photo were opening with the big header and then switching back a second later. Both are fixed, and one half of it was in the data: removing your picture only cleared half of it and left the tall crop behind, so every other phone still had a record saying you had a photo. The app no longer guesses at all. It asks your account record, has the answer before it draws anything, and keeps that answer for the whole visit.
 
-            The placeholder is a quiet capsule now, not a loud bubble in your chat colour. Same fixed look in every chat, readable over any wallpaper.
+            PLEASE TRY FIRST: open the profile of somebody WITH a photo and somebody WITHOUT one, and reach each of them three ways - from the chat, from the Calls list, and from their story. Every time it must be right on the very first frame and must never change while you are looking at it. Then remove your own photo and check what your friend's phone shows you as.
 
-            A deleted message is completely dead: reactions vanish the instant you delete, no reaction bar on long-press, no double-tap, no swipe to reply. Long-press gives Delete (your side only, since it is already gone for everyone) and Select.
+            Icons in menus are the right size: Unread, Archive, Add Story, and the pin and the archive on the swipe. This fix was finished before build 447 and missed it, because that build was made from the wrong commit.
 
-            A deleted STORY flips your reply card to Story unavailable, instead of showing a preview of nothing.
+            A pinned FILE or PDF now shows its preview and its name in the pin bar at the top of the chat, instead of an empty line.
 
-            An emoji-only story reply shows as the big emoji under the story card, not squeezed in a grey box.
+            The All Media tab bar uses the same moving pill as the All / Missed bar on the Calls page.
 
-            The X on a full-screen profile photo works now. The invisible top bar was stealing the tap, so the X is a real bar button now, on people and groups both.
+            Zooming a photo in a chat hides the buttons. Pinch in and the top bar and the bottom buttons fade away, let it back to normal size and they come back. They also come back when you swipe to the next photo.
 
-            The photo cropper's window morphs from the circle to the tall frame between the two steps instead of cutting.
+            Your own picture in Settings opens SQUARE instead of in a circle, the bottom tab bar gets out of the way, and the top says Profile photo.
 
-            PLEASE TRY FIRST, with two phones: delete a photo with no caption for everyone, then a voice note, then a gif. Each must flip to the placeholder instantly on your phone and within a second or two on the other one, and deleting one message must never touch another. Then long-press a placeholder: only Delete and Select. Then tap a profile photo and press the X.
+            Edit Profile, the Large tab, is a clean preview: your picture at the shape the big header crops it to, your name, your username, and nothing else.
 
-            From 446:
+            From 447:
 
-            The white lines down the left and right of a profile photo are gone. The pill on the All Media bar sits in the middle of its slot again, and the bar is 42pt. Edit Profile has Circle and Large tabs, so you can see both crops of the same photo before you save.
-
-            From 444:
-
-            Setting a photo has TWO steps: first you frame the CIRCLE that shows in chats and groups, then the TALL header with the Blur band marked. Save writes both. Nothing changes until you press Save.
-
-            The profile photo has no line at the bottom. It fades into the page's own colour, so the bottom of the photo IS the background.
+            THE DELETE SYSTEM, all layers fixed. Deleting a photo, gif, voice note or file for everyone flips it to the placeholder instantly, on both phones. The placeholder is a quiet capsule, and a deleted message is completely dead - no reactions, no reaction bar, no double-tap, no swipe to reply. A deleted STORY flips your reply card to Story unavailable. An emoji-only story reply shows as the big emoji. The X on a full-screen profile photo works.
 
         run: fastlane beta
