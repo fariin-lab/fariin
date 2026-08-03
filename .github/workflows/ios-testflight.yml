@@ -70,6 +70,24 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            THE STORY CAMERA RECORDS VIDEO. Hold the shutter to record, slide right to lock it so you can let go, tap the red button to stop. The time shows at the top while it runs. It stops itself at 60 seconds, and the clip lands in the same editor a video from your library opens in.
+
+            PLEASE TRY FIRST: record with sound and play it back, record with the front camera and check you are not mirrored the wrong way, and use the lock.
+
+            ALL MEDIA TABS ARE BACK UNDER THE BAR, full width, with All Media and the photo count above them again. Same Apple control and the same glass as before, only the position changed.
+
+            THE STORY EDITOR: crop now opens in place with a fade instead of sliding up like a new page, and its X and Done are no longer under the clock and on the home indicator. While you draw with the pen, every button gets out of the way and comes back when you lift your finger.
+
+            TEXT STORIES: tapping TEXT no longer opens the keyboard on its own. Tap the card when you want to type. And with the keyboard up the card now runs to the edges instead of leaving black gaps beside its bottom corners.
+
+            STORY CARDS: the flash on the very first pull after opening the app is gone. The photo is now brought into memory while you are watching the story, so the card has it ready.
+
+            A WATCHED STORY RING uses your two colours now: 505052 in dark mode and CACACA in light mode.
+
+            SMALL ONES: the white edge around the plus on My Story is a hairline, matching the ring around your picture. And on the second step of the photo cropper the top left button is a back arrow instead of an X, because that is what it does.
+
+            From 452:
+
             LOG IN WITH A CODE, no password needed. On the login screen tap "Log in with a code instead", type your email, and we send you a six digit number. Type it and you are in. Your phone will usually offer the number straight from the notification so you never type it. The code lasts 10 minutes, works once, and dies after five wrong tries.
 
             Also: if you signed up with email and then press Continue with Google, the app now tells you that instead of saying it could not sign you in. One email is always one account here.
