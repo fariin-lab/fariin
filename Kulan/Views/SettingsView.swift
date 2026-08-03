@@ -120,8 +120,14 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Settings")
+            // The bar titles what you are looking at: the page while it is the page, the picture
+            // while the picture is open over it.
+            .navigationTitle(showPhoto ? "Profile photo" : "Settings")
             .navigationBarTitleDisplayMode(.inline)
+            // Nothing floats over the photo, top or bottom. The tab bar is a safe-area inset on the
+            // list, not on the overlay, so hiding it moves no part of the header the morph flies out
+            // of — and it comes back only after the close animation has landed.
+            .toolbar(showPhoto ? .hidden : .automatic, for: .tabBar)
             .listSectionSpacing(20)   // Signal's steady card rhythm — .compact left the gaps uneven
             .contentMargins(.top, 4, for: .scrollContent)   // remove the big gap above the avatar
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
@@ -149,12 +155,15 @@ struct SettingsView: View {
                 }
             }
             // The same in-place morph a contact's photo uses: grows out of the circle, drag melts
-            // the page away, closes back into it.
+            // the page away, closes back into it. It LANDS SQUARE (owner order) — a circle is how
+            // the avatar is framed in a list, not how you look at your own picture, and the round
+            // crop was cutting the photo off on all four sides.
             .overlay {
                 if showPhoto {
                     ProfilePhotoViewer(name: profile.me?.name ?? "",
                                        photoUrl: profile.me?.photoUrl ?? "",
                                        sourceFrame: avatarFrame,
+                                       landsSquare: true,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showPhoto)
                         .ignoresSafeArea()

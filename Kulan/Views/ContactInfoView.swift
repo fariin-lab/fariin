@@ -1276,6 +1276,11 @@ struct ProfilePhotoViewer: View {
     /// Poster mode: grow out of the square header and land at the photo's OWN aspect ratio, square
     /// corners throughout. Off: the round-avatar morph this viewer was built for, unchanged.
     var poster: Bool = false
+    /// Grow out of a ROUND avatar and land on the whole photo, square (Settings, owner order).
+    /// The corner rounds off during the flight rather than at the start, so the first frame is
+    /// still the circle the picture is leaving — a square first frame would be the one-frame jump
+    /// this viewer keeps being reported for.
+    var landsSquare: Bool = false
     /// Close REQUEST from outside — the parent bumps this when its toolbar X is tapped, and the
     /// viewer runs the same reverse morph as a drag or backdrop tap. The X lives in the parent's
     /// NAVIGATION BAR because the top strip belongs to UIKit's bar, which sits above this whole
@@ -1287,11 +1292,12 @@ struct ProfilePhotoViewer: View {
     @State private var image: UIImage?
 
     init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false,
-         closeSignal: Int = 0, isPresented: Binding<Bool>) {
+         landsSquare: Bool = false, closeSignal: Int = 0, isPresented: Binding<Bool>) {
         self.name = name
         self.photoUrl = photoUrl
         self.sourceFrame = sourceFrame
         self.poster = poster
+        self.landsSquare = landsSquare
         self.closeSignal = closeSignal
         _isPresented = isPresented
         // The avatar this grows out of is already on screen, so its bitmap is already in memory.
@@ -1346,13 +1352,15 @@ struct ProfilePhotoViewer: View {
             // and running off nothing. The frame's shape travels from the header's square to the
             // photo's real one, which is why the crop opens up as it flies instead of the image
             // stretching.
-            let targetW = poster ? min(geo.size.width, geo.size.height * imageAspect) : d
-            let targetH = poster ? targetW / imageAspect : targetW
+            let wholePhoto = poster || landsSquare
+            let targetW = wholePhoto ? min(geo.size.width, geo.size.height * imageAspect) : d
+            let targetH = wholePhoto ? targetW / imageAspect : targetW
             // Interpolate between the header's rect and where it is going.
             let w = sourceFrame.width  + (targetW - sourceFrame.width)  * progress
             let h = sourceFrame.height + (targetH - sourceFrame.height) * progress
-            // Round the whole way as an avatar; square the whole way as a poster.
-            let corner = poster ? 0 : w / 2
+            // Round the whole way as an avatar; square the whole way as a poster; round-to-square
+            // across the flight when the picture leaves a circle and lands as the whole photo.
+            let corner = poster ? 0 : (landsSquare ? (w / 2) * (1 - progress) : w / 2)
             let srcX = sourceFrame.midX - origin.x, srcY = sourceFrame.midY - origin.y
             let x = srcX + (geo.size.width / 2 - srcX) * progress + drag.width
             let y = srcY + (geo.size.height / 2 - srcY) * progress + drag.height
