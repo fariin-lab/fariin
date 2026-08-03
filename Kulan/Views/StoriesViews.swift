@@ -925,7 +925,15 @@ struct StoryViewer: View {
                                 source: .story,   // no chat underneath → no Search/Wallpaper (audit)
                                 isSelf: g.authorUid == me)
             }
-            .presentationDetents([.medium, .large])   // small profile sheet over the paused story
+            // FULL HEIGHT, not half (owner 2026-08-03: "if someone upload story then i open, then i
+            // click his profile — open FULL profile sheet"). At `.medium` this profile has half a
+            // screen to fit a page built around a full-width photo header: the header loses its room,
+            // the name lands in the navigation bar's strip, and the story stack that lives in that
+            // strip is drawn straight through it. That is the overlap in his screenshot, and it is
+            // the symptom of the height rather than a bug in either piece.
+            //
+            // The drag indicator stays: pulling this down is how you get back to the story.
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
         // REAL native delete confirmation (user request: no custom sheet). An alert, not a
