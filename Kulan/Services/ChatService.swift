@@ -1071,27 +1071,30 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
         let msgRef = convRef.collection("messages").document()
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc", progressId: clientId)
         // iMessage-style document preview (owner's reference): a PDF's first page — or an image
         // file's own pixels — rides along as an ENCRYPTED thumbnail, the video-poster pipeline
         // reused (thumbUrl/thumbEnc parse on every message type). Best-effort: a failed preview
         // never fails the send; other document types keep the plain icon.
-        var thumbFields: [String: Any] = [:]
-        if let preview = documentPreviewJPEG(fileName: fileName, data: rawData) {
+        //
+        // The file and its preview are INDEPENDENT blobs, and they used to upload in SEQUENCE —
+        // two full network round trips one after the other, which is why even a 142 KB PDF sat
+        // on the clock for seconds (owner screenshot). Now they fly together: the wall time is
+        // the slower upload, and for small files that is one round trip, not two.
+        async let thumbTask: [String: Any] = {
+            guard let preview = documentPreviewJPEG(fileName: fileName, data: rawData) else { return [:] }
             let tCipher: Data?, tMeta: EncMeta?
             if let members {
                 (tCipher, tMeta) = (try? await Crypto.shared.encryptBytesForGroup(preview, members: members)) ?? (nil, nil)
             } else {
                 (tCipher, tMeta) = (try? await Crypto.shared.encryptBytes(cid, preview)) ?? (nil, nil)
             }
-            if let tCipher, let tMeta {
-                // Still best-effort: a missing document preview must never fail the file send.
-                if let tUrl = try? await uploadEncrypted(
-                    tCipher, to: "chat/\(cid)/\(msgRef.documentID).filethumb.enc") {
-                    thumbFields = ["thumbUrl": tUrl, "thumbEnc": tMeta.asDict]
-                }
-            }
-        }
+            guard let tCipher, let tMeta,
+                  let tUrl = try? await uploadEncrypted(
+                      tCipher, to: "chat/\(cid)/\(msgRef.documentID).filethumb.enc") else { return [:] }
+            return ["thumbUrl": tUrl, "thumbEnc": tMeta.asDict]
+        }()
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc", progressId: clientId)
+        let thumbFields: [String: Any] = await thumbTask
         let batch = db.batch()
         var msg: [String: Any] = [
             "type": "file", "fileUrl": url, "fileName": fileName, "fileSize": rawData.count,

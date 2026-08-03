@@ -4998,7 +4998,12 @@ struct MessageBubble: View, Equatable {
         // nothing — so there is no single tap for the double-tap recogniser to hold up, and the one
         // reason to give up the shortcut does not apply to it. Listing it here cost the gesture and
         // bought nothing, which is why double-tap to react did nothing on a gif (owner's report).
-        message.isImage || message.isVideo || message.isAlbum
+        //
+        // FILES belong here too (owner order): tapping a file opens its preview, and the
+        // double-tap recogniser made that tap wait for the maybe-second tap — a visible pause
+        // before the document appeared. Reacting on a file is the long-press bar, like any other
+        // bubble that opens on tap.
+        message.isImage || message.isVideo || message.isAlbum || message.isFile
     }
 
     @ViewBuilder private var reactionBadges: some View {
