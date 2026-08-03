@@ -105,9 +105,10 @@ struct ProfilePhotoCropper: View {
         }
     }
 
-    /// X. From the poster stage it steps BACK to the circle rather than throwing the whole thing
-    /// away — you are two taps in and losing both for one wrong move is the kind of thing that makes
-    /// people stop changing their photo.
+    /// X on the first stage, back arrow on the second — see the button. From the poster stage it
+    /// steps BACK to the circle rather than throwing the whole thing away: you are two taps in and
+    /// losing both for one wrong move is the kind of thing that makes people stop changing their
+    /// photo.
     private func back() {
         if stage == .poster {
             avatarResult = nil
@@ -149,7 +150,12 @@ struct ProfilePhotoCropper: View {
     private var chrome: some View {
         VStack {
             HStack {
-                circleButton("xmark") { back() }
+                // THE GLYPH TELLS THE TRUTH ABOUT WHERE THE BUTTON GOES (owner 2026-08-03: "now it
+                // showing X but is Back button, make it arrow"). On the first stage it closes the
+                // cropper, so it is an X. On the second it steps back to the circle you just framed,
+                // and an X there promises you are about to lose the picture — which is exactly the
+                // fear that stops people finishing.
+                circleButton(stage == .poster ? "chevron.left" : "xmark") { back() }
                 Spacer(minLength: 8)
                 // Says which of the two you are framing AND where it will be seen. Without the second
                 // line "Avatar" is our word for it, and the whole reason this screen has two steps is
