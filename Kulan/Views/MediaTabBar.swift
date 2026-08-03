@@ -32,6 +32,7 @@ import UIKit
 struct MediaTabBar: View {
     let titles: [String]
     @Binding var selection: Int
+    @Environment(\.colorScheme) private var scheme
 
     /// Height of the capsule itself. Stated so the scroll views can reserve a matching top margin —
     /// a floating bar and the content that must clear it cannot each guess.
@@ -49,8 +50,13 @@ struct MediaTabBar: View {
             let seg = titles.isEmpty ? g.size.width : g.size.width / CGFloat(titles.count)
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(.white.opacity(0.22))
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+                    // The SYSTEM segmented control's selected platter (owner order: match the
+                    // Calls bar's All/Missed): a SOLID elevated pill — white in light, Apple's
+                    // #636366 in dark — with the platter's soft drop shadow. The old translucent
+                    // white-0.22 wash read as a different design one screen away from the native
+                    // control. No stroke: the platter's edge is its elevation, not a border.
+                    .fill(scheme == .dark ? Color(red: 0.388, green: 0.388, blue: 0.4) : .white)
+                    .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.12), radius: 4, y: 2)
                     .frame(width: max(0, seg - pad * 2), height: max(0, g.size.height - pad * 2))
                     // X ONLY. A leading-aligned ZStack still centres its children VERTICALLY, so the
                     // pill already has `pad` of air above and below it — the `y: pad` that used to be
