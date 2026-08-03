@@ -1952,14 +1952,20 @@ struct UploadingAvatarRing: View {
     let photoUrl: String?
     @State private var spin = false
     var body: some View {
-        ZStack {
-            AvatarView(name: name, photoUrl: photoUrl, size: 32)
-            Circle()
-                .trim(from: 0, to: 0.72)
-                .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .frame(width: 42, height: 42)
-                .rotationEffect(.degrees(spin ? 360 : 0))
-        }
+        // AN OVERLAY, NOT A SECOND ITEM IN A STACK, and 37 rather than 42. Both halves of his report
+        // come from that one line: a ZStack takes the size of its LARGEST child, so the ring made
+        // this view 42pt where every other card's circle is 32, and since the card pins its circle to
+        // the bottom-left corner, the extra 10pt pushed the avatar up and in by 5. An overlay draws
+        // outside the view without resizing it, which is exactly how the posted-story ring already
+        // hangs off its own 32pt avatar at the same 37.
+        AvatarView(name: name, photoUrl: photoUrl, size: 32)
+            .overlay {
+                Circle()
+                    .trim(from: 0, to: 0.72)
+                    .stroke(Color.white.opacity(0.95), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .frame(width: 37, height: 37)
+                    .rotationEffect(.degrees(spin ? 360 : 0))
+            }
         .onAppear {
             withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
         }
