@@ -169,7 +169,15 @@ struct ImageViewerView: View {
     private var dateLine: String { message.createdAt.formatted(date: .numeric, time: .shortened) }
     // NOT gated on `dismissing` any more: during a drag-close the chrome must stay in the tree so the
     // root-alpha scrub can fade it with the finger. Its 0.25s ease here would fight that scrub.
-    private var chromeVisible: Bool { !chromeHidden }
+    //
+    // ZOOM HIDES IT (owner, 2026-08-03: "if i start Zoom Image controls Make hide"). The moment the
+    // pinch passes fit the buttons fade out, and they come back when the photo returns to fit — which
+    // includes paging to another photo, since that resets the zoom. `pageZoom` is already reported
+    // live from `scrollViewDidZoom`, so this costs no new state and no new work during the gesture,
+    // and 1.02 is the same at-fit tolerance the drag-close and the back arrow already use.
+    private var chromeVisible: Bool { !chromeHidden && pageZoom <= zoomFitTolerance }
+    /// Anything at or under this ratio counts as "not zoomed". One number, three readers.
+    private let zoomFitTolerance: CGFloat = 1.02
 
     private func closeViewer() {
         // ZOOM OUT FIRST, like Signal — but the close must NEVER be hostage to the zoom-out. The old
@@ -178,7 +186,7 @@ struct ImageViewerView: View {
         // retry loop spun forever with the back arrow dead (user report: after a drag, the arrow stopped
         // working; screenshot showed the viewer stuck with chrome up). One zoom-out attempt, then close
         // regardless.
-        if pageZoom > 1.02 {
+        if pageZoom > zoomFitTolerance {
             zoomOutToken += 1
             // Let the zoom settle so the closing state matches the screen — then close no matter what.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeToken += 1 }
@@ -220,7 +228,7 @@ struct ImageViewerView: View {
             // The interactive drag-down close. Unconditional: the system .zoom transition this used to
             // be suppressed for is gone from every chat-media entry point.
             SignalDismissHost(
-                canBegin: { pageZoom <= 1.02 },
+                canBegin: { pageZoom <= zoomFitTolerance },
                 media: {
                     // The SAME warm-cache chain the page itself renders from. `loaded` only fills from
                     // the async load, so a page drawn straight from the memory cache could report nil
@@ -432,7 +440,14 @@ struct ImageViewerView: View {
             // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
-                          onSingleTap: { withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() } },
+                          // The tap-toggle only means anything at fit. While zoomed the chrome is
+                          // already gone by the rule above, so letting a tap flip the flag would do
+                          // nothing you can see and then surprise you later — the buttons would stay
+                          // missing after you zoomed back out.
+                          onSingleTap: {
+                              guard pageZoom <= zoomFitTolerance else { return }
+                              withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() }
+                          },
                           onZoom: { pageZoom = $0 },
                           zoomOutToken: zoomOutToken,
                           imageKey: m.id)   // reload on a new PHOTO, never on a new UIImage of the same one
