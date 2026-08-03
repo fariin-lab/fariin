@@ -170,12 +170,19 @@ struct ImageViewerView: View {
     // NOT gated on `dismissing` any more: during a drag-close the chrome must stay in the tree so the
     // root-alpha scrub can fade it with the finger. Its 0.25s ease here would fight that scrub.
     //
-    // ZOOM HIDES IT (owner, 2026-08-03: "if i start Zoom Image controls Make hide"). The moment the
-    // pinch passes fit the buttons fade out, and they come back when the photo returns to fit — which
-    // includes paging to another photo, since that resets the zoom. `pageZoom` is already reported
-    // live from `scrollViewDidZoom`, so this costs no new state and no new work during the gesture,
-    // and 1.02 is the same at-fit tolerance the drag-close and the back arrow already use.
-    private var chromeVisible: Bool { !chromeHidden && pageZoom <= zoomFitTolerance }
+    // ZOOM HIDES IT (owner, 2026-08-03: "if i start Zoom Image controls Make hide"), and then the TAP
+    // OWNS IT AGAIN (his follow-up on 449: "after i zoom, tapping the image does not show the controls
+    // again").
+    //
+    // The first version made zoom a second condition here, so while the photo was zoomed the chrome
+    // was not hidden, it was OVERRULED — and a tap had nothing to flip that anyone could see. Zoom now
+    // performs the SAME action a tap does, once, at the moment the pinch passes fit, and then gets out
+    // of the way. One flag, one meaning, and every route in and out of it is a real toggle.
+    //
+    // The cost of the simpler rule, and it is the right one: returning to fit no longer brings the
+    // buttons back by itself, and neither does paging to the next photo. That is Apple Photos' own
+    // behaviour and it is what "each single tap toggles" asks for.
+    private var chromeVisible: Bool { !chromeHidden }
     /// Anything at or under this ratio counts as "not zoomed". One number, three readers.
     private let zoomFitTolerance: CGFloat = 1.02
 
@@ -478,15 +485,22 @@ struct ImageViewerView: View {
             // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
-                          // The tap-toggle only means anything at fit. While zoomed the chrome is
-                          // already gone by the rule above, so letting a tap flip the flag would do
-                          // nothing you can see and then surprise you later — the buttons would stay
-                          // missing after you zoomed back out.
+                          // A tap toggles the chrome at ANY zoom. The single-tap recogniser already
+                          // fires while zoomed (it only waits on the double-tap to fail), so the guard
+                          // that used to be here was the whole of "tapping does nothing after I zoom".
                           onSingleTap: {
-                              guard pageZoom <= zoomFitTolerance else { return }
                               withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() }
                           },
-                          onZoom: { pageZoom = $0 },
+                          onZoom: { z in
+                              pageZoom = z
+                              // Passing fit hides the buttons ONCE, exactly as if you had tapped them
+                              // away. `!chromeHidden` is what makes it once: scrollViewDidZoom fires
+                              // on every frame of a pinch, and without it every one of those frames
+                              // would re-assert the hide and fight a tap you made mid-gesture.
+                              if z > zoomFitTolerance && !chromeHidden {
+                                  withAnimation(.easeInOut(duration: 0.25)) { chromeHidden = true }
+                              }
+                          },
                           zoomOutToken: zoomOutToken,
                           imageKey: m.id)   // reload on a new PHOTO, never on a new UIImage of the same one
         } else {
