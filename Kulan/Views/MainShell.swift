@@ -1181,7 +1181,10 @@ struct ChatsView: View {
             .onChange(of: path.count) {
                 showHeaderIcons = path.isEmpty
             }
-            .sheet(isPresented: $showCompose) {   // premium Add-Story picker (bottom sheet) → editor
+            // Add Story opens the CAMERA, full screen (owner 2026-08-03). It was a bottom sheet
+            // holding a picker; a camera in a card with the chat list showing behind it is not a
+            // camera, and the sheet's own drag-to-dismiss would fight the preview.
+            .fullScreenCover(isPresented: $showCompose) {
                 AddStorySheet { Task { await StoriesRepository.shared.load(force: true) } }
             }
             .fullScreenCover(item: $viewerGroup) { g in

@@ -2,10 +2,17 @@ import SwiftUI
 import Photos
 import AVFoundation
 
-// "Add to Story" picker — clean + minimalist with a Photos / Albums top tab.
-//  • Photos: a Text card + Camera tile + a 4-col grid of recent photos.
-//  • Albums: your photo albums; tap one to browse its grid.
-// Picking/capturing opens StoryEditorView.
+// ADD STORY IS THE CAMERA (owner, 2026-08-03, with his reference shot: "when i click add story show
+// this page this camera, old page remove"). The picker page that used to open first is now the
+// LIBRARY behind the camera's bottom-left button, which is where every story camera keeps it.
+//
+// This type stays the flow's container because it owns every onward presentation — editor, video
+// editor, text composer, audience sheet — and those must all hang off ONE view. The camera is simply
+// its root now instead of a cover it raised.
+//
+//  • Camera: capture → StoryEditorView.
+//  • CAMERA / TEXT switch → StoryTextComposer → audience sheet.
+//  • Library button → the Photos / Albums grid, which is the only path that also takes VIDEO.
 struct AddStorySheet: View {
     var onPosted: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
@@ -15,16 +22,49 @@ struct AddStorySheet: View {
     @State private var editorImage: EditorImage?
     @State private var editorVideo: EditorVideo?
     @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
-    @State private var pendingCapture: UIImage?   // camera shot held until the camera cover dismisses
-    @State private var pendingTextMode = false    // "Aa" from the camera held until the camera cover dismisses
+    /// Picked in the library SHEET, opened once it has closed. A full-screen editor asked for while
+    /// the sheet above it is still dismissing is the presentation that silently never appears — the
+    /// same rule the camera cover used to need here.
+    @State private var pendingLibraryImage: UIImage?
+    @State private var pendingLibraryVideo: URL?
     @State private var pendingTextStory: StoryShareData?   // text story held until the composer cover dismisses
     @State private var shareTextStory: StoryShareData?     // then shown to the audience sheet
-    @State private var showCamera = false
+    @State private var showLibrary = false
     @State private var showText = false
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
     var body: some View {
+        StoryCameraView(
+            onCapture: { d in if let ui = UIImage(data: d) { editorImage = EditorImage(ui) } },
+            onClose: { dismiss() },
+            onTextMode: { showText = true },
+            onLibrary: { showLibrary = true })
+        .fullScreenCover(item: $editorImage) { item in
+            StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
+        }
+        .fullScreenCover(item: $editorVideo) { item in
+            StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
+        }
+        .sheet(isPresented: $showLibrary, onDismiss: {
+            if let ui = pendingLibraryImage { pendingLibraryImage = nil; editorImage = EditorImage(ui) }
+            else if let url = pendingLibraryVideo { pendingLibraryVideo = nil; editorVideo = EditorVideo(url) }
+        }) { libraryPage }
+        // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
+        .fullScreenCover(isPresented: $showText, onDismiss: {
+            if let s = pendingTextStory { pendingTextStory = nil; shareTextStory = s }
+        }) {
+            StoryTextComposer(onShare: { d in pendingTextStory = StoryShareData(data: d); showText = false },
+                              onClose: { showText = false })
+        }
+        .sheet(item: $shareTextStory) { s in
+            ShareStorySheet(image: s.data, onPosted: { onPosted(); dismiss() })
+        }
+    }
+
+    // MARK: - The library, behind the camera's bottom-left button
+
+    private var libraryPage: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("", selection: $tab) {
@@ -38,38 +78,12 @@ struct AddStorySheet: View {
             }
             .navigationTitle("Add to Story")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button { showLibrary = false } label: { Image(systemName: "xmark") } } }
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
-            .fullScreenCover(item: $editorImage) { item in
-                StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
-            }
-            .fullScreenCover(item: $editorVideo) { item in
-                StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
-            }
             .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
-            // Stash the capture + dismiss the camera; present the editor in onDismiss so two
-            // fullScreenCovers never fight (which silently dropped the captured shot).
-            .fullScreenCover(isPresented: $showCamera, onDismiss: {
-                if let ui = pendingCapture { pendingCapture = nil; editorImage = EditorImage(ui) }
-                // Same pattern for "Aa": toggling showText WHILE the camera cover was still
-                // dismissing intermittently dropped the text composer (two covers fighting).
-                else if pendingTextMode { pendingTextMode = false; showText = true }
-            }) {
-                StoryCameraView(onCapture: { d in if let ui = UIImage(data: d) { pendingCapture = ui }; showCamera = false },
-                                onClose: { showCamera = false },
-                                onTextMode: { pendingTextMode = true; showCamera = false })
-            }
-            // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
-            .fullScreenCover(isPresented: $showText, onDismiss: {
-                if let s = pendingTextStory { pendingTextStory = nil; shareTextStory = s }
-            }) {
-                StoryTextComposer(onShare: { d in pendingTextStory = StoryShareData(data: d); showText = false },
-                                  onClose: { showText = false })
-            }
-            .sheet(item: $shareTextStory) { s in
-                ShareStorySheet(image: s.data, onPosted: { onPosted(); dismiss() })
-            }
+            // Asked for HERE, not on the camera: opening the camera should not raise a photo-library
+            // permission prompt for a screen that is not showing the library yet.
             .task { store.load(); store.loadAlbums() }
         }
     }
@@ -77,14 +91,9 @@ struct AddStorySheet: View {
     // MARK: - Photos tab
     private var photosTab: some View {
         ScrollView {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    quickCard("Aa", "Text", .green) { showText = true }
-                }
-                .padding(.horizontal, 16).padding(.vertical, 8)
-            }
+            // The Text card and the Camera tile are gone: the camera screen in front of this one owns
+            // both, and offering them twice is how a picker turns back into a menu.
             LazyVGrid(columns: cols, spacing: 2) {
-                cameraTile
                 ForEach(store.assets, id: \.localIdentifier) { asset in tile(asset) }
             }
             .padding(.horizontal, 2)
@@ -142,6 +151,9 @@ struct AddStorySheet: View {
                         .padding(4)
                 }
             }
+            // Held, then opened when this sheet has closed — see pendingLibraryImage. The resolve
+            // still happens HERE, with its spinner, because an iCloud video can take a moment and
+            // closing first would leave the camera sitting there looking like nothing happened.
             .onTapGesture {
                 if asset.mediaType == .video {
                     guard !loadingVideo else { return }
@@ -149,10 +161,12 @@ struct AddStorySheet: View {
                     Task {
                         let url = await store.videoURL(asset)
                         loadingVideo = false
-                        if let url { editorVideo = EditorVideo(url) }
+                        if let url { pendingLibraryVideo = url; showLibrary = false }
                     }
                 } else {
-                    Task { if let ui = await store.fullImage(asset) { editorImage = EditorImage(ui) } }
+                    Task {
+                        if let ui = await store.fullImage(asset) { pendingLibraryImage = ui; showLibrary = false }
+                    }
                 }
             }
     }
@@ -165,34 +179,6 @@ struct AddStorySheet: View {
     struct EditorImage: Identifiable { let id = UUID(); let image: UIImage; init(_ i: UIImage) { image = i } }
     struct EditorVideo: Identifiable { let id = UUID(); let url: URL; init(_ u: URL) { url = u } }
 
-    private var cameraTile: some View {
-        Button { showCamera = true } label: {
-            ZStack {
-                Color(.systemGray6)
-                VStack(spacing: 6) {
-                    Image(systemName: "camera.fill").font(.system(size: 20, weight: .bold)).foregroundStyle(.black)
-                        .frame(width: 50, height: 50).background(.white, in: Circle())
-                        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-                    Text("Camera").font(.caption).foregroundStyle(.primary)
-                }
-            }
-            .aspectRatio(1, contentMode: .fill).clipped()
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func quickCard(_ glyph: String, _ label: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Text(glyph).font(.system(size: 26, weight: .bold)).foregroundStyle(color)
-                Text(label).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-            }
-            .frame(width: 110, height: 90)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(.primary.opacity(0.08), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 // A grid thumbnail that loads its PHAsset image once (guarded against PhotoKit's double callback).

@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import Photos
 import PhotosUI
 
 // Full-screen story camera (standard story-camera style): live preview, capture, flip,
@@ -133,21 +134,55 @@ struct CameraPreview: UIViewRepresentable {
 
 // MARK: - The camera UI
 
+/// The story camera, to the owner's reference (2026-08-03): the preview is a rounded card, the close
+/// and flash controls float on it, the zoom pill and the shutter sit at its foot, and a black bar
+/// underneath carries the library, the CAMERA / TEXT switch and the flip button.
+///
+/// It is also the FIRST thing "Add Story" opens now — the picker page it used to open is reached
+/// from the library button at the bottom left, which is his instruction and the way every story
+/// camera works.
 struct StoryCameraView: View {
     var onCapture: (Data) -> Void
     var onClose: () -> Void
     var onTextMode: () -> Void = {}
+    /// Bottom-left. Opens the photo/album grid rather than Apple's picker, so a story can still be a
+    /// VIDEO — the system picker here would hand back an image and quietly drop that.
+    var onLibrary: () -> Void = {}
 
     @StateObject private var cam = StoryCamera()
-    @State private var libraryItem: PhotosPickerItem?
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
+    @State private var libraryThumb: UIImage?
     @Environment(\.scenePhase) private var scenePhase
+
+    private let previewCorner: CGFloat = 40
+    private let barHeight: CGFloat = 88
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            CameraPreview(session: cam.session).ignoresSafeArea()
+            VStack(spacing: 0) {
+                preview
+                    .clipShape(RoundedRectangle(cornerRadius: previewCorner, style: .continuous))
+                    .padding(.horizontal, 6)
+                    .padding(.top, 6)
+                bottomBar
+                    .frame(height: barHeight)
+            }
+        }
+        .onAppear { cam.onCapture = onCapture; cam.start(); loadLibraryThumb() }
+        .onDisappear { cam.stop() }
+        .onChange(of: scenePhase) { _, phase in   // free the camera when backgrounded
+            if phase == .active { cam.start() } else { cam.stop() }
+        }
+    }
+
+    // MARK: Preview card
+
+    private var preview: some View {
+        ZStack {
+            Color.black
+            CameraPreview(session: cam.session)
                 .gesture(MagnificationGesture()
                     .onChanged { scale in cam.zoomContinuous(baseZoom * scale) }
                     .onEnded { scale in baseZoom = max(1, baseZoom * scale) })
@@ -169,84 +204,183 @@ struct StoryCameraView: View {
                 .padding(.horizontal, 40)
             }
 
-            VStack {
-                // Top: close + flash
-                HStack {
-                    Button { onClose() } label: { circleIcon("xmark") }
+            VStack(spacing: 0) {
+                HStack(alignment: .top) {
+                    Button { onClose() } label: { chromeIcon("xmark") }
+                        .buttonStyle(.plain)
                     Spacer()
-                    Button { cam.torchOn.toggle() } label: { circleIcon(cam.torchOn ? "bolt.fill" : "bolt.slash.fill") }
-                }
-                .padding(.horizontal, 16).padding(.top, 8)
-
-                Spacer()
-
-                // Zoom levels
-                HStack(spacing: 4) {
-                    zoomButton(0.5, "·5")
-                    zoomButton(1, "1×")
-                    zoomButton(3, "3")
-                }
-                .padding(5).liquidGlass(Capsule(), interactive: true)
-                .animation(.easeInOut(duration: 0.2), value: zoom)   // smooth zoom-level selection
-
-                // Shutter
-                Button { cam.capture() } label: {
-                    ZStack {
-                        Circle().stroke(.white, lineWidth: 5).frame(width: 76, height: 76)
-                        Circle().fill(.white).frame(width: 62, height: 62)
+                    // A capsule because the reference has one, holding the flash on its own for now.
+                    // Signal's second glyph there is their single/multi CAPTURE MODE
+                    // (PhotoCaptureViewController.swift:989, `captureModeButton` → `didTapBatchMode`),
+                    // which takes a burst and sends them together. We have no such thing, and drawing
+                    // a button that does nothing is the one thing this project never does.
+                    HStack(spacing: 0) {
+                        Button { cam.torchOn.toggle() } label: {
+                            Image(systemName: cam.torchOn ? "bolt.fill" : "bolt.slash.fill")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 46, height: 44)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .liquidGlass(Capsule(), interactive: true)
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 16).padding(.bottom, 14)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
 
-                // Bottom: library + text-story + flip
-                HStack {
-                    PhotosPicker(selection: $libraryItem, matching: .images) { circleIcon("photo.on.rectangle") }
-                    Spacer()
-                    Button { onTextMode() } label: {
-                        Text("Aa").font(.system(size: 18, weight: .heavy)).foregroundStyle(.primary)
-                            .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
-                    }
-                    Spacer()
-                    Button { cam.flip() } label: { circleIcon("arrow.triangle.2.circlepath") }
-                }
-                .padding(.horizontal, 24).padding(.bottom, 16)
-            }
-        }
-        .onAppear { cam.onCapture = onCapture; cam.start() }
-        .onDisappear { cam.stop() }
-        .onChange(of: scenePhase) { _, phase in   // free the camera when backgrounded
-            if phase == .active { cam.start() } else { cam.stop() }
-        }
-        .onChange(of: libraryItem) { _, it in
-            guard let it else { return }
-            Task {
-                if let d = try? await it.loadTransferable(type: Data.self) {
-                    await MainActor.run { onCapture(d) }
-                }
+                Spacer(minLength: 0)
+
+                zoomPill
+                    .padding(.bottom, 26)
+
+                shutter
+                    .padding(.bottom, 26)
             }
         }
     }
 
-    private func circleIcon(_ name: String) -> some View {
+    /// Apple's own arrangement: the lenses you can switch to are small, and the one you are on shows
+    /// its factor, wider and in yellow.
+    private var zoomPill: some View {
+        HStack(spacing: 6) {
+            zoomButton(0.5, ".5")
+            zoomButton(1, "1")
+            zoomButton(3, "3")
+        }
+        .padding(5)
+        .background(.ultraThinMaterial, in: Capsule())
+        .environment(\.colorScheme, .dark)
+        .animation(.easeInOut(duration: 0.2), value: zoom)
+    }
+
+    private var shutter: some View {
+        Button { cam.capture() } label: {
+            ZStack {
+                Circle().stroke(.white.opacity(0.55), lineWidth: 3).frame(width: 84, height: 84)
+                Circle().fill(.white).frame(width: 72, height: 72)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Take photo")
+    }
+
+    // MARK: Black bar under the card
+
+    private var bottomBar: some View {
+        HStack {
+            Button { onLibrary() } label: { libraryCard }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Choose from library")
+            Spacer(minLength: 8)
+            modePicker
+            Spacer(minLength: 8)
+            Button { cam.flip() } label: {
+                // The symbol the app already used for this, not a newer one I would be guessing at:
+                // a wrong SF Symbol name is a BLANK button on the device and a green build in CI.
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Flip camera")
+        }
+        .padding(.horizontal, 20)
+    }
+
+    /// A little deck of pictures, which is what the reference draws: the newest photo in front with a
+    /// white edge, one more leaning behind it. Empty until the library has been allowed — asking for
+    /// the whole photo library just to draw a thumbnail would be a permission prompt for decoration.
+    private var libraryCard: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(.white.opacity(0.28))
+                .frame(width: 30, height: 38)
+                .rotationEffect(.degrees(-12))
+                .offset(x: -6)
+            Group {
+                if let libraryThumb {
+                    Image(uiImage: libraryThumb).resizable().scaledToFill()
+                } else {
+                    Color.white.opacity(0.16)
+                }
+            }
+            .frame(width: 32, height: 40)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(.white, lineWidth: 2))
+        }
+        .frame(width: 52, height: 46)
+        .contentShape(Rectangle())
+    }
+
+    private var modePicker: some View {
+        HStack(spacing: 0) {
+            modeLabel("CAMERA", selected: true) {}
+            modeLabel("TEXT", selected: false) { onTextMode() }
+        }
+        .padding(4)
+        .background(.white.opacity(0.14), in: Capsule())
+    }
+
+    private func modeLabel(_ title: String, selected: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .kerning(0.6)
+                .foregroundStyle(selected ? .white : .white.opacity(0.55))
+                .padding(.horizontal, 20).frame(height: 34)
+                .background(selected ? AnyShapeStyle(.white.opacity(0.22)) : AnyShapeStyle(.clear), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Pieces
+
+    private func chromeIcon(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.primary)
+            .foregroundStyle(.white)
             .frame(width: 44, height: 44)
             .liquidGlass(Circle(), interactive: true)
     }
 
     private func zoomButton(_ level: CGFloat, _ label: String) -> some View {
-        Button {
+        let on = zoom == level
+        return Button {
             zoom = level
+            baseZoom = max(1, level)   // a pinch after tapping a lens continues from THAT lens
             cam.setZoom(level)
         } label: {
-            Text(label)
-                .font(.system(size: zoom == level ? 15 : 12, weight: .semibold))
-                .foregroundStyle(zoom == level ? .yellow : .white)
-                .frame(width: zoom == level ? 38 : 30, height: zoom == level ? 38 : 30)
-                .background(zoom == level ? AnyShapeStyle(.thinMaterial) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
+            Text(on ? "\(label)×" : label)
+                .font(.system(size: on ? 14 : 13, weight: .semibold))
+                .foregroundStyle(on ? .yellow : .white)
+                .frame(minWidth: on ? 44 : 34, minHeight: 34)
+                .background(.black.opacity(on ? 0.35 : 0.22), in: Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    /// The newest thing in the library, for the button that opens it. Only if access has ALREADY been
+    /// granted, so this screen never raises a prompt of its own.
+    private func loadLibraryThumb() {
+        guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized
+                || PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited else { return }
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.fetchLimit = 1
+        guard let asset = PHAsset.fetchAssets(with: opts).firstObject else { return }
+        let req = PHImageRequestOptions()
+        req.deliveryMode = .opportunistic
+        req.resizeMode = .fast
+        req.isNetworkAccessAllowed = false
+        PHImageManager.default().requestImage(for: asset,
+                                              targetSize: CGSize(width: 160, height: 200),
+                                              contentMode: .aspectFill,
+                                              options: req) { img, _ in
+            if let img { DispatchQueue.main.async { libraryThumb = img } }
+        }
     }
 }
