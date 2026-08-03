@@ -43,6 +43,10 @@ struct StoryEditorView: View {
     @State private var penHue = 0.01             // 0 = white end of the track; 0.01 = red
     @State private var penWidth: CGFloat = 6
     @State private var isHighlighter = false
+    /// A stroke is under the finger right now. Everything on top of the photo gets out of the way
+    /// while it is true (owner 2026-08-03: "when i start to use pen all buttons hide, when i remove
+    /// my finger show again") — you cannot draw across a corner your own toolbar is sitting on.
+    @State private var strokeInFlight = false
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
     @State private var canvasSize: CGSize = .zero
     // Pinch-zoom + pan the photo directly on the canvas (baked WYSIWYG into the post). Driven by UIKit
@@ -191,7 +195,10 @@ struct StoryEditorView: View {
                                                         : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
                                   showsToolPicker: false,
                                   inkType: isHighlighter ? .marker : .pen,
-                                  penWidth: penWidth)
+                                  penWidth: penWidth,
+                                  onStroke: { drawing in
+                                      withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
+                                  })
                         .frame(width: geo.size.width, height: geo.size.height)
                 } else if !drawing.bounds.isEmpty {
                     // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
@@ -235,7 +242,9 @@ struct StoryEditorView: View {
                     .padding(.horizontal, 16).padding(.top, max(windowSafeTop - 22, 10))
                     Spacer()
                 }
-                .opacity(draggingID == nil && editingID == nil ? 1 : 0)
+                // …and out of the way while a stroke is under the finger, same as the pen bar below.
+                // The X and Done are in the top corners, which is exactly where a drawing runs off.
+                .opacity(draggingID == nil && editingID == nil && !strokeInFlight ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
                 // Bottom bar — ONLY this rises above the keyboard (caption docks above it, toolbar hides).
@@ -248,6 +257,10 @@ struct StoryEditorView: View {
                         penBar.padding(.bottom, 8)
                     }
                     .ignoresSafeArea(.keyboard, edges: .bottom)
+                    // OPACITY, not an `if`: removing the bar from the tree mid-stroke would relayout
+                    // the screen the canvas is measured against, and the canvas has to stay exactly
+                    // where it is or the line lands somewhere other than the finger.
+                    .opacity(strokeInFlight ? 0 : 1)
                 } else {
                     VStack {
                         Spacer()
@@ -946,6 +959,8 @@ struct DrawingCanvas: UIViewRepresentable {
     var showsToolPicker: Bool = true
     var inkType: PKInkingTool.InkType = .pen   // pen vs marker/highlighter
     var penWidth: CGFloat = 6
+    /// True while a stroke is being drawn. The editor uses it to clear its chrome out of the way.
+    var onStroke: (Bool) -> Void = { _ in }
     func makeUIView(context: Context) -> PKCanvasView {
         let v = PKCanvasView()
         v.drawingPolicy = .anyInput
@@ -978,6 +993,12 @@ struct DrawingCanvas: UIViewRepresentable {
         let toolPicker = PKToolPicker()
         init(_ p: DrawingCanvas) { parent = p }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) { parent.drawing = canvasView.drawing }
+
+        // PencilKit's own "a stroke is happening" pair. Reporting it is what lets the editor get its
+        // buttons out of the way while the finger is down — the alternative, a gesture recogniser of
+        // our own on the canvas, would have to compete with the one drawing the line.
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { parent.onStroke(true) }
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) { parent.onStroke(false) }
     }
 }
 
