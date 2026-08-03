@@ -467,29 +467,33 @@ struct StoriesRow: View {
                     // My Story with a filled cover (story preview OR profile photo): small avatar +
                     // ring + green + badge. With no stories the story ring is absent, so a clean white
                     // border makes the circle stand out against the (identical) photo behind it.
-                    // SMALLER THAN THE OTHER CARDS' CIRCLES, ON PURPOSE (owner 2026-08-03, with it
-                    // circled: "the white circle profile, its looks like uploaded story, can you
-                    // make it small"). A white ring around a face is the shape a POSTED story wears,
-                    // so at the size of a real story ring this read as one on a card that has
-                    // nothing posted. It is an add button, and now it is sized like a badge.
-                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: 26)
+                    //
+                    // THE WHITE-RING STATE ONLY (owner 2026-08-03, asked outright whether the change
+                    // touched anything else: "are you sure to change only white circle"). A white ring
+                    // around a face is the shape a POSTED story wears, so at story-ring size it read
+                    // as one on a card with nothing posted. Shrunk, it reads as the add button it is.
+                    //
+                    // The moment there IS something posted, this card is showing a real story ring and
+                    // must match everyone else's in the row — 32 with a 37 ring, same as the branch
+                    // below. Sizing both states together was my first pass and it would have made his
+                    // own posted ring smaller than his friends' for no reason.
+                    let addButton = seen.isEmpty
+                    AvatarView(name: avatarName ?? name, photoUrl: avatar, size: addButton ? 26 : 32)
                         .overlay {
-                            if seen.isEmpty {
+                            if addButton {
                                 Circle().strokeBorder(.white, lineWidth: 2)
                             } else {
-                                // With stories posted this IS a story ring, and it keeps its old
-                                // proportion to the circle it wraps.
-                                StoryRingView(seen: seen).frame(width: 30, height: 30)
+                                StoryRingView(seen: seen).frame(width: 37, height: 37)
                             }
                         }
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 13)).symbolRenderingMode(.palette)
+                                .font(.system(size: addButton ? 13 : 16)).symbolRenderingMode(.palette)
                                 // Black badge (matches the settings icon color); flips white in dark mode.
                                 .foregroundStyle(Color(.systemBackground), Color.primary)
                                 // Same white rim as the big add-badge — cut cleanly into the ring.
                                 .background(Circle().fill(Color(.systemBackground)).padding(-2))
-                                .offset(x: 3, y: 3)
+                                .offset(x: addButton ? 3 : 4, y: addButton ? 3 : 4)
                                 // high-priority so tapping + adds a story without triggering the card's open tap
                                 .highPriorityGesture(TapGesture().onEnded { onBadge() })
                         }
