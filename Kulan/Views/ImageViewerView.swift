@@ -367,12 +367,19 @@ struct ImageViewerView: View {
             // Only when it actually differs: paging is gated on being at fit anyway (`canBegin`), so
             // this was almost always writing 1 over 1 and invalidating the body for nothing.
             if pageZoom != 1 { pageZoom = 1 }
+            // PREFETCH IMMEDIATELY, and do NOT wait for the settle. It used to be inside the delay
+            // below, which was a mistake of association: the delay exists because BUILDING A PAGE
+            // mid-gesture breaks the interactive transition, and prefetching builds nothing. It
+            // decrypts and decodes off the main thread. Waiting a third of a second before even
+            // starting is why a fast swipe through a long gallery kept landing on a page with
+            // nothing to draw (owner: All Media flashes on swipe, a chat does not — a chat opens a
+            // single photo with no gallery at all, so there is nothing there to outrun).
+            prefetchNeighbors()
             settleToken &+= 1
             let token = settleToken
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard token == settleToken else { return }   // superseded by a newer swipe
                 windowIndex = currentIndex
-                prefetchNeighbors()   // decrypt+decode the new neighbours, now that nothing is moving
             }
         }
         .task {
@@ -412,22 +419,54 @@ struct ImageViewerView: View {
         //
         // Widening costs two more live pages, bounded to display size by the cache, and changes no
         // timing at all.
-        if abs(idx - currentIdx) > 2 {
-            Color.clear
-        } else {
-            // PIN THE PAGE TO THE WINDOW, by measurement instead of guesswork. The paging TabView has
-            // been placing its page slots below the window origin (the "image is cut at the status
-            // bar" and "image jumps down after opening" reports — the fly-open lands the copy centered
-            // in the WINDOW, then the real page rendered lower and the photo visibly hopped). Container
-            // and TabView both ignore the safe area already and the offset still survived, so stop
-            // arguing with the slot: measure where this page actually sits and cancel it. On a
-            // correctly placed page the measured offset is zero and this is a no-op.
-            GeometryReader { pg in
-                realPagerPage(m)
-                    .frame(width: pg.size.width, height: pg.size.height)
-                    .offset(y: -pg.frame(in: .global).minY)
+        //
+        // AND BEYOND THE WINDOW, A STILL PICTURE RATHER THAN A BLANK. Widening was not enough on its
+        // own: All Media hands this viewer the whole chat's photos, and a few quick flicks still
+        // outrun a window that is deliberately a third of a second behind. What made that a FLASH
+        // was `Color.clear` — landing on literally nothing. A far page now draws the same bitmap,
+        // aspect-fit at the same frame, as a plain Image. It is pixel-identical to the live page, so
+        // when the window catches up and the real zoom view replaces it there is nothing to see; it
+        // just becomes zoomable. And it is only an Image: no scroll view, no view controller, so it
+        // cannot bring back the mid-gesture teardown the lag exists to prevent.
+        //
+        // Bounded to a band rather than the whole gallery, because a paging TabView evaluates every
+        // child on every pass and there is no point resolving a bitmap for page 30 of 33.
+        let distance = abs(idx - currentIdx)
+        // PIN THE PAGE TO THE WINDOW, by measurement instead of guesswork. The paging TabView has
+        // been placing its page slots below the window origin (the "image is cut at the status
+        // bar" and "image jumps down after opening" reports — the fly-open lands the copy centered
+        // in the WINDOW, then the real page rendered lower and the photo visibly hopped). Container
+        // and TabView both ignore the safe area already and the offset still survived, so stop
+        // arguing with the slot: measure where this page actually sits and cancel it. On a
+        // correctly placed page the measured offset is zero and this is a no-op.
+        GeometryReader { pg in
+            Group {
+                if distance <= Self.liveWindow {
+                    realPagerPage(m)
+                } else if distance <= Self.stillWindow, let img = cachedImage(m) {
+                    Image(uiImage: img).resizable().scaledToFit()
+                } else {
+                    Color.clear
+                }
             }
+            .frame(width: pg.size.width, height: pg.size.height)
+            .offset(y: -pg.frame(in: .global).minY)
         }
+    }
+
+    /// Pages either side that get a real zoomable view.
+    private static let liveWindow = 2
+    /// …and how much further a still picture is drawn, so a fast swipe never lands on nothing.
+    private static let stillWindow = 6
+
+    /// The bitmap for this page WITHOUT starting any work: optimistic local bytes, then whatever the
+    /// async loader has already produced, then the memory cache the grid behind this viewer filled
+    /// when it drew the same photo as a tile. Same chain `realPagerPage` uses, so the still page and
+    /// the live page can never disagree about which picture belongs here.
+    private func cachedImage(_ m: Message) -> UIImage? {
+        loaded[m.id]
+            ?? m.localImageData.flatMap(UIImage.init(data:))
+            ?? m.imageUrl.flatMap { DiskImageCache.shared.memoryImage($0) }
     }
 
     @ViewBuilder private func realPagerPage(_ m: Message) -> some View {
@@ -435,8 +474,7 @@ struct ImageViewerView: View {
         // this used to render a spinner and only fill in after an async task — even though the bubble
         // you just tapped had already decoded the image into the memory cache. That one-frame-plus gap
         // is what read as "the image opens late".
-        if let img = loaded[m.id] ?? m.localImageData.flatMap(UIImage.init(data:))
-            ?? m.imageUrl.flatMap({ DiskImageCache.shared.memoryImage($0) }) {
+        if let img = cachedImage(m) {
             // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
@@ -627,10 +665,8 @@ struct ImageViewerView: View {
     /// `loaded`. So Share, Pen and Save all read nil on a photo that is plainly on screen and did
     /// nothing at all (owner report; Delete kept working because it needs no image).
     private var currentImage: UIImage? {
-        if let img = loaded[current] { return img }
-        guard let m = gallery.first(where: { $0.id == current }) else { return nil }
-        return m.localImageData.flatMap(UIImage.init(data:))
-            ?? m.imageUrl.flatMap { DiskImageCache.shared.memoryImage($0) }
+        guard let m = gallery.first(where: { $0.id == current }) else { return loaded[current] }
+        return cachedImage(m)   // one chain, so "on screen" and "what Share gets" cannot drift apart
     }
 
     private func share() {
