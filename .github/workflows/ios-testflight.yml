@@ -70,6 +70,26 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
+            ADD STORY OPENS THE CAMERA now, full screen, built to the picture you sent. The close button and the flash sit on the preview, the zoom and the shutter at its foot, and underneath there is the pictures button on the left, the CAMERA and TEXT tabs in the middle and flip on the right. The old picker page is not gone, it is what the pictures button opens, because that is the only way to post a VIDEO story.
+
+            PLEASE TRY FIRST: take a photo and post it, then open the pictures button and post a video, then TEXT. One thing is missing on purpose. Your picture has a second button beside the flash. In Signal that takes a burst of photos and sends them together. We have nothing like it and I do not ship a button that does nothing, so tell me what you want there.
+
+            THE PINNED BAR SHOWS THE MESSAGE, not Tap to view. It was looking for the pinned message among the ones loaded on screen, and a pin is almost always older than that, so it had nothing to show. It now fetches the pinned messages themselves. It also stops saying a message was deleted when it was only too old to reach: that word now appears only when the message really is gone. Tapping a pin that is too far back to jump to opens the pinned list instead.
+
+            MENU ICONS ARE THE SAME SIZE AS EACH OTHER, measured properly this time. Mute, Pin and Delete looked small next to Unread and Archive. Every earlier attempt set the box around the icon, and the box is not what you see: Apple draws its icons with air around them, and your pin is a thin shape on a square canvas. The size is now applied to the drawing itself, with the empty space trimmed off first.
+
+            ALL MEDIA USES APPLE'S OWN TAB BAR, the same control as All and Missed on the Calls page. The white highlight is the real one now, not our copy of it.
+
+            THE SWIPE BETWEEN MEDIA, FILES AND VOICE IS SMOOTH. There was a second animation running on top of your finger, over all five tabs at once, on the exact frame the swipe needed. It is gone.
+
+            EDIT PHOTO IS THE PHOTO. Tapping it now shows your picture large with an X on it to remove it, and Take photo and Choose photo underneath. Take photo opens the camera and lands in the same cropper a chosen photo does.
+
+            ZOOMING A CHAT PHOTO: the controls hide when you zoom, and a tap brings them back and hides them again, at any zoom. Before, a tap did nothing once you had zoomed.
+
+            THE PIN BAR BUTTON is the same size as the rest of the icons.
+
+            From 449:
+
             NO PICTURE MEANS THE CIRCLE, everywhere. You showed me an account with no picture that still opened with the big header. Yesterday's fix moved the decision onto your account record, and a record can name a photo that is not there any more, so the app believed in a picture it could not draw. It now asks one more question before it draws anything: is there really a picture behind this. Nothing to load means the circle. This is checked on a person's profile opened from a chat, from the Calls list and from a story, on a group, and on your own preview in Edit Profile.
 
             PLEASE TRY FIRST: an account with no picture, and one with a picture, opened all three ways. The right layout on the very first frame, and it must not change while you are looking at it.
