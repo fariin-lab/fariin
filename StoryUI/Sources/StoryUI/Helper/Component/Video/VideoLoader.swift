@@ -174,6 +174,10 @@ private extension PlayerView {
     // StorySnapshotCache-backed cards show it. Only the ACTIVE, advanced video responds (others are
     // stopped/at zero). Fails silently → the card keeps its poster fallback.
     @objc func captureCurrentFrameObserver(_ note: Notification) {
+        // `.started` STAYS. Pausing does not change this state — `pauseVideo()` never writes it — so a
+        // paused-for-the-sheet player still answers, which is exactly what we want. Widening it to
+        // `.ready`/`.restart` would let a NON-active loader answer and store its own frame under the
+        // active story's url, which is a wrong picture rather than a missing one.
         guard let urlStr = note.object as? String,
               state == .started,
               let item = player?.currentItem else { return }

@@ -1513,8 +1513,23 @@ struct StoryViewer: View {
                 // full-screen story (letterboxed = keeps its blur) and by the card it fills (no side
                 // bars). A fixed card threshold would make a letterboxed story FILL from the first
                 // pixel — its blur bars would vanish as you drag, reading as "the blur disappears".
-                StoryImage(url: url, fitBlur: true, bakedBars: false, cardFillThreshold: mH / mW)
+                // THE FRAME THE VIDEO IS ACTUALLY ON, if one was captured (owner 2026-08-04: watch a
+                // 30s story to 21s, swipe up, and the card behind the sheet showed second zero).
+                //
+                // `StoryImage(url:)` loads the story's POSTER, which for a video is its first frame —
+                // correct for a photo, wrong for a video you are 21 seconds into. The player
+                // photographs its current frame into StoryCompositeCache as the pull begins; this
+                // prefers that when it exists and falls back to the poster when it does not, so a
+                // photo story and a video still at zero behave exactly as before.
+                Group {
+                    if let live = StoryCompositeCache.image(for: url) {
+                        Image(uiImage: live).resizable().scaledToFill()
+                    } else {
+                        StoryImage(url: url, fitBlur: true, bakedBars: false, cardFillThreshold: mH / mW)
+                    }
+                }
                     .frame(width: mW, height: mH)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.top, blockTop * sizeP)
                     .frame(maxWidth: .infinity)
