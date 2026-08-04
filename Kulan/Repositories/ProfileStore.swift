@@ -39,8 +39,15 @@ final class ProfileStore {
     static func adoptServerPrivacy(_ privacy: [String: String]?) {
         guard let privacy, !privacy.isEmpty else { return }
         let d = UserDefaults.standard
-        for (key, value) in privacy where d.string(forKey: "priv.\(key)") == nil {
-            d.set(value, forKey: "priv.\(key)")
+        for (key, value) in privacy {
+            // The on/off switches live under their own plain keys as Bools, not under "priv." as
+            // audience strings — that is where the settings screen already reads them, and moving
+            // them would be a migration for no gain. One map on the server, two shapes locally.
+            if PrivacyPrefs.flagKeys.contains(key) {
+                if d.object(forKey: key) == nil { d.set(value == "true", forKey: key) }
+            } else if d.string(forKey: "priv.\(key)") == nil {
+                d.set(value, forKey: "priv.\(key)")
+            }
         }
     }
 

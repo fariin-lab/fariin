@@ -44,6 +44,24 @@ enum PrivacyPrefs {
         }
     }
 
+    /// THE ON/OFF SWITCHES, published like the audiences are (owner 2026-08-04: "sync Read Receipts,
+    /// Typing Indicators and Share Last Seen with the server so they are restored on every device").
+    ///
+    /// These were local only. Signing out wiped them and there was nothing to bring back, so every
+    /// new device and every re-login silently turned them all back ON — which for a privacy switch is
+    /// the wrong direction to fail in. They live beside the audiences in `users/{uid}.privacy` as
+    /// "true"/"false" strings, so one map carries the whole screen and one import restores it.
+    static let flagKeys = ["readReceipts", "typingIndicators", "shareLastSeen"]
+
+    static func setFlag(_ key: String, _ on: Bool) {
+        UserDefaults.standard.set(on, forKey: key)
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        Task {
+            try? await Firestore.firestore().collection("users").document(uid)
+                .setData(["privacy": [key: on ? "true" : "false"]], merge: true)
+        }
+    }
+
     /// Does someone whose privacy map says `audience` for a field allow ME to see it?
     /// qualified = I share a conversation with them.
     static func allows(_ privacy: [String: String], _ key: String, contactOfMine: Bool) -> Bool {
@@ -229,7 +247,9 @@ struct MessagesPrivacyPage: View {
 
             Section {
                 Toggle("Read Receipts", isOn: $readReceipts).tint(.green)
+                    .onChange(of: readReceipts) { _, v in PrivacyPrefs.setFlag("readReceipts", v) }
                 Toggle("Typing Indicators", isOn: $typingIndicators).tint(.green)
+                    .onChange(of: typingIndicators) { _, v in PrivacyPrefs.setFlag("typingIndicators", v) }
             } footer: {
                 Text("These are reciprocal — if you turn one off, you won't see it from others either.")
             }
