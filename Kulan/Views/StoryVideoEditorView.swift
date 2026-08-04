@@ -24,6 +24,22 @@ struct StoryVideoEditorView: View {
     // One AVQueuePlayer + looper for the whole editor session.
     @State private var player = AVQueuePlayer()
     @State private var looper: AVPlayerLooper?
+    @State private var playing = true
+    @State private var zoom: CGFloat = 1
+    @State private var baseZoom: CGFloat = 1
+    @State private var showTrim = false
+    /// The cut, in seconds. Applied at POST time by exporting exactly this range, so nothing is
+    /// re-encoded while you are still deciding.
+    @State private var trimStart: Double = 0
+    @State private var trimEnd: Double = 0
+
+    private var isTrimmed: Bool { trimStart > 0.05 || (duration > 0 && trimEnd < duration - 0.05) }
+    private var trimmedLength: Double { max(0, trimEnd - trimStart) }
+
+    private func togglePlay() {
+        playing.toggle()
+        if playing { player.play() } else { player.pause() }
+    }
 
     private var windowSafeTop: CGFloat {
         UIApplication.shared.connectedScenes
@@ -58,14 +74,45 @@ struct StoryVideoEditorView: View {
                             .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
                     }
                     // The looping video, aspect-fit, contained in the card.
+                    //
+                    // PINCH ZOOMS IT (owner 2026-08-04). The scale lives on the player view and the
+                    // mask stays put, so the video grows INSIDE the card instead of spilling over its
+                    // rounded edge. Springs back if you pinch below 1, and 4x is as far in as a story
+                    // is worth going.
                     LoopingPlayerView(player: player)
                         .frame(width: geo.size.width, height: cardH)
+                        .scaleEffect(zoom)
                         .mask {
                             RoundedRectangle(cornerRadius: 40, style: .continuous)
                                 .frame(width: geo.size.width, height: cardH)
                         }
                         .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                        .onTapGesture { captionFocused = false }
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { v in zoom = min(4, max(0.9, baseZoom * v)) }
+                                .onEnded { _ in
+                                    baseZoom = max(1, zoom)
+                                    if zoom < 1 { withAnimation(.snappy(duration: 0.25)) { zoom = 1 } }
+                                }
+                        )
+                        // Tap puts the keyboard away if it is up, otherwise it plays and pauses —
+                        // the caption always wins, because a tap meant for dismissing a keyboard
+                        // should never also stop the video.
+                        .onTapGesture {
+                            if captionFocused { captionFocused = false } else { togglePlay() }
+                        }
+
+                    // The play mark, only while paused, exactly as his reference draws it.
+                    if !playing {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 34))
+                            .foregroundStyle(.white)
+                            .frame(width: 84, height: 84)
+                            .background(Color.black.opacity(0.45), in: Circle())
+                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
                 }
 
                 // Top controls: X (left), trim notice + mute (right).
@@ -78,8 +125,12 @@ struct StoryVideoEditorView: View {
                                 .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
                         }
                         Spacer()
-                        if duration > Double(Limits.storyVideoSeconds) + 0.5 {
-                            Text("First \(Limits.storyVideoSeconds)s will be shared")
+                        // NOTHING IS THROWN AWAY ANY MORE, so the notice stopped being a warning and
+                        // became a fact: a long video posts as several stories that play one after
+                        // another. It used to read "First 30s will be shared", which was the app
+                        // telling you it was about to discard the rest.
+                        if segmentCount > 1 {
+                            Text("Posts as \(segmentCount) stories")
                                 .font(.footnote.weight(.medium)).foregroundStyle(.primary)
                                 .padding(.horizontal, 12).frame(height: 32)
                                 .liquidGlass(Capsule())
@@ -115,6 +166,11 @@ struct StoryVideoEditorView: View {
             ShareStorySheet(image: s.payload.thumbnail, caption: s.caption, video: s.payload,
                             onPosted: { onPosted(); dismiss() })
         }
+        .fullScreenCover(isPresented: $showTrim) {
+            StoryTrimView(url: url, duration: duration,
+                          trimStart: $trimStart, trimEnd: $trimEnd,
+                          onClose: { showTrim = false })
+        }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
         .onDisappear { player.pause() }
@@ -134,10 +190,13 @@ struct StoryVideoEditorView: View {
                         }
                 }
                 .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)
-                // Dark pill (readable white text on bright video frames) instead of light Liquid Glass.
-                .background(Color.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                // Light photos made the white caption text invisible (user screenshot: white-on-
-                // white). A soft bar shadow lifts the pill off bright backgrounds...
+                // Liquid Glass, tinted dark (owner 2026-08-04). Plain glass goes pale over a bright
+                // frame and swallows the white placeholder, which is the bug the flat pill was
+                // covering for; the tint is Apple's own, so this is real glass that still gives
+                // white text something to sit on. The text keeps its hairline shadow for the same
+                // reason.
+                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous),
+                             tint: .black.opacity(0.28))
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
 
                 if captionFocused { compactSendButton }
@@ -145,7 +204,22 @@ struct StoryVideoEditorView: View {
             .padding(.bottom, 10)
 
             if !captionFocused {
-                HStack {
+                HStack(spacing: 14) {
+                    // TRIM ONLY, and only here. Aa, crop and pen draw ON a picture; on a video they
+                    // would have to be burned into every frame at export, which is a different job
+                    // from the photo editor's and not one to fake with a button that does nothing.
+                    HStack(spacing: 22) {
+                        Button { player.pause(); playing = false; showTrim = true } label: {
+                            Image(systemName: "scissors")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(isTrimmed ? .green : .white)
+                                .frame(width: 32, height: 32).contentShape(Rectangle())
+                        }
+                        .buttonStyle(StoryPressStyle())
+                    }
+                    .padding(.horizontal, 20).frame(height: 46)
+                    .liquidGlass(Capsule())
+
                     Spacer()
                     sendButton
                 }
@@ -187,8 +261,17 @@ struct StoryVideoEditorView: View {
 
     private func send() {
         guard let thumbnailData else { return }
-        pendingShare = StoryVideoShare(payload: StoryVideoPayload(url: url, thumbnail: thumbnailData, muted: muted),
-                                       caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
+        pendingShare = StoryVideoShare(
+            payload: StoryVideoPayload(url: url, thumbnail: thumbnailData, muted: muted,
+                                       trim: isTrimmed ? trimStart...trimEnd : nil),
+            caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// How many stories this post will become, so the notice can say it plainly.
+    private var segmentCount: Int {
+        let len = isTrimmed ? trimmedLength : duration
+        guard len > Double(Limits.storyVideoSeconds) + 0.5 else { return 1 }
+        return Int(ceil(min(len, Double(Limits.storyVideoPickSeconds)) / Double(Limits.storyVideoSeconds)))
     }
 
     // Load duration + poster frame, start the loop. The poster is the SAME frame recipe the
@@ -197,6 +280,7 @@ struct StoryVideoEditorView: View {
         let asset = AVURLAsset(url: url)
         guard let dur = try? await asset.load(.duration).seconds, dur > 0 else { loadFailed = true; return }
         duration = dur
+        if trimEnd <= 0 { trimEnd = dur }   // the trim starts as "all of it"
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)

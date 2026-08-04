@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UIKit
+import AVFoundation
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
@@ -247,7 +248,8 @@ final class StoriesService {
     // Fire-and-forget VIDEO post — same shape as postStoryBackground. `thumbnail` is the poster
     // frame the editor already generated; it drives the uploading ring/placeholder immediately
     // while the transcode + upload run in the background.
-    @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false, caption: String = "",
+    @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false,
+                                             trim: ClosedRange<Double>? = nil, caption: String = "",
                                              excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
@@ -264,7 +266,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, caption: caption, excluded: excluded, included: included, everyone: everyone) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, caption: caption, excluded: excluded, included: included, everyone: everyone) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -275,17 +277,89 @@ final class StoriesService {
         }
     }
 
-    // Post a video story: auto-trim to the first 30s (standard behavior — never reject),
-    // transcode to 720p H.264, upload the poster thumb + the mp4, then fill both URLs atomically
-    // (the repository skips docs with an empty mediaUrl, so nobody sees a half-uploaded story).
-    func postVideoStory(videoURL: URL, muted: Bool = false, caption: String = "", expiryHours: Double = 24,
+    /// A long video becomes SEVERAL stories, in order, instead of being cut down to the first 90
+    /// seconds (owner's spec, 2026-08-04, WhatsApp Status' model). 45s is one story; two minutes is
+    /// 90 + 30; five minutes is four. Nothing the user picked is thrown away and they do nothing
+    /// extra to get it.
+    ///
+    /// SEQUENTIAL ON PURPOSE, not parallel. Each story's place in the queue is its `createdAt`, and
+    /// the only way to be sure segment 2 sorts after segment 1 is to write it after segment 1. Three
+    /// uploads racing would land in whatever order the network felt like, which is a jumbled story.
+    ///
+    /// A FAILURE DOES NOT RESTART THE WHOLE THING. Each segment retries on its own, twice, and if one
+    /// still will not go the error says which — the segments already posted stay posted, because
+    /// making somebody re-upload four minutes because the fifth chunk timed out is the opposite of
+    /// what this feature is for.
+    func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil,
+                        caption: String = "", expiryHours: Double = 24,
                         excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) async throws {
+        let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
+        // A hand trim decides where the material starts and how much of it there is; the split then
+        // works on THAT, not on the original file. Trim to 20s and you get one story, not the first
+        // 90 seconds of something you already cut.
+        let offset = max(0, trim?.lowerBound ?? 0)
+        let total = max(0, min(trim?.upperBound ?? full, full) - offset)
+        let cap = Double(Limits.storyVideoSeconds)
+        guard total > cap + 0.5 else {
+            let range = trim.map { _ in
+                CMTimeRange(start: CMTime(seconds: offset, preferredTimescale: 600),
+                            duration: CMTime(seconds: total, preferredTimescale: 600))
+            }
+            // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
+            try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted,
+                                       expiryHours: expiryHours, excluded: excluded,
+                                       included: included, everyone: everyone)
+            return
+        }
+
+        let count = Int(ceil(min(total, Double(Limits.storyVideoPickSeconds)) / cap))
+        for i in 0..<count {
+            try Task.checkCancellation()
+            let start = offset + Double(i) * cap
+            let len = min(cap, (offset + total) - start)
+            guard len > 0.05 else { break }
+            let range = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                                    duration: CMTime(seconds: len, preferredTimescale: 600))
+            // The caption belongs to the story, not to every slice of it: repeating it on all seven
+            // reads as a stutter. It rides the FIRST segment, which is the one people see first.
+            var lastError: Error?
+            for attempt in 0..<3 {
+                do {
+                    try await postVideoSegment(videoURL: videoURL, range: range,
+                                               caption: i == 0 ? caption : "", muted: muted,
+                                               expiryHours: expiryHours, excluded: excluded,
+                                               included: included, everyone: everyone)
+                    lastError = nil
+                    break
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                    if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * (attempt + 1))) }
+                }
+            }
+            if let lastError {
+                throw NSError(domain: "Fariin", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Part \(i + 1) of \(count) didn't upload. The parts before it were posted — try again to send the rest.",
+                    NSUnderlyingErrorKey: lastError,
+                ])
+            }
+        }
+    }
+
+    // Post ONE story from a video: transcode to 720p H.264 (optionally just the slice `range`),
+    // upload the poster thumb + the mp4, then fill both URLs atomically (the repository skips docs
+    // with an empty mediaUrl, so nobody sees a half-uploaded story).
+    private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool,
+                                  expiryHours: Double, excluded: Set<String>, included: Set<String>,
+                                  everyone: Bool) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()
 
         // Transcode BEFORE creating the doc — a failed/cancelled transcode leaves zero server state.
-        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted) else {
+        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, range: range) else {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }

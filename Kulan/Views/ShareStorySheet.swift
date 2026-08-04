@@ -7,7 +7,15 @@ struct StoryShareData: Identifiable { let id = UUID(); let data: Data; var capti
 // A picked video awaiting the audience sheet: the source file + the poster frame the editor
 // already generated (drives the uploading ring immediately; the transcode runs in the background).
 // muted = the editor's speaker toggle → the upload strips the audio track (real, as standard messengers do).
-struct StoryVideoPayload { let url: URL; let thumbnail: Data; var muted: Bool = false }
+// `trim`: the range the user kept on the trim screen, in seconds. nil = the whole clip. Carried
+// rather than exported on the spot, so opening trim and changing your mind costs nothing and the
+// clip is encoded exactly once, at post time.
+struct StoryVideoPayload {
+    let url: URL
+    let thumbnail: Data
+    var muted: Bool = false
+    var trim: ClosedRange<Double>? = nil
+}
 
 // "Share Story" audience sheet: choose who sees the story, then Post.
 // Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
@@ -176,6 +184,7 @@ struct ShareStorySheet: View {
                 videoURL: video.url,
                 thumbnail: video.thumbnail,
                 muted: video.muted,
+                trim: video.trim,
                 caption: caption,
                 excluded: mode == 1 ? excluded : [],
                 included: mode == 2 ? included : [],

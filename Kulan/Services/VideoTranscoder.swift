@@ -17,7 +17,11 @@ enum VideoTranscoder {
     // to the first N seconds, never rejected). nil = full length (video messages).
     // stripAudio: the story editor's mute — re-composes with the video track ONLY, so the
     // sound is genuinely gone from the uploaded file (not just muted in the preview).
-    static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false, hd: Bool = false) async -> Prepared? {
+    /// `range`: export exactly this slice instead of starting at zero. Two callers need it and they
+    /// are the same problem seen twice — the trim screen cutting a clip by hand, and a long story
+    /// being split into 90-second segments. `maxSeconds` still applies to whatever is left after it.
+    static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false,
+                        hd: Bool = false, range: CMTimeRange? = nil) async -> Prepared? {
         let asset = AVURLAsset(url: url)
         guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
         var duration = fullTime.seconds
@@ -40,7 +44,18 @@ enum VideoTranscoder {
         let preset = hd ? AVAssetExportPreset1920x1080 : AVAssetExportPreset1280x720
         guard let session = AVAssetExportSession(asset: exportAsset, presetName: preset) else { return nil }
         session.shouldOptimizeForNetworkUse = true
-        if let cap = maxSeconds, duration > cap {
+        // A requested slice wins; the cap then trims whatever that slice turned out to be. Clamped
+        // to the real duration, because a range past the end exports nothing at all rather than
+        // failing loudly, which is the worst way for this to go wrong.
+        if let range {
+            let start = max(0, range.start.seconds)
+            let len = min(range.duration.seconds, max(0, fullTime.seconds - start))
+            guard len > 0.05 else { return nil }
+            let capped = min(len, maxSeconds ?? len)
+            session.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                                            duration: CMTime(seconds: capped, preferredTimescale: 600))
+            duration = capped
+        } else if let cap = maxSeconds, duration > cap {
             session.timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: cap, preferredTimescale: 600))
             duration = cap
         }

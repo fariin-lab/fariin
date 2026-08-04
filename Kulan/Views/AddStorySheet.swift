@@ -29,6 +29,7 @@ struct AddStorySheet: View {
     @State private var pendingLibraryVideo: URL?
     @State private var shareTextStory: StoryShareData?     // finished text story → the audience sheet
     @State private var showLibrary = false
+    @State private var tooLongVideo = false   // pick over the 10-minute ceiling
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -79,6 +80,11 @@ struct AddStorySheet: View {
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
             .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
+            .alert("That video is too long", isPresented: $tooLongVideo) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Stories can be up to \(Limits.storyVideoPickSeconds / 60) minutes. Longer videos are posted as several stories, but this one is past the limit.")
+            }
             // Asked for HERE, not on the camera: opening the camera should not raise a photo-library
             // permission prompt for a screen that is not showing the library yet.
             .task { store.load(); store.loadAlbums() }
@@ -154,6 +160,13 @@ struct AddStorySheet: View {
             .onTapGesture {
                 if asset.mediaType == .video {
                     guard !loadingVideo else { return }
+                    // TEN MINUTES IS THE CEILING (owner's spec). Under it, any length is fine — a
+                    // long video becomes several 90-second stories on its own. Over it, say so
+                    // BEFORE the iCloud download rather than after somebody waits for it.
+                    guard asset.duration <= Double(Limits.storyVideoPickSeconds) + 1 else {
+                        tooLongVideo = true
+                        return
+                    }
                     loadingVideo = true
                     Task {
                         let url = await store.videoURL(asset)

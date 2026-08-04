@@ -25,7 +25,13 @@ enum Limits {
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
     static let storyUploadBytes = 100 * 1024 * 1024              // 100 MB
-    static let storyVideoSeconds = 30   // standard cap; longer picks are auto-trimmed, never rejected
+    /// How long ONE story can be. 90s is WhatsApp Status's number and the owner's spec (2026-08-04).
+    /// A longer pick is no longer truncated to this — it is SPLIT into consecutive segments, each its
+    /// own story, so nothing the user chose is thrown away.
+    static let storyVideoSeconds = 90
+    /// How long a pick may be before we refuse it outright: ten minutes, which at 90s a segment is
+    /// seven stories. Past that the split stops being a story and starts being a film.
+    static let storyVideoPickSeconds = 600
     static let storyCaptionChars = 700
 
     // Groups
