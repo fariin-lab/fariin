@@ -16,6 +16,7 @@ struct DeleteAccountView: View {
     init(onDeleted: @escaping () -> Void) { self.onDeleted = onDeleted }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
     private var profile = ProfileStore.shared
 
     private enum Step { case confirm, verify, working }
@@ -155,7 +156,7 @@ struct DeleteAccountView: View {
                         }
                     }
                 }
-                .signInWithAppleButtonStyle(.black)
+                .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
                 .frame(height: 50)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
@@ -167,12 +168,13 @@ struct DeleteAccountView: View {
                     HStack(spacing: 10) {
                         GoogleGIcon(size: 20)
                         Text("Continue with Google")
-                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Color(.systemBackground))
                     }
                     .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(Color.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.black.opacity(0.14), lineWidth: 1))
+                        .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
@@ -214,10 +216,19 @@ struct DeleteAccountView: View {
 
     private func start() {
         error = nil
-        // Verified recently enough? Then there's nothing to prove — go straight through.
-        if AuthService.shared.needsRecentLogin && !AuthService.shared.reauthMethods.isEmpty {
+        // ALWAYS ask, however fresh the session is. `needsRecentLogin` answers a different
+        // question: whether Firebase will accept the call with the token we are holding. It
+        // says nothing about whether the person holding the phone is the person who owns the
+        // account, and this is the one screen where those two must not be confused. An
+        // unlocked phone left on a table was one tap from deleting the account behind it.
+        //
+        // For a Google account this opens Google's own account picker, so choosing the wrong
+        // one fails instead of deleting. Same for Apple. Email asks for the password.
+        if !AuthService.shared.reauthMethods.isEmpty {
             step = .verify
         } else {
+            // No door to knock on: an account with no sign-in provider cannot be re-verified,
+            // and refusing here would trap the user in an account they cannot leave.
             deleteNow()
         }
     }
