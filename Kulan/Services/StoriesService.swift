@@ -660,7 +660,7 @@ final class StoriesRepository {
         // BLOCK GATE (audit). resolveAudience deliberately strips people I've blocked from every
         // story I post, but an "Everyone" story also carries public == true, and this read gated
         // only on that flag — so someone the AUTHOR blocked could still watch it from the author's
-        // profile, invisibly, because the profile viewer is anonymous and never lands in Seen-by.
+        // profile, and a rules-refused view write means it need not land in Seen-by to be watched.
         // The block is recorded on the shared conversation doc, which both clients can read.
         let cid = ChatService.convId(me, uid)
         if let snap = try? await db.collection("conversations").document(cid).getDocument(),

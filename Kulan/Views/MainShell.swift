@@ -601,7 +601,6 @@ struct ChatsView: View {
     @State private var showMyQR = false   // welcome empty-state → My QR Code sheet
     @State private var welcomeGreet = 0   // one-shot greeting bounce on the welcome glyph
     @State private var viewerGroup: StoryGroup?
-    @State private var viewerAnonymous = false
     // WHERE the story was opened from — the zoom grows out of (and closes back into) the
     // exact circle the user tapped: a top stories-row card (its group id) or a chat-row
     // ring ("row-<cid>"). Set BEFORE viewerGroup at every open site.
@@ -824,7 +823,7 @@ struct ChatsView: View {
                     if selecting { toggleSelection(conv.id); return }
                     if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
                         viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
-                        viewerAnonymous = false; viewerGroup = g
+                        viewerGroup = g
                     }
                 },
                 storyNS: storyNS,
@@ -1186,10 +1185,9 @@ struct ChatsView: View {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                  storyNS: storyNS,
                                  onCompose: { showCompose = true },
-                                 onOpen: { g in viewerSourceID = g.isMine ? g.id : "story-\(g.id)"; viewerAnonymous = false; viewerGroup = g },
+                                 onOpen: { g in viewerSourceID = g.isMine ? g.id : "story-\(g.id)"; viewerGroup = g },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
-                                 onOpenAnon: { g in viewerSourceID = g.isMine ? g.id : "story-\(g.id)"; viewerAnonymous = true; viewerGroup = g },
                                  onOpenUploading: { showUploadViewer = true })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
@@ -1272,10 +1270,10 @@ struct ChatsView: View {
                 // My Story (not in `others`) opens on its own.
                 Group {
                     if let idx = others.firstIndex(where: { $0.id == g.id }) {
-                        StoryViewer(groups: others, startIndex: idx, anonymous: viewerAnonymous, onClose: close,
+                        StoryViewer(groups: others, startIndex: idx, onClose: close,
                                     onProfile: { grp in profileGroup = grp })
                     } else {
-                        StoryViewer(group: g, anonymous: viewerAnonymous, onClose: close,
+                        StoryViewer(group: g, onClose: close,
                                     onProfile: { grp in profileGroup = grp },
                                     onDeletedRemaining: { fresh in
                                         // A story was deleted but I still have others — re-feed the viewer the

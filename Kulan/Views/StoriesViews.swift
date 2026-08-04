@@ -345,7 +345,6 @@ struct StoriesRow: View {
     var onOpen: (StoryGroup) -> Void
     var onMessage: (StoryGroup) -> Void = { _ in }
     var onProfile: (StoryGroup) -> Void = { _ in }
-    var onOpenAnon: (StoryGroup) -> Void = { _ in }
     var onOpenUploading: () -> Void = {}   // tap the still-uploading card → live upload viewer
     @State private var prefsTick = 0   // re-render after hide/notify toggles
     @State private var hideTarget: StoryGroup?   // "Hide Stories?" confirmation target
@@ -389,7 +388,6 @@ struct StoriesRow: View {
                                     onMessage: { onMessage(g) },
                                     onProfile: { onProfile(g) },
                                     onHide: { hideTarget = g },
-                                    onOpenAnon: { onOpenAnon(g) },
                                     storyNS: storyNS,
                                     groupID: g.id)
                         .equatable()
@@ -622,7 +620,6 @@ private struct StoryFriendCard: View, Equatable {
     let onMessage: () -> Void
     let onProfile: () -> Void
     let onHide: () -> Void
-    var onOpenAnon: () -> Void = {}   // "View Anonymously" — opens the story without a seen receipt
     let storyNS: Namespace.ID    // hero zoom: card ⇄ viewer
     let groupID: String          // matches the viewer's zoom sourceID
 
@@ -656,7 +653,6 @@ private struct StoryFriendCard: View, Equatable {
         // chat List now (which was what collapsed per-card menus into one), so per-card native menus
         // work; the stable `.id(authorUid)` at the call site keeps each menu bound to its person.
         .contextMenu {
-            Button { onOpenAnon() } label: { Label("View Anonymously", systemImage: "eye.slash") }
             Button { onMessage() } label: { Label("Send Message", systemImage: "message") }
             Button { onProfile() } label: { Label("Open Profile", systemImage: "person.crop.circle") }
             Button(role: .destructive) { onHide() } label: { Label("Hide Stories", systemImage: "archivebox") }
@@ -708,7 +704,6 @@ struct StoryViewer: View {
     let ownSwipeDismiss: Bool
     let groups: [StoryGroup]
     var startIndex: Int = 0
-    var anonymous: Bool
     var onClose: () -> Void
     var onProfile: (StoryGroup) -> Void = { _ in }   // tap the story header → that user's profile
     var onDeletedRemaining: (StoryGroup) -> Void = { _ in }   // deleted an item but more of mine remain → re-feed
@@ -835,21 +830,20 @@ struct StoryViewer: View {
     // the last item, auto-dismissed the whole viewer (taking the sheet with it).
     private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil }
 
-    init(group: StoryGroup, anonymous: Bool = false, ownSwipeDismiss: Bool = false,
+    init(group: StoryGroup, ownSwipeDismiss: Bool = false,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
-        self.init(groups: [group], startIndex: 0, anonymous: anonymous, ownSwipeDismiss: ownSwipeDismiss,
+        self.init(groups: [group], startIndex: 0, ownSwipeDismiss: ownSwipeDismiss,
                   onClose: onClose, onProfile: onProfile,
                   onDeletedRemaining: onDeletedRemaining)
     }
-    init(groups: [StoryGroup], startIndex: Int = 0, anonymous: Bool = false, ownSwipeDismiss: Bool = false,
+    init(groups: [StoryGroup], startIndex: Int = 0, ownSwipeDismiss: Bool = false,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
         self.groups = groups
         self.startIndex = startIndex
-        self.anonymous = anonymous
         self.ownSwipeDismiss = ownSwipeDismiss
         self.onClose = onClose
         self.onProfile = onProfile
@@ -871,7 +865,7 @@ struct StoryViewer: View {
                         // Where the viewer opens (firstUnseenIndex = first item with isSeen == false,
                         //  else 0):
                         //  • MY OWN story: purely the real per-item seen flag (own items ARE marked seen
-                        //    as I watch them — onItemSeen is non-anonymous for my own). So: any unread
+                        //    as I watch them). So: any unread
                         //    item -> opens on the FIRST unread (e.g. a just-posted D); everything read ->
                         //    firstUnseenIndex falls back to 0 -> opens from A again (NOT the last one I
                         //    watched). No watermark here so it tracks exactly what I actually viewed.
@@ -1270,13 +1264,12 @@ struct StoryViewer: View {
             // Landing on a person no longer greys their whole ring — seen state advances per ITEM
             // below (the standard rule: the ring stays colored until every story is watched).
             onUserChanged: { uid in currentBucketUid = uid; loadBarViewers() },
-            // Anonymous viewing leaves NO trace (incognito / anonymous): no local flags either.
             onItemSeen: { id in
                 currentStoryId = id
                 // The synthetic still-uploading item has no real doc — don't persist it as "seen"
                 // (junk entry) or fetch its (non-existent) viewers.
                 guard id != StoriesService.uploadingStoryId else { return }
-                if !anonymous { StoryPrefs.markStorySeen(id) }
+                StoryPrefs.markStorySeen(id)
                 markSeenItem(id); loadBarViewers()
             },
             onDrag: { d in dragDown = d },   // fade my overlays out as the card is pulled down
@@ -1736,7 +1729,7 @@ struct StoryViewer: View {
     // Receipt ONLY the photo actually shown (drives accurate view counts + "Seen by"), and
     // advance the local watermark so the ring/row update instantly (H8 race fix).
     private func markSeenItem(_ storyId: String) {
-        guard !anonymous, let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }) else { return }
+        guard let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }) else { return }
         StoriesRepository.shared.markSeenLocally(s.authorUid, upTo: s.createdAt)
         Task { await StoriesService.shared.markViewed(s) }
     }

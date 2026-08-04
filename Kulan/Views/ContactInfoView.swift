@@ -484,19 +484,15 @@ struct ContactInfoView: View {
             // NO extra background wrapper) — the previous isPresented + nested `if let` + black
             // `.background(...ignoresSafeArea())` version couldn't be closed cleanly: that wrapper sat
             // over the library's swipe-down pan, which is the gesture that dismisses it.
-            // anonymous: we don't write a view record (a non-contact may not have write access to the
-            // author's story views).
             .fullScreenCover(item: $storyViewerGroup) { g in
                 // ownSwipeDismiss:FALSE + the native zoom transition = the identical close to a story
                 // opened from the chat list: drag down, hold it part way, release and it springs back
                 // into the avatar it came from. With `true` the library's own pan ran instead, which
                 // is why closing here felt like a different (and worse) gesture.
-                // anonymous: FALSE. With `true` the view was never recorded — not on the server and
-                // not even in the local seen flags (markSeenItem bails on anonymous) — so watching a
-                // story from a profile left the ring showing "unseen" forever. Viewing here counts
-                // exactly like viewing from the chat list. For a non-contact the server write may be
-                // refused by rules; that's non-fatal and the local watermark still updates.
-                StoryViewer(group: g, anonymous: false, ownSwipeDismiss: false,
+                // Viewing here counts exactly like viewing from the chat list. For a non-contact the
+                // server write may be refused by rules; that's non-fatal and the local watermark
+                // still updates.
+                StoryViewer(group: g, ownSwipeDismiss: false,
                             onClose: { storyViewerGroup = nil; refreshStorySeen() })
                     .navigationTransition(.zoom(sourceID: "profile-story", in: mediaNS))
             }
