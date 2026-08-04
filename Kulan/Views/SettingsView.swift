@@ -1492,26 +1492,35 @@ struct UsernameEditView: View {
         .onAppear { draft = handle; focused = true }
     }
 
+    /// THE RULES STAY PUT (owner 2026-08-04: they vanished the moment the checker answered).
+    ///
+    /// They used to be one of the STATES, so the first reply from the server took them off the
+    /// screen — exactly while you are typing a name and most likely to need them. They are not a
+    /// state, they are the caption for the field; the checker's answer goes underneath.
     @ViewBuilder private var statusLine: some View {
-        switch status {
-        case .quiet:
+        VStack(alignment: .leading, spacing: 4) {
             Text("Letters, numbers and _ only. \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters.")
-        case .checking:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
-                Text("Checking username…")
+            switch status {
+            case .quiet:
+                EmptyView()
+            case .checking:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Checking username…")
+                }
+                .transition(.opacity)
+            case .available(let name):
+                Text("\(name) is available.").foregroundStyle(.green)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            case .taken:
+                Text("Sorry, this username is already taken.").foregroundStyle(.red)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            case .problem(let why):
+                Text(why).foregroundStyle(.red)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
-            .transition(.opacity)
-        case .available(let name):
-            Text("\(name) is available.").foregroundStyle(.green)
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-        case .taken:
-            Text("Sorry, this username is already taken.").foregroundStyle(.red)
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-        case .problem(let why):
-            Text(why).foregroundStyle(.red)
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Debounced availability check. Everything that makes this feel instant instead of chattery is
@@ -1564,6 +1573,16 @@ struct UsernameEditView: View {
         do {
             try await ChatService.claimHandle(value)
             handle = value
+            // THE CLAIM CHANGED THE SERVER; NOTHING TOLD THE APP (owner 2026-08-04: "when i click
+            // done save is not working… new name never appearing").
+            //
+            // It saved every time. `claimUsername` writes handle and handleLower on the user
+            // document inside its transaction, and the logs show it returning clean. But this screen
+            // claimed the name DIRECTLY and then only wrote the binding, so `ProfileStore.me` still
+            // held the profile it read when the app started — and every place that shows your
+            // @name reads that. Save worked; the app just went on displaying the old answer, which
+            // is indistinguishable from it not having worked.
+            await ProfileStore.shared.refreshMe()
             claiming = false
             dismiss()
         } catch {

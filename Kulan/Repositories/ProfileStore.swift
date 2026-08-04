@@ -102,6 +102,14 @@ final class ProfileStore {
         return p
     }
 
+    /// Re-read MY profile and publish it. Anything that changes my account on the SERVER without
+    /// going through `updateProfile` has to call this, or the app keeps showing what it last read —
+    /// which is how a username could be claimed successfully and still never appear anywhere.
+    func refreshMe() async {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        me = await fetch(uid)
+    }
+
     func updateProfile(name: String, handle: String, about: String = "") async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let h = handle.trimmingCharacters(in: .whitespaces)
