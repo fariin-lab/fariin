@@ -1248,23 +1248,39 @@ enum ChatService {
             // decrypts from the source chat and re-seals for the target through the real album
             // pipeline. ANY missing item fails the whole forward — never deliver a smaller album
             // than the bubble showed.
-            var items: [AlbumSendItem] = []
-            for it in m.album {
-                guard let purl = URL(string: it.imageUrl),
-                      let (pCipher, _) = try? await MediaSession.shared.data(from: purl),
-                      let poster = await Crypto.shared.decryptBytes(sourceCid, cipher: pCipher, meta: it.enc)
-                else { throw ForwardError.sourceUnavailable }
-                if it.isVideo {
-                    guard let vs = it.videoUrl, let vurl = URL(string: vs), let venc = it.videoEnc,
-                          let (vCipher, _) = try? await MediaSession.shared.data(from: vurl),
-                          let clip = await Crypto.shared.decryptBytes(sourceCid, cipher: vCipher, meta: venc)
-                    else { throw ForwardError.sourceUnavailable }
-                    items.append(.video(clip, thumbnail: poster, duration: it.duration,
-                                        width: it.width, height: it.height))
-                } else {
-                    items.append(.image(poster))
+            // EVERY ITEM AT ONCE. This was a plain `for` loop, so forwarding a ten-photo album made
+            // ten round trips end to end before a single byte went back out — and a video item made
+            // two of them, poster then clip. Nothing in the loop depended on the item before it.
+            //
+            // Indexed and re-sorted afterwards, because a task group finishes in whatever order the
+            // network feels like and an album that arrives shuffled is worse than a slow one.
+            // The all-or-nothing rule is unchanged: any item that cannot be rebuilt throws, and a
+            // throw inside the group cancels the siblings and propagates, so a partial album still
+            // cannot be delivered.
+            var indexed: [(Int, AlbumSendItem)] = try await withThrowingTaskGroup(
+                of: (Int, AlbumSendItem).self
+            ) { group in
+                for (idx, it) in m.album.enumerated() {
+                    group.addTask {
+                        guard let purl = URL(string: it.imageUrl),
+                              let (pCipher, _) = try? await MediaSession.shared.data(from: purl),
+                              let poster = await Crypto.shared.decryptBytes(sourceCid, cipher: pCipher, meta: it.enc)
+                        else { throw ForwardError.sourceUnavailable }
+                        guard it.isVideo else { return (idx, .image(poster)) }
+                        guard let vs = it.videoUrl, let vurl = URL(string: vs), let venc = it.videoEnc,
+                              let (vCipher, _) = try? await MediaSession.shared.data(from: vurl),
+                              let clip = await Crypto.shared.decryptBytes(sourceCid, cipher: vCipher, meta: venc)
+                        else { throw ForwardError.sourceUnavailable }
+                        return (idx, .video(clip, thumbnail: poster, duration: it.duration,
+                                            width: it.width, height: it.height))
+                    }
                 }
+                var out: [(Int, AlbumSendItem)] = []
+                for try await pair in group { out.append(pair) }
+                return out
             }
+            indexed.sort { $0.0 < $1.0 }
+            let items = indexed.map(\.1)
             guard !items.isEmpty else { throw ForwardError.sourceUnavailable }
             try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, clientId: clientId, forwarded: true)
         } else if m.isAudio {
@@ -1274,20 +1290,25 @@ enum ChatService {
             else { throw ForwardError.sourceUnavailable }
             try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform, clientId: clientId, forwarded: true)
         } else if m.isVideo {
-            // Prefer this device's copy (the server object may already be delivered+deleted).
-            var bytes = VideoCache.data(for: m.id)
-            if bytes == nil, let s = m.videoUrl, let url = URL(string: s), let meta = m.enc,
-               let (cipher, _) = try? await MediaSession.shared.data(from: url),
-               let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
-                bytes = dec
-            }
-            guard let bytes else { throw ForwardError.sourceUnavailable }
-            var thumb: Data? = nil
-            if let s = m.thumbUrl, let url = URL(string: s), let meta = m.thumbEnc,
-               let (cipher, _) = try? await MediaSession.shared.data(from: url) {
-                thumb = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
-            }
-            guard let thumb else { throw ForwardError.sourceUnavailable }
+            // The clip and its poster are two independent fetches and were done one after the other.
+            // Started together now. The local copy is still preferred for the clip: the server object
+            // may already be delivered-and-deleted by the mailman sweep, and a cache hit costs nothing
+            // to try first.
+            async let clipBytes: Data? = {
+                if let cached = VideoCache.data(for: m.id) { return cached }
+                guard let s = m.videoUrl, let url = URL(string: s), let meta = m.enc,
+                      let (cipher, _) = try? await MediaSession.shared.data(from: url)
+                else { return nil }
+                return await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
+            }()
+            async let thumbBytes: Data? = {
+                guard let s = m.thumbUrl, let url = URL(string: s), let meta = m.thumbEnc,
+                      let (cipher, _) = try? await MediaSession.shared.data(from: url)
+                else { return nil }
+                return await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
+            }()
+            guard let bytes = await clipBytes, let thumb = await thumbBytes
+            else { throw ForwardError.sourceUnavailable }
             try await sendVideo(cid: targetCid, video: bytes, thumbnail: thumb, duration: m.duration ?? 0,
                                 width: m.width ?? 720, height: m.height ?? 720, caption: m.text, clientId: clientId, forwarded: true)
         } else if m.isGif {
