@@ -55,6 +55,10 @@ struct StoryTextCard: View {
 
     @FocusState private var focused: Bool
     @State private var showDiscard = false
+    /// The page no longer resizes for the keyboard, so the card has to lift its own contents over it.
+    /// Measured rather than guessed: a hardware keyboard, a floating one and a language bar are all
+    /// different heights, and a constant would be wrong on all three.
+    @StateObject private var keyboard = KeyboardWatcher()
 
     private let charLimit = 700
     private var style: TextStoryStyle { TextStoryStyles.style(styleIndex) }
@@ -86,6 +90,11 @@ struct StoryTextCard: View {
                     .background(Color.clear)
                     .padding(.horizontal, 28)
             }
+            // HALF the keyboard, because the words are CENTRED: lifting them by the whole height
+            // would put them as far above the middle as they were below it. Half keeps them centred
+            // in the part of the card you can still see.
+            .offset(y: -keyboard.height / 2)
+            .animation(.easeOut(duration: 0.22), value: keyboard.height)
 
             VStack(spacing: 0) {
                 HStack {
@@ -126,7 +135,9 @@ struct StoryTextCard: View {
                         .transition(.opacity)
                     }
                 }
-                .padding(.horizontal, 14).padding(.bottom, 14)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14 + keyboard.height)   // ride just above the keyboard
+                .animation(.easeOut(duration: 0.22), value: keyboard.height)
             }
             .foregroundStyle(style.ink)
         }

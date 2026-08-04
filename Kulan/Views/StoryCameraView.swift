@@ -282,6 +282,14 @@ struct StoryCameraView: View {
                 }
             }
         }
+        // THE PAGE DOES NOT RESIZE FOR THE KEYBOARD (owner 2026-08-04: "the entire editor frame moves
+        // upward and a black background appears behind the keyboard").
+        //
+        // SwiftUI's automatic avoidance shrinks the available height, so the card was being made
+        // shorter and everything in it moved — and the space the card no longer covered was black.
+        // The card now keeps the whole screen and the keyboard simply sits over its lower part;
+        // inside it, the words and the two buttons lift themselves. Nothing else moves at all.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .onAppear {
             cam.onCapture = onCapture
             cam.onVideo = onVideo
