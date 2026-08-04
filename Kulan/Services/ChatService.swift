@@ -4,6 +4,7 @@ import PDFKit
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
+import FirebaseFunctions
 
 /// Write-side operations (port of the RN Db writes). All E2EE goes through Crypto.
 enum ChatService {
@@ -24,6 +25,34 @@ enum ChatService {
     static func sanitizeHandle(_ raw: String) -> String {
         String(raw.lowercased().filter { handleAllowed.contains($0) }.prefix(Limits.usernameMaxChars))
     }
+    /// What the SERVER will say no to, checked here so the app does not ask about a name that cannot
+    /// work. Mirrors `invalidReason` in the backend deliberately — the server is the one that counts,
+    /// this one exists so typing feels instant and we do not spend a round trip to be told the
+    /// obvious. Returns nil when the shape is fine.
+    static func handleShapeProblem(_ h: String) -> String? {
+        if h.count < Limits.usernameMinChars { return nil }   // still typing — say nothing yet
+        if h.count > Limits.usernameMaxChars { return "Usernames are at most \(Limits.usernameMaxChars) characters." }
+        if h.hasPrefix("_") || h.hasSuffix("_") { return "Usernames can't start or end with _." }
+        if h.contains("__") { return "Usernames can't contain two _ in a row." }
+        if h.allSatisfy(\.isNumber) { return "Usernames can't be only numbers." }
+        return nil
+    }
+
+    /// Ask the server whether a name is free FOR ME. Never trusted for the claim — see `claimHandle`.
+    static func checkHandleAvailable(_ h: String) async throws -> (available: Bool, reason: String?) {
+        let res = try await Functions.functions(region: "me-central1")
+            .httpsCallable("checkUsername").call(["username": h])
+        let d = res.data as? [String: Any] ?? [:]
+        return (d["available"] as? Bool ?? false, d["reason"] as? String)
+    }
+
+    /// TAKE it. One transaction on the server decides, so two people pressing Done on the same name
+    /// at the same instant cannot both win. Throws with the server's own words on failure.
+    static func claimHandle(_ h: String) async throws {
+        _ = try await Functions.functions(region: "me-central1")
+            .httpsCallable("claimUsername").call(["username": h])
+    }
+
     static func isValidHandle(_ h: String) -> Bool {
         h.count >= Limits.usernameMinChars && h.count <= Limits.usernameMaxChars && h.allSatisfy { handleAllowed.contains($0) }
     }

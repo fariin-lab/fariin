@@ -61,12 +61,12 @@ struct MediaApprovalView: View {
     @FocusState private var captionFocused: Bool
 
     // Per-VIDEO trim state, keyed by item id (each video trims independently).
-    @State private var trimStart: [UUID: Double] = [:]
-    @State private var trimEnd: [UUID: Double] = [:]
-    @State private var strips: [UUID: [UIImage]] = [:]   // filmstrip thumbs
+    @State private var trimStart: [String: Double] = [:]
+    @State private var trimEnd: [String: Double] = [:]
+    @State private var strips: [String: [UIImage]] = [:]   // filmstrip thumbs
     @State private var scrubTime: Double?                // live seek while dragging a handle
-    @State private var playheads: [UUID: Double] = [:]   // live playback position per video → scrubber
-    @State private var videoPlaying: [UUID: Bool] = [:]  // per-video play state — PAUSED by default (single-editor parity)
+    @State private var playheads: [String: Double] = [:]   // live playback position per video → scrubber
+    @State private var videoPlaying: [String: Bool] = [:]  // per-video play state — PAUSED by default (single-editor parity)
     // Pinch-zoom + pan for the CURRENT video page (same mechanism as the single video editor). Resets on
     // page change. Images zoom via ZoomImageView already; this brings video zoom to parity in the pager.
     @State private var vZoom: CGFloat = 1
@@ -357,7 +357,7 @@ struct MediaApprovalView: View {
     // THE shared trimmer (VideoTrimStrip) — the SAME implementation as the single video editor, fed the
     // pager's per-item state via bindings. Every trim behavior/fix lives once in VideoTrimStrip and works
     // identically here: no auto-play on drag, playhead clamped inside the yellow frame, 32pt grab area.
-    private func trimStrip(id: UUID, duration: Double, thumbs: [UIImage]) -> some View {
+    private func trimStrip(id: String, duration: Double, thumbs: [UIImage]) -> some View {
         let dur = max(0.01, duration)
         return VideoTrimStrip(
             duration: dur, thumbnails: thumbs,
@@ -372,7 +372,7 @@ struct MediaApprovalView: View {
             stripHeight: stripHeight, handleW: handleW, minDuration: minDuration)
     }
 
-    private func loadVideoMeta(id: UUID, url: URL, duration: Double) async {
+    private func loadVideoMeta(id: String, url: URL, duration: Double) async {
         guard strips[id] == nil else { return }
         if trimEnd[id] == nil { await MainActor.run { trimEnd[id] = duration } }
         let asset = AVURLAsset(url: url)
@@ -389,7 +389,7 @@ struct MediaApprovalView: View {
         await MainActor.run { strips[id] = imgs }
     }
 
-    private func trimmed(_ id: UUID, duration: Double) -> Bool {
+    private func trimmed(_ id: String, duration: Double) -> Bool {
         (trimStart[id] ?? 0) > 0.05 || (trimEnd[id] ?? duration) < duration - 0.05
     }
 

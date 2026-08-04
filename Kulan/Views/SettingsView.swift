@@ -1421,6 +1421,30 @@ struct UsernameEditView: View {
     @State private var draft = ""
     @FocusState private var focused: Bool
 
+    /// What the line under the field is saying. One value, so the three states cannot overlap and the
+    /// animation has something single to cross-fade between.
+    private enum Status: Equatable {
+        case quiet                    // too short to judge, or unchanged from what you already have
+        case checking
+        case available(String)
+        case taken
+        case problem(String)          // shape is wrong, or the server refused for its own reason
+    }
+
+    @State private var status: Status = .quiet
+    /// The value the LAST check was fired for. Stops the same name being asked about twice — a
+    /// re-render, a keyboard autocorrect that lands on the same text, or coming back to a name you
+    /// already tried.
+    @State private var lastAsked = ""
+    /// Bumped on every keystroke. A reply whose token is stale is DROPPED: a slow answer for "viize"
+    /// must never overwrite a fresh answer for "viizethh", which is the classic way these fields end
+    /// up lying to people.
+    @State private var token = 0
+    @State private var claiming = false
+
+    private var clean: String { ChatService.sanitizeHandle(draft) }
+    private var unchanged: Bool { clean.lowercased() == handle.lowercased() }
+
     var body: some View {
         Form {
             Section {
@@ -1428,27 +1452,124 @@ struct UsernameEditView: View {
                     Text("@").foregroundStyle(.secondary)
                     TextField("username", text: $draft)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().focused($focused)
-                        .onChange(of: draft) { _, v in let c = ChatService.sanitizeHandle(v); if c != v { draft = c } }
+                        .onChange(of: draft) { _, v in
+                            let c = ChatService.sanitizeHandle(v)
+                            if c != v { draft = c }
+                            schedule(c)
+                        }
+                    // Clear, inside the field, only while there is something to clear.
+                    if !draft.isEmpty {
+                        Button { draft = ""; status = .quiet; lastAsked = ""; focused = true } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 17))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    }
                 }
             } footer: {
-                Text("Letters, numbers and _ only. 3–30 characters.")
+                // The one line that changes. Fixed height so the form does not twitch as it swaps.
+                statusLine
+                    .animation(.smooth(duration: 0.22), value: status)
             }
         }
         .navigationTitle("Username")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { handle = ChatService.sanitizeHandle(draft); dismiss() }
+                Button("Done") { Task { await done() } }
                     .fontWeight(.semibold)
                     // An EMPTY (or too-short) draft was accepted here and only rejected later by
                     // Save, which then failed with a validation message for a field the user was no
                     // longer looking at — and name and bio edits could not be saved at all until a
                     // username was retyped. There is no "remove username" outcome, so block it here
                     // where the field is still on screen (audit).
-                    .disabled(ChatService.sanitizeHandle(draft).count < 3)
+                    .disabled(claiming || clean.count < Limits.usernameMinChars || status == .taken)
             }
         }
         .onAppear { draft = handle; focused = true }
+    }
+
+    @ViewBuilder private var statusLine: some View {
+        switch status {
+        case .quiet:
+            Text("Letters, numbers and _ only. \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters.")
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Checking username…")
+            }
+            .transition(.opacity)
+        case .available(let name):
+            Text("\(name) is available.").foregroundStyle(.green)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        case .taken:
+            Text("Sorry, this username is already taken.").foregroundStyle(.red)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        case .problem(let why):
+            Text(why).foregroundStyle(.red)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        }
+    }
+
+    /// Debounced availability check. Everything that makes this feel instant instead of chattery is
+    /// here: nothing is asked until the name could actually be valid, the same name is never asked
+    /// about twice, a newer keystroke cancels the wait, and a stale reply is dropped on arrival.
+    private func schedule(_ value: String) {
+        token += 1
+        let mine = token
+
+        guard !unchanged else { status = .quiet; return }
+        if let problem = ChatService.handleShapeProblem(value) {
+            withAnimation { status = .problem(problem) }
+            return
+        }
+        guard value.count >= Limits.usernameMinChars else { withAnimation { status = .quiet }; return }
+        guard value != lastAsked else { return }
+
+        withAnimation { status = .checking }
+        Task {
+            // The pause IS the debounce: a newer keystroke bumps the token, and this reply is then
+            // thrown away rather than raced against.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard mine == token else { return }
+            lastAsked = value
+            do {
+                let r = try await ChatService.checkHandleAvailable(value)
+                guard mine == token else { return }
+                withAnimation {
+                    if r.available { status = .available(value) }
+                    else if r.reason == "taken" || r.reason == nil { status = .taken }
+                    else { status = .problem(r.reason ?? "") }
+                }
+            } catch {
+                guard mine == token else { return }
+                // A failed CHECK is not a failed name: say nothing rather than accuse it of being
+                // taken. Done still asks the server, which is the answer that counts.
+                withAnimation { status = .quiet }
+                lastAsked = ""
+            }
+        }
+    }
+
+    /// Done CLAIMS it on the server. The check above is a courtesy; this is the decision, and it is
+    /// the only thing that can actually make the name yours.
+    private func done() async {
+        let value = clean
+        guard value.count >= Limits.usernameMinChars else { return }
+        if unchanged { dismiss(); return }
+        claiming = true
+        do {
+            try await ChatService.claimHandle(value)
+            handle = value
+            claiming = false
+            dismiss()
+        } catch {
+            claiming = false
+            let msg = (error as NSError).localizedDescription
+            withAnimation { status = msg.lowercased().contains("taken") ? .taken : .problem(msg) }
+        }
     }
 }
 
