@@ -157,9 +157,14 @@ struct StoryVideoEditorView: View {
                 // TRIM ZOOMS THE VIDEO OUT, it does not cover it (owner 2026-08-04: "user never feel
                 // new page… just zoom out then trim appearing"). The card shrinks toward the TOP so
                 // every pixel it gives up appears at the bottom, which is where the strip arrives.
+                //
+                // It gives up as LITTLE as it can (0.9, was 0.78): in his reference the picture is
+                // still the screen, with the buttons floating on it and only the filmstrip below.
+                // Shrinking it further left a black margin all round, which is most of what made the
+                // old screen look like a separate page.
                 canvas(geo: geo, cardTop: cardTop, cardH: cardH)
-                    .scaleEffect(showTrim ? 0.78 : 1, anchor: .top)
-                    .offset(y: showTrim ? 44 : 0)
+                    .scaleEffect(showTrim ? 0.9 : 1, anchor: .top)
+                    .offset(y: showTrim ? 10 : 0)
 
                 // NOTHING FLOATS OVER THE TEXT EDITOR (owner 2026-08-04: "when keyboad opened pkz
                 // hide caption bar and all buttons"). Aa opens a full-screen editor with the keyboard
@@ -630,15 +635,23 @@ struct StoryVideoEditorView: View {
             VStack(spacing: 0) {
                 trimHeader
                 Spacer(minLength: 0)
-                if clips.count > 1 { trimPeerStrip }
+                // THE CLIPS SIT IN THE BOTTOM-RIGHT CORNER OF THE PICTURE, over it, small, the way
+                // his reference draws them (2026-08-04: "make it like image 2"). They used to be a
+                // full-width row pinned under the title bar, which is what made the screen read as a
+                // file browser with a video in it rather than a video with its clips in the corner.
+                if clips.count > 1 {
+                    trimPeerStrip
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 12)
+                }
                 VideoTrimStrip(duration: duration, thumbnails: trimThumbs,
                                trimStart: $trimStart, trimEnd: $trimEnd,
                                playhead: $trimPlayhead, scrubTime: $trimScrub,
                                playing: $playing, draggingPlayhead: $trimDragging)
                     .frame(height: 56)
                     .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 28)
+                    .padding(.bottom, 24)
                     // Reserve the slot rather than let a late strip shove the layout (same reason the
                     // old screen did it).
                     .opacity(trimThumbs.isEmpty ? 0 : 1)
@@ -658,16 +671,9 @@ struct StoryVideoEditorView: View {
             }
             .buttonStyle(.plain)
 
-            Spacer()
-
-            // The length you are about to KEEP, not the length of the file — that is the number you
-            // are deciding.
-            Text(trimClock(trimmedLength))
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).frame(height: 32)
-                .liquidGlass(Capsule())
-
+            // NO LENGTH PILL IN THE MIDDLE. It said the same thing the clips now say for themselves,
+            // one number per clip on its own thumbnail, which is where his reference puts it — and a
+            // pill floating over the picture between two buttons is what made this bar look busy.
             Spacer()
 
             Button { closeTrim(keep: true) } label: {
@@ -683,38 +689,76 @@ struct StoryVideoEditorView: View {
         .padding(.top, max(windowSafeTop - 22, 10))
     }
 
-    /// The post's other clips, so each can be trimmed without leaving (owner: "trimming multiple
-    /// videos from a single trim screen"). Same behaviour the old screen had, kept.
+    /// The post's clips, so each can be trimmed without leaving (owner: "trimming multiple videos
+    /// from a single trim screen"), drawn to his reference: SQUARE cards in the bottom-right corner
+    /// of the picture, each carrying its own length, the one you are trimming ringed in blue with an
+    /// X to drop it.
+    ///
+    /// A plain HStack, not a ScrollView. It sits in a corner over the video now, and a scroll view
+    /// there would have an invisible edge you could flick — with 10 clips the row is 740pt wide and
+    /// simply runs off, which is the honest failure and not one worth a scroller in the corner.
     private var trimPeerStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Array(clips.enumerated()), id: \.element.id) { i, c in
-                    Group {
-                        if let p = c.poster { Image(uiImage: p).resizable().scaledToFill() }
-                        else { Color(white: 0.15) }
-                    }
-                    .frame(width: 44, height: 58)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(i == index ? Color.accentColor : .white.opacity(0.3),
-                                          lineWidth: i == index ? 2 : 1)
-                    }
-                    .onTapGesture {
-                        guard i != index else { return }
-                        // ORDER MATTERS: select() runs restoreCurrent(), which loads the new clip's
-                        // handles AND starts it playing. Pausing first would be undone a line later,
-                        // and the opened-values snapshot has to be taken after the handles change or
-                        // X would restore the WRONG clip's trim.
-                        select(i)
-                        playing = false
-                        trimOpenedStart = trimStart
-                        trimOpenedEnd = trimEnd
+        HStack(spacing: 8) {
+            ForEach(Array(clips.enumerated()), id: \.element.id) { i, c in
+                Group {
+                    if let p = c.poster { Image(uiImage: p).resizable().scaledToFill() }
+                    else { Color(white: 0.15) }
+                }
+                .frame(width: 62, height: 62)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // The clip's own length, bottom-left on the picture, as his reference has it.
+                .overlay(alignment: .bottomLeading) {
+                    Text(trimClock(clipLength(i)))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(4)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(i == index ? Color(.systemBlue) : .white.opacity(0.25),
+                                      lineWidth: i == index ? 2.5 : 1)
+                }
+                // The X drops this clip, and only on the one you are trimming — an X on every
+                // thumbnail turns a row of pictures into a row of buttons. Same rule the photo
+                // editor's strip already follows.
+                .overlay(alignment: .topTrailing) {
+                    if i == index, clips.count > 1 {
+                        Button { remove(i) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 17))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, .black.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 6, y: -6)
                     }
                 }
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture {
+                    guard i != index else { return }
+                    // ORDER MATTERS: select() runs restoreCurrent(), which loads the new clip's
+                    // handles AND starts it playing. Pausing first would be undone a line later,
+                    // and the opened-values snapshot has to be taken after the handles change or
+                    // X would restore the WRONG clip's trim.
+                    select(i)
+                    playing = false
+                    trimOpenedStart = trimStart
+                    trimOpenedEnd = trimEnd
+                }
             }
-            .padding(.horizontal, 16)
         }
+    }
+
+    /// What this clip will actually post as. The one on screen reads the LIVE handles, because its
+    /// trim has not been parked back onto it yet; the others read their stored cut.
+    private func clipLength(_ i: Int) -> Double {
+        guard clips.indices.contains(i) else { return 0 }
+        if i == index { return trimmedLength > 0 ? trimmedLength : duration }
+        let c = clips[i]
+        let kept = c.trimEnd - c.trimStart
+        return kept > 0 ? kept : c.duration
     }
 
     /// Entering and leaving the pen. The clip freezes for it and starts again when you are done,
