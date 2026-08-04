@@ -224,6 +224,7 @@ struct StoryCameraView: View {
 
     @StateObject private var cam = StoryCamera()
     @State private var mode: Mode = .camera
+    @Namespace private var modePill      // lets the selected capsule SLIDE between the two words
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
     @State private var libraryThumb: UIImage?
@@ -273,6 +274,34 @@ struct StoryCameraView: View {
                 .padding(.horizontal, typing ? 0 : 6)
                 .padding(.top, 6)
                 .animation(.easeInOut(duration: 0.2), value: typing)
+                // SWIPE BETWEEN THE TWO, which is the half that was missing — tapping worked, so the
+                // switch looked like a tab strip and did not behave like one.
+                //
+                // Signal's rule, from PhotoCaptureViewController (`didSwipeToTextComposer` /
+                // `didSwipeToCamera`): swipe LEFT off the camera to reach TEXT, swipe RIGHT off the
+                // text composer to come back. The screen therefore moves the same way the pill reads,
+                // left word on the left. Signal refuses the swipe mid-recording; so does this.
+                //
+                // A FLICK, NOT A DRAG. Signal uses UISwipeGestureRecognizer, which fires once on a
+                // quick directional swipe and never tracks the finger. SwiftUI has no equivalent, so
+                // this is a DragGesture judged ONLY in onEnded, with a distance floor and a
+                // mostly-horizontal test — otherwise a pinch or a vertical drag reads as a mode change.
+                //
+                // `.simultaneousGesture`, never `.gesture` or `.highPriorityGesture`: the preview
+                // already carries pinch-to-zoom and the text card carries a text editor, and a
+                // gesture that CLAIMS the touch eats both (kulan-scroll-gesture-rules; this exact
+                // mistake has cost us a build before).
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 24)
+                        .onEnded { v in
+                            guard !typing, !cam.recording else { return }
+                            let dx = v.translation.width, dy = v.translation.height
+                            guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                            let next: Mode = dx < 0 ? .text : .camera
+                            guard next != mode else { return }
+                            withAnimation(.snappy(duration: 0.25)) { mode = next }
+                        }
+                )
 
                 // Gone while the keyboard is up, as he drew it: the card takes that space instead,
                 // and the switch would otherwise be riding on top of the keyboard.
@@ -569,21 +598,35 @@ struct StoryCameraView: View {
 
     private var modePicker: some View {
         HStack(spacing: 0) {
-            modeLabel("CAMERA", selected: mode == .camera) { withAnimation(.snappy(duration: 0.2)) { mode = .camera } }
-            modeLabel("TEXT", selected: mode == .text) { withAnimation(.snappy(duration: 0.2)) { mode = .text } }
+            modeLabel("CAMERA", .camera)
+            modeLabel("TEXT", .text)
         }
         .padding(4)
         .background(.white.opacity(0.14), in: Capsule())
     }
 
-    private func modeLabel(_ title: String, selected: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    /// ONE capsule that MOVES, not two that light up in turn. `matchedGeometryEffect` hands the same
+    /// highlight from word to word, so it slides across the way a real segmented control does — and
+    /// it slides for a swipe exactly as it does for a tap, because both go through the same
+    /// `withAnimation`. Drawing a separate background per label is what made this pop instead of
+    /// travel, and popping is most of why it did not read as a tab.
+    private func modeLabel(_ title: String, _ target: Mode) -> some View {
+        let selected = mode == target
+        return Button {
+            guard mode != target else { return }
+            withAnimation(.snappy(duration: 0.25)) { mode = target }
+        } label: {
             Text(title)
                 .font(.system(size: 13, weight: .bold))
                 .kerning(0.6)
                 .foregroundStyle(selected ? .white : .white.opacity(0.55))
                 .padding(.horizontal, 20).frame(height: 34)
-                .background(selected ? AnyShapeStyle(.white.opacity(0.22)) : AnyShapeStyle(.clear), in: Capsule())
+                .background {
+                    if selected {
+                        Capsule().fill(.white.opacity(0.22))
+                            .matchedGeometryEffect(id: "modePill", in: modePill)
+                    }
+                }
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
