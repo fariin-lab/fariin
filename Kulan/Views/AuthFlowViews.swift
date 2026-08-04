@@ -111,12 +111,22 @@ extension View {
             .background(Color.primary, in: Capsule())
     }
 
+    /// The second choice: OUTLINED, not filled.
+    ///
+    /// It used to be a light grey capsule with a hairline on top, and grey-on-white is the weakest
+    /// thing a button can be — it competed with the black pill above it while looking washed out
+    /// rather than deliberately quieter. Filled-primary beside outlined-secondary is the pairing
+    /// Apple, Stripe and Linear all use, and it reads as a real choice instead of a disabled one.
+    ///
+    /// Derived from `Color.primary`, so it inverts on a dark phone with no second set of values.
+    /// `.contentShape` matters here and did not before: with no fill, the middle of the capsule is
+    /// empty space, and without a declared shape a tap in the centre would fall straight through.
     func authSecondaryPill() -> some View {
         self.font(.system(size: 17, weight: .medium))
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity).frame(height: 50)
-            .background(AuthPalette.raised, in: Capsule())
-            .overlay(Capsule().strokeBorder(AuthPalette.hairline, lineWidth: 1))
+            .contentShape(Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.22), lineWidth: 1.5))
     }
 
     /// Tap the page to put the keyboard away.
@@ -146,7 +156,17 @@ private struct ShiningLogo: View {
 
     var body: some View {
         ZStack {
-            if let ui = UIImage(named: "welcome-logo") {
+            // THE CURRENT MARK, not the retired one. This pointed at `welcome-logo`, a 512px PNG of
+            // the TRI-ARROW — the logo the speech bubble replaced, and which the owner had removed
+            // from the alternate app icons back on 2026-07-29 (see the note in project.yml). The
+            // Welcome screen was the last place in the whole product still showing it, so the first
+            // thing anybody saw was a brand we had already retired.
+            //
+            // `welcome-mark` is the app icon's own 1024px master, so it is the same artwork on the
+            // Home Screen and on this page, at a resolution that holds up at 108pt. The AltIcons
+            // files could not be used: they are 120 and 180px, made for a 60pt tile, and would have
+            // been visibly soft here.
+            if let ui = UIImage(named: "welcome-mark") {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
                 Color.black
