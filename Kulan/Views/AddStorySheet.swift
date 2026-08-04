@@ -30,6 +30,14 @@ struct AddStorySheet: View {
     @State private var shareTextStory: StoryShareData?     // finished text story → the audience sheet
     @State private var showLibrary = false
     @State private var tooLongVideo = false   // pick over the 10-minute ceiling
+    /// The thing in the editor was picked from the library, so closing the editor belongs back there.
+    @State private var fromLibrary = false
+
+    private func reopenLibraryIfThatIsWhereItCameFrom() {
+        guard fromLibrary else { return }
+        fromLibrary = false
+        showLibrary = true
+    }
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -44,15 +52,27 @@ struct AddStorySheet: View {
             // story arrives here already rendered and goes straight to the audience sheet.
             onTextStory: { d in shareTextStory = StoryShareData(data: d) },
             onLibrary: { showLibrary = true })
-        .fullScreenCover(item: $editorImage) { item in
-            StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
+        // X GOES BACK WHERE YOU CAME FROM (owner 2026-08-04). Closing the editor on a picture you
+        // chose from the library used to land on the CAMERA, so changing your mind cost you the trip
+        // through the camera and back into the picker. Now the editor reopens whichever door it was
+        // opened from, and a picture taken with the camera still closes to the camera.
+        //
+        // The flag is cleared on POST as well as on reopen: posting dismisses this whole screen, and
+        // a stale flag would try to raise the picker on the way out.
+        .fullScreenCover(item: $editorImage, onDismiss: reopenLibraryIfThatIsWhereItCameFrom) { item in
+            StoryEditorView(source: item.image,
+                            onPosted: { fromLibrary = false; onPosted(); dismiss() })
         }
-        .fullScreenCover(item: $editorVideo) { item in
-            StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
+        .fullScreenCover(item: $editorVideo, onDismiss: reopenLibraryIfThatIsWhereItCameFrom) { item in
+            StoryVideoEditorView(url: item.url,
+                                 onPosted: { fromLibrary = false; onPosted(); dismiss() })
         }
         .sheet(isPresented: $showLibrary, onDismiss: {
-            if let ui = pendingLibraryImage { pendingLibraryImage = nil; editorImage = EditorImage(ui) }
-            else if let url = pendingLibraryVideo { pendingLibraryVideo = nil; editorVideo = EditorVideo(url) }
+            if let ui = pendingLibraryImage {
+                pendingLibraryImage = nil; fromLibrary = true; editorImage = EditorImage(ui)
+            } else if let url = pendingLibraryVideo {
+                pendingLibraryVideo = nil; fromLibrary = true; editorVideo = EditorVideo(url)
+            }
         }) { libraryPage }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
         .sheet(item: $shareTextStory) { s in
@@ -240,10 +260,17 @@ final class PhotoGridStore: ObservableObject {
             opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             opts.predicate = Self.mediaPredicate
             let result = PHAsset.fetchAssets(with: opts)
+            // THE WHOLE LIBRARY (owner 2026-08-04: "mediapicker is showing small media only, it's
+            // not showing all media in my phone"). It used to stop at 300, which is a couple of
+            // months for most people and reads as the picker being broken rather than capped.
+            //
+            // Safe to take them all: a PHAsset is a lightweight reference, not an image, and the
+            // grid is lazy — only the tiles on screen ever ask PhotoKit for pixels. The old cap was
+            // guarding a cost that the grid was already avoiding.
             var arr: [PHAsset] = []
+            arr.reserveCapacity(result.count)
             result.enumerateObjects { a, _, _ in arr.append(a) }
-            let limited = Array(arr.prefix(300))
-            Task { @MainActor in self.assets = limited }
+            Task { @MainActor in self.assets = arr }
         }
     }
 
