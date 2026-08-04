@@ -70,36 +70,22 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            PLEASE TRY THESE FIRST, they are the risky ones. Send a photo in a normal chat, send a photo with a caption, send a photo as a reply, and send a video. Then do all four again in a group. Then forward a photo, forward a video, and forward an album that has several photos AND a video in it, and check the album arrives in the same order you sent it. Sending and forwarding were made faster by doing several things at once instead of one after another, and only a real phone can tell us it still works.
+            PLEASE TRY THESE FIRST. Watch a story with a video in it, on wifi and on mobile data. The app was crashing there and only a real phone can tell us it is gone. Then post a video story with text on it, with the pen on it, and cropped, and check the words land where you put them.
 
-            SENDING AND FORWARDING ARE FASTER. Nothing was waiting on anything it needed. A photo was waiting for its own caption and its blurred preview to be sealed after the upload finished, when neither depends on it. A video was uploading the clip, waiting, then uploading its small poster. And forwarding an album fetched every picture one at a time, so a ten photo album made ten trips before anything went out. All of that now happens together.
+            THE CRASH IS FIXED. When a story video started downloading, one line assumed the connection would always ask us the same question, and on networks that ask a different one the app closed itself. That happens on hotel wifi, on some phone networks, and behind a work connection. The same line was also accepting any security certificate it was handed without checking it, which it should never have done.
 
-            POSTING A STORY IS FASTER too, for the same reason. The photo now starts uploading straight away instead of waiting for two round trips first.
+            MESSAGE REQUESTS. Somebody who has never messaged you now gets one message and then waits. You see Accept or Delete inside the conversation itself, not in a separate inbox you have to go and find. Accept and you are friends and can talk normally. Delete and it is gone. Their first message is limited to 300 characters so an unanswered request cannot be used to shout at you.
 
-            THE STORY RING ON A PROFILE IS THERE THE MOMENT THE PAGE OPENS. Before, you watched the app work out whether the person had a story and how many, and then draw it. Now it knows before the page appears.
+            Who can message you is Everyone or My Friends. My Friends means people you have already accepted. There is no No One option, as you asked.
 
-            DARK MODE ON THE LOG IN SCREEN. The Sign in with Apple button was black on a black page, so it looked like a missing button with floating text. Apple's button takes its colour when it is created and cannot be repainted, so it is rebuilt when you change your phone between light and dark.
+            AA, CROP AND PEN NOW WORK ON VIDEOS. They were on the screen before and then quietly thrown away when you posted, so the video came out plain. Now they are painted into the video itself.
 
-            ERROR MESSAGES ARE IN ENGLISH. Typing the wrong password on Delete Account answered "The supplied auth credential is malformed or has expired". A translation for that existed but only the Log In screen could reach it. Every door shares it now.
+            THE VIDEO EDITOR HAS THE PLUS BUTTON AND THE THUMBNAIL STRIP, like the photo one. Add several videos to one post, tap between them, and each one keeps its own trim, its own mute and its own drawings. Trim them all from the same trim screen instead of going in and out for each one.
 
-            CANCELLING IS SILENT. Backing out of the Google sheet used to put a wall of red Apple text on screen, on the page about deleting your account. Cancelling is a decision, not a failure, so it now says nothing.
+            USERNAMES TELL YOU AS YOU TYPE. It says Checking username, then either that the name is available or that it is already taken, and it fades between them instead of jumping. There is a small X in the field to clear it. The important part is underneath: the server now decides who gets a name, in one step, so two people tapping Done at the same moment can no longer both be told they won.
 
-            THE SYSTEM SAYS FARIIN. The Google sign in prompt said "Kulan" wants to use accounts.google.com. That is a different name setting from the one on your home screen and it was never changed.
+            A VIDEO ADDED IN THE PHOTO EDITOR shows a play mark now. It shows a still picture there, and without the mark you could not tell it was a video until after you posted it.
 
-            SHARING GIVES A REAL LINK. Your username, a contact and a group invite now share as fariin.com links. Before they were kulan:// links, which only work on a phone that already has the app, so anyone without it got dead text. Now it opens the app if they have it and a real page if they do not. Your QR code carries the same link.
-
-            THE WELCOME SCREEN SHOWS THE RIGHT LOGO. It was still using the old arrow mark you removed from the icons a week ago. It is the speech bubble now. The Log In button under it is outlined instead of filled grey.
-
-            FORGOT PASSWORD IS ITS OWN PAGE. It used to fire the moment you tapped it, with no chance to check your address, and told you off if the field was empty. Now it shows you the address before sending, and afterwards leaves it on screen so you know which inbox to open.
-
-            THE SIGN UP FORM. The big empty gap between the button and the keyboard is gone, there is an eye to check the password you typed, "at least 6 characters" stays on screen and ticks itself off as you type, and the greyed out button no longer looks broken.
-
-            YOUR USERNAME IS CHECKED WHILE YOU TYPE. The green tick used to only mean the letters were allowed, so it showed a tick on a name somebody else already had and only told you after you tapped Continue. It now says available or taken as you type.
-
-            TAP THE SCREEN TO CLOSE THE KEYBOARD on any of the sign in pages. There was no way to put it away before.
-
-            THE PAGE THAT ASKS YOU TO COME BACK, after you delete your account, was written as a warning. It led with "your account is scheduled for deletion" under an orange clock and gave Delete It Now a button the same size as Restore. It now leads with the fact that matters, that nothing is gone, and the delete option is a quiet line of text.
-
-            EMAILS, and these are already live so you do not need this build to see them. The deletion email said "this cannot be undone" when it is not true, you have 30 days and signing back in brings everything back. It now names the real date and tells you how to come back. You get an email every time anyone signs in, not only from a new phone. Creating an account finally sends you something. And when the 30 days run out you get one last email. They all look like one company now.
+            WHAT TO WATCH FOR, and please tell me if you see it. Nothing that already worked should have changed: open your old chats and check none of them are asking to be accepted. Open a group. Send a normal message. Post a plain video story with no drawing on it, which still goes out the old way untouched.
 
         run: fastlane beta
