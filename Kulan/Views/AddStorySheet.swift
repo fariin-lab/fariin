@@ -22,22 +22,15 @@ struct AddStorySheet: View {
     @State private var editorImage: EditorImage?
     @State private var editorVideo: EditorVideo?
     @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
-    /// Picked in the library SHEET, opened once it has closed. A full-screen editor asked for while
-    /// the sheet above it is still dismissing is the presentation that silently never appears — the
-    /// same rule the camera cover used to need here.
-    @State private var pendingLibraryImage: UIImage?
-    @State private var pendingLibraryVideo: URL?
+    /// THE EDITOR FOR SOMETHING PICKED IN THE LIBRARY, presented FROM the library sheet rather than
+    /// from this root — which is the whole of the fix below, and why these are separate from
+    /// `editorImage` / `editorVideo`. Two covers cannot be bound to one item while both the root and
+    /// the sheet are in the hierarchy; they would fight over who presents.
+    @State private var libraryEditorImage: EditorImage?
+    @State private var libraryEditorVideo: EditorVideo?
     @State private var shareTextStory: StoryShareData?     // finished text story → the audience sheet
     @State private var showLibrary = false
     @State private var tooLongVideo = false   // pick over the 10-minute ceiling
-    /// The thing in the editor was picked from the library, so closing the editor belongs back there.
-    @State private var fromLibrary = false
-
-    private func reopenLibraryIfThatIsWhereItCameFrom() {
-        guard fromLibrary else { return }
-        fromLibrary = false
-        showLibrary = true
-    }
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -52,28 +45,15 @@ struct AddStorySheet: View {
             // story arrives here already rendered and goes straight to the audience sheet.
             onTextStory: { d in shareTextStory = StoryShareData(data: d) },
             onLibrary: { showLibrary = true })
-        // X GOES BACK WHERE YOU CAME FROM (owner 2026-08-04). Closing the editor on a picture you
-        // chose from the library used to land on the CAMERA, so changing your mind cost you the trip
-        // through the camera and back into the picker. Now the editor reopens whichever door it was
-        // opened from, and a picture taken with the camera still closes to the camera.
-        //
-        // The flag is cleared on POST as well as on reopen: posting dismisses this whole screen, and
-        // a stale flag would try to raise the picker on the way out.
-        .fullScreenCover(item: $editorImage, onDismiss: reopenLibraryIfThatIsWhereItCameFrom) { item in
-            StoryEditorView(source: item.image,
-                            onPosted: { fromLibrary = false; onPosted(); dismiss() })
+        // These two are the CAMERA's editors. A photo taken here closes back to the camera, which is
+        // where it was taken. The library has its own pair, presented from the library itself.
+        .fullScreenCover(item: $editorImage) { item in
+            StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
         }
-        .fullScreenCover(item: $editorVideo, onDismiss: reopenLibraryIfThatIsWhereItCameFrom) { item in
-            StoryVideoEditorView(url: item.url,
-                                 onPosted: { fromLibrary = false; onPosted(); dismiss() })
+        .fullScreenCover(item: $editorVideo) { item in
+            StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
         }
-        .sheet(isPresented: $showLibrary, onDismiss: {
-            if let ui = pendingLibraryImage {
-                pendingLibraryImage = nil; fromLibrary = true; editorImage = EditorImage(ui)
-            } else if let url = pendingLibraryVideo {
-                pendingLibraryVideo = nil; fromLibrary = true; editorVideo = EditorVideo(url)
-            }
-        }) { libraryPage }
+        .sheet(isPresented: $showLibrary) { libraryPage }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
         .sheet(item: $shareTextStory) { s in
             ShareStorySheet(image: s.data, onPosted: { onPosted(); dismiss() })
@@ -108,6 +88,25 @@ struct AddStorySheet: View {
             // Asked for HERE, not on the camera: opening the camera should not raise a photo-library
             // permission prompt for a screen that is not showing the library yet.
             .task { store.load(); store.loadAlbums() }
+        }
+        // THE PICKER DOES NOT CLOSE WHEN YOU PICK (owner 2026-08-04: "the media picker should not
+        // close automatically after I select a photo… only close it when I tap the close button").
+        //
+        // It used to close itself, hold the picture in a `pending` slot, and open the editor from the
+        // ROOT once the sheet had finished dismissing — because a cover asked for while the sheet
+        // above it is still going down silently never appears. Closing the editor then had to raise
+        // the picker all over again, from the bottom, as a brand new presentation. That is the slide
+        // out and slide back in he is seeing, twice per picture.
+        //
+        // Presenting the editor from INSIDE the sheet removes the whole problem rather than timing
+        // around it: the picker stays exactly where it is, the editor covers it, and closing the
+        // editor reveals the picker still sitting there with its scroll position intact. The pending
+        // slots, the came-from-the-library flag and the reopen function are all gone with it.
+        .fullScreenCover(item: $libraryEditorImage) { item in
+            StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
+        }
+        .fullScreenCover(item: $libraryEditorVideo) { item in
+            StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
         }
     }
 
@@ -174,9 +173,8 @@ struct AddStorySheet: View {
                         .padding(4)
                 }
             }
-            // Held, then opened when this sheet has closed — see pendingLibraryImage. The resolve
-            // still happens HERE, with its spinner, because an iCloud video can take a moment and
-            // closing first would leave the camera sitting there looking like nothing happened.
+            // Straight into the editor, over the top of this grid, which stays where it is. The
+            // resolve happens HERE with its spinner, because an iCloud video can take a moment.
             .onTapGesture {
                 if asset.mediaType == .video {
                     guard !loadingVideo else { return }
@@ -191,11 +189,11 @@ struct AddStorySheet: View {
                     Task {
                         let url = await store.videoURL(asset)
                         loadingVideo = false
-                        if let url { pendingLibraryVideo = url; showLibrary = false }
+                        if let url { libraryEditorVideo = EditorVideo(url) }
                     }
                 } else {
                     Task {
-                        if let ui = await store.fullImage(asset) { pendingLibraryImage = ui; showLibrary = false }
+                        if let ui = await store.fullImage(asset) { libraryEditorImage = EditorImage(ui) }
                     }
                 }
             }
