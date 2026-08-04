@@ -2085,9 +2085,24 @@ struct MyStoriesCarousel: View {
     // hard flick to advance and snapped back otherwise — the "hard to swipe"). `index` is the centred
     // card; the row is a plain offset HStack so the drag follows the finger 1:1 and commits to the next
     // card at just 30%. Seeding `index` in init also kills the old .scrollPosition centring race.
-    @State private var index = 0
-    @State private var dragX: CGFloat = 0     // live horizontal finger translation
+    /// ONE CONTINUOUS POSITION, in card units, and everything is derived from it: 2.0 means card 2
+    /// is centred, 2.5 means you are exactly between 2 and 3.
+    ///
+    /// THIS IS THE FIX FOR THE FLICK (owner 2026-08-04: dragging is smooth, a flick "sticks" and
+    /// then continues). It used to be an Int `index` plus the live finger translation, and SwiftUI
+    /// cannot interpolate an Int — so on release the index CHANGED AT ONCE, teleporting the cards by
+    /// however many steps the flick was worth, and only the leftover finger distance was animated.
+    /// The jump was the stick, and the scaling looked choppy because it is computed from the same
+    /// number. A CGFloat animates, so position and scale now move together for the whole glide.
+    @State private var scroll: CGFloat = 0
+    @State private var scrollAtDragStart: CGFloat = 0
     @State private var dragging = false
+
+    /// The card the carousel considers centred. Derived, never stored: with `scroll` continuous
+    /// there is exactly one answer and it cannot drift from what is on screen.
+    private var index: Int {
+        max(0, min(max(0, stories.count - 1), Int(scroll.rounded())))
+    }
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
@@ -2101,17 +2116,20 @@ struct MyStoriesCarousel: View {
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
         self.onInteracting = onInteracting
-        self._index = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
+        self._scroll = State(initialValue: CGFloat(stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0))
     }
 
     @State private var interactGen = 0   // invalidates a stale "settled" callback when a new swipe starts
     // Swipe finished settling → hand the centre back to the real story (identical pixels = invisible swap).
-    private func endInteractionSoon() {
+    /// `after`: how long the glide that just started will take. The hand-off has to wait for the
+    /// card to actually stop — handing the centre back to the real story on a still-moving card was
+    /// a logged bug, and a long flick now glides for longer than the old fixed 0.55s allowed.
+    private func endInteractionSoon(after: Double = 0.42) {
         interactGen += 1
         let gen = interactGen
-        // 0.55s, not 0.4: the 0.34s interactiveSpring still has a 1-3pt visible tail at
-        // 0.4s, so the centre hand-off happened on a still-moving card (audit finding 4).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+        // The spring's tail outlives its response: a 1-3pt drift was still visible well after the
+        // stated duration, which is why this waits a beat past it rather than exactly for it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + after + 0.16) {
             if gen == interactGen, !dragging { onInteracting(false) }
         }
     }
@@ -2134,13 +2152,12 @@ struct MyStoriesCarousel: View {
         VStack(spacing: 12) {
             GeometryReader { geo in
                 let centralX = geo.size.width / 2
-                let dragFrac = dragX / fullDist          // live finger, in item units (scroll fraction)
                 ZStack {
                     ForEach(Array(stories.enumerated()), id: \.element.id) { pair in
                         let i = pair.offset
                         let s = pair.element
                         // combinedFraction = (index offset) + scroll fraction.
-                        let cf = CGFloat(i - index) + dragFrac
+                        let cf = CGFloat(i) - scroll
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
@@ -2170,10 +2187,13 @@ struct MyStoriesCarousel: View {
                             guard abs(v.translation.width) > 5,
                                   abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
                             dragging = true
+                            scrollAtDragStart = scroll
                             interactGen += 1
                             onInteracting(true)
                         }
-                        dragX = v.translation.width   // 1:1 finger tracking
+                        // 1:1 finger tracking, expressed as a position rather than an offset, so the
+                        // release below has nothing to convert.
+                        scroll = scrollAtDragStart - v.translation.width / fullDist
                     }
                     .onEnded { v in
                         let wasDragging = dragging
@@ -2181,7 +2201,8 @@ struct MyStoriesCarousel: View {
                         if !wasDragging {
                             // A fast flick that never crossed the engage gate still turns the page —
                             // otherwise it's a tap: engage so the momentum path below runs.
-                            if abs(v.predictedEndTranslation.width) < fullDist * 0.15 { dragX = 0; return }
+                            if abs(v.predictedEndTranslation.width) < fullDist * 0.15 { return }
+                            scrollAtDragStart = scroll
                             onInteracting(true)
                         }
                         // MOMENTUM: predictedEndTranslation already carries the gesture VELOCITY (UIKit
@@ -2193,17 +2214,23 @@ struct MyStoriesCarousel: View {
                         let softStep = abs(v.translation.width) > fullDist * 0.4        // gentle-drag commit
                             ? (v.translation.width < 0 ? -1 : 1) : 0
                         var steps = abs(hardSteps) >= 1 ? hardSteps : softStep
-                        steps = max(-4, min(4, steps))                                  // never fly off
-                        // Drag/flick RIGHT (+) reveals the PREVIOUS card → index decreases.
-                        let ni = max(0, min(n - 1, index - steps))
-                        // Fluid, velocity-matched spring (premium-messenger glide, not a stiff snap):
-                        // response 0.42 gives it room to coast; damping 0.80 lands cleanly, tiny glide.
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.80)) {
-                            index = ni
-                            dragX = 0
+                        steps = max(-6, min(6, steps))                                  // never fly off
+                        // Drag/flick RIGHT (+) reveals the PREVIOUS card → the position decreases.
+                        let ni = max(0, min(n - 1, Int((scrollAtDragStart).rounded()) - steps))
+                        // ONE animation on ONE number, so every card's x AND scale are interpolated by
+                        // the same curve for the whole glide — which is the whole point: the scaling
+                        // can no longer stutter, because it is the same value that is moving.
+                        //
+                        // The further the flick throws it, the longer it is given to get there, so a
+                        // four-card fling decelerates instead of arriving at the speed of a one-card
+                        // nudge. Damping 0.86 lands without a wobble at these distances.
+                        let travel = abs(CGFloat(ni) - scroll)
+                        let response = min(0.62, 0.34 + Double(travel) * 0.07)
+                        withAnimation(.spring(response: response, dampingFraction: 0.86)) {
+                            scroll = CGFloat(ni)
                         }
                         if stories.indices.contains(ni) { activeId = stories[ni].id }
-                        endInteractionSoon()
+                        endInteractionSoon(after: response)
                     }
             )
             // The centred card's count, big + centred under the carousel (mockup).
@@ -2212,6 +2239,8 @@ struct MyStoriesCarousel: View {
         // The CENTRED card is the single source of truth: keep sheetStoryId (activeId) in lockstep with
         // it, so the story behind + the close ALWAYS land on exactly the card you see. Without this the
         // seeded `index` and `activeId` could drift (open on A, close showed B).
+        // Watch the POSITION, act on the card it resolves to. `index` is derived now, and a computed
+        // property is not something onChange can observe.
         .onChange(of: index) { _, i in
             guard stories.indices.contains(i), stories[i].id != activeId else { return }
             activeId = stories[i].id
@@ -2219,11 +2248,11 @@ struct MyStoriesCarousel: View {
         // External retarget (rare) → recentre, but never while the finger is dragging.
         .onChange(of: activeId) { _, v in
             guard !dragging, let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
-            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) { index = ni }
+            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) { scroll = CGFloat(ni) }
         }
         // Re-seed from the opened-on story in case `stories` was still loading at init.
         .onAppear {
-            if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { index = ni }
+            if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { scroll = CGFloat(ni) }
         }
         .task { await loadAll() }
     }
