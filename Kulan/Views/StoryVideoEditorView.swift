@@ -6,7 +6,8 @@ import PencilKit
 
 // Video-story editor — the video plays looping on the same rounded canvas card as the photo
 // editor (muted poster-frame wash behind it, black frame above/below), with the same caption
-// bar (40px) + NEXT (46px) layout. Tools: mute toggle only — crop/pen/text are photo tools.
+// bar (40px) + NEXT (46px) layout. Tools: text, pen and trim, plus the mute toggle up top and the
+// + inside the caption bar. NO CROP here — that is a photo tool (owner, 2026-08-04).
 // Videos longer than the story cap are auto-trimmed to the first 30s at post time
 // (as standard messengers do); a label says so up front, nothing is rejected.
 struct StoryVideoEditorView: View {
@@ -55,7 +56,6 @@ struct StoryVideoEditorView: View {
         var muted = false
         var drawing = PKDrawing()
         var overlays: [TextOverlay] = []
-        var cropRect: CGRect? = nil
     }
 
     @State private var clips: [Clip] = []
@@ -64,7 +64,6 @@ struct StoryVideoEditorView: View {
     // The live tool state for the clip on screen. Parked onto its Clip when you switch away.
     @State private var drawing = PKDrawing()
     @State private var overlays: [TextOverlay] = []
-    @State private var cropRect: CGRect? = nil
     @State private var selectedID: UUID?
     @State private var editingID: UUID?
     @State private var isDrawing = false
@@ -72,7 +71,6 @@ struct StoryVideoEditorView: View {
     @State private var penHue: Double = 0
     @State private var penWidth: CGFloat = 8
     @State private var isHighlighter = false
-    @State private var showCrop = false
     // Trim's own working state. It lives HERE, not in a pushed screen, because trimming is a mode of
     // this editor now rather than a page you travel to — see `trimOverlay`.
     @State private var trimThumbs: [UIImage] = []
@@ -92,7 +90,6 @@ struct StoryVideoEditorView: View {
         guard clips.indices.contains(index) else { return }
         clips[index].drawing = drawing
         clips[index].overlays = overlays
-        clips[index].cropRect = cropRect
         clips[index].trimStart = trimStart
         clips[index].trimEnd = trimEnd
         clips[index].muted = muted
@@ -104,7 +101,6 @@ struct StoryVideoEditorView: View {
         let c = clips[index]
         drawing = c.drawing
         overlays = c.overlays
-        cropRect = c.cropRect
         trimStart = c.trimStart
         trimEnd = c.trimEnd
         muted = c.muted
@@ -165,11 +161,14 @@ struct StoryVideoEditorView: View {
                     .scaleEffect(showTrim ? 0.78 : 1, anchor: .top)
                     .offset(y: showTrim ? 44 : 0)
 
-                if !showTrim {
+                // NOTHING FLOATS OVER THE TEXT EDITOR (owner 2026-08-04: "when keyboad opened pkz
+                // hide caption bar and all buttons"). Aa opens a full-screen editor with the keyboard
+                // up, and the caption bar and the tool capsule were still sitting there underneath
+                // it. The caption already stood aside for its OWN keyboard; this is the other one.
+                if !showTrim, editingID == nil {
                     topControls
                     bottomStack(geo: geo)
                 }
-                cropOverlay
                 trimOverlay
             }
             .animation(.easeInOut(duration: 0.3), value: showTrim)
@@ -450,30 +449,29 @@ struct StoryVideoEditorView: View {
 
             if !captionFocused {
                 HStack(spacing: 14) {
-                    // THE SAME FIVE TOOLS THE PHOTO EDITOR HAS, plus trim, which only a video has.
-                    // Aa, crop and pen were photo-only because a video had nowhere to put them; they
-                    // are burned into the frames at export now, so there is no longer a reason for
-                    // this screen to offer less than that one.
+                    // THREE TOOLS: text, pen, trim. Two went on the owner's word, 2026-08-04.
+                    //
+                    // CROP is gone from the VIDEO editor and stays in the photo one ("Remove Crop
+                    // feature in video story editor… only video").
+                    //
+                    // THE SECOND + is gone. It did the same job as the + inside the caption bar,
+                    // which he keeps: "one is working same plz remove buttom one. Dont tuch ine in
+                    // side caption bar".
                     HStack(spacing: 20) {
                         tool("textformat") { addTextOverlay() }
-                        tool("crop", active: cropRect != nil) {
-                            player.pause(); playing = false
-                            withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
-                        }
-                        // THE VIDEO HOLDS STILL WHILE YOU DRAW, the way it already does for crop and
-                        // for trim (owner 2026-08-04: "plz play and pause fix"). It used to keep
-                        // playing and looping under your hand, and you could not stop it, because
-                        // every tap on the picture belongs to the pen while the pen is out. Tapping
-                        // the tick gives you the video back, running, where you left it.
+                        // THE VIDEO HOLDS STILL WHILE YOU DRAW, the way it already does for trim
+                        // (owner 2026-08-04: "plz play and pause fix"). It used to keep playing and
+                        // looping under your hand, and you could not stop it, because every tap on
+                        // the picture belongs to the pen while the pen is out. Tapping the tick
+                        // gives you the video back, running, where you left it.
                         tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
                              active: isDrawing) { setDrawing(!isDrawing) }
                         tool("scissors", active: isTrimmed) { openTrim() }
-                        tool("plus.square.on.square") { showAddPicker = true }
                     }
                     .padding(.horizontal, 18).frame(height: 46)
                     .liquidGlass(Capsule())
 
-                    Spacer()
+                    Spacer(minLength: 8)
                     sendButton
                 }
             }
@@ -501,11 +499,18 @@ struct StoryVideoEditorView: View {
     private var sendButton: some View {
         Button { send() } label: {
             HStack(spacing: 4) {
+                // ONE LINE, ALWAYS (owner 2026-08-04: it was breaking as "NE / XT"). The tool capsule
+                // beside it was winning the width argument and NEXT was told to wrap to fit. A word
+                // this short must never wrap: it is a label, not a paragraph. `lineLimit` alone only
+                // stops the second line from DRAWING — `fixedSize` is what stops the layout from
+                // squeezing the button below the width the word needs in the first place.
                 Text("NEXT").font(.system(size: 16, weight: .semibold))
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 22).frame(height: 46)
+            .layoutPriority(1)   // the tools capsule gives way, not the word
             .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
             .contentShape(Capsule())   // whole pill tappable (not just the text)
         }
@@ -597,29 +602,9 @@ struct StoryVideoEditorView: View {
         }
     }
 
-    /// Crop, in place, cross-faded — the chat editor's own cropper, the same one the photo story
-    /// editor uses. It works on the poster because a rectangle is all the export needs; the clip
-    /// itself is reframed during the burn-in.
-    @ViewBuilder private var cropOverlay: some View {
-        if showCrop, let poster = thumbnail {
-            ChatCropView(image: poster, inline: true,
-                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } },
-                         onRect: { r in
-                             // Re-cropping refines the crop you already have, so the new rectangle is
-                             // read INSIDE the old one rather than against the original.
-                             if let old = cropRect {
-                                 cropRect = CGRect(x: old.minX + r.minX * old.width,
-                                                   y: old.minY + r.minY * old.height,
-                                                   width: r.width * old.width,
-                                                   height: r.height * old.height)
-                             } else {
-                                 cropRect = r
-                             }
-                         }) { _ in }
-                .transition(.opacity)
-                .zIndex(20)
-        }
-    }
+    // CROP LIVED HERE. Removed from the video editor on the owner's word, 2026-08-04 ("Remove Crop
+    // feature in video story editor… only video"). The photo editor keeps its cropper, and
+    // ChatCropView, which both of them borrowed, is untouched.
 
     // MARK: Trim, in place
 
@@ -823,7 +808,7 @@ struct StoryVideoEditorView: View {
     /// uses, so text placed on a clip lands where text placed on a picture lands.
     @MainActor private func burnIn(for c: Clip) -> StoryBurnIn? {
         let hasArt = !c.drawing.bounds.isEmpty || !c.overlays.isEmpty
-        guard hasArt || c.cropRect != nil else { return nil }
+        guard hasArt else { return nil }
         let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
 
         var art: UIImage?
@@ -847,7 +832,9 @@ struct StoryVideoEditorView: View {
             renderer.isOpaque = false          // black here would hide the whole video behind it
             art = renderer.uiImage
         }
-        return StoryBurnIn(overlay: art, cropRect: c.cropRect,
+        // cropRect is always nil now that the video editor has no cropper. The parameter stays
+        // because VideoTranscoder still supports a crop and that capability is not ours to delete.
+        return StoryBurnIn(overlay: art, cropRect: nil,
                            canvasAspect: size.height > 0 ? size.width / size.height : nil)
     }
 
