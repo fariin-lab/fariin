@@ -73,6 +73,11 @@ final class ConversationsRepository {
                 // which plain data() reads as nil → updatedAtMillis 0 → isCleared() treats the
                 // chat as delete-for-me and it vanishes from the list until the server acks.
                 let convs = snap.documents.map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
+                // "Automatically Archive new chats from unknown users" (Settings > Chats). Here
+                // rather than inside publish() because publish coalesces and can skip a snapshot
+                // outright — this must see every one, since the request it has to catch may arrive
+                // in a snapshot that changes nothing else. No-op while the setting is off.
+                UnknownChatArchiver.sweep(convs)
                 self.publish(convs)
 
                 // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY

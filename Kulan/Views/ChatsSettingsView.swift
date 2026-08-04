@@ -7,6 +7,7 @@ import SwiftUI
 // settings page read as one page instead of a stack of cards.
 struct ChatsSettingsView: View {
     @AppStorage(AutoSaveToPhotos.defaultsKey) private var saveToPhotos = false
+    @AppStorage(UnknownChatArchiver.defaultsKey) private var autoArchiveUnknown = false
     @State private var confirmClear = false
     @State private var clearing = false
 
@@ -18,6 +19,17 @@ struct ChatsSettingsView: View {
                 Toggle("Save to Photos", isOn: $saveToPhotos).tint(.green)
             } footer: {
                 Text("Automatically save received photos and videos to your Photos library.")
+            }
+
+            // The setting moves WHERE a stranger's first message waits, and nothing else. It is
+            // still an ordinary conversation with Accept and Delete inside it either way — there is
+            // no separate requests inbox in this app and this does not add one.
+            Section {
+                Toggle("Automatically Archive", isOn: $autoArchiveUnknown).tint(.green)
+            } header: {
+                Text("New Chats from Unknown Users")
+            } footer: {
+                Text("Automatically archive and mute new private chats, groups, and channels from people who are not in your contacts.")
             }
 
             Section {

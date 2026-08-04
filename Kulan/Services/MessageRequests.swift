@@ -64,6 +64,9 @@ enum MessageRequests {
     static func accept(_ cid: String) async throws {
         try await Firestore.firestore().collection("conversations").document(cid)
             .setData(["accepted": true], merge: true)
+        // If "Automatically Archive" was what put this chat in the archive, saying yes takes it
+        // back out — you just accepted the person, and a normal chat lives in the chat list.
+        await UnknownChatArchiver.undoAutoArchive(cid)
     }
 
     /// Delete: the conversation goes, and with it the request. Not a block — blocking is its own
@@ -81,4 +84,76 @@ enum MessageRequests {
     // already loaded, and the rules refuse the write regardless. A third copy of the same question,
     // asked over the network before navigating, would only add a pause before an answer the screen
     // already has.
+}
+
+/// AUTOMATICALLY ARCHIVE NEW CHATS FROM UNKNOWN USERS (Settings > Chats), on the owner's word,
+/// 2026-08-04.
+///
+/// It moves WHERE a request waits, and nothing else. There is still no separate requests inbox —
+/// off, a stranger's request sits in the chat list; on, it sits in Archived Chats. Either way it is
+/// an ordinary conversation carrying its Accept and Delete inside itself, which is the whole design
+/// this feature was built on and the thing he asked not to break.
+///
+/// ARCHIVING IS DONE ONCE PER CHAT AND REMEMBERED. Without that ledger, taking a request out of the
+/// archive by hand would last until the next snapshot and then silently undo itself, which reads as
+/// the app fighting you.
+enum UnknownChatArchiver {
+    /// The key the Settings toggle binds to, so there is one spelling of it.
+    static let defaultsKey = "chats.autoArchiveUnknown"
+    private static let doneKey = "chats.autoArchiveUnknown.done"
+    private static let doneCap = 400
+
+    private static var isOn: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
+    private static let lock = NSLock()
+
+    private static func handled() -> [String] {
+        UserDefaults.standard.stringArray(forKey: doneKey) ?? []
+    }
+
+    /// Claim a cid. False if this setting has already dealt with it once.
+    private static func claim(_ cid: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var ids = handled()
+        guard !ids.contains(cid) else { return false }
+        ids.append(cid)
+        if ids.count > doneCap { ids.removeFirst(ids.count - doneCap) }
+        UserDefaults.standard.set(ids, forKey: doneKey)
+        return true
+    }
+
+    /// Every chat-list snapshot. Cheap and off when the setting is off.
+    static func sweep(_ convs: [Conversation]) {
+        guard isOn else { return }
+        let me = ChatService.uid
+        guard !me.isEmpty else { return }
+        for c in convs {
+            // THEIR unanswered request only. A chat I started is not from an unknown user to me,
+            // and an accepted one is a normal chat with a person I said yes to.
+            guard MessageRequests.stance(c, myUid: me) == .incoming else { continue }
+            guard !c.isArchived(me) else { continue }
+            guard claim(c.id) else { continue }
+            // Archive AND mute, which is what the setting says it does. Archiving alone would
+            // still buzz the phone for a message you have chosen not to look at yet.
+            Task {
+                await ChatService.setArchived(c.id, true)
+                await ChatService.setMuted(c.id, true)
+            }
+        }
+    }
+
+    /// Undo the archiving THIS setting did, when the request is accepted. Only for chats it moved:
+    /// an archive you chose yourself is yours, and accepting somebody must not empty it behind you.
+    static func undoAutoArchive(_ cid: String) async {
+        lock.lock()
+        var ids = handled()
+        let wasOurs = ids.contains(cid)
+        if wasOurs {
+            ids.removeAll { $0 == cid }
+            UserDefaults.standard.set(ids, forKey: doneKey)
+        }
+        lock.unlock()
+        guard wasOurs else { return }
+        await ChatService.setArchived(cid, false)
+        await ChatService.setMuted(cid, false)
+    }
 }
