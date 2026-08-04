@@ -3,7 +3,7 @@ import SwiftUI
 // "Send to" chat picker for Share Contact — sends the contact's Kulan link into one or more chats
 // (multi-select), instead of the system share sheet. Real send pipeline via ChatService.sendText.
 struct SendContactSheet: View {
-    let contactText: String   // e.g. "Chat with Kasim on Kulan: kulan://u/abdi1"
+    let contactText: String   // e.g. "Chat with Kasim on Fariin: kulan://u/abdi1"
 
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared

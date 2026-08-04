@@ -1078,7 +1078,7 @@ struct ContactInfoView: View {
     // Shareable contact link (opens/starts a chat with this user in Kulan).
     private var shareText: String {
         handle.isEmpty ? "Chat with \(name) on Fariin"
-                       : "Chat with \(name) on Kulan: kulan://u/\(handle)"
+                       : "Chat with \(name) on Fariin: kulan://u/\(handle)"
     }
 
     // The most recent real call with this person (nil if none) — drives the call-log card.

@@ -1,4 +1,4 @@
-# Kulan — Native iOS (Swift / SwiftUI) Migration Blueprint
+# Fariin — Native iOS (Swift / SwiftUI) Migration Blueprint
 
 **Status:** RN/Expo sunset decided. This is the single source of truth for the native rebuild.
 **Backend stays identical** — same Firebase project (`kulan-2ef85`), same Firestore schema, same
@@ -20,7 +20,7 @@ transition (shared backend), so we can roll out screen-by-screen with no hard cu
 
 ## 1. Project & Tooling
 
-- SwiftUI App lifecycle (`@main struct KulanApp: App`), Swift 6 (or 5.9 + incremental strict concurrency).
+- SwiftUI App lifecycle (`@main struct FariinApp: App`), Swift 6 (or 5.9 + incremental strict concurrency).
 - **Swift Package Manager** only (no CocoaPods).
 - `GoogleService-Info.plist`; capabilities: Push Notifications, Background Modes → Remote notifications.
 - Folders: `App/`, `Models/`, `Repositories/`, `Services/` (Crypto, Storage, Push), `Features/`

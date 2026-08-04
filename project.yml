@@ -42,7 +42,7 @@ targets:
     info:
       path: Kulan/Info.plist
       properties:
-        CFBundleDisplayName: Kulan
+        CFBundleDisplayName: Fariin
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
@@ -75,12 +75,12 @@ targets:
         # distribution (e.g. enabling France, or a stricter reading of E2EE as non-exempt) changes,
         # revisit this — the earlier stance treated E2EE as NON-exempt (would be `true` + an
         # ITSEncryptionExportComplianceCode issued by ASC).
-        NSPhotoLibraryUsageDescription: "Kulan needs photo access so you can send pictures in chats."
-        NSPhotoLibraryAddUsageDescription: "Kulan needs permission to save photos to your camera roll."
-        NSCameraUsageDescription: "Kulan needs camera access so you can take photos in chats."
-        NSMicrophoneUsageDescription: "Kulan needs microphone access so you can send voice messages."
-        NSFaceIDUsageDescription: "Kulan uses Face ID to unlock the app."
-        NSLocationWhenInUseUsageDescription: "Kulan needs your location so you can share it in chats."
+        NSPhotoLibraryUsageDescription: "Fariin needs photo access so you can send pictures in chats."
+        NSPhotoLibraryAddUsageDescription: "Fariin needs permission to save photos to your camera roll."
+        NSCameraUsageDescription: "Fariin needs camera access so you can take photos in chats."
+        NSMicrophoneUsageDescription: "Fariin needs microphone access so you can send voice messages."
+        NSFaceIDUsageDescription: "Fariin uses Face ID to unlock the app."
+        NSLocationWhenInUseUsageDescription: "Fariin needs your location so you can share it in chats."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         CFBundleURLTypes:

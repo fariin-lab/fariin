@@ -3086,7 +3086,7 @@ struct ThreadView: View {
                 repo.markFailed(clientId: clientId)
                 if error is MissingRecipientKeyError {
                     sendError = isGroup
-                        ? "No one in this group has set up encryption yet. Your message will send once a member opens Kulan."
+                        ? "No one in this group has set up encryption yet. Your message will send once a member opens Fariin."
                         : "\(title) hasn't opened Fariin yet, so encryption isn't set up. Your message will send once they do."
                 }
             }

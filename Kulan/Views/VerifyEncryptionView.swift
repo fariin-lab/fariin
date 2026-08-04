@@ -84,7 +84,7 @@ struct VerifyEncryptionView: View {
             .padding(.top, 8)
             Text(verified ? "This chat is verified" : "This chat is end-to-end encrypted")
                 .font(.headline)
-            Text("Messages and calls with \(peerName) are secured with end-to-end encryption. No one outside this chat, not even Kulan, can read them.")
+            Text("Messages and calls with \(peerName) are secured with end-to-end encryption. No one outside this chat, not even Fariin, can read them.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

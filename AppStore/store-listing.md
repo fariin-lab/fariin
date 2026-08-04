@@ -1,4 +1,4 @@
-# Kulan — App Store submission pack (v1.0)
+# Fariin, App Store submission pack (v1.0)
 
 Everything to copy-paste into App Store Connect. Prepared 2026-07-19.
 v1 scope: 1-to-1 E2EE messenger. Groups are compiled out (`Flags.groupsEnabled = false`).
@@ -7,24 +7,24 @@ v1 scope: 1-to-1 E2EE messenger. Groups are compiled out (`Flags.groupsEnabled =
 
 ## 1. Listing texts
 
-**Name:** Kulan
+**Name:** Fariin
 
 **Subtitle** (max 30 chars):
 `Private, simple messaging`
 
 **Promotional text** (max 170 chars, changeable without review):
-`Private messaging without a phone number. End-to-end encrypted chats, voice and video calls, and 24-hour stories. Kulan is the Somali word for a gathering.`
+`Private messaging without a phone number. End-to-end encrypted chats, voice and video calls, and 24-hour stories. Fariin is the Somali word for message.`
 
 **Description** (max 4000 chars):
 
 ```
-Kulan is a private messenger built on one idea: your conversations belong to you.
+Fariin is a private messenger built on one idea: your conversations belong to you.
 
 NO PHONE NUMBER NEEDED
 Create an account in seconds with just a name and a username. No phone number, no email, no contact list upload. Find friends by username or by scanning their QR code in person.
 
 END-TO-END ENCRYPTED
-Every message is encrypted on your device before it is sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Kulan cannot read them, and neither can anyone else.
+Every message is encrypted on your device before it is sent. Texts, photos, videos, voice messages and files can only be read by you and the person you send them to. Fariin cannot read them, and neither can anyone else.
 
 VOICE AND VIDEO CALLS
 Free, private 1-to-1 voice and video calls over the internet.
@@ -47,15 +47,15 @@ BUILT-IN PROTECTION
 • Block and report users
 • Delete your account and data at any time
 
-Kulan is the Somali word for a gathering, a place where people meet. That is what the app is meant to be: a private place to talk with the people who matter to you.
+Fariin is the Somali word for message. That is what the app is meant to be: a private place to talk with the people who matter to you.
 ```
 
 **Keywords** (max 100 chars, comma-separated):
 `somali,chat,private,secure,encrypted,messaging,texting,calls,video,stories,voice`
 
 **Category:** Social Networking
-**Support URL:** https://kulan-2ef85.web.app
-**Privacy Policy URL:** https://kulan-2ef85.web.app/privacy.html
+**Support URL:** https://fariin.com/support
+**Privacy Policy URL:** https://fariin.com/privacy
 
 ---
 
@@ -112,7 +112,7 @@ questionnaire computes; do not understate).
 ## 5. Review notes (paste into "Notes" for the reviewer)
 
 ```
-Kulan is an end-to-end encrypted 1-to-1 messenger. No phone number, email or
+Fariin is an end-to-end encrypted 1-to-1 messenger. No phone number, email or
 login credentials are required — the reviewer can create an account instantly
 with any name and username.
 
