@@ -105,9 +105,12 @@ struct StoryVideoEditorView: View {
         thumbnailData = c.posterData
         selectedID = nil; editingID = nil; isDrawing = false
         player.isMuted = muted
-        looper = nil                     // a looper outlives its item; a stale one keeps the old clip
-        let item = AVPlayerItem(url: c.url)
-        looper = AVPlayerLooper(player: player, templateItem: item)
+        // BOTH LINES MATTER. Dropping the looper stops it re-queueing, but the items it has ALREADY
+        // queued are sitting in the player and would keep the previous clip playing over the new
+        // one — so the queue is emptied before the new looper is allowed to fill it.
+        looper = nil
+        player.removeAllItems()
+        looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: c.url))
         playing = true
         player.play()
     }

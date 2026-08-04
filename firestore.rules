@@ -133,17 +133,22 @@ service cloud.firestore {
             && request.resource.data.users.hasAll(resource.data.users)
             && resource.data.users.hasAll(request.resource.data.users)
             && request.resource.data.users.size() == 2
-            // ONE MESSAGE, AND ONLY ONE. While a request is unanswered the person who sent it may
-            // no longer touch `lastSender`, `lastMessage` or `accepted` — which is what stops a
-            // second message (the message rule below reads `lastSender` to decide) and stops anyone
-            // accepting their own request. Their own housekeeping still works: they can still block,
-            // mute, archive or clear the thread they started.
+            // ONE MESSAGE, AND ONLY ONE. While a request is unanswered, the person who sent it may
+            // not touch the fields that would let them take a second turn: `lastSender` (which the
+            // message rule below reads to decide), `lastMessage`, and `accepted` (nobody accepts
+            // their own request).
+            //
+            // NAMED AS A DENY-LIST, not an allow-list. An allow-list was here first and it refused
+            // the requester's own `openConversation`, which rewrites `users`/`names`/`photos` on
+            // every single open — so re-opening a chat you had sent a request into failed, silently,
+            // and stopped refreshing the other person's name and face. Everything that is not on
+            // this list still works: opening, blocking, muting, archiving, clearing.
             && (
               !isRequestPending()
               || request.auth.uid != resource.data.get('lastSender', '')
-              || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                   'blockedBy', 'blockedAt', 'blockClearedAt', 'mutedBy', 'archivedBy',
-                   'pinnedBy', 'pinOrder', 'clearedAt', 'unreadCount', 'typing', 'lastRead'
+              || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                   'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc',
+                   'accepted', 'startedBy'
                  ])
             )
           )

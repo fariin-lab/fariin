@@ -205,6 +205,8 @@ struct StoryEditorView: View {
                         }
                     }
 
+                videoMark
+
                 // Text overlays — above the photo, below the drawing canvas + controls.
                 ForEach($overlays) { $o in
                     TextOverlayView(
@@ -389,6 +391,25 @@ struct StoryEditorView: View {
     ///
     /// Only when there is more than one. A single thumbnail of the picture already filling the
     /// screen is a picture of what you are looking at.
+    /// A video item shows its POSTER here, not moving frames — this editor is built around a picture
+    /// and the clip is only played once it reaches the video editor. Without a mark that reads as a
+    /// still photo, and you would only find out it was a clip after posting it. The strip already
+    /// carries the same badge, so the two agree.
+    ///
+    /// Its own property, not another branch inside `body`: that ZStack is one branch away from the
+    /// type-checker giving up, which is exactly what happened to the video editor's.
+    @ViewBuilder private var videoMark: some View {
+        if currentIsVideo, !isDrawing, editingID == nil {
+            Image(systemName: "play.fill")
+                .font(.system(size: 26))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 72, height: 72)
+                .background(.black.opacity(0.35), in: Circle())
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
+    }
+
     @ViewBuilder private var itemStrip: some View {
         if items.count > 1 {
             HStack(spacing: 8) {

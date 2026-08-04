@@ -24,6 +24,12 @@ enum MessageRequests {
 
     /// A first message is short on purpose. Long enough to say who you are and why, short enough that
     /// an unanswered request cannot be used to shout at someone.
+    ///
+    /// ENFORCED ON THE CLIENT ONLY, and that is not an oversight. Message bodies are end-to-end
+    /// encrypted, so the server is handed a cipher and cannot measure the words inside it — a rule
+    /// counting characters would be counting the encryption. What the rules DO enforce is the part
+    /// that matters: exactly one message, from one person, until it is answered. A patched client can
+    /// make that one message long; it cannot make it a second message.
     static let firstMessageLimit = 300
 
     /// What this conversation currently allows.
@@ -67,22 +73,12 @@ enum MessageRequests {
         try await Firestore.firestore().collection("conversations").document(cid).delete()
     }
 
-    /// May I open a chat with this person at all?
-    ///
-    /// "My Friends" means an accepted conversation already exists. That is the same test the rules
-    /// make, so the screen and the database agree about who is a friend.
-    ///
-    /// A MISS MEANS YES. If we have not read their settings we let the attempt through and let the
-    /// rules refuse it — the same reasoning as [CallPrivacyIndex]: a stale guess must never be the
-    /// thing that stops a legitimate message.
-    static func mayStartChat(with other: UserProfile) async -> Bool {
-        guard other.id != ChatService.uid else { return true }
-        let audience = other.privacy["messages"] ?? Audience.everyone.rawValue
-        guard audience == Audience.contacts.rawValue else { return true }
-        let cid = ChatService.convId(ChatService.uid, other.id)
-        guard let snap = try? await Firestore.firestore()
-            .collection("conversations").document(cid).getDocument() else { return true }
-        guard let data = snap.data() else { return false }         // no history, friends-only → no
-        return Conversation(id: cid, data: data).accepted
-    }
+    // THERE IS DELIBERATELY NO "may I open a chat with them" CHECK HERE.
+    //
+    // One was written and then deleted unused, which is the useful part to record. The thread should
+    // OPEN either way and say why you cannot write — the same rule he set for calls: never hide the
+    // button, show a sentence. ThreadView's own `cannotMessageThem` does that from the privacy it has
+    // already loaded, and the rules refuse the write regardless. A third copy of the same question,
+    // asked over the network before navigating, would only add a pause before an answer the screen
+    // already has.
 }
