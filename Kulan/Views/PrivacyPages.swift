@@ -224,7 +224,10 @@ struct MessagesPrivacyPage: View {
     var body: some View {
         List {
             Section {
-                ForEach(Audience.allCases, id: \.self) { a in
+                // NO "No One" HERE (owner 2026-08-04). Messaging is the app; a switch that turns it
+                // off entirely is being held back as a paid option rather than shipped as a way to
+                // make yourself unreachable by accident. The other two audiences are unchanged.
+                ForEach([Audience.everyone, .contacts], id: \.self) { a in
                     Button {
                         privMessages = a.rawValue
                         PrivacyPrefs.setMine("messages", a)

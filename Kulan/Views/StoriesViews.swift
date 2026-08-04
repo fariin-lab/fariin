@@ -2302,7 +2302,9 @@ struct MyStoriesCarousel: View {
                 if s.id == activeId { onActiveTap() }
                 else if let ni = stories.firstIndex(where: { $0.id == s.id }) {
                     onInteracting(true)   // tap-to-recentre animates cards too — same hand-off dance
-                    withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84)) { index = ni }
+                    // `scroll`, not `index` — the position is the one continuous number now and the
+                    // index is derived from it. Tap-to-recentre glides on the same curve a flick does.
+                    withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84)) { scroll = CGFloat(ni) }
                     activeId = s.id
                     endInteractionSoon()
                 }
