@@ -942,7 +942,7 @@ struct ChatsView: View {
                 }
                     .tint(.primary).disabled(selection.isEmpty)
                 Spacer()
-                Button("Read All") { markReadSelected() }.tint(.primary).disabled(selection.isEmpty)
+                Button(readTitle) { markReadTargets() }.tint(.primary).disabled(readTargets.isEmpty)
                 Spacer()
                 Button(role: .destructive) { showDeleteSelected = true } label: { Image(systemName: "trash") }
                     .disabled(selection.isEmpty)
@@ -1042,14 +1042,34 @@ struct ChatsView: View {
         Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setArchived(id, true) } } } }
         exitSelect()
     }
-    private func markReadSelected() {
-        // Skip silently-blocked chats, exactly like the tab badge, Mark All Read and the row menu
-        // (audit): markRead writes lastRead, which flips the blocked person's messages to read ticks
-        // and reveals the activity the block is hiding. Their rows show 0 unread, so nothing on
-        // screen even hints they were included.
-        let ids = selection.filter { id in
-            !(repo.conversations.first { $0.id == id }?.isBlockedByMe(me) ?? false)
-        }
+    // SELECT MODE'S READ BUTTON, Signal's rule (ChatListViewController+Multiselect.swift).
+    //
+    // With NOTHING selected it reads "Read All" and clears every unread chat in the list you are
+    // looking at — you do not have to select anything first. The moment one chat is selected it
+    // becomes "Read" and touches only the selection. Either way it is DISABLED when there is
+    // nothing unread to act on, so the button never offers work it would not do. The old version
+    // said "Read All" always, was dead until you selected something, and then quietly acted on the
+    // selection only: the label and the behaviour disagreed.
+    private var readTitle: String { selection.isEmpty ? "Read All" : "Read" }
+
+    /// The chats the button would actually mark. Empty = nothing to do = disabled.
+    /// Already-read chats drop out here, which is what makes "Read" ignore a read chat you picked.
+    ///
+    /// Skips silently-blocked chats, exactly like the tab badge, Mark All Read and the row menu
+    /// (audit): markRead writes lastRead, which flips the blocked person's messages to read ticks
+    /// and reveals the activity the block is hiding. Their rows show 0 unread, so nothing on
+    /// screen even hints they were included.
+    private var readTargets: [String] {
+        // Nothing selected -> the whole list as it is currently filtered, which is Signal scoping
+        // Read All to the rendered list. Selected -> resolve out of the repo, so a chat that the
+        // filter stopped showing while you were selecting is still honoured.
+        let pool = selection.isEmpty ? visible : repo.conversations.filter { selection.contains($0.id) }
+        return pool.filter { !$0.isBlockedByMe(me) && $0.unread(me) > 0 }.map(\.id)
+    }
+
+    private func markReadTargets() {
+        let ids = readTargets
+        guard !ids.isEmpty else { return }
         Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.resetUnread(id); await ChatService.markRead(id) } } } }
         exitSelect()
     }
@@ -1522,7 +1542,7 @@ struct ArchivedChatsView: View {
                         Button { unarchiveSelected() } label: { Image(systemName: "tray.and.arrow.up") }
                             .tint(.primary).disabled(selection.isEmpty)
                         Spacer()
-                        Button("Read All") { markReadSelected() }.tint(.primary).disabled(selection.isEmpty)
+                        Button(readTitle) { markReadTargets() }.tint(.primary).disabled(readTargets.isEmpty)
                         Spacer()
                         Button(role: .destructive) { showDeleteSelected = true } label: { Image(systemName: "trash") }
                             .disabled(selection.isEmpty)
@@ -1551,14 +1571,22 @@ struct ArchivedChatsView: View {
         Task { for id in ids { await ChatService.setArchived(id, false) } }
         exitSelect()
     }
-    private func markReadSelected() {
+    // Identical rule to the main chat list's Read button — see the long note on `readTargets`
+    // there. "Read All" here means every unread chat in the ARCHIVE, which is the list this
+    // screen renders; Signal scopes Read All the same way, to the rendered list.
+    private var readTitle: String { selection.isEmpty ? "Read All" : "Read" }
+
+    private var readTargets: [String] {
+        let pool = selection.isEmpty ? archived : repo.conversations.filter { selection.contains($0.id) }
         // Same blocked exclusion as the main list's version (audit) — the archived list can hold
         // silently blocked chats too, and markRead there leaks read receipts just the same.
-        let me = AuthService.shared.uid ?? ""
-        let ids = selection.filter { id in
-            !(ConversationsRepository.shared.conversations.first { $0.id == id }?.isBlockedByMe(me) ?? false)
-        }
-        Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
+        return pool.filter { !$0.isBlockedByMe(me) && $0.unread(me) > 0 }.map(\.id)
+    }
+
+    private func markReadTargets() {
+        let ids = readTargets
+        guard !ids.isEmpty else { return }
+        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.resetUnread(id); await ChatService.markRead(id) } } } }
         exitSelect()
     }
     private func deleteSelected() {
