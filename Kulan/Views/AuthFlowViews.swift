@@ -199,6 +199,15 @@ struct AuthMethodView: View {
                 // backgrounds and `.white` for dark ones, so this is the compliant pairing rather than a
                 // workaround.
                 .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
+                // ...and the style has to be re-BUILT, not re-applied. This is Apple's own
+                // `ASAuthorizationAppleIDButton`, which takes its colour in its initialiser and
+                // exposes no way to change it afterwards, so the modifier above only decides what
+                // the button is BORN as. Google and Email survive an appearance flip without this
+                // because `Color.primary` is a dynamic colour UIKit repaints in place; nothing has
+                // to re-run for them. The Apple button just kept the instance it already had, which
+                // is how a black button ended up on a black page mid-session.
+                // `.id(scheme)` makes SwiftUI discard it and make a new one when the phone flips.
+                .id(scheme)
                 .frame(height: 50)              // matches authDoorPill exactly
                 .clipShape(Capsule())
 

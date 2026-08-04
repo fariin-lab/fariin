@@ -157,6 +157,11 @@ struct DeleteAccountView: View {
                     }
                 }
                 .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
+                // Same rebuild the Log In door needs, and for the same reason: Apple's button
+                // cannot be restyled after it exists. See AuthFlowViews.swift for the full note.
+                // Changed together on purpose — a report about one of these has already left the
+                // other behind once on this project.
+                .id(scheme)
                 .frame(height: 50)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
