@@ -439,7 +439,10 @@ struct StoryVideoEditorView: View {
                 // covering for; the tint is Apple's own, so this is real glass that still gives
                 // white text something to sit on. The text keeps its hairline shadow for the same
                 // reason.
-                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous),
+                // Rounder, on his word (2026-08-04). Not a Capsule: this bar GROWS to five lines
+                // when the caption is long, and a capsule's ends become huge lozenges as it does.
+                // 26 reads as a pill at resting height and still looks deliberate when it is tall.
+                .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous),
                              tint: .black.opacity(0.28))
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
 

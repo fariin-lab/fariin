@@ -188,7 +188,18 @@ struct StoryEditorView: View {
                 // The final scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
                 ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
                                   maxScale: 4, interactive: !isDrawing && editingID == nil,
-                                  onTap: { captionFocused = false; selectedID = nil })
+                                  onTap: { captionFocused = false; selectedID = nil },
+                                  onSwipe: { step in
+                                      // The strip and the swipe are the same move, so they go through
+                                      // the same door: select() parks this picture's edits and brings
+                                      // the next one's back. Ends of the post simply do not move.
+                                      guard items.count > 1, !isDrawing, editingID == nil,
+                                            draggingID == nil else { return }
+                                      let next = index + step
+                                      guard items.indices.contains(next) else { return }
+                                      captionFocused = false
+                                      withAnimation(.snappy(duration: 0.22)) { select(next) }
+                                  })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
                     // Zoomed/panned photo stays STRICTLY inside the card (user's final spec:
@@ -416,9 +427,13 @@ struct StoryEditorView: View {
                 Spacer(minLength: 0)
                 ForEach(Array(items.enumerated()), id: \.element.id) { i, it in
                     Button { select(i) } label: {
+                        // SMALLER, AND SQUARE (owner 2026-08-04: "make small… make it also 1:1").
+                        // A 52x66 portrait thumb is a small copy of the picture; a square one is a
+                        // marker for it, which is what a strip of these is for. scaledToFill still
+                        // centre-crops, so nothing stretches.
                         Image(uiImage: it.image)
                             .resizable().scaledToFill()
-                            .frame(width: 52, height: 66)
+                            .frame(width: 44, height: 44)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .overlay(alignment: .bottomLeading) {
                                 if it.isVideo {
@@ -489,7 +504,10 @@ struct StoryEditorView: View {
                 // Apple's own glass tint, so this is still real glass and not a dark pill pretending —
                 // it just carries enough of its own darkness that white text always has something to
                 // sit on. The text keeps its hairline shadow for the same reason.
-                .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous),
+                // Rounder, on his word (2026-08-04). Not a Capsule: this bar GROWS to five lines
+                // when the caption is long, and a capsule's ends become huge lozenges as it does.
+                // 26 reads as a pill at resting height and still looks deliberate when it is tall.
+                .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous),
                              tint: .black.opacity(0.28))
                 // Light photos made the white caption text invisible (user screenshot: white-on-
                 // white). A soft bar shadow lifts the pill off bright backgrounds...
@@ -1129,6 +1147,12 @@ struct ZoomableImageView: UIViewRepresentable {
     var minScale: CGFloat = 1
     var interactive: Bool = true
     var onTap: () -> Void = {}
+    /// SWIPE TO THE NEXT PICTURE, +1 forward and -1 back (owner 2026-08-04: "when i swipe touching
+    /// screen nothing happens… it most work swipe to next image").
+    ///
+    /// It belongs HERE and not on a SwiftUI gesture over the top, because this view's own pan
+    /// recogniser is what was eating the swipe. Nothing to do with the strip.
+    var onSwipe: (Int) -> Void = { _ in }
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -1152,7 +1176,15 @@ struct ZoomableImageView: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         pan.maximumNumberOfTouches = 2
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        for g in [pinch, pan, tap] as [UIGestureRecognizer] { g.delegate = context.coordinator; container.addGestureRecognizer(g) }
+        // Left and right flicks, the same recogniser Signal's camera uses to change mode. A discrete
+        // swipe, so it can never fight the pinch or the pan for the picture itself.
+        let swipeLeft = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSwipe(_:)))
+        swipeLeft.direction = .left
+        let swipeRight = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSwipe(_:)))
+        swipeRight.direction = .right
+        for g in [pinch, pan, tap, swipeLeft, swipeRight] as [UIGestureRecognizer] {
+            g.delegate = context.coordinator; container.addGestureRecognizer(g)
+        }
         context.coordinator.pinch = pinch; context.coordinator.pan = pan
         return container
     }
@@ -1240,6 +1272,28 @@ struct ZoomableImageView: UIViewRepresentable {
             }
         }
         @objc func handleTap(_ g: UITapGestureRecognizer) { parent.onTap() }
+
+        @objc func handleSwipe(_ g: UISwipeGestureRecognizer) {
+            parent.onSwipe(g.direction == .left ? 1 : -1)
+        }
+
+        /// THE PAN IS WHY SWIPING DID NOTHING, and this one line is the fix.
+        ///
+        /// It was live at every zoom level, so a one-finger drag across the picture was always
+        /// claimed by it — and at 1x `clampOffset` pins the offset to zero, so the picture could not
+        /// move either. The drag was swallowed and then thrown away: you touched the screen and
+        /// nothing happened, exactly as reported.
+        ///
+        /// A pan only has work to do when the picture is bigger than its frame. Below that it does
+        /// not begin at all, and the swipe is free to recognise. Zoomed in, the pan begins as before
+        /// and the swipe stays out of the way, which is right — a drag on a zoomed photo is a pan.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard g === pan else { return true }
+            // Zooming out from 1x and moving in the SAME motion still works: while the pinch is
+            // live the pan is let through regardless, or that one gesture would lose its second half.
+            if let p = pinch, p.state == .began || p.state == .changed { return true }
+            return curScale > 1.01
+        }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool {
             !(g is UITapGestureRecognizer || o is UITapGestureRecognizer)
