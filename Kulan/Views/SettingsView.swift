@@ -331,6 +331,7 @@ struct AccountSettingsView: View {
     @State private var connecting: AuthService.SignInMethod?
     @State private var connectError: String?
     @State private var connectedTick = 0        // bump to re-read providerData after a link
+    @State private var disconnecting: AuthService.SignInMethod?   // → the verify-then-remove screen
     @State private var showConnectEmail = false
 
     var body: some View {
@@ -402,6 +403,12 @@ struct AccountSettingsView: View {
         .navigationDestination(isPresented: $showDelete) {
             DeleteAccountView { dismiss(); onSignOut() }
         }
+        // Removing a login is a page, not an alert, for the same reason deleting the account is:
+        // an alert cannot run a provider's re-authentication sheet, and skipping that step is what
+        // would turn this feature into a bigger hole than the one it closes.
+        .navigationDestination(item: $disconnecting) { method in
+            DisconnectSignInView(method: method) { connectedTick += 1 }
+        }
     }
 
     // Gather profile + all chats (decrypted) into a text file, then present the share sheet.
@@ -420,8 +427,8 @@ struct AccountSettingsView: View {
             Text("Sign-in Methods")
         } footer: {
             Text(AuthService.shared.isAnonymousSession
-                 ? "You're signed in as a guest. Connect a login so you can get back into this account on another phone — your chats stay exactly as they are."
-                 : "Connect more than one so you can always get back in. They all open this same account.")
+                 ? "You're signed in as a guest. Connect a login so you can get back into this account on another phone, and your chats stay exactly as they are."
+                 : "Connect more than one so you can always get back in. They all open this same account. You can remove one as long as another is left, and we'll ask you to prove it's you first.")
         }
     }
 
@@ -440,9 +447,24 @@ struct AccountSettingsView: View {
             if connecting == method {
                 ProgressView()
             } else if identifier != nil {
-                // Connected: a quiet checkmark, not a button (Firebase needs at least one method,
-                // and unlinking the last one would lock the account out — so no disconnect here).
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                // CONNECTED. This used to be a checkmark and nothing else, on the reasoning that
+                // Firebase needs at least one method and unlinking the last one would lock the
+                // account out. That reasoning was wrong: the answer to "removing the last one is
+                // dangerous" is to refuse the LAST one, not to refuse all of them. Leaving it out
+                // meant somebody who attached their own Google to your account could never be
+                // removed by anybody.
+                //
+                // So: Remove appears only when another door is connected, and it goes through a
+                // verification screen. The checkmark stays when this is the only way in, because
+                // then there is genuinely nothing to offer.
+                if AuthService.shared.connectedMethods.count > 1 {
+                    Button("Remove") { disconnecting = method }
+                        .font(.subheadline.weight(.semibold))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                } else {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                }
             } else {
                 connectButton(method)
             }

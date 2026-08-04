@@ -366,6 +366,35 @@ final class AuthService: NSObject {
 
     func isConnected(_ method: SignInMethod) -> Bool { connectedIdentifier(_: method) != nil }
 
+    /// Every door currently attached to this account.
+    var connectedMethods: [SignInMethod] { SignInMethod.allCases.filter { isConnected($0) } }
+
+    /// Take a sign-in method OFF this account.
+    ///
+    /// This exists because connecting one was a one-way door, and that was the sharpest hole in the
+    /// app: somebody holding your unlocked phone could attach THEIR Google account to YOUR Fariin
+    /// and sign in as you forever, with nothing anywhere to undo it. A password you can change. That
+    /// you could not.
+    ///
+    /// Two guards, and the second one is the one that matters:
+    ///
+    /// 1. NEVER the last method. Firebase will happily unlink it and leave an account with no way
+    ///    in at all.
+    /// 2. The CALLER must have re-verified. Without this, adding disconnect would have opened a
+    ///    worse hole than the one it closes: the same person holding your phone connects their
+    ///    Google, unlinks your Apple, and now the account is theirs and you are locked out. The
+    ///    caller is responsible for re-verifying immediately before calling — see the note in
+    ///    DeleteAccountView.start() about why freshness is a different question from ownership.
+    func disconnect(_ method: SignInMethod) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        guard isConnected(method) else { throw AuthFlowError.notConnected }
+        guard connectedMethods.count > 1 else { throw AuthFlowError.lastSignInMethod }
+        _ = try await user.unlink(fromProvider: method.providerId)
+        // providerData is read straight off the cached user, and every screen showing what is
+        // connected reads it — without this the removed row stays on screen until the next launch.
+        try? await user.reload()
+    }
+
     /// True while the session is a legacy anonymous one — connecting a real method upgrades it
     /// in place, keeping the same uid (and therefore every chat, key and story).
     var isAnonymousSession: Bool { Auth.auth().currentUser?.isAnonymous ?? false }
@@ -531,6 +560,7 @@ enum AuthFlowError: LocalizedError {
     case appleFailed, googleFailed, emailTaken, emailTakenWrongPassword
     case notSignedIn, alreadyConnected, alreadyLinkedElsewhere
     case noAccount, accountExists
+    case notConnected, lastSignInMethod
 
     var errorDescription: String? {
         switch self {
@@ -547,6 +577,9 @@ enum AuthFlowError: LocalizedError {
             return "You haven't signed up with this account before. Go back and choose Sign Up to continue."
         case .accountExists:
             return "This account already has a Fariin account. Go back and choose Log In instead."
+        case .notConnected: return "That login isn't connected to this account."
+        case .lastSignInMethod:
+            return "This is the only way into your account. Connect another login first, then you can remove this one."
         }
     }
 }
