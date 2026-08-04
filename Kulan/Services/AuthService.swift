@@ -393,6 +393,20 @@ final class AuthService: NSObject {
         // providerData is read straight off the cached user, and every screen showing what is
         // connected reads it — without this the removed row stays on screen until the next launch.
         try? await user.reload()
+        // AFTER the reload, so the mail's "ways in now" line is read from the truth rather than
+        // from a cached list that still contains the method we just removed.
+        reportSignInMethodChange(providerId: method.providerId, added: false)
+    }
+
+    /// Fire-and-forget, exactly like `reportLogin`. An email failing must never fail the change it
+    /// was only reporting on — and the function itself is written not to throw for the same reason.
+    private func reportSignInMethodChange(providerId: String, added: Bool) {
+        guard let uid, !uid.isEmpty, !isAnonymousSession else { return }
+        Task.detached {
+            _ = try? await Functions.functions(region: "me-central1")
+                .httpsCallable("notifySignInMethodChanged")
+                .call(["provider": providerId, "added": added])
+        }
     }
 
     /// True while the session is a legacy anonymous one — connecting a real method upgrades it
@@ -407,6 +421,9 @@ final class AuthService: NSObject {
         do {
             let result = try await user.link(with: credential)
             uid = result.user.uid
+            // Tell the owner of the account, whoever is holding the phone. Attaching a login is how
+            // an account gets taken over quietly, so it must never be quiet.
+            reportSignInMethodChange(providerId: credential.provider, added: true)
         } catch let e as NSError where e.code == AuthErrorCode.credentialAlreadyInUse.rawValue
                                     || e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
             // That identity belongs to a DIFFERENT Fariin account. We must not silently switch
