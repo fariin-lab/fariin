@@ -226,10 +226,50 @@ struct OnboardingView: View {
     private enum Field { case name, handle }
     @FocusState private var focus: Field?
 
-    // Live username validity (client-side only — the taken/not check runs on Continue).
-    private var handleValid: Bool { ChatService.isValidHandle(ChatService.sanitizeHandle(handle)) }
+    /// WHAT THE TICK MEANS. It used to mean "the format is legal", and it was drawn green, so a
+    /// username somebody else already owns showed a confident green tick — and only after tapping
+    /// Continue did the screen say "That username is taken". The tick promised something it had
+    /// never checked.
+    ///
+    /// ON THE PRIVACY OF ASKING. Checking live means asking the server "does @x exist" as somebody
+    /// types, which is an enumeration oracle if handle existence is a secret. Here it is not, and
+    /// that was verified rather than assumed: ChatService.findByHandle already lets any signed-in
+    /// person resolve any handle, which is how @search, the QR scanner and invite links work, and
+    /// the users document carries no email and no phone — name, handle, about, photo, public key,
+    /// privacy settings. So resolving a handle reveals a profile and nothing behind it, exactly as
+    /// on Instagram, X or Telegram where usernames are public by design. This adds no new door.
+    /// It does make scraping the namespace easier, and that exposure already exists via @search;
+    /// real rate limiting would mean routing every lookup through a Cloud Function and paying a
+    /// round trip on all of them. Worth writing down, not worth doing before launch.
+    enum HandleState: Equatable { case empty, invalid, checking, free, taken }
+
+    @State private var handleState: HandleState = .empty
+    @State private var checkTask: Task<Void, Never>?
+
     private var canContinue: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty && handleValid && !saving
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && handleState == .free && !saving
+    }
+
+    /// Debounced so it is one read per PAUSE rather than one per keystroke. The previous task is
+    /// cancelled on every change, so a fast typist produces exactly one query, not eight.
+    private func scheduleHandleCheck() {
+        checkTask?.cancel()
+        let h = ChatService.sanitizeHandle(handle)
+        guard !h.isEmpty else { handleState = .empty; return }
+        guard ChatService.isValidHandle(h) else { handleState = .invalid; return }
+
+        handleState = .checking
+        checkTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            let found = await ChatService.findByHandle(h)
+            guard !Task.isCancelled else { return }
+            // Still typing? A late answer about an older string must not overwrite a newer one.
+            guard ChatService.sanitizeHandle(handle) == h else { return }
+            // Your own handle is not "taken" from your point of view.
+            let mine = found?.id == AuthService.shared.uid
+            await MainActor.run { handleState = (found == nil || mine) ? .free : .taken }
+        }
     }
 
     var body: some View {
@@ -267,11 +307,23 @@ struct OnboardingView: View {
                         }
 
                         field("USERNAME", accessory: {
-                            // Inline validity tick, so the rules are felt rather than read.
-                            if !handle.isEmpty {
-                                Image(systemName: handleValid ? "checkmark.circle.fill" : "circle.dashed")
-                                    .foregroundStyle(handleValid ? Color.green : Color.secondary)
-                                    .font(.system(size: 17))
+                            // The tick now means AVAILABLE, which is what everybody already thought
+                            // it meant. Monochrome: this flow has no colour in it but the avatar,
+                            // and the shapes carry the meaning without needing any.
+                            switch handleState {
+                            case .empty:
+                                EmptyView()
+                            case .invalid:
+                                Image(systemName: "circle.dashed")
+                                    .foregroundStyle(.secondary).font(.system(size: 17))
+                            case .checking:
+                                ProgressView().controlSize(.small)
+                            case .free:
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.primary).font(.system(size: 17))
+                            case .taken:
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.red).font(.system(size: 17))
                             }
                         }) {
                             HStack(spacing: 2) {
@@ -284,13 +336,31 @@ struct OnboardingView: View {
                                     .onChange(of: handle) { _, v in
                                         let clean = ChatService.sanitizeHandle(v)
                                         if clean != v { handle = clean }
+                                        scheduleHandleCheck()
                                     }
                             }
                         }
 
-                        Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
-                            .font(.caption).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // ONE line that answers whatever the current question is, rather than a
+                        // fixed rule plus a separate error appearing somewhere else after a tap.
+                        Group {
+                            switch handleState {
+                            case .taken:
+                                Text("@\(ChatService.sanitizeHandle(handle)) is taken. Try adding a number.")
+                                    .foregroundStyle(.red)
+                            case .free:
+                                Text("@\(ChatService.sanitizeHandle(handle)) is available.")
+                                    .foregroundStyle(.primary)
+                            case .checking:
+                                Text("Checking…").foregroundStyle(.secondary)
+                            case .empty, .invalid:
+                                Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.caption)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .animation(.easeInOut(duration: 0.15), value: handleState)
                     }
                     .padding(.top, 26)
 
@@ -383,8 +453,13 @@ struct OnboardingView: View {
         }
         saving = true; error = nil
         do {
+            // KEPT even though the field now checks live, and it is not redundant. The live check
+            // answers a question about a moment that has already passed: somebody else can claim
+            // the same name in the seconds between the tick appearing and Continue being pressed.
+            // This is the one that decides, and it runs against the server at the instant of the
+            // write. The live version is for the eyes; this is for correctness.
             if let existing = await ChatService.findByHandle(h), existing.id != AuthService.shared.uid {
-                error = "That username is taken"; saving = false; return
+                error = "That username was just taken. Try another."; saving = false; return
             }
             try await ProfileStore.shared.updateProfile(name: n, handle: h)
             await Crypto.shared.publishPublicKey()   // doc now exists — ensure key is live
