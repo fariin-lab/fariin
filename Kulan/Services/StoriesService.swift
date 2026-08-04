@@ -249,6 +249,7 @@ final class StoriesService {
     // frame the editor already generated; it drives the uploading ring/placeholder immediately
     // while the transcode + upload run in the background.
     @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false,
+                                             burn: StoryBurnIn? = nil,
                                              trim: ClosedRange<Double>? = nil, caption: String = "",
                                              excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
@@ -266,7 +267,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, caption: caption, excluded: excluded, included: included, everyone: everyone) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, caption: caption, excluded: excluded, included: included, everyone: everyone, burn: burn) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -290,7 +291,7 @@ final class StoriesService {
     /// still will not go the error says which — the segments already posted stay posted, because
     /// making somebody re-upload four minutes because the fifth chunk timed out is the opposite of
     /// what this feature is for.
-    func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil,
+    func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil, burn: StoryBurnIn? = nil,
                         caption: String = "", expiryHours: Double = 24,
                         excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) async throws {
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
@@ -306,7 +307,7 @@ final class StoriesService {
                             duration: CMTime(seconds: total, preferredTimescale: 600))
             }
             // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
-            try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted,
+            try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
                                        expiryHours: expiryHours, excluded: excluded,
                                        included: included, everyone: everyone)
             return
@@ -325,7 +326,7 @@ final class StoriesService {
             var lastError: Error?
             for attempt in 0..<3 {
                 do {
-                    try await postVideoSegment(videoURL: videoURL, range: range,
+                    try await postVideoSegment(videoURL: videoURL, range: range, burn: burn,
                                                caption: i == 0 ? caption : "", muted: muted,
                                                expiryHours: expiryHours, excluded: excluded,
                                                included: included, everyone: everyone)
@@ -351,7 +352,7 @@ final class StoriesService {
     // Post ONE story from a video: transcode to 720p H.264 (optionally just the slice `range`),
     // upload the poster thumb + the mp4, then fill both URLs atomically (the repository skips docs
     // with an empty mediaUrl, so nobody sees a half-uploaded story).
-    private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool,
+    private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool, burn: StoryBurnIn? = nil,
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
                                   everyone: Bool) async throws {
         let me = uid
@@ -359,7 +360,12 @@ final class StoriesService {
         try Task.checkCancellation()
 
         // Transcode BEFORE creating the doc — a failed/cancelled transcode leaves zero server state.
-        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, range: range) else {
+        // The editor's text, pen and crop ride the SAME export the trim and the 90-second split
+        // already use, so a long edited clip is burned in once per segment rather than re-encoded a
+        // second time on top of itself.
+        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, range: range,
+                                                           overlay: burn?.overlay, cropRect: burn?.cropRect,
+                                                           canvasAspect: burn?.canvasAspect) else {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }

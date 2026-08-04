@@ -81,11 +81,19 @@ private extension CacheManager {
         let backgroundQueue = DispatchQueue.global(qos: .background)
 
         backgroundQueue.async { [weak self] in
-            let session = URLSession(
-                configuration: .default,
-                delegate: self,
-                delegateQueue: nil
-            )
+            // THE SHARED SESSION, WITH NO DELEGATE OF OUR OWN. This used to build a fresh URLSession
+            // per download and hand it a delegate whose entire job was
+            //     URLCredential(trust: challenge.protectionSpace.serverTrust!)
+            // and that force unwrap is the build 454 crash. `serverTrust` is nil for every challenge
+            // that is not a server-trust one — a proxy, a captive portal, a basic-auth or
+            // client-certificate challenge — so on those networks the app died in a Swift trap
+            // (EXC_BREAKPOINT) the moment a story video started downloading.
+            //
+            // It was also accepting ANY certificate without evaluating it, which is a
+            // man-in-the-middle hole rather than a feature. Deleting it restores URLSession's own
+            // TLS validation, which is correct for the plain HTTPS these files come from — and each
+            // download no longer leaks a session that is never invalidated.
+            let session = URLSession.shared
             let task = session.downloadTask(with: url) { [weak self] (tempLocalUrl, response, error) in
                 guard let self else { return }
 
@@ -136,16 +144,6 @@ private extension CacheManager {
 }
 
 
-extension CacheManager: URLSessionDelegate {
-    func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (
-            URLSession.AuthChallengeDisposition,
-            URLCredential?
-        ) -> Void
-    ) {
-        let urlCredential = URLCredential(trust: challenge.protectionSpace.serverTrust!)
-        completionHandler(.useCredential, urlCredential)
-    }
-}
+// The URLSessionDelegate that used to live here is gone on purpose — see downloadAndCacheVideo.
+// It force-unwrapped `serverTrust`, which crashed the app on any non-server-trust challenge, and it
+// accepted every certificate it was shown. URLSession's default handling is both safer and correct.

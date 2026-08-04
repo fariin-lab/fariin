@@ -24,6 +24,26 @@ struct StoryVideoPayload {
     let thumbnail: Data
     var muted: Bool = false
     var trim: ClosedRange<Double>? = nil
+    /// What the editor's tools did to this clip, if anything. nil = a plain video, which still takes
+    /// the original untouched export path.
+    var burn: StoryBurnIn? = nil
+}
+
+/// The story editor's Aa, Crop and Pen, as they apply to a VIDEO.
+///
+/// A photo can have its edits flattened into a picture. A video cannot, so they travel as far as the
+/// export and are composited into the frames there — one transparent image for everything drawn, and
+/// a rectangle for what was kept. See `VideoTranscoder.burnIn`.
+struct StoryBurnIn {
+    /// Text and pen strokes, rendered once at the size of the canvas they were placed on.
+    var overlay: UIImage? = nil
+    /// The crop, normalised (0-1) inside that same canvas.
+    var cropRect: CGRect? = nil
+    /// The canvas's own width/height, so the export can rebuild the exact frame he drew against.
+    var canvasAspect: CGFloat? = nil
+
+    /// Nothing to do — so the caller can hand back nil and keep the untouched path.
+    var isEmpty: Bool { overlay == nil && cropRect == nil }
 }
 
 // "Share Story" audience sheet: choose who sees the story, then Post.
@@ -195,6 +215,7 @@ struct ShareStorySheet: View {
                 videoURL: video.url,
                 thumbnail: video.thumbnail,
                 muted: video.muted,
+                burn: video.burn,
                 trim: video.trim,
                 caption: caption,
                 excluded: mode == 1 ? excluded : [],
@@ -219,7 +240,7 @@ struct ShareStorySheet: View {
         for extra in extras {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
-                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, trim: v.trim, caption: "",
+                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim, caption: "",
                     excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
                     everyone: mode == 3)
             } else if let p = extra.photo {

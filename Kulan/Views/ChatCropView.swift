@@ -11,6 +11,10 @@ struct ChatCropView: View {
     var inline: Bool = false              // true = presented INLINE (fade) → close via onClose, NOT dismiss
     var onClose: () -> Void = {}          // inline close (dismiss() would drop the whole editor to the chat)
     var onDone: (UIImage) -> Void
+    /// The same crop, as a NORMALISED rectangle (0-1) of the source. A photo can simply be handed the
+    /// cropped picture; a video cannot be cropped into an image, so it needs the rectangle instead and
+    /// applies it during its export. Optional, so nothing that only wants the picture has to care.
+    var onRect: ((CGRect) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var img: UIImage
@@ -21,8 +25,10 @@ struct ChatCropView: View {
     @State private var aspect: CGFloat? = nil        // locked w/h, nil = free
     @State private var edited = false                // any change made → show Reset
 
-    init(image: UIImage, inline: Bool = false, onClose: @escaping () -> Void = {}, onDone: @escaping (UIImage) -> Void) {
-        self.image = image; self.inline = inline; self.onClose = onClose; self.onDone = onDone
+    init(image: UIImage, inline: Bool = false, onClose: @escaping () -> Void = {},
+         onRect: ((CGRect) -> Void)? = nil, onDone: @escaping (UIImage) -> Void) {
+        self.image = image; self.inline = inline; self.onClose = onClose
+        self.onRect = onRect; self.onDone = onDone
         _img = State(initialValue: Self.normalized(image))
     }
 
@@ -272,6 +278,8 @@ struct ChatCropView: View {
         let px = CGRect(x: inImage.minX * img.scale, y: inImage.minY * img.scale,
                         width: inImage.width * img.scale, height: inImage.height * img.scale)
         guard let cg = img.cgImage?.cropping(to: px) else { close(); return }
+        onRect?(CGRect(x: inImage.minX / img.size.width, y: inImage.minY / img.size.height,
+                       width: inImage.width / img.size.width, height: inImage.height / img.size.height))
         onDone(UIImage(cgImage: cg, scale: img.scale, orientation: .up))
         close()
     }

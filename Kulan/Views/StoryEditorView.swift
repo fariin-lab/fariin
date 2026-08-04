@@ -40,6 +40,7 @@ struct StoryEditorView: View {
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
+    @State private var cropRect: CGRect? = nil   // live crop as a rectangle — see DraftItem.cropRect
     // Our own pen palette, the same three controls ChatImageEditor drives PencilKit with. Defaults
     // match it too, so a pen is a pen wherever you pick one up in this app.
     @State private var penHue = 0.01             // 0 = white end of the track; 0.01 = red
@@ -105,6 +106,11 @@ struct StoryEditorView: View {
         // The edits, held BESIDE the picture rather than burnt into it, so switching away and back
         // returns you to exactly what you had, still adjustable (owner 2026-08-04).
         var cropped: UIImage? = nil       // the interactive crop's result, re-derivable from `image`
+        /// THE SAME CROP, AS A RECTANGLE (normalised 0-1). A photo can carry its crop as a cropped
+        /// picture; a video has no picture to crop, so it needs the rectangle and applies it during
+        /// the export. Both are kept because both are needed: the poster in the strip is the image,
+        /// the frames that get uploaded are the rectangle.
+        var cropRect: CGRect? = nil
         var filterIndex = 0
         var drawing = PKDrawing()
         var overlays: [TextOverlay] = []
@@ -517,7 +523,20 @@ struct StoryEditorView: View {
             // From the CURRENT cropped result when there is one, so re-opening crop refines instead
             // of resetting to the original.
             ChatCropView(image: croppedSource ?? current, inline: true,
-                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
+                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } },
+                         onRect: { r in
+                             // Re-cropping refines the crop you already have, so the new rectangle is
+                             // read INSIDE the old one rather than against the original — otherwise a
+                             // second pass would jump back out to the full frame and lose the first.
+                             if let old = cropRect {
+                                 cropRect = CGRect(x: old.minX + r.minX * old.width,
+                                                   y: old.minY + r.minY * old.height,
+                                                   width: r.width * old.width,
+                                                   height: r.height * old.height)
+                             } else {
+                                 cropRect = r
+                             }
+                         }) { cropped in
                 croppedSource = cropped
                 recomputeEdited()
             }
@@ -652,6 +671,7 @@ struct StoryEditorView: View {
     @MainActor private func stashCurrent() {
         guard items.indices.contains(index) else { return }
         items[index].cropped = croppedSource
+        items[index].cropRect = cropRect
         items[index].filterIndex = filterIndex
         items[index].drawing = drawing
         items[index].overlays = overlays
@@ -664,6 +684,7 @@ struct StoryEditorView: View {
         guard items.indices.contains(index) else { return }
         let it = items[index]
         croppedSource = it.cropped
+        cropRect = it.cropRect
         filterIndex = it.filterIndex
         drawing = it.drawing
         overlays = it.overlays
@@ -698,16 +719,20 @@ struct StoryEditorView: View {
         // being able to un-crop after switching costs: the work moves from "on the way out of an
         // item" to "once, when you actually post". `flatten` composes from the tool state rather
         // than from what is on screen, so restoring an item is enough to render it correctly.
-        var rendered: [(data: Data, video: URL?)] = []
+        var rendered: [(data: Data, video: URL?, burn: StoryBurnIn?)] = []
         for i in items.indices {
-            if let u = items[i].videoURL {
-                // A video's frames are not editable here; its poster is what the strip showed.
-                rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u))
-                continue
-            }
             index = i
             restoreCurrent()
-            rendered.append((await flatten(), nil))
+            if let u = items[i].videoURL {
+                // A VIDEO'S EDITS ARE NOT DISCARDED ANY MORE (owner 2026-08-04). Aa, crop and pen were
+                // offered on a video and then silently dropped at post time, which is worse than not
+                // offering them. They cannot be flattened into a picture, so they travel as far as the
+                // export and are composited into the frames there — see VideoTranscoder.burnIn.
+                let burn = await videoBurnIn()
+                rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u, burn))
+                continue
+            }
+            rendered.append((await flatten(), nil, nil))
         }
         index = keep
         restoreCurrent()
@@ -719,7 +744,7 @@ struct StoryEditorView: View {
         var extras: [StoryExtra] = []
         for r in rendered.dropFirst() {
             if let u = r.video {
-                extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data)))
+                extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data, burn: r.burn)))
             } else {
                 extras.append(StoryExtra(photo: r.data))
             }
@@ -728,6 +753,43 @@ struct StoryEditorView: View {
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data, caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
         pendingExtras = extras
+    }
+
+    /// Everything drawn on top of a VIDEO, in one transparent image the size of the canvas it was
+    /// drawn on, plus the crop rectangle.
+    ///
+    /// Deliberately the same builder and the same transforms as `flatten` uses for a photo, so the two
+    /// cannot drift apart and have text land in one place on a picture and another on a clip. What it
+    /// does NOT draw is the picture itself — the frames are the picture, and painting the poster in
+    /// would freeze the first frame over the whole video.
+    @MainActor private func videoBurnIn() async -> StoryBurnIn? {
+        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty
+        guard hasArt || cropRect != nil else { return nil }
+        let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+
+        var art: UIImage?
+        if hasArt {
+            let composed = ZStack(alignment: .bottom) {
+                Color.clear
+                if !drawing.bounds.isEmpty {
+                    Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale))
+                        .resizable()
+                }
+                ForEach(overlays) { o in
+                    storyStyledText(o, maxWidth: size.width * 0.9)
+                        .scaleEffect(o.scale)
+                        .rotationEffect(o.rotation)
+                        .position(o.center)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            let renderer = ImageRenderer(content: composed)
+            renderer.scale = UIScreen.main.scale
+            renderer.isOpaque = false          // black here would hide the whole video behind it
+            art = renderer.uiImage
+        }
+        return StoryBurnIn(overlay: art, cropRect: cropRect,
+                           canvasAspect: size.height > 0 ? size.width / size.height : nil)
     }
 
     @MainActor private func flatten() async -> Data {
