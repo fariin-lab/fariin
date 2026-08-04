@@ -4,6 +4,15 @@ import UIKit
 // Flattened story image awaiting the audience sheet (used by both the photo editor + text composer).
 struct StoryShareData: Identifiable { let id = UUID(); let data: Data; var caption: String = "" }
 
+/// One more item posted behind the first, in the order the user arranged them. The audience sheet is
+/// answered ONCE and every item inherits that answer — being asked who can see it seven times for one
+/// post is the thing this avoids.
+struct StoryExtra: Identifiable {
+    let id = UUID()
+    var photo: Data? = nil
+    var video: StoryVideoPayload? = nil
+}
+
 // A picked video awaiting the audience sheet: the source file + the poster frame the editor
 // already generated (drives the uploading ring immediately; the transcode runs in the background).
 // muted = the editor's speaker toggle → the upload strips the audio track (real, as standard messengers do).
@@ -23,6 +32,8 @@ struct ShareStorySheet: View {
     let image: Data
     var caption: String = ""
     var video: StoryVideoPayload? = nil   // set → posts a video story instead of the photo
+    /// Everything after the first item, in order. They post behind it and share this audience.
+    var extras: [StoryExtra] = []
     var onPosted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
@@ -198,6 +209,25 @@ struct ShareStorySheet: View {
                 included: mode == 2 ? included : [],
                 everyone: mode == 3
             )
+        }
+        // The rest, in order, behind the first. The background posters already CHAIN rather than
+        // cancel each other, so this queues instead of racing — which is what keeps a multi-item
+        // post in the order the user arranged it.
+        //
+        // NO CAPTION ON THE EXTRAS: it belongs to the post, and repeating it on every item reads as
+        // a stutter — the same rule the 90-second split follows.
+        for extra in extras {
+            if let v = extra.video {
+                StoriesService.shared.postVideoStoryBackground(
+                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, trim: v.trim, caption: "",
+                    excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
+                    everyone: mode == 3)
+            } else if let p = extra.photo {
+                StoriesService.shared.postStoryBackground(
+                    image: p, caption: "",
+                    excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
+                    everyone: mode == 3)
+            }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
     }

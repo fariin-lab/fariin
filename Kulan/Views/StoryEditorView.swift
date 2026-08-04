@@ -2,6 +2,8 @@ import SwiftUI
 import PencilKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import AVFoundation
+import PhotosUI
 
 // Photo-story editor — matches the in-chat photo editor (image 212): the picked photo fits on a
 // black canvas; X top-left; a caption bar + @ and a crop / draw / adjust / HD tool row at the
@@ -63,6 +65,7 @@ struct StoryEditorView: View {
     @State private var posting = false
     @State private var postError = false
     @State private var pendingShare: StoryShareData?
+    @State private var pendingExtras: [StoryExtra] = []
     @FocusState private var captionFocused: Bool
     @StateObject private var keyboard = KeyboardWatcher()   // manual keyboard rise (editor ignores the keyboard safe area)
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
@@ -84,10 +87,37 @@ struct StoryEditorView: View {
         ("Original", nil), ("Vivid", "CIPhotoEffectChrome"), ("Mono", "CIPhotoEffectMono"),
         ("Fade", "CIPhotoEffectFade"), ("Noir", "CIPhotoEffectNoir"),
     ]
-    private var edited: UIImage { editedCache ?? source }
+    // MARK: - More than one item
+
+    /// One thing queued for this post. A video carries its file; its `image` is the poster, which is
+    /// what the thumbnail strip and the canvas show — a video's own bytes decode to nothing as an
+    /// image, and every strip in this app already learned that the hard way.
+    struct DraftItem: Identifiable {
+        let id = UUID()
+        var image: UIImage
+        var videoURL: URL? = nil
+        var duration: Double = 0
+        var isVideo: Bool { videoURL != nil }
+    }
+
+    /// Everything in this post, in order, with `index` pointing at the one on the canvas.
+    ///
+    /// SWITCHING BAKES. The item you are leaving keeps its crop, filter, drawing and text by having
+    /// them flattened into its image, and the tools reset for the one you arrive at. Per-item live
+    /// edit state would mean five parallel copies of every tool's state on a screen that is already
+    /// device-verified, and the risk of that is not worth being able to un-crop something you left.
+    @State private var items: [DraftItem] = []
+    @State private var index = 0
+    @State private var addPick: [PhotosPickerItem] = []
+    @State private var showAddPicker = false
+
+    private var current: UIImage { items.indices.contains(index) ? items[index].image : source }
+    private var currentIsVideo: Bool { items.indices.contains(index) && items[index].isVideo }
+
+    private var edited: UIImage { editedCache ?? current }
     private func recomputeEdited() {
         // Filter applies on top of the (interactively) cropped source.
-        editedCache = Self.apply(Self.filters[filterIndex].ci, to: croppedSource ?? source)
+        editedCache = Self.apply(Self.filters[filterIndex].ci, to: croppedSource ?? current)
         updateIconContrast()   // re-sample brightness so the controls stay readable on this photo
     }
 
@@ -279,7 +309,7 @@ struct StoryEditorView: View {
                 cropOverlay
             }
             .coordinateSpace(name: "canvas")
-            .onAppear { canvasSize = geo.size; recomputeEdited() }
+            .onAppear { canvasSize = geo.size; if items.isEmpty { items = [DraftItem(image: source)] }; recomputeEdited() }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .overlay {
@@ -299,20 +329,112 @@ struct StoryEditorView: View {
         .ignoresSafeArea(.keyboard)
         .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
+        // Images AND videos, because the + offers both. A picked video joins the post with its own
+        // poster frame; its frames are not editable here, which is why bakeCurrent leaves it alone.
+        .photosPicker(isPresented: $showAddPicker, selection: $addPick, maxSelectionCount: 9,
+                      matching: .any(of: [.images, .videos]))
+        .onChange(of: addPick) { _, picks in
+            guard !picks.isEmpty else { return }
+            Task {
+                await bakeCurrent()
+                for p in picks {
+                    if let movie = try? await p.loadTransferable(type: PickedMovie.self) {
+                        let asset = AVURLAsset(url: movie.url)
+                        let dur = (try? await asset.load(.duration).seconds) ?? 0
+                        let gen = AVAssetImageGenerator(asset: asset)
+                        gen.appliesPreferredTrackTransform = true
+                        gen.maximumSize = CGSize(width: 1200, height: 1200)
+                        let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
+                        if let cg = try? await gen.image(at: t).image {
+                            await MainActor.run {
+                                items.append(DraftItem(image: UIImage(cgImage: cg), videoURL: movie.url, duration: dur))
+                            }
+                        }
+                    } else if let d = try? await p.loadTransferable(type: Data.self), let ui = UIImage(data: d) {
+                        await MainActor.run { items.append(DraftItem(image: ui)) }
+                    }
+                }
+                await MainActor.run { addPick = []; index = max(0, items.count - 1); recomputeEdited() }
+            }
+        }
         .sheet(item: $pendingShare) { s in
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
             // flows get the same compact fitted sheet.
-            ShareStorySheet(image: s.data, caption: s.caption, onPosted: { onPosted(); dismiss() })
+            ShareStorySheet(image: s.data, caption: s.caption, extras: pendingExtras,
+                            onPosted: { onPosted(); dismiss() })
         }
         .toolbar(.hidden, for: .navigationBar)
     }
 
+    /// The items in this post, bottom right above the caption bar, exactly as he drew them: the one
+    /// on screen has a blue frame and an X, the others are plain and switch to when tapped.
+    ///
+    /// Only when there is more than one. A single thumbnail of the picture already filling the
+    /// screen is a picture of what you are looking at.
+    @ViewBuilder private var itemStrip: some View {
+        if items.count > 1 {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, it in
+                    Button { select(i) } label: {
+                        Image(uiImage: it.image)
+                            .resizable().scaledToFill()
+                            .frame(width: 52, height: 66)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(alignment: .bottomLeading) {
+                                if it.isVideo {
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                                        .padding(4)
+                                }
+                            }
+                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(i == index ? Color(.systemBlue) : .clear, lineWidth: 2))
+                            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(alignment: .topTrailing) {
+                        // The X removes, and only on the one you are on — an X on every thumbnail
+                        // turns a row of pictures into a row of buttons.
+                        if i == index {
+                            Button { remove(i) } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 17))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .black.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                            .offset(x: 6, y: -6)
+                        }
+                    }
+                }
+            }
+            .padding(.trailing, 4)
+            .padding(.bottom, 8)
+        }
+    }
+
+    /// Add more pictures or videos to this post. Inside the caption bar on the left, where he put it.
+    private var addMoreButton: some View {
+        Button { showAddPicker = true } label: {
+            Image(systemName: "plus.square.on.square")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(StoryPressStyle())
+        .accessibilityLabel("Add more photos or videos")
+    }
+
     private var bottomBar: some View {
         VStack(spacing: 12) {   // user spec: 12px between the caption bar and the tool row
+            if !captionFocused { itemStrip }
             // Caption bar — dark pill. While typing, Send sits beside it so you can post without
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 10) {
+                    addMoreButton
                     // Grows with the text (up to 5 lines) instead of staying a single truncated line.
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
@@ -350,6 +472,10 @@ struct StoryEditorView: View {
                             withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                         }
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
+                        // The fourth tool in his drawing: add another picture or video to this post.
+                        // Same action as the + in the caption bar, because reaching for either and
+                        // getting something different is worse than having it twice.
+                        capsuleTool("plus.square.on.square", active: false) { showAddPicker = true }
                     }
                     .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
                     .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
@@ -378,7 +504,7 @@ struct StoryEditorView: View {
         if showCrop {
             // From the CURRENT cropped result when there is one, so re-opening crop refines instead
             // of resetting to the original.
-            ChatCropView(image: croppedSource ?? source, inline: true,
+            ChatCropView(image: croppedSource ?? current, inline: true,
                          onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
                 croppedSource = cropped
                 recomputeEdited()
@@ -506,15 +632,64 @@ struct StoryEditorView: View {
         }
     }
 
+    // MARK: - Items
+
+    /// Flatten what is on the canvas back into the item it belongs to, then clear the tools. Called
+    /// before leaving an item and before posting, so an edit is never lost by switching away.
+    @MainActor private func bakeCurrent() async {
+        guard items.indices.contains(index) else { return }
+        // A video's frames cannot be edited here, so its poster is left exactly as it was.
+        if !items[index].isVideo {
+            let data = await flatten()
+            if let img = UIImage(data: data) { items[index].image = img }
+        }
+        croppedSource = nil
+        drawing = PKDrawing()
+        overlays = []
+        filterIndex = 0
+        photoZoom = 1; photoOffset = .zero
+        recomputeEdited()
+    }
+
+    private func select(_ i: Int) {
+        guard i != index, items.indices.contains(i) else { return }
+        Task { await bakeCurrent(); index = i; recomputeEdited() }
+    }
+
+    private func remove(_ i: Int) {
+        guard items.count > 1, items.indices.contains(i) else { return }
+        items.remove(at: i)
+        if index >= items.count { index = items.count - 1 }
+        else if i < index { index -= 1 }
+        recomputeEdited()
+    }
+
     // MARK: - Send
     private func send() async {
         posting = true
-        let data = await flatten()
+        await bakeCurrent()
+        // Everything AFTER the first item rides along as extras; the audience is answered once.
+        let ordered = items
+        let first = ordered.first
+        let data = first.map { it -> Data in
+            it.image.jpegData(compressionQuality: 0.9) ?? Data()
+        } ?? Data()
         posting = false
         guard !data.isEmpty else { postError = true; return }   // never hand off a zero-byte (broken) image
+
+        var extras: [StoryExtra] = []
+        for it in ordered.dropFirst() {
+            if let u = it.videoURL {
+                extras.append(StoryExtra(video: StoryVideoPayload(
+                    url: u, thumbnail: it.image.jpegData(compressionQuality: 0.72) ?? Data())))
+            } else {
+                extras.append(StoryExtra(photo: it.image.jpegData(compressionQuality: 0.9) ?? Data()))
+            }
+        }
         // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data, caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
+        pendingExtras = extras
     }
 
     @MainActor private func flatten() async -> Data {
