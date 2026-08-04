@@ -1059,6 +1059,49 @@ struct ChatsView: View {
         exitSelect()
     }
 
+    // THE BINDINGS AND THE DIALOG BODY LIVE OUT HERE, not inline in the modifier chain.
+    //
+    // `body` stopped compiling — "unable to type-check this expression in reasonable time" — and an
+    // inline `Binding(get:set:)` is one of the most expensive things you can put in a chain that
+    // long, because the compiler has to infer the closure types against every overload of the
+    // modifier. Naming them costs nothing at runtime and hands the type-checker the answer.
+    //
+    // The cascade is worth remembering too: the SECOND error was "cannot find 'call' in scope",
+    // pointing at a property declared at the top of this very file. It was not a real missing
+    // symbol, it was the compiler giving up on the body and losing track of what was in it.
+
+    private var restrictedCallee: Binding<CallService.RestrictedCallee?> {
+        Binding(get: { CallService.shared.restrictedCallee },
+                set: { if $0 == nil { CallService.shared.restrictedCallee = nil } })
+    }
+
+    private var mutePrompted: Binding<Bool> {
+        Binding(get: { pendingMute != nil }, set: { if !$0 { pendingMute = nil } })
+    }
+
+    private var muteTitle: String {
+        guard let c = pendingMute else { return "Mute" }
+        return "Mute \(c.displayName(me))"
+    }
+
+    @ViewBuilder private var muteActions: some View {
+        if let c = pendingMute {
+            if c.isMuted(me, now: Date().timeIntervalSince1970 * 1000) {
+                Button("Unmute") { Task { await ChatService.setMute(c.id, until: 0) }; pendingMute = nil }
+            }
+            Button("Mute for 1 hour") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(1)) }; pendingMute = nil }
+            Button("Mute for 8 hours") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(8)) }; pendingMute = nil }
+            Button("Mute for 1 week") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(168)) }; pendingMute = nil }
+            Button("Mute Always") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(nil)) }; pendingMute = nil }
+        }
+        Button("Cancel", role: .cancel) { pendingMute = nil }
+    }
+
+    private var pendingInvite: Binding<InviteCodeItem?> {
+        Binding(get: { Flags.groupsEnabled ? router.pendingInviteCode.map { InviteCodeItem(code: $0) } : nil },
+                set: { router.pendingInviteCode = $0?.code })
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             Group {
@@ -1252,8 +1295,7 @@ struct ChatsView: View {
             }
             // ONE presentation for every dial site (profile tiles, chat header, Calls list, search,
             // New Call): the gate lives in CallService, so the sheet does too.
-            .sheet(item: Binding(get: { call.restrictedCallee },
-                                 set: { if $0 == nil { CallService.shared.restrictedCallee = nil } })) { r in
+            .sheet(item: restrictedCallee) { r in
                 CantCallSheet(name: r.name, photoUrl: r.photo, onSendMessage: {})
             }
             .sheet(item: $profileGroup) { g in
@@ -1293,28 +1335,12 @@ struct ChatsView: View {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
             }
             // displayName, not name(for:) — the latter shows a MEMBER's name for groups.
-            .confirmationDialog("Mute \(pendingMute?.displayName(me) ?? "")",
-                                isPresented: Binding(get: { pendingMute != nil },
-                                                     set: { if !$0 { pendingMute = nil } }),
-                                titleVisibility: .visible) {
-                if let c = pendingMute {
-                    if c.isMuted(me, now: Date().timeIntervalSince1970 * 1000) {
-                        Button("Unmute") { Task { await ChatService.setMute(c.id, until: 0) }; pendingMute = nil }
-                    }
-                    Button("Mute for 1 hour") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(1)) }; pendingMute = nil }
-                    Button("Mute for 8 hours") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(8)) }; pendingMute = nil }
-                    Button("Mute for 1 week") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(168)) }; pendingMute = nil }
-                    Button("Mute Always") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(nil)) }; pendingMute = nil }
-                }
-                Button("Cancel", role: .cancel) { pendingMute = nil }
-            }
+            .confirmationDialog(muteTitle, isPresented: mutePrompted,
+                                titleVisibility: .visible) { muteActions }
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
             .sheet(isPresented: $showArchived) { ArchivedChatsView() }
             .sheet(isPresented: $showMyQR) { MyQRView() }
-            .sheet(item: Binding(
-                get: { Flags.groupsEnabled ? router.pendingInviteCode.map { InviteCodeItem(code: $0) } : nil },
-                set: { router.pendingInviteCode = $0?.code }
-            )) { item in
+            .sheet(item: pendingInvite) { item in
                 JoinGroupSheet(code: item.code).presentationDetents([.large])
             }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
