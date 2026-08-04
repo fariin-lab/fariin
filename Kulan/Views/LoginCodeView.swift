@@ -96,7 +96,6 @@ struct LoginCodeView: View {
             }
             .padding(.horizontal, 24)
         }
-        .preferredColorScheme(.light)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if address.isEmpty { address = email }

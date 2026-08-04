@@ -4,15 +4,20 @@ import AuthenticationServices
 // The front door. Welcome → Create Account / Log In → Apple / Google / Email →
 // onboarding (name, @username) for new accounts, straight in for returning ones.
 //
-// User decision 2026-07-27, replacing the always-dark call of 2026-07-24: the front
-// door is ALWAYS LIGHT, pinned with `.preferredColorScheme(.light)`, and does NOT
-// follow the phone's setting — LINE's welcome screen was the reference, and the user's
-// rule was "big apps don't use dark or light out front". The decorative greeting wall
-// came out with it ("make it pro like big corporate apps").
-// The colours are still semantic (`AuthPalette`): pinned to light they resolve to white
-// / #F2F2F7 / black, and nothing here can disagree with its neighbour the way four
-// separate hard-coded `.black`s did. The theme returns to the user's choice the moment
-// the flow ends, since only these four screens pin it.
+// THE FRONT DOOR FOLLOWS THE PHONE. Owner decision 2026-08-03, reversing the
+// always-light call of 2026-07-27: "when user system dark or user turn on dark mode
+// in his mobile system must detect".
+//
+// That earlier call never actually took effect. It was written as five
+// `.preferredColorScheme(.light)` calls inside this flow, but KulanApp applies its own
+// `.preferredColorScheme` OUTSIDE RootView, and an outer one overrides whatever
+// descendants ask for. So the pins were dead code and the front door has been following
+// the phone all along — which is how the owner ended up looking at a black Log In screen
+// with a black Apple button on it. The dead pins are gone rather than left to mislead
+// the next person who reads this file.
+//
+// Every colour here is semantic (`AuthPalette`, `Color.primary`), so the flow resolves
+// correctly in both schemes instead of needing a second set of values.
 struct WelcomeView: View {
     var onAuthed: () -> Void
     var onDemo: () -> Void = {}   // Appetize preview: straight to main, no routing
@@ -61,7 +66,6 @@ struct WelcomeView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.light)
     }
 }
 
@@ -90,16 +94,21 @@ extension View {
             .background(Color.primary, in: Capsule())
     }
 
-    /// One of the sign-in doors. Matched to `SignInWithAppleButtonStyle.whiteOutline` —
-    /// same height, same capsule, same white-with-a-thin-outline — so Apple, Google and
-    /// Email read as one set of three instead of three different apps' buttons.
+    /// One of the sign-in doors. Always the opposite of the page: white with dark text on
+    /// a dark phone, black with light text on a light one. It was hard-coded white, which
+    /// is why on a dark phone two white buttons sat next to an Apple button that had
+    /// vanished into the background.
+    ///
+    /// Both ends stay inside the brand rules. Google's guidelines allow a light button
+    /// with dark text and a dark button with light text, and the G keeps its colours in
+    /// either. `Color.primary` and `AuthPalette.page` are exact opposites by definition,
+    /// so contrast cannot drift.
     func authDoorPill() -> some View {
         self.font(.system(size: 17, weight: .medium))
-            .foregroundStyle(.black)               // dark text on white: Google's rule and Apple's
+            .foregroundStyle(AuthPalette.page)
             .labelStyle(.titleAndIcon)
             .frame(maxWidth: .infinity).frame(height: 50)   // 50, not 54: still well over the 44pt tap minimum
-            .background(.white, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.black.opacity(0.5), lineWidth: 1))
+            .background(Color.primary, in: Capsule())
     }
 
     func authSecondaryPill() -> some View {
@@ -144,6 +153,7 @@ struct AuthMethodView: View {
     let mode: Mode
     var onAuthed: () -> Void
 
+    @Environment(\.colorScheme) private var scheme
     @State private var busy = false
     @State private var error: String?
 
@@ -178,19 +188,17 @@ struct AuthMethodView: View {
                         break   // user cancelled the sheet — not an error worth showing
                     }
                 }
-                // SOLID BLACK, NOT `.whiteOutline`. The outline style draws a 1pt border on the button's
-                // own bounds, and the `.clipShape(Capsule())` below slices that border off at the corners
-                // — the broken-looking Apple button the user reported, while Google and Email were fine
-                // because their outline is a capsule stroke we draw ourselves and there is nothing to cut.
+                // SOLID FILL, NOT `.whiteOutline`. The outline style draws a 1pt border on the button's
+                // own bounds and the `.clipShape(Capsule())` below slices it off at the corners, which is
+                // the broken-looking Apple button reported earlier. A solid fill clips to a capsule
+                // perfectly.
                 //
-                // SwiftUI's SignInWithAppleButton exposes no corner radius, so a true capsule WITH the
-                // outline intact would mean rebuilding the button by hand out of ASAuthorizationAppleIDButton
-                // and wiring the authorization controller ourselves. Not worth hand-rolling Apple's own
-                // sign-in button for a stroke. A solid fill clips to a capsule perfectly, and black on a
-                // light background is one of Apple's three approved styles, so this is compliant and
-                // cannot break. The set is slightly less uniform than the reference screens; an Apple
-                // button that looks damaged is worse.
-                .signInWithAppleButtonStyle(.black)
+                // Which solid fill follows the phone. `.black` was hard-coded, so on a dark phone it was
+                // a black button on a black page: only its white label showed, and it read as a bare row
+                // of text between two real buttons. Apple's guidelines name `.black` for light
+                // backgrounds and `.white` for dark ones, so this is the compliant pairing rather than a
+                // workaround.
+                .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
                 .frame(height: 50)              // matches authDoorPill exactly
                 .clipShape(Capsule())
 
@@ -228,7 +236,6 @@ struct AuthMethodView: View {
             }
             .padding(.horizontal, 24)
         }
-        .preferredColorScheme(.light)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -371,7 +378,6 @@ struct EmailAuthView: View {
             }
             .padding(.horizontal, 24)
         }
-        .preferredColorScheme(.light)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { focus = true }
     }

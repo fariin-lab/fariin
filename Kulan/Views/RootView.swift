@@ -337,7 +337,6 @@ struct OnboardingView: View {
             }
             .scrollDismissesKeyboard(.interactively)
         }
-        .preferredColorScheme(.light)
         .onAppear {
             // Apple hands over the person's name exactly once, at first authorization —
             // prefill it so they just pick a username.
