@@ -25,6 +25,19 @@ final class CacheManager: NSObject {
         return raw.replacingOccurrences(of: "/", with: "_")
     }
 
+    /// A CACHED VIDEO COUNTS ONLY IF THERE ARE BYTES IN IT.
+    ///
+    /// Existence used to be the whole test, and that is a permanent wedge: a download killed
+    /// mid-move, or an error body written to disk, leaves a file that EXISTS. Every later open then
+    /// "finds" it, hands AVPlayer something it cannot play, and — because the only thing that ever
+    /// takes the spinner down is playback STARTING — the story wheels forever and never downloads
+    /// again. One bad moment on the network and that story is dead on this device for good.
+    static func isUsableCacheFile(_ file: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let size = attrs[.size] as? Int else { return false }
+        return size > 4096   // no real video is this small; a truncated file or an error page is
+    }
+
     func loadVideo(from url: URL, completion: @escaping (Result<URL>) -> Void) {
         switch createCacheDirectory() {
         case .success(let cacheDirectory):
@@ -32,14 +45,20 @@ final class CacheManager: NSObject {
             let destinationUrl = cacheDirectory.appendingPathComponent(videoFileName)
 
             if fileManager.fileExists(atPath: destinationUrl.path) {
-                DispatchQueue.main.async {
-                    completion(.success(destinationUrl))
+                if Self.isUsableCacheFile(destinationUrl) {
+                    DispatchQueue.main.async {
+                        completion(.success(destinationUrl))
+                    }
+                } else {
+                    // Clear the wedge, then fetch it properly.
+                    try? fileManager.removeItem(at: destinationUrl)
+                    downloadAndCacheVideo(from: url, completion: completion)
                 }
             } else {
                 downloadAndCacheVideo(from: url, completion: completion)
             }
         case .failure(let error):
-            completion(.failure(error))
+            DispatchQueue.main.async { completion(.failure(error)) }
         }
     }
 }
@@ -98,7 +117,7 @@ private extension CacheManager {
                 guard let self else { return }
 
                 if let error = error {
-                    completion(.failure("Error downloading video: \(error.localizedDescription)"))
+                    DispatchQueue.main.async { completion(.failure("Error downloading video: \(error.localizedDescription)")) }
                     return
                 }
 
@@ -106,7 +125,7 @@ private extension CacheManager {
                       let response = response as? HTTPURLResponse,
                       response.statusCode == 200
                 else {
-                    completion(.failure("Error: Invalid response or no data"))
+                    DispatchQueue.main.async { completion(.failure("Error: Invalid response or no data")) }
                     return
                 }
 
@@ -132,10 +151,10 @@ private extension CacheManager {
                         }
 
                     } catch {
-                        completion(.failure("Error moving video file to cache: \(error.localizedDescription)"))
+                        DispatchQueue.main.async { completion(.failure("Error moving video file to cache: \(error.localizedDescription)")) }
                     }
                 case .failure(let error):
-                    completion(.failure(error))
+                    DispatchQueue.main.async { completion(.failure(error)) }
                 }
             }
             task.resume()

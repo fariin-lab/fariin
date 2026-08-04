@@ -26,6 +26,13 @@ final class PlayerView: UIView {
 
     private var observation: NSKeyValueObservation?
     private var sizeObservation: NSKeyValueObservation?
+    /// Watches for an item that CANNOT play. Without it the spinner has no exit: the only thing that
+    /// ever takes it down is playback starting.
+    private var statusObservation: NSKeyValueObservation?
+    /// The cache file currently loaded, so a failure can throw the bad copy away.
+    private var cachedFileInUse: URL?
+    /// One retry per story, or a dead URL becomes an endless download loop.
+    private var didRetryRemote = false
 
     // MARK: - Initializers
     override init(frame: CGRect) {
@@ -39,6 +46,7 @@ final class PlayerView: UIView {
     deinit {
         observation = nil
         sizeObservation = nil
+        statusObservation = nil
         player = nil
     }
 
@@ -51,18 +59,49 @@ final class PlayerView: UIView {
         addActivityIndicatory()
         // stop video if it's playing before video request
         stopVideo()
-        guard let url = url else { return }
-        cacheManager.loadVideo(from: url) { [weak self] result in
+        didRetryRemote = false
+        cachedFileInUse = nil
+        cacheManager.loadVideo(from: validatedUrl) { [weak self] result in
+            // STALE ANSWER GUARD. This view is reused across stories, so a download started for the
+            // last one can land after the next one has claimed it — and it would then set up the
+            // wrong video and take the spinner down over it.
+            guard let self, self.url == validatedUrl else { return }
             switch result {
-            case .success(let url):
-                self?.setupPlayer(url)
+            case .success(let fileUrl):
+                self.cachedFileInUse = fileUrl
+                self.setupPlayer(fileUrl)
             case .failure(let error):
                 // Never leave the viewer on an eternal spinner: AVPlayer streams https mp4s
                 // fine, so a cache failure falls back to playing the remote URL directly.
                 print(error)
-                DispatchQueue.main.async { self?.setupPlayer(validatedUrl) }
+                self.didRetryRemote = true
+                self.setupPlayer(validatedUrl)
             }
         }
+    }
+
+    /// THE ONLY WAY OUT OF THE SPINNER USED TO BE PLAYBACK STARTING.
+    ///
+    /// So anything that stopped the item from ever playing — a truncated cache file, an object that
+    /// is not there yet, a URL that 404s — left the wheel turning for as long as you cared to look
+    /// at it, with no retry and no message (owner 2026-08-04: "when i upload video is loading never
+    /// play"). An item that fails now says so, and this answers it.
+    private func handleFailedItem() {
+        // A half-written cache file is the worst case, because it is PERMANENT: it exists, so every
+        // future open finds it and never downloads again. Throw it away and stream instead.
+        if let bad = cachedFileInUse {
+            cachedFileInUse = nil
+            try? FileManager.default.removeItem(at: bad)
+            if let remote = url, !didRetryRemote {
+                didRetryRemote = true
+                setupPlayer(remote)
+                player?.play()
+                return
+            }
+        }
+        // Streaming failed too, so there is nothing left to try. Stop claiming it is loading —
+        // a black frame is honest, an endless spinner is not.
+        removeActivityIndicatory()
     }
 
 }
@@ -86,6 +125,15 @@ private extension PlayerView {
             } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
                 self.addActivityIndicatory()
             }
+        }
+
+        // An item that cannot be played reports it HERE and nowhere else — timeControlStatus simply
+        // never reaches .playing, which is silence, not an answer.
+        // `.initial` too: an item that is already failed when we start watching would otherwise
+        // never send a change, and never sending one is the bug.
+        statusObservation = player?.currentItem?.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            DispatchQueue.main.async { self?.handleFailedItem() }
         }
 
         self.player?.automaticallyWaitsToMinimizeStalling = false
