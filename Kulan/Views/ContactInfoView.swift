@@ -71,6 +71,24 @@ struct ContactInfoView: View {
             fallbackPhoto: conv.map { $0.photoUrl(for: me) } ?? photoUrl,
             fallbackPoster: conv.map { $0.posterUrl(for: me) } ?? posterUrl,
             iAmContact: PrivacyPrefs.isContact(other)))
+
+        // THE STORY IS KNOWN ON FRAME ONE TOO, for exactly the reason the photo is.
+        //
+        // `publicStory` was plain @State starting at nil and first filled inside `.task`, which runs
+        // AFTER the first frame. So the toolbar's story stack was absent on open EVERY time — even
+        // when the answer was already sitting in memory — and then appeared. The owner's words:
+        // "system figuer out in front of me if this user has story and how many, and then draw in
+        // front of me". That is the same failure `ProfilePhotoIndex` was built to end for the photo,
+        // and the same fix applies: read the fact synchronously and latch it before anything draws.
+        //
+        // `StoriesRepository.others` is the very list the stories row is already drawing from, so
+        // this is a read of live memory, not a fetch. The `.task` below still refreshes from the
+        // server, but it can only REPLACE a group now, never conjure one out of nothing while
+        // somebody is looking at the bar.
+        let optedOut = UserDefaults.standard.bool(forKey: "storiesOptedOut")
+        _publicStory = State(initialValue: (isSelf || optedOut)
+            ? nil
+            : StoriesRepository.shared.others.first { $0.authorUid == other && !$0.stories.isEmpty })
     }
 
     @State private var handle = ""
@@ -425,10 +443,14 @@ struct ContactInfoView: View {
             // able to share or view stories" and the chat list already draws no rings, but this page
             // still showed one, played the story, and wrote a view receipt to the author.
             if !isSelf, !UserDefaults.standard.bool(forKey: "storiesOptedOut") {
-                // SEED SYNCHRONOUSLY from the already-loaded story tray first, so for anyone whose
-                // story we know about the ring is there on the FIRST frame instead of blinking in
-                // after the network round-trip. The fetch below then covers non-contacts (public
-                // stories that were never in our tray).
+                // THE FIRST-FRAME SEED IS IN `init` NOW, not here. This block used to claim it put
+                // the ring up "on the FIRST frame", and it never could: `.task` runs after the view
+                // has already been drawn once, so the bar was always empty for a beat and then
+                // filled. That is the flicker the owner reported.
+                //
+                // It stays as a second chance, for the narrow case init could not answer: the story
+                // tray finishing its load while this screen is already open. Guarded on nil so it
+                // can only ADD, never replace what init already latched.
                 if publicStory == nil,
                    let known = StoriesRepository.shared.others.first(where: { $0.authorUid == otherUid }),
                    !known.stories.isEmpty {
