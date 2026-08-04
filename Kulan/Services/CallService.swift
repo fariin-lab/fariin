@@ -1155,6 +1155,15 @@ final class CallService: NSObject {
 
     // MARK: - Outgoing
 
+    /// Somebody whose settings refuse calls, surfaced so the UI can say so once. Cleared by the sheet.
+    struct RestrictedCallee: Identifiable, Equatable {
+        let id = UUID()
+        let uid: String
+        let name: String
+        let photo: String?
+    }
+    var restrictedCallee: RestrictedCallee?
+
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
         // ONE central block gate (audit). The profile's call tiles learned to hide while blocked, but
@@ -1164,6 +1173,21 @@ final class CallService: NSObject {
         let blocked = ConversationsRepository.shared.conversations
             .first { $0.id == ChatService.convId(me, uid) }?.isBlockedByMe(me) ?? false
         guard !blocked else { return }
+        // CALL PRIVACY, CHECKED BEFORE THE PHONE RINGS (owner 2026-08-04). The buttons stay live for
+        // everyone — hiding them would tell you what somebody chose in their settings, which is
+        // nobody's business — so the answer arrives when you press one.
+        //
+        // HERE, in the same central gate as the block check, for the same reason written above it:
+        // there are seven dial sites and a future eighth would forget.
+        //
+        // The callee ALSO refuses on their own side, and that stays: this is a courtesy so the caller
+        // gets a sentence instead of a call that dies for no visible reason. It is not the security
+        // boundary and must never be treated as one.
+        if CallPrivacyIndex.refuses(uid) {
+            restrictedCallee = RestrictedCallee(uid: uid, name: name, photo: photo)
+            return
+        }
+        Task { await CallPrivacyIndex.refresh(uid) }   // keep the answer fresh for next time
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
         startedAsVideo = video
         noteVideo()
@@ -1366,7 +1390,7 @@ final class CallService: NSObject {
                     // Calls privacy (Settings > Privacy > Calls): "No One" declines everything;
                     // "My Contacts" requires a real conversation with the caller. The caller
                     // sees declined — same signal as a manual decline, nothing leaks.
-                    let audience = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.calls") ?? "") ?? .everyone
+                    let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
                     let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
                     let callsAllowed = audience == .everyone || (audience == .contacts && isContact)
                     if !callsAllowed {
@@ -1454,7 +1478,7 @@ final class CallService: NSObject {
         db.collection("conversations").document(cid).getDocument { [weak self] cs, _ in
             guard let self else { return }
             let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
-            let audience = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.calls") ?? "") ?? .everyone
+            let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
             let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
             let allowed = !blocked && (audience == .everyone || (audience == .contacts && isContact))
             DispatchQueue.main.async { completion(allowed) }

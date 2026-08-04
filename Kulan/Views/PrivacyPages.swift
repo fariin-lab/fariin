@@ -26,8 +26,13 @@ enum Audience: String, CaseIterable {
 
 enum PrivacyPrefs {
     /// My audience for a key ("lastSeen", "photo", "bio", "calls", "groups").
+    /// CALLS DEFAULT TO MY FRIENDS (owner 2026-08-04); everything else still defaults to Everyone.
+    /// A stranger being able to make your phone ring is a different kind of exposure from a stranger
+    /// reading your bio, and the default is what almost everyone will live with.
+    static func defaultAudience(for key: String) -> Audience { key == "calls" ? .contacts : .everyone }
+
     static func mine(_ key: String) -> Audience {
-        Audience(rawValue: UserDefaults.standard.string(forKey: "priv.\(key)") ?? "") ?? .everyone
+        Audience(rawValue: UserDefaults.standard.string(forKey: "priv.\(key)") ?? "") ?? defaultAudience(for: key)
     }
 
     static func setMine(_ key: String, _ a: Audience) {

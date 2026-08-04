@@ -710,7 +710,9 @@ struct PrivacySettingsView: View {
     @AppStorage("priv.lastSeen") private var privLastSeen = "everyone"
     @AppStorage("priv.photo") private var privPhoto = "everyone"
     @AppStorage("priv.bio") private var privBio = "everyone"
-    @AppStorage("priv.calls") private var privCalls = "everyone"
+    // Calls default to My Friends — see PrivacyPrefs.defaultAudience. The @AppStorage default
+    // has to match it or this row shows "Everyone" while the gate behaves as "My Friends".
+    @AppStorage("priv.calls") private var privCalls = "contacts"
     @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("priv.groups") private var privGroups = "everyone"
     // Default "modern", and any value this build does not recognise falls back to modern too — the

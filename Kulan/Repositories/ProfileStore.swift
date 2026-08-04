@@ -89,6 +89,9 @@ final class ProfileStore {
     /// See [ProfilePhotoIndex] for why the header cannot ask the network this question.
     private static func indexed(_ p: UserProfile) -> UserProfile {
         ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl, privacy: p.privacy)
+        // The same one hook feeds the call-privacy answer, so pressing the call button has something
+        // to read on the frame it is pressed. See CallPrivacyIndex.
+        CallPrivacyIndex.record(uid: p.id, privacy: p.privacy)
         return p
     }
 

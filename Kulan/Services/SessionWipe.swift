@@ -29,6 +29,7 @@ enum SessionWipe {
         AppRouter.shared.pendingChatPhoto = nil
         AppRouter.shared.pendingInviteCode = nil
         wipeAccountPrefs()
+        CallPrivacyIndex.clear()                // who-refuses-calls is per-account too
         Crypto.shared.wipeIdentity()            // fresh keypair for the next account
     }
 

@@ -1250,6 +1250,12 @@ struct ChatsView: View {
                 // scroll-down pan — use Apple's zoom dismiss instead). Heroes from the uploading card.
                 .navigationTransition(.zoom(sourceID: "my-story", in: storyNS))
             }
+            // ONE presentation for every dial site (profile tiles, chat header, Calls list, search,
+            // New Call): the gate lives in CallService, so the sheet does too.
+            .sheet(item: Binding(get: { call.restrictedCallee },
+                                 set: { if $0 == nil { CallService.shared.restrictedCallee = nil } })) { r in
+                CantCallSheet(name: r.name, photoUrl: r.photo, onSendMessage: {})
+            }
             .sheet(item: $profileGroup) { g in
                 NavigationStack {
                     // .story source: no chat underneath → no Search/Wallpaper dead buttons (audit).
