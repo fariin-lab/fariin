@@ -6100,7 +6100,17 @@ struct MessageBubble: View, Equatable {
         .frame(width: w, height: h).clipped()
         .overlay {
             // Video item → a play glyph + duration badge over its poster.
-            if albumItemIsVideo(i), extra == 0 {
+            //
+            // NOT WHILE THE ALBUM IS STILL UPLOADING. The upload ring is drawn over the whole bubble
+            // and is centred on the BUBBLE; this badge is centred on its own TILE. Two different
+            // centres, so during a send they appeared side by side, overlapping, and read as one
+            // broken smear of two half-circles (owner screenshot, build 458). The single-video
+            // bubble has always had this right — `if sending { ring } else { play }` — and the album
+            // grid simply never got the same rule.
+            //
+            // A play badge means "this is ready, tap it". During an upload that is not true yet, so
+            // hiding it is also the more honest state, not just the tidier one.
+            if albumItemIsVideo(i), extra == 0, message.sendState != .sending {
                 ZStack {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: min(w, h) * 0.28))
