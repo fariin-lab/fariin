@@ -20,6 +20,28 @@ final class ProfileStore {
         // Offline: fetch() returns nil after the server-timeout — keep the cached
         // profile instead of wiping `me` (which would bounce the user to onboarding).
         me = await fetch(uid) ?? me
+        Self.adoptServerPrivacy(me?.privacy)
+    }
+
+    /// BRING MY OWN PRIVACY SETTINGS BACK WITH ME (owner 2026-08-04: "after I close the app and sign
+    /// in again, all of my settings are reset").
+    ///
+    /// The settings screen reads UserDefaults, `setMine` writes BOTH there and to `users/{uid}.privacy`,
+    /// and signing out wipes the local copy on purpose — the next person on this phone must not
+    /// inherit the last one's choices, and one of those choices silently auto-declines calls. What was
+    /// never built is the other half: putting YOUR OWN settings back when YOU sign in. SessionWipe's
+    /// own comment says it outright — "privacy is also published to the server, and nothing ever
+    /// imports it back".
+    ///
+    /// ONLY FILLS WHAT IS MISSING. After a sign-out every key is absent, so everything is restored;
+    /// if a key is present it was set on this device and stays, which is what keeps a change made
+    /// offline from being overwritten by a stale read a second later.
+    static func adoptServerPrivacy(_ privacy: [String: String]?) {
+        guard let privacy, !privacy.isEmpty else { return }
+        let d = UserDefaults.standard
+        for (key, value) in privacy where d.string(forKey: "priv.\(key)") == nil {
+            d.set(value, forKey: "priv.\(key)")
+        }
     }
 
     /// Instant boot path: my profile straight from Firestore's on-disk cache, no
@@ -32,6 +54,9 @@ final class ProfileStore {
         let cached = UserProfile(id: uid, data: data)
         guard !cached.handle.isEmpty else { return false }
         me = cached
+        // The boot fast path reaches the app before loadMine's network round trip, so the settings
+        // screen would show defaults for that whole moment. The cached doc already carries them.
+        Self.adoptServerPrivacy(cached.privacy)
         return true
     }
 
