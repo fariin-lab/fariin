@@ -74,22 +74,20 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PLEASE TRY THIS FIRST. Open the app and look at your chat list. There should be a new chat called Fariin with a blue tick, at the top. Open it. The bell at the top right should ALREADY be crossed out without you touching it, and there should be no box to type in at the bottom, only a line saying only Fariin can send messages. If any of those three things is wrong, tell me.
+            PLEASE TRY THIS FIRST. Settings, Account, Sign-in Methods. If you have two logins connected, each one now has a Remove button. Tap it and check three things: it tells you what you will still be able to sign in with, it makes you sign in again before it does anything, and you get an email afterwards saying a login was removed.
 
-            THE OFFICIAL CHAT. This is where we tell you about new things, fixes and updates. It works the way Signal's does, and the important part is what is NOT there: no account sits behind it. There is no @fariin user to log in to, so nobody can ever pretend to be it. The app itself decides what is official, and the tick is drawn from that and nothing else.
+            YOU CAN TAKE A LOGIN OFF YOUR ACCOUNT NOW. Adding one used to be permanent. That was the worst hole in the app: somebody holding your unlocked phone could attach their own Google account to your Fariin and sign in as you forever, and nothing anywhere could undo it. A password you can change. That you could not.
 
-            It is muted from the start and stays muted unless you turn it on. You can block it and you will stop getting updates, and nothing is lost if you unblock it later.
+            Two rules keep it safe. You can never remove the last one, because that would leave an account with no way in. And it always makes you prove it is you first, even if you just signed in a minute ago. That second rule matters more than it looks: without it, the same person holding your phone could connect their login, remove yours, and lock you out of your own account.
 
-            SENDING ONE, for you only. Settings now has Official Announcements, and only your account can see it. Please test it on yourself first: New Announcement, then Send to, then Chosen people, then pick yourself. Nobody else sees that. Write a title, write a message, add a picture, add a button, and send. Then open the Fariin chat and check it looks the way the preview said it would.
+            YOU NOW GET AN EMAIL when a login is added OR removed, including when you are the one doing it. It names the login, the account, the time, and what ways in you have left.
 
-            When you are happy, Send to Everyone is the same screen. You can also send to particular countries, or to a share of people rather than all of them, and you can set a date instead of sending now.
+            AN ALBUM WITH A VIDEO IN IT no longer draws the play button on top of the upload spinner. They came from two different places and overlapped into one broken smear while sending. The play button now waits until the album has finished going out, which is also more honest, since it cannot be played yet.
 
-            You can add other admins in there too, and choose one by one what each of them is allowed to do. Only you can do that, and nobody can be made an owner.
+            THAT ONE IS TEMPORARY, on purpose. The real fix is a progress ring on each item that fills as it uploads, that you can tap to cancel, the way WhatsApp does it. That is the next piece of work. Right now an album reports no progress at all, which is why the spinner spins instead of filling.
 
-            WHAT I KNOW IS MISSING, so you do not go looking for it. Announcements do not make your phone buzz at all, not even the security ones. The chat is muted on purpose and there is no notification behind it yet. That is a separate job and I have not started it.
+            STILL MISSING, so you do not go hunting. Announcements make no sound at all, not even security ones. Cancelling a send only hides the bubble, it does not actually stop the upload yet.
 
-            The Update Now button needs the App Store link, which cannot exist until the app is published. Until you set it in Announcements, Update Link, the app refuses to offer that button rather than giving you one that opens nothing.
-
-            WHAT TO WATCH FOR. Nothing that already worked should have changed. Open your old chats. Send a normal message. Post a story. Swipe the new Fariin chat to pin, mute and archive it and check each one actually holds.
+            WHAT TO WATCH FOR. Nothing that already worked should have changed. Send a photo. Send a video. Forward an album with photos and a video mixed together and check it arrives in the SAME ORDER you sent it. Open your old chats. Open the Fariin chat.
 
         run: fastlane beta
