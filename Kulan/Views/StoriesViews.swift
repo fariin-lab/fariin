@@ -1521,13 +1521,26 @@ struct StoryViewer: View {
                 // photographs its current frame into StoryCompositeCache as the pull begins; this
                 // prefers that when it exists and falls back to the poster when it does not, so a
                 // photo story and a video still at zero behave exactly as before.
-                Group {
-                    if let live = StoryCompositeCache.image(for: url) {
-                        Image(uiImage: live).resizable().scaledToFill()
-                    } else {
-                        StoryImage(url: url, fitBlur: true, bakedBars: false, cardFillThreshold: mH / mW)
-                    }
-                }
+                // THE MORPH CARD AND THE CAROUSEL CARD MUST BE THE SAME VIEW ON THE SAME PICTURE.
+                // That invariant is written down at `card(_:)` below — "exactly what the morph card
+                // shows, so the morph→carousel hand-off at full-open is seamless" — and it is the
+                // whole reason this hand-off can be a hard swap instead of a crossfade.
+                //
+                // `402ec4d` broke it. To show the frame a video is actually on, it gave the morph a
+                // second renderer (a bare `scaledToFill`) on a second picture (the full-screen
+                // composite snapshot). Both halves diverge from the carousel card: the composite is
+                // SCREEN-shaped, so filling this shorter card crops its top and bottom away and
+                // zooms, while the carousel one hair of drag later aspect-fits the POSTER over live
+                // blur. Crossing p=0.97 swapped one framing for the other — a picture jumping inside
+                // a frame that never moved, which is exactly what he reported, and it is a shipped
+                // regression, not an old bug resurfacing.
+                //
+                // Back to one view on one picture. THE COST, and it is his call to spend it: a video
+                // you are 21 seconds into shows its FIRST frame on the card behind the sheet again,
+                // which is the report `402ec4d` was answering. Fixing that properly means giving the
+                // carousel's active card the same live frame, and that changes the resting look of a
+                // card he has already signed off on twice — so it is not something to slip in here.
+                StoryImage(url: url, fitBlur: true, bakedBars: false, cardFillThreshold: mH / mW)
                     .frame(width: mW, height: mH)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
