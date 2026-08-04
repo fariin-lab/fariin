@@ -666,19 +666,33 @@ enum ChatService {
         }
         let convRef = db.collection("conversations").document(cid)
         let cipher: Data, meta: EncMeta
+        // THE CONVERSATION TOUCH IS NOT A PREREQUISITE OF THE UPLOAD. It only ensures the 1:1 doc
+        // carries `users` + `updatedAt`, which the message write needs — not the Storage put. It was
+        // awaited inline, so a full round trip stood between the finished ciphertext and the first
+        // byte leaving the phone. Started here, awaited just before the batch that actually needs it.
+        var ensureConv: Task<Void, Error>?
         if let members {
             (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members)
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            ensureConv = Task {
+                try await convRef.setData(["users": [uid, other],
+                                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            }
         }
 
         let msgRef = convRef.collection("messages").document()
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).enc", progressId: clientId)
-        // Seed the cache with the plaintext image under its URL so when the optimistic bubble
-        // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
-        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
+
+        // THE BYTES GO NOW. Everything below this line — the caption seal, the reply seal, the
+        // BlurHash — was computed AFTER the upload returned, and none of it has ever depended on the
+        // upload. On a photo with a caption and a reply that is three more seals plus a BlurHash
+        // encode (which decodes and downsamples the image again) added onto the end of the slowest
+        // step, instead of hidden underneath it. They run together now, so the send costs the upload
+        // and not the upload plus the paperwork.
+        async let uploadedURL = uploadEncrypted(cipher,
+                                                to: "chat/\(cid)/\(msgRef.documentID).enc",
+                                                progressId: clientId)
 
         // Caption travels INSIDE the image message (the caption is the message body) — sealed
         // exactly like a text message.
@@ -702,6 +716,24 @@ enum ChatService {
             replyEnc = ["id": r.id, "authorId": r.authorId, "text": rc]
         }
 
+        // BlurHash: a ~28-char sketch of the photo, sealed like the caption, so the recipient's
+        // bubble shows a real blurred preview before any bytes download. Computed here, still
+        // alongside the upload, rather than after it.
+        let sized = UIImage(data: data)
+        var blurSealed: String?
+        if !viewOnce, let ui = sized, let hash = BlurHash.encode(ui) {
+            blurSealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, hash))
+        }
+
+        // Now collect the upload, and the conversation touch the message write depends on.
+        let url = try await uploadedURL
+        try await ensureConv?.value
+        // Seed the cache with the plaintext image under its URL so when the optimistic bubble
+        // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
+        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
+
         let batch = db.batch()
         var imgMsg: [String: Any] = [
             "type": "image", "imageUrl": url, "enc": meta.asDict, "text": captionCipher,
@@ -711,17 +743,11 @@ enum ChatService {
         if let clientId { imgMsg["clientId"] = clientId }   // reconcile the optimistic bubble
         if viewOnce { imgMsg["viewOnce"] = true }           // view-once photo
         if forwarded { imgMsg["forwarded"] = true }
-        if let ui = UIImage(data: data) {                   // natural aspect ratio
+        if let ui = sized {                                 // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
-            // BlurHash: a ~28-char sketch of the photo, sealed like the caption, so the
-            // recipient's bubble shows a real blurred preview before any bytes download.
-            if !viewOnce, let hash = BlurHash.encode(ui) {
-                let sealed = members != nil
-                    ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
-                    : (try? await Crypto.shared.encryptForConversation(cid, hash))
-                if let sealed, !sealed.isEmpty { imgMsg["blurhash"] = sealed }
-            }
         }
+        // Sealed above, while the upload was in flight.
+        if let blurSealed, !blurSealed.isEmpty { imgMsg["blurhash"] = blurSealed }
         batch.setData(imgMsg, forDocument: msgRef)
         // A VIEW-ONCE photo publishes NO thumbnail to the conversation doc (audit): lastImageUrl +
         // lastImageEnc are a decryptable copy both sides keep forever, and the chat list rendered it
@@ -1002,6 +1028,9 @@ enum ChatService {
         }
         let convRef = db.collection("conversations").document(cid)
         let vidCipher: Data, vidMeta: EncMeta, thCipher: Data, thMeta: EncMeta
+        // Same as sendImage: the conversation touch is a prerequisite of the MESSAGE write, not of
+        // the uploads, so it no longer stands in front of them.
+        var ensureConv: Task<Void, Error>?
         if let members {
             (vidCipher, vidMeta) = try await Crypto.shared.encryptBytesForGroup(video, members: members)
             (thCipher, thMeta) = try await Crypto.shared.encryptBytesForGroup(thumbnail, members: members)
@@ -1009,15 +1038,26 @@ enum ChatService {
             (vidCipher, vidMeta) = try await Crypto.shared.encryptBytes(cid, video)
             (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, thumbnail)
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            ensureConv = Task {
+                try await convRef.setData(["users": [uid, other],
+                                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            }
         }
         let msgRef = convRef.collection("messages").document()
-        // The clip first: if it fails, the retry has not already spent the user's data on a poster
-        // for a video that is not going to arrive.
-        // The clip is the upload worth watching; the poster below it is a few KB and would only make
-        // the ring jump. Progress is reported for the video alone.
-        let videoUrl = try await uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc", progressId: clientId)
-        let thumbUrl = try await uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
+        // THE CLIP AND ITS POSTER GO TOGETHER NOW, and this reverses a deliberate decision, so the
+        // reasoning is on the record. They were serial so that a failed clip would not have already
+        // spent the user's data on a poster for a video that never arrives. But the poster is, by
+        // that same comment's own admission, a few KB — while the round trip it costs is paid on
+        // EVERY successful send. Trading a few wasted KB on the rare failure for a whole round trip
+        // saved on every success is the right way round.
+        //
+        // Progress still reports the clip alone: the poster is too small to do anything but make the
+        // ring jump, which was the other half of the original reasoning and still holds.
+        async let videoUp = uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc", progressId: clientId)
+        async let thumbUp = uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
+        let videoUrl = try await videoUp
+        let thumbUrl = try await thumbUp
+        try await ensureConv?.value
         // Seed the cache so the optimistic bubble reconciles with no shimmer (photo parity).
         if let ui = UIImage(data: thumbnail) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
 
