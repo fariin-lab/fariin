@@ -31,6 +31,7 @@ struct LoginCodeView: View {
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
+                .dismissesKeyboardOnTap()
             VStack(spacing: 14) {
                 Spacer().frame(height: 40)
 

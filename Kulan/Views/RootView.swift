@@ -237,6 +237,7 @@ struct OnboardingView: View {
         // palette and pills as Welcome/Apple/Google/Email (see AuthFlowViews).
         ZStack {
             AuthPalette.page.ignoresSafeArea()
+                .dismissesKeyboardOnTap()
             ScrollView {
                 VStack(spacing: 0) {
                     Spacer().frame(height: 24)

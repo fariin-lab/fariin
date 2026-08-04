@@ -118,6 +118,26 @@ extension View {
             .background(AuthPalette.raised, in: Capsule())
             .overlay(Capsule().strokeBorder(AuthPalette.hairline, lineWidth: 1))
     }
+
+    /// Tap the page to put the keyboard away.
+    ///
+    /// None of the entry screens had ANY way to dismiss it. They are ZStack over VStack, not
+    /// scrolling content, so there is no swipe-down to fall back on and no Done bar above the
+    /// keys — once it was up it stayed up, sitting over the buttons underneath.
+    ///
+    /// APPLY THIS TO THE BACKGROUND COLOUR, never to the whole screen. On the background it sits
+    /// BEHIND the fields and buttons, so a tap on a control still reaches the control and only
+    /// taps that hit nothing dismiss. Wrapping the whole stack instead would swallow the first
+    /// tap on every button on the page.
+    ///
+    /// resignFirstResponder rather than a FocusState binding, because it does not care which of
+    /// several fields is up, and it works the same on a screen that has two.
+    func dismissesKeyboardOnTap() -> some View {
+        self.onTapGesture {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
+        }
+    }
 }
 
 // The chrome logo with a slow light sweep — like the metal is catching light.
@@ -317,6 +337,7 @@ struct EmailAuthView: View {
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
+                .dismissesKeyboardOnTap()
             VStack(spacing: 14) {
                 Spacer().frame(height: 40)
                 Text(mode == .create ? "Sign up with Email" : "Log in with Email")
@@ -473,6 +494,7 @@ struct ForgotPasswordView: View {
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
+                .dismissesKeyboardOnTap()
             VStack(spacing: 14) {
                 Spacer().frame(height: 40)
                 if let sentTo { sentState(sentTo) } else { form }
