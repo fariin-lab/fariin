@@ -32,11 +32,27 @@ service cloud.firestore {
       return isAdmin() && (adminData().get('role', '') == 'owner' || p in adminData().get('perms', []));
     }
 
+    // Is the CALLER banned? Costs one document read, so it is used only where the thing being
+    // created is public and permanent (a story), never on the message path where it would be a read
+    // per message sent. A banned account can still write into its own end-to-end encrypted chats,
+    // and that is a deliberate limit of this approach: the fix for that is disabling the account in
+    // Firebase Auth, which needs a Cloud Function and is not built yet.
+    function isBanned() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('banned', false) == true;
+    }
+
     // Profiles: any signed-in user can look up a handle to start a chat,
     // but you can only create/edit your OWN profile.
     match /users/{uid} {
       allow read: if signedIn();
       allow create, update: if signedIn() && request.auth.uid == uid;
+      // A moderator may set the ban flag on ANY account, and may touch nothing else on it. The
+      // hasOnly list is what keeps this from being a general "edit any profile" power: a moderator
+      // cannot rename somebody, change their photo, or alter their privacy settings.
+      allow update: if adminCan('moderate')
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['banned', 'bannedAt', 'bannedBy', 'banReason']);
       // NO delete. (A copy of the message-request decline rule was pasted here by mistake; it read
       // conversation fields off a user document, so it could only ever error, and the real one lives
       // on /conversations/{cid} where it belongs. Removed 2026-08-04, no behaviour change.)
@@ -87,7 +103,15 @@ service cloud.firestore {
     // operator reviews them in the Firebase console and acts within 24 hours.
     match /reports/{reportId} {
       allow create: if signedIn() && request.auth.uid == request.resource.data.reporterUid;
-      allow read, update, delete: if false;
+      // Readable by moderators, and by nobody else - a report names the person who filed it, and a
+      // reported user being able to look up who reported them is how reporting stops being used.
+      allow read: if adminCan('moderate');
+      // Only the handled flag and who closed it. A moderator cannot rewrite what was reported, so the
+      // record of what happened stays the record.
+      allow update: if adminCan('moderate')
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['handled', 'handledBy', 'handledAt', 'outcome']);
+      allow delete: if false;
     }
 
     // Official sticker packs. Published by us and readable by everyone signed in; no client
@@ -536,9 +560,17 @@ service cloud.firestore {
         request.auth.uid == resource.data.authorUid
         || request.auth.uid in resource.data.recipientUids
         || resource.data.public == true
+        // A moderator acting on a report. A reported story is often NOT public - somebody's friend
+        // reported it - and without this the one person who has to look at it is the one person who
+        // cannot. Reading is gated on the `moderate` permission, which nobody has by default.
+        || adminCan('moderate')
       );
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
+        // A banned account cannot post anything anybody else can find. This is the surface that
+        // matters: chat is end-to-end encrypted and private, so it is not what an App Store reviewer
+        // can be shown. A public story is.
+        && !isBanned()
         && request.resource.data.recipientUids.size() <= 1000   // limit fan-out abuse
         // Kill "immortal stories": expiry must be within ~30h of now (client sets +24h; the
         // margin tolerates device-clock skew). Blocks a hostile client from setting expiresAt
@@ -568,7 +600,13 @@ service cloud.firestore {
         && request.resource.data.mediaPath == resource.data.mediaPath
         // type is pinned with the path (they were validated as a pair at create).
         && request.resource.data.type == resource.data.type;
-      allow delete: if signedIn() && request.auth.uid == resource.data.authorUid;
+      // The author, or a moderator acting on a report. This is the ONE surface in Fariin where a
+      // stranger's content is visible to anybody who finds it (an "Everyone" story is public), which
+      // makes it the one place Apple could be shown somebody else's illegal post. Being able to take
+      // it down in seconds is the whole point - Telegram was pulled from the App Store on
+      // 2026-08-04 over a single user's post and restored the same day once they removed it.
+      allow delete: if signedIn()
+        && (request.auth.uid == resource.data.authorUid || adminCan('moderate'));
 
       // A recipient records they viewed it; the author can read the viewer list.
       match /views/{viewerUid} {

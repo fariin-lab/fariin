@@ -26,6 +26,11 @@ enum AdminPermission: String, CaseIterable, Identifiable {
     case targetCountry   // send to particular countries rather than everyone
     case targetChosen    // send to hand-picked people
     case security        // send a Security announcement
+    /// Review abuse reports, remove a public story, ban an account. Used by the web console at
+    /// fariin.com/console, not by any screen in the app — moderation is desk work, and shipping the
+    /// screens for it inside the app would put them in every user's copy. The permission lives here
+    /// because this is where the owner hands permissions out.
+    case moderate
 
     var id: String { rawValue }
     var label: String {
@@ -37,6 +42,7 @@ enum AdminPermission: String, CaseIterable, Identifiable {
         case .targetCountry: return "Choose countries"
         case .targetChosen:  return "Send to chosen people"
         case .security:      return "Send security alerts"
+        case .moderate:      return "Review reports"
         }
     }
     var detail: String {
@@ -48,6 +54,7 @@ enum AdminPermission: String, CaseIterable, Identifiable {
         case .targetCountry: return "Send to one or more countries instead of the whole world."
         case .targetChosen:  return "Pick individual people by username."
         case .security:      return "Send the alerts that break through the mute."
+        case .moderate:      return "Handle abuse reports at fariin.com/console: remove a story, ban an account."
         }
     }
     /// What a brand-new admin gets. Deliberately not everything: an admin who can send is useful on
