@@ -1155,6 +1155,20 @@ final class CallService: NSObject {
 
     // MARK: - Outgoing
 
+    /// THE NAME YOU GAVE THEM WINS, on every call screen (owner 2026-08-04: renamed a contact, and the
+    /// call still said the old name).
+    ///
+    /// A nickname is local and lives in ContactNames, while a call carries the name the OTHER side
+    /// published. Seven dial sites each passed whatever name they happened to be holding — a profile
+    /// its `name`, the chat its `title` — so fixing them one at a time would have been seven fixes and
+    /// an eighth waiting to be forgotten. Resolved here instead, which also covers the INCOMING side:
+    /// somebody calling you shows as the name you filed them under, not the one they chose.
+    static func displayName(for uid: String, fallback: String) -> String {
+        guard !uid.isEmpty, let nick = ContactNames.shared.name(for: uid),
+              !nick.trimmingCharacters(in: .whitespaces).isEmpty else { return fallback }
+        return nick
+    }
+
     /// Somebody whose settings refuse calls, surfaced so the UI can say so once. Cleared by the sheet.
     struct RestrictedCallee: Identifiable, Equatable {
         let id = UUID()
@@ -1193,10 +1207,12 @@ final class CallService: NSObject {
         noteVideo()
         isCaller = true
         otherUid = uid
-        otherName = name
+        otherName = Self.displayName(for: uid, fallback: name)
         otherPhotoUrl = photo
         state = .outgoing
-        CallKitManager.shared.startOutgoing(name: name)   // native call UI + audio session
+        // iOS's own call UI and the recents list get the nickname too — the lock screen saying one
+        // name while the app says another is worse than either being wrong on its own.
+        CallKitManager.shared.startOutgoing(name: otherName)   // native call UI + audio session
         CallKitManager.shared.reportConnecting()
 
         ensureMicPermission { [weak self] granted in
@@ -1401,7 +1417,8 @@ final class CallService: NSObject {
                     guard !blocked, self.state == .idle else { return }
                     self.callId = doc.documentID
                     self.otherUid = caller
-                    self.otherName = d["callerName"] as? String ?? "Caller"
+                    self.otherName = Self.displayName(for: caller,
+                                                      fallback: d["callerName"] as? String ?? "Caller")
                     let photo = d["callerPhoto"] as? String ?? ""
                     self.otherPhotoUrl = photo.isEmpty ? nil : photo
                     self.isCaller = false
@@ -1440,7 +1457,7 @@ final class CallService: NSObject {
         self.startedAsVideo = video
         self.noteVideo()
         self.callId = callId
-        self.otherName = name
+        self.otherName = Self.displayName(for: uid, fallback: name)
         self.otherUid = uid
         self.otherPhotoUrl = (photo?.isEmpty == false) ? photo : nil
         self.isCaller = false
