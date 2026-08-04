@@ -354,7 +354,10 @@ struct EmailAuthView: View {
                     }
                     .padding(.top, 2)
 
-                    Button(resetSent ? "Reset email sent — check your inbox" : "Forgot password?") {
+                    // A line of green text under a button is not an answer. Sending a reset
+                    // is exactly the moment a person leaves the app for a mail client, so it
+                    // has to stop them and say where to look.
+                    Button("Forgot password?") {
                         guard !email.isEmpty else { error = "Type your email above first."; return }
                         Task {
                             do {
@@ -366,8 +369,7 @@ struct EmailAuthView: View {
                         }
                     }
                     .font(.footnote)
-                    .foregroundStyle(resetSent ? Color.green : Color.secondary)
-                    .disabled(resetSent)
+                    .foregroundStyle(.secondary)
                 }
 
                 if let error {
@@ -380,6 +382,14 @@ struct EmailAuthView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { focus = true }
+        // Names the address, because the commonest reason a reset "never arrives" is that
+        // it went somewhere else. Names the spam folder, which is the second commonest.
+        // And names the code, which is the door that does not depend on the mail at all.
+        .alert("Check your email", isPresented: $resetSent) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("We sent a link to \(email) for setting a new password. It can take a minute. If you cannot find it, look in your spam folder, or log in with a code instead.")
+        }
     }
 
     private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
