@@ -1175,10 +1175,19 @@ final class CallService: NSObject {
         let uid: String
         let name: String
         let photo: String?
+        /// WHERE the call was attempted from decides HOW we say no (owner 2026-08-04).
+        ///
+        /// The profile gets the full sheet: their picture, the reason, and a Send message button —
+        /// you are standing on their page with nothing else in front of you, and offering the thing
+        /// you CAN do is useful there. Everywhere else — the chat header, the Calls tab, search —
+        /// gets a plain centred alert, because a sheet sliding up over a conversation covers the
+        /// conversation, and "Send message" is meaningless when you are already in the message.
+        var fromProfile = false
     }
     var restrictedCallee: RestrictedCallee?
 
-    func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false) {
+    func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false,
+                   fromProfile: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
         // ONE central block gate (audit). The profile's call tiles learned to hide while blocked, but
         // every other dial site — the Calls tab row button, its long-press menu, New Call, Calls
@@ -1198,7 +1207,7 @@ final class CallService: NSObject {
         // gets a sentence instead of a call that dies for no visible reason. It is not the security
         // boundary and must never be treated as one.
         if CallPrivacyIndex.refuses(uid) {
-            restrictedCallee = RestrictedCallee(uid: uid, name: name, photo: photo)
+            restrictedCallee = RestrictedCallee(uid: uid, name: name, photo: photo, fromProfile: fromProfile)
             return
         }
         Task { await CallPrivacyIndex.refresh(uid) }   // keep the answer fresh for next time

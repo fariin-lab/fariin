@@ -846,9 +846,6 @@ struct ContactInfoView: View {
     private var gatedAbout: String {
         PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) ? about : ""
     }
-    private var canCallThem: Bool {
-        PrivacyPrefs.allows(targetPrivacy, "calls", contactOfMine: iAmContact)
-    }
 
     /// The backdrop behind the hero: their own photo, blurred, fading into the page.
     ///
@@ -1069,11 +1066,22 @@ struct ContactInfoView: View {
             if source == .calls {
                 Button { openChat = true } label: { PosterActionIcon(icon: "message.fill") }.tint(.primary)
             }
-            if !isSelf && canCallThem && !blocked {
-                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl) } label: {
+            // THE CALL BUTTONS STAY ON THE PROFILE even when the person refuses calls (owner
+            // 2026-08-04: "why you are hiding call voice and call video button… plz show that
+            // button, and when users click show sheet"). Hiding them answered the question before
+            // it was asked, and left you looking at a profile with a hole in it and no explanation.
+            // Pressing one now says why, in the sheet built for exactly that.
+            //
+            // BLOCKED still hides them, and that is a different thing: it is MY decision about
+            // them, not theirs about me, and a button that says "you blocked this person" is not
+            // information anybody needs on their own screen.
+            if !isSelf && !blocked {
+                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
+                                                      fromProfile: true) } label: {
                     PosterActionIcon(icon: "phone.fill")
                 }.tint(.primary)
-                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl, video: true) } label: {
+                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
+                                                      video: true, fromProfile: true) } label: {
                     PosterActionIcon(icon: "video.fill")
                 }.tint(.primary)
             }

@@ -1089,9 +1089,16 @@ struct ChatsView: View {
     // pointing at a property declared at the top of this very file. It was not a real missing
     // symbol, it was the compiler giving up on the body and losing track of what was in it.
 
-    private var restrictedCallee: Binding<CallService.RestrictedCallee?> {
-        Binding(get: { CallService.shared.restrictedCallee },
+    /// The PROFILE's refusal — the full sheet. nil for every other dial site, so the sheet simply
+    /// does not present there.
+    private var restrictedCalleeSheet: Binding<CallService.RestrictedCallee?> {
+        Binding(get: { let r = CallService.shared.restrictedCallee; return r?.fromProfile == true ? r : nil },
                 set: { if $0 == nil { CallService.shared.restrictedCallee = nil } })
+    }
+    /// Everywhere else — a centred alert with one button, which is all there is to say.
+    private var restrictedCalleeAlert: Binding<Bool> {
+        Binding(get: { CallService.shared.restrictedCallee.map { !$0.fromProfile } ?? false },
+                set: { if !$0 { CallService.shared.restrictedCallee = nil } })
     }
 
     private var mutePrompted: Binding<Bool> {
@@ -1313,8 +1320,14 @@ struct ChatsView: View {
             }
             // ONE presentation for every dial site (profile tiles, chat header, Calls list, search,
             // New Call): the gate lives in CallService, so the sheet does too.
-            .sheet(item: restrictedCallee) { r in
+            .sheet(item: restrictedCalleeSheet) { r in
                 CantCallSheet(name: r.name, photoUrl: r.photo, onSendMessage: {})
+            }
+            // In a chat, on the Calls tab or in search, the answer is one sentence and one button.
+            .alert("Can't Call", isPresented: restrictedCalleeAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("This person restricts who can call them")
             }
             .sheet(item: $profileGroup) { g in
                 NavigationStack {
