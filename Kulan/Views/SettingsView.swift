@@ -48,6 +48,7 @@ struct SettingsView: View {
 
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
+    private var admin = AdminStore.shared   // @Observable: the Official Announcements section appears only for admins
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var showEdit = false
     @State private var showQR = false
@@ -112,6 +113,22 @@ struct SettingsView: View {
                     }
                     NavigationLink { StorageDataView() } label: {
                         SettingsRowLabel("Storage and Data", system: "externaldrive")
+                    }
+                }
+
+                // THE OFFICIAL CHANNEL'S SENDING SIDE. The whole section is absent unless this
+                // account has a row in `admins`, and that is not cosmetic: the Firestore rules refuse
+                // every write behind it independently, so a person who found the screen would still
+                // be unable to send anything. Hidden here so a normal user never sees a door they
+                // cannot open.
+                if admin.isAdmin {
+                    Section {
+                        NavigationLink { AnnouncementAdminView() } label: {
+                            SettingsRowLabel("Official Announcements", system: "megaphone")
+                        }
+                    } footer: {
+                        Text(admin.isOwner ? "You are the owner of the Fariin channel."
+                                           : "You can send announcements from the Fariin channel.")
                     }
                 }
 
