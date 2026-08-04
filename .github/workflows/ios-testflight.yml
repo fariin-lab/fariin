@@ -70,108 +70,36 @@ jobs:
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
           TF_CHANGELOG: |
-            THE STORY CAMERA RECORDS VIDEO. Hold the shutter to record, slide right to lock it so you can let go, tap the red button to stop. The time shows at the top while it runs. It stops itself at 60 seconds, and the clip lands in the same editor a video from your library opens in.
+            PLEASE TRY THESE FIRST, they are the risky ones. Send a photo in a normal chat, send a photo with a caption, send a photo as a reply, and send a video. Then do all four again in a group. Then forward a photo, forward a video, and forward an album that has several photos AND a video in it, and check the album arrives in the same order you sent it. Sending and forwarding were made faster by doing several things at once instead of one after another, and only a real phone can tell us it still works.
 
-            PLEASE TRY FIRST: record with sound and play it back, record with the front camera and check you are not mirrored the wrong way, and use the lock.
+            SENDING AND FORWARDING ARE FASTER. Nothing was waiting on anything it needed. A photo was waiting for its own caption and its blurred preview to be sealed after the upload finished, when neither depends on it. A video was uploading the clip, waiting, then uploading its small poster. And forwarding an album fetched every picture one at a time, so a ten photo album made ten trips before anything went out. All of that now happens together.
 
-            ALL MEDIA TABS ARE BACK UNDER THE BAR, full width, with All Media and the photo count above them again. Same Apple control and the same glass as before, only the position changed.
+            POSTING A STORY IS FASTER too, for the same reason. The photo now starts uploading straight away instead of waiting for two round trips first.
 
-            THE STORY EDITOR: crop now opens in place with a fade instead of sliding up like a new page, and its X and Done are no longer under the clock and on the home indicator. While you draw with the pen, every button gets out of the way and comes back when you lift your finger.
+            THE STORY RING ON A PROFILE IS THERE THE MOMENT THE PAGE OPENS. Before, you watched the app work out whether the person had a story and how many, and then draw it. Now it knows before the page appears.
 
-            TEXT STORIES: tapping TEXT no longer opens the keyboard on its own. Tap the card when you want to type. And with the keyboard up the card now runs to the edges instead of leaving black gaps beside its bottom corners.
+            DARK MODE ON THE LOG IN SCREEN. The Sign in with Apple button was black on a black page, so it looked like a missing button with floating text. Apple's button takes its colour when it is created and cannot be repainted, so it is rebuilt when you change your phone between light and dark.
 
-            STORY CARDS: the flash on the very first pull after opening the app is gone. The photo is now brought into memory while you are watching the story, so the card has it ready.
+            ERROR MESSAGES ARE IN ENGLISH. Typing the wrong password on Delete Account answered "The supplied auth credential is malformed or has expired". A translation for that existed but only the Log In screen could reach it. Every door shares it now.
 
-            A WATCHED STORY RING uses your two colours now: 505052 in dark mode and CACACA in light mode.
+            CANCELLING IS SILENT. Backing out of the Google sheet used to put a wall of red Apple text on screen, on the page about deleting your account. Cancelling is a decision, not a failure, so it now says nothing.
 
-            SMALL ONES: the white edge around the plus on My Story is a hairline, matching the ring around your picture. And on the second step of the photo cropper the top left button is a back arrow instead of an X, because that is what it does.
+            THE SYSTEM SAYS FARIIN. The Google sign in prompt said "Kulan" wants to use accounts.google.com. That is a different name setting from the one on your home screen and it was never changed.
 
-            From 452:
+            SHARING GIVES A REAL LINK. Your username, a contact and a group invite now share as fariin.com links. Before they were kulan:// links, which only work on a phone that already has the app, so anyone without it got dead text. Now it opens the app if they have it and a real page if they do not. Your QR code carries the same link.
 
-            LOG IN WITH A CODE, no password needed. On the login screen tap "Log in with a code instead", type your email, and we send you a six digit number. Type it and you are in. Your phone will usually offer the number straight from the notification so you never type it. The code lasts 10 minutes, works once, and dies after five wrong tries.
+            THE WELCOME SCREEN SHOWS THE RIGHT LOGO. It was still using the old arrow mark you removed from the icons a week ago. It is the speech bubble now. The Log In button under it is outlined instead of filled grey.
 
-            Also: if you signed up with email and then press Continue with Google, the app now tells you that instead of saying it could not sign you in. One email is always one account here.
+            FORGOT PASSWORD IS ITS OWN PAGE. It used to fire the moment you tapped it, with no chance to check your address, and told you off if the field was empty. Now it shows you the address before sending, and afterwards leaves it on screen so you know which inbox to open.
 
-            THE STORY CAMERA X BUTTON WORKS. You were right, the touch area was tiny. The picture was small inside a big circle and only the picture was taking taps. The X, the flash, the flip and the zoom buttons all take taps across their whole button now.
+            THE SIGN UP FORM. The big empty gap between the button and the keyboard is gone, there is an eye to check the password you typed, "at least 6 characters" stays on screen and ticks itself off as you type, and the greyed out button no longer looks broken.
 
-            TEXT STORIES ARE PART OF THE CAMERA PAGE, built to the picture you sent: X top left, colour button top right, Aa bottom left, a tick while the keyboard is up, and the CAMERA and TEXT switch still there underneath with a blue NEXT. Because the switch stays on screen you can move between camera and text without closing anything, and what you typed survives the trip.
+            YOUR USERNAME IS CHECKED WHILE YOU TYPE. The green tick used to only mean the letters were allowed, so it showed a tick on a name somebody else already had and only told you after you tapped Continue. It now says available or taken as you type.
 
-            THE STORY EDITOR USES OUR OWN CROP AND OUR OWN PEN. The outside cropper is gone from the app entirely; cropping a story is now the same screen as cropping a photo you send. The pen has our own colour bar instead of Apple's floating palette. The caption bar is Liquid Glass, tinted just enough that white text stays readable on a bright photo.
+            TAP THE SCREEN TO CLOSE THE KEYBOARD on any of the sign in pages. There was no way to put it away before.
 
-            ALL MEDIA TABS MOVED INTO THE TOP BAR, so they are literally the same control, in the same place, as All and Missed on the Calls page. That is where the glass comes from. The photo count moved to a line under the bar.
+            THE PAGE THAT ASKS YOU TO COME BACK, after you delete your account, was written as a warning. It led with "your account is scheduled for deletion" under an orange clock and gave Delete It Now a button the same size as Restore. It now leads with the fact that matters, that nothing is gone, and the delete option is a quiet line of text.
 
-            OPENING SOMEBODY'S PROFILE FROM THEIR STORY opens the full profile, not a half sheet. That is why the name and the story circles were sitting on top of each other.
-
-            STORY CARDS STOP FLASHING when you pull the viewers sheet up and down. A card that already has its photo now draws it instead of showing the grey loading block for a frame.
-
-            A DELETED MESSAGE USES YOUR CHAT COLOUR now, and follows it when you change it.
-
-            MY STORY: the white ring around your picture and the white edge around the plus are thinner. The picture itself is back to the same size as everyone else's.
-
-            From 451:
-
-            THE STORIES ROW, three fixes, and they are on their own in this build so anything that goes wrong in that row is easy to blame.
-
-            The white circle on My Story is smaller. You said it looked like you had uploaded a story when you had not, and you were right: a white ring around a face is the shape a posted story wears. It is an add button, so it is sized like a badge now. The moment you actually have a story posted, that circle goes back to full size with the real ring, matching everyone else in the row.
-
-            The uploading circle is now exactly the circle it turns into. Same size, same position, same lift off the photo. It was bigger and sat higher and further in, because the spinning ring was making that whole piece wider than the picture inside it.
-
-            ALL MEDIA: long press a photo or a video and you get a proper big preview instead of the little tile. Still Apple's own preview, just given the picture at a size worth looking at, and sized to the photo's real shape so a tall one comes up tall.
-
-            From 450:
-
-            ADD STORY OPENS THE CAMERA now, full screen, built to the picture you sent. The close button and the flash sit on the preview, the zoom and the shutter at its foot, and underneath there is the pictures button on the left, the CAMERA and TEXT tabs in the middle and flip on the right. The old picker page is not gone, it is what the pictures button opens, because that is the only way to post a VIDEO story.
-
-            PLEASE TRY FIRST: take a photo and post it, then open the pictures button and post a video, then TEXT. One thing is missing on purpose. Your picture has a second button beside the flash. In Signal that takes a burst of photos and sends them together. We have nothing like it and I do not ship a button that does nothing, so tell me what you want there.
-
-            THE PINNED BAR SHOWS THE MESSAGE, not Tap to view. It was looking for the pinned message among the ones loaded on screen, and a pin is almost always older than that, so it had nothing to show. It now fetches the pinned messages themselves. It also stops saying a message was deleted when it was only too old to reach: that word now appears only when the message really is gone. Tapping a pin that is too far back to jump to opens the pinned list instead.
-
-            MENU ICONS ARE THE SAME SIZE AS EACH OTHER, measured properly this time. Mute, Pin and Delete looked small next to Unread and Archive. Every earlier attempt set the box around the icon, and the box is not what you see: Apple draws its icons with air around them, and your pin is a thin shape on a square canvas. The size is now applied to the drawing itself, with the empty space trimmed off first.
-
-            ALL MEDIA USES APPLE'S OWN TAB BAR, the same control as All and Missed on the Calls page. The white highlight is the real one now, not our copy of it.
-
-            THE SWIPE BETWEEN MEDIA, FILES AND VOICE IS SMOOTH. There was a second animation running on top of your finger, over all five tabs at once, on the exact frame the swipe needed. It is gone.
-
-            EDIT PHOTO IS THE PHOTO. Tapping it now shows your picture large with an X on it to remove it, and Take photo and Choose photo underneath. Take photo opens the camera and lands in the same cropper a chosen photo does.
-
-            ZOOMING A CHAT PHOTO: the controls hide when you zoom, and a tap brings them back and hides them again, at any zoom. Before, a tap did nothing once you had zoomed.
-
-            THE PIN BAR BUTTON is the same size as the rest of the icons.
-
-            From 449:
-
-            NO PICTURE MEANS THE CIRCLE, everywhere. You showed me an account with no picture that still opened with the big header. Yesterday's fix moved the decision onto your account record, and a record can name a photo that is not there any more, so the app believed in a picture it could not draw. It now asks one more question before it draws anything: is there really a picture behind this. Nothing to load means the circle. This is checked on a person's profile opened from a chat, from the Calls list and from a story, on a group, and on your own preview in Edit Profile.
-
-            PLEASE TRY FIRST: an account with no picture, and one with a picture, opened all three ways. The right layout on the very first frame, and it must not change while you are looking at it.
-
-            MENU AND SWIPE ICONS are the same size as the rest now. You said the last ones came out too small. They did, because I sized them to the text instead of to the picture box that a normal icon fills, and this time the number is one number for menus and for swipe buttons together.
-
-            EDIT PROFILE, the Large tab is now called Preview and it is a card deck. Your card in front, the same card peeking out either side and tilted, your name and username on the card itself.
-
-            ALL MEDIA no longer flashes when you swipe fast. Swiping quickly through photos there could land you on an empty page for a moment. A chat never did this because a chat opens one photo with nothing to swipe to. Photos further ahead are now drawn instead of left blank, and the neighbours start loading the moment you move.
-
-            THE CHAT LIST no longer keeps a row lit under the chat you opened. It only lights while your finger is on it, which is what you asked for. The grey that stayed on all through the back swipe is gone.
-
-            From 448:
-
-            PROFILE PICTURES, the big one. Some people who have a photo were opening with the small circle, and some people with no photo were opening with the big header and then switching back a second later. Both are fixed, and one half of it was in the data: removing your picture only cleared half of it and left the tall crop behind, so every other phone still had a record saying you had a photo. The app no longer guesses at all. It asks your account record, has the answer before it draws anything, and keeps that answer for the whole visit.
-
-            PLEASE TRY FIRST: open the profile of somebody WITH a photo and somebody WITHOUT one, and reach each of them three ways - from the chat, from the Calls list, and from their story. Every time it must be right on the very first frame and must never change while you are looking at it. Then remove your own photo and check what your friend's phone shows you as.
-
-            Icons in menus are the right size: Unread, Archive, Add Story, and the pin and the archive on the swipe. This fix was finished before build 447 and missed it, because that build was made from the wrong commit.
-
-            A pinned FILE or PDF now shows its preview and its name in the pin bar at the top of the chat, instead of an empty line.
-
-            The All Media tab bar uses the same moving pill as the All / Missed bar on the Calls page.
-
-            Zooming a photo in a chat hides the buttons. Pinch in and the top bar and the bottom buttons fade away, let it back to normal size and they come back. They also come back when you swipe to the next photo.
-
-            Your own picture in Settings opens SQUARE instead of in a circle, the bottom tab bar gets out of the way, and the top says Profile photo.
-
-            Edit Profile, the Large tab, is a clean preview: your picture at the shape the big header crops it to, your name, your username, and nothing else.
-
-            From 447:
-
-            THE DELETE SYSTEM, all layers fixed. Deleting a photo, gif, voice note or file for everyone flips it to the placeholder instantly, on both phones. The placeholder is a quiet capsule, and a deleted message is completely dead - no reactions, no reaction bar, no double-tap, no swipe to reply. A deleted STORY flips your reply card to Story unavailable. An emoji-only story reply shows as the big emoji. The X on a full-screen profile photo works.
+            EMAILS, and these are already live so you do not need this build to see them. The deletion email said "this cannot be undone" when it is not true, you have 30 days and signing back in brings everything back. It now names the real date and tells you how to come back. You get an email every time anyone signs in, not only from a new phone. Creating an account finally sends you something. And when the 30 days run out you get one last email. They all look like one company now.
 
         run: fastlane beta
