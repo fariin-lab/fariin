@@ -447,7 +447,7 @@ struct AccountSettingsView: View {
                             connecting = .apple
                             Task {
                                 do { try await AuthService.shared.connectApple(authorization: auth); connectedTick += 1 }
-                                catch { connectError = error.localizedDescription }
+                                catch { connectError = AuthService.plainMessage(error) }
                                 connecting = nil
                             }
                         case .failure:
@@ -477,7 +477,7 @@ struct AccountSettingsView: View {
             connecting = .google
             Task {
                 do { try await AuthService.shared.connectGoogle(); connectedTick += 1 }
-                catch { connectError = error.localizedDescription }
+                catch { connectError = AuthService.plainMessage(error) }
                 connecting = nil
             }
         }
@@ -1481,7 +1481,7 @@ struct ConnectEmailView: View {
                                     try await onConnect(email.trimmingCharacters(in: .whitespaces), password)
                                     dismiss()
                                 } catch {
-                                    self.error = error.localizedDescription
+                                    self.error = AuthService.plainMessage(error)
                                 }
                                 busy = false
                             }

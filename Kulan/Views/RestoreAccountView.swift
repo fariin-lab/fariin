@@ -27,79 +27,97 @@ struct RestoreAccountView: View {
         max(0, Calendar.current.dateComponents([.day], from: Date(), to: scheduledFor).day ?? 0)
     }
 
+    // REBUILT 2026-08-04. It used to lead with "Your account is scheduled for deletion" under an
+    // orange warning clock, with Delete It Now given a full-width button identical in size and
+    // shape to Restore. That is a notice, not a door back: it repeats the bad news to somebody who
+    // is already half-regretting, and hands the exit the same weight as the way home.
+    //
+    // Three deliberate changes, all in service of the one job this screen has.
+    //   1. LEAD WITH WHAT IS STILL TRUE. Nothing has been deleted. That single fact is the reason
+    //      anybody stays, and it was buried under the headline and two grey lines.
+    //   2. THE EXIT IS TEXT, NOT A BUTTON. Still there, still red, still one tap plus a confirm.
+    //      Just no longer dressed as an equal choice.
+    //   3. MONOCHROME, and matching the front door. This screen appears INSTEAD of the app when you
+    //      sign in, so the last thing the person saw was the Log In screen and its black capsules;
+    //      the same button here reads as one continuous flow rather than a system alert that
+    //      ambushed them. The old blue came from `Color.accentColor`, which reads the asset
+    //      catalogue and quietly ignores the `.tint(.primary)` KulanApp sets to keep iOS blue out
+    //      of this app — so this screen was the one place the blue got back in.
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Spacer(minLength: 48)
+                Spacer(minLength: 56)
 
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 46))
-                    .foregroundStyle(.orange)
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(.secondary)
 
-                Text("Your account is scheduled for deletion")
+                Text("Everything is still here")
                     .font(.title2.weight(.bold))
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 14).padding(.horizontal, 28)
+                    .padding(.top, 18).padding(.horizontal, 28)
 
-                VStack(spacing: 8) {
-                    Text(handle.isEmpty
-                         ? "It will be permanently deleted on \(dueText)."
-                         : "@\(handle) will be permanently deleted on \(dueText).")
-                    Text(daysLeft == 0
-                         ? "This is your last day to bring it back."
-                         : "You have \(daysLeft) day\(daysLeft == 1 ? "" : "s") to bring it back exactly as it was.")
-                }
-                .font(.subheadline).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 10).padding(.horizontal, 28)
+                Text(handle.isEmpty
+                     ? "Your chats, your photos and your name. Nothing has been deleted."
+                     : "@\(handle), your chats and your photos. Nothing has been deleted.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10).padding(.horizontal, 32)
 
-                VStack(spacing: 12) {
-                    Button {
-                        act { try await ProfileStore.shared.restoreAccount(); onRestored() }
-                    } label: {
-                        Group {
-                            if working { ProgressView().tint(.white) }
-                            else { Text("Restore My Account").fontWeight(.semibold) }
-                        }
-                        .frame(maxWidth: .infinity).frame(height: 52)
-                        .foregroundStyle(.white)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Button {
+                    act { try await ProfileStore.shared.restoreAccount(); onRestored() }
+                } label: {
+                    Group {
+                        if working { ProgressView().tint(AuthPalette.page) }
+                        else { Text("Bring my account back") }
                     }
-                    .buttonStyle(.plain)
-
-                    Button { confirmDeleteNow = true } label: {
-                        Text("Delete It Now").fontWeight(.semibold)
-                            .frame(maxWidth: .infinity).frame(height: 52)
-                            .foregroundStyle(.red)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
+                    .authDoorPill()
                 }
+                .buttonStyle(.plain)
                 .disabled(working)
-                .padding(.horizontal, 20).padding(.top, 30)
+                .padding(.horizontal, 24).padding(.top, 34)
 
-                // Said plainly rather than promising everything back: with end-to-end encryption the
-                // key that reads old messages exists only on the device that had it.
-                Text("Restoring on a different phone brings back your account and username, but older messages stay unreadable — the key that unlocks them is only on the phone you deleted from.")
+                // The deadline is a fact, not a threat, so it sits UNDER the way back rather than
+                // above it. A date as well as a countdown: one is checkable, the other is felt.
+                Text(daysLeft == 0
+                     ? "Today is the last day. It is deleted on \(dueText)."
+                     : "It is deleted on \(dueText), \(daysLeft) day\(daysLeft == 1 ? "" : "s") from now.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 28).padding(.top, 18)
+                    .padding(.horizontal, 32).padding(.top, 14)
 
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 28).padding(.top, 14)
                 }
+
+                Button { confirmDeleteNow = true } label: {
+                    Text("Delete it now")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+                .disabled(working)
+                .padding(.top, 28)
+
+                // Said plainly rather than promising everything back: with end-to-end encryption
+                // the key that reads old messages exists only on the device that had it.
+                Text("Restoring on a different phone brings back your account and your username, but older messages stay unreadable. The key that opens them is only on the phone you deleted from.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 32).padding(.top, 34)
 
                 Spacer(minLength: 48)
             }
             .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .background(AuthPalette.page.ignoresSafeArea())
         .alert("Delete now?", isPresented: $confirmDeleteNow) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {

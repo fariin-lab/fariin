@@ -43,6 +43,13 @@ targets:
       path: Kulan/Info.plist
       properties:
         CFBundleDisplayName: Fariin
+        # NOT the same key, and the difference is visible. CFBundleDisplayName is the home-screen
+        # label; CFBundleName is what iOS uses when the SYSTEM speaks about the app, and it defaults
+        # to the target name, which is still Kulan. So the Google sign-in prompt read
+        # `"Kulan" Wants to Use "accounts.google.com" to Sign In` on a build where every other
+        # surface already said Fariin — caught by the owner in a screenshot. Rename stage 1 changed
+        # the label and missed this. Apple wants 15 characters or fewer here.
+        CFBundleName: Fariin
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}

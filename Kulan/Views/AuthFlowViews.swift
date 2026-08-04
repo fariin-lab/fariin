@@ -436,20 +436,8 @@ struct EmailAuthView: View {
         }
     }
 
-    // Firebase error codes → normal-person words.
-    private func plain(_ error: Error) -> String {
-        let ns = error as NSError
-        switch ns.code {
-        case 17008: return "That doesn't look like an email address."
-        case 17026: return "Password must be at least 6 characters."
-        case 17009, 17004: return "Wrong email or password."
-        case 17011: return "No account with that email. Create one instead."
-        case 17007: return "This email already has an account. Go back and choose Log In instead."
-        case 17020: return "No internet connection. Try again."
-        // Same story from the email door: the address belongs to an account created with Google or
-        // Apple, so there is no password to be right.
-        case 17012: return "This email already has an account, made with Google or Apple. Go back and use that button, or log in with a code."
-        default: return error.localizedDescription
-        }
-    }
+    // Moved to AuthService.plainMessage so every door that can reject somebody shares it. It lived
+    // here as a private function, which is exactly why Delete Account was still showing people
+    // "The supplied auth credential is malformed or has expired".
+    private func plain(_ error: Error) -> String? { AuthService.plainMessage(error) }
 }

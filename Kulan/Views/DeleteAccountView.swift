@@ -247,7 +247,12 @@ struct DeleteAccountView: View {
                 try await work()
                 await performScheduling()
             } catch {
-                self.error = error.localizedDescription
+                // Only the password is in question on this screen; the email is not something the
+                // person typed, so the front door's "wrong email or password" would send them
+                // looking for a mistake they could not have made. A cancel comes back nil and
+                // simply clears the line.
+                self.error = AuthService.plainMessage(error,
+                                                      credentialHint: "That password is not right.")
                 step = .verify
             }
         }
@@ -281,7 +286,7 @@ struct DeleteAccountView: View {
             dismiss()
             onDeleted()
         } catch {
-            self.error = error.localizedDescription
+            self.error = AuthService.plainMessage(error)
             step = .confirm
         }
     }
@@ -298,7 +303,7 @@ struct DeleteAccountView: View {
             dismiss()
             onDeleted()
         } catch {
-            self.error = error.localizedDescription
+            self.error = AuthService.plainMessage(error)
             step = .confirm
         }
     }

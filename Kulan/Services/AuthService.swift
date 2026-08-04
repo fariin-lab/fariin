@@ -280,8 +280,22 @@ final class AuthService: NSObject {
         }
     }
 
+    /// OUR OWN EMAIL, not Firebase's. `Auth.auth().sendPasswordReset` hands the job to Google's
+    /// mailer, and that mailer sent from a domain shared by every Firebase project on earth; Gmail
+    /// binned the result and said why, "previous messages from firebaseapp.com were marked as
+    /// spam". Worse, the wording could not be changed at all — the console refuses every edit with
+    /// "Email template updates are currently unavailable for this project" — so it stayed a wall of
+    /// plain text wrapped around a raw 200-character URL, which is what phishing looks like.
+    ///
+    /// The function mints the same link Firebase would have mailed and posts it through Resend from
+    /// noreply@fariin.com, the sender the login codes already use and which already reaches the
+    /// inbox. The reset page itself is unchanged.
+    ///
+    /// SAYS NOTHING ABOUT WHETHER THE ACCOUNT EXISTS, same contract as `requestLoginCode`.
     func resetPassword(email: String) async throws {
-        try await Auth.auth().sendPasswordReset(withEmail: email)
+        _ = try await Functions.functions(region: "me-central1")
+            .httpsCallable("requestPasswordReset")
+            .call(["email": email])
     }
 
     // MARK: - Signing in with a code, for when the password is gone
@@ -436,6 +450,72 @@ final class AuthService: NSObject {
     func reauthEmail(password: String) async throws {
         guard let email = Auth.auth().currentUser?.email else { throw AuthFlowError.notSignedIn }
         try await reauthenticate(with: EmailAuthProvider.credential(withEmail: email, password: password))
+    }
+
+    /// Did the person simply back out? Then there is nothing to report and nothing went wrong.
+    ///
+    /// Every door closes differently and none of them are Firebase errors, which is why the shared
+    /// message table below cannot answer this. Tapping Cancel on the Google sheet used to put
+    /// **"The operation couldn't be completed. (com.apple.AuthenticationServices.WebAuthentication
+    /// Session error 1.)"** on screen in red — on the Delete Account page, where a wall of Apple
+    /// framework text reads like the deletion broke rather than like the person changed their mind.
+    /// The Apple button already guarded its own cancel; Google and the rest never did.
+    static func isCancellation(_ error: Error) -> Bool {
+        let ns = error as NSError
+        switch ns.domain {
+        // The in-app browser Google's sign-in runs in. Code 1 is canceledLogin.
+        case "com.apple.AuthenticationServices.WebAuthenticationSession": return ns.code == 1
+        // Sign in with Apple's own sheet. 1001 is ASAuthorizationError.canceled.
+        case ASAuthorizationError.errorDomain: return ns.code == 1001
+        // Google's SDK, when it is the one presenting. -5 is its canceled case.
+        case "com.google.GIDSignIn": return ns.code == -5
+        default: return false
+        }
+    }
+
+    /// Firebase error codes → normal-person words.
+    ///
+    /// THIS USED TO BE PRIVATE TO THE SIGN-IN SCREEN, and every other door that can reject you was
+    /// left showing `error.localizedDescription` raw. The owner hit the result on Delete Account:
+    /// typing the wrong password answered **"The supplied auth credential is malformed or has
+    /// expired"**, which is Firebase 17004 read aloud. It says nothing a person can act on, and on
+    /// a screen about deleting an account it reads like the app broke rather than like a typo.
+    ///
+    /// `credentialHint` exists because the same code means different things at different doors. At
+    /// the front door you may have got either field wrong. On a re-verify screen your email is not
+    /// in question and only the password is, so saying "wrong email or password" there would send
+    /// somebody hunting for a mistake they did not make.
+    /// RETURNS nil WHEN THERE IS NOTHING TO SAY, which is the point. Every `error` property in the
+    /// app is already `String?`, so `self.error = plainMessage(e)` now clears itself on a cancel
+    /// instead of each screen needing its own guard to remember. One screen forgetting that guard
+    /// is precisely how the Google sheet came to shout Apple framework text at somebody who had
+    /// merely tapped Cancel.
+    static func plainMessage(_ error: Error,
+                             credentialHint: String = "Wrong email or password.") -> String? {
+        // Backing out is a decision, not a failure.
+        if isCancellation(error) { return nil }
+
+        // Our own errors already speak English; passing them through the code table would lose them.
+        if let flow = error as? AuthFlowError { return flow.localizedDescription }
+
+        let ns = error as NSError
+        switch ns.code {
+        case 17008: return "That doesn't look like an email address."
+        case 17026: return "Password must be at least 6 characters."
+        case 17009, 17004: return credentialHint
+        case 17011: return "No account with that email. Create one instead."
+        case 17007: return "This email already has an account. Go back and choose Log In instead."
+        case 17020: return "No internet connection. Try again."
+        case 17010: return "Too many attempts. Wait a moment and try again."
+        case 17014: return "Please sign in again before doing this."
+        case 17021: return "Your session expired. Sign in again."
+        // The address belongs to an account created with Google or Apple, so there is no password
+        // that can be right.
+        case 17012: return "This email already has an account, made with Google or Apple. Go back and use that button, or log in with a code."
+        // Last resort. Firebase's own text is better than nothing, but it is never a good answer,
+        // so anything that lands here is a code worth adding above once we have seen it.
+        default: return error.localizedDescription
+        }
     }
 }
 
