@@ -135,7 +135,7 @@ struct StoryTrimView: View {
         openedEnd = trimEnd > 0 ? trimEnd : duration
         if trimEnd <= 0 { trimEnd = duration }
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
-        player.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600))
+        await player.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600))
 
         // The same filmstrip recipe VideoApprovalView uses: ten frames, rotation-corrected, small.
         let asset = AVURLAsset(url: url)

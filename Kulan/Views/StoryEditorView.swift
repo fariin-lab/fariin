@@ -94,10 +94,22 @@ struct StoryEditorView: View {
     /// image, and every strip in this app already learned that the hard way.
     struct DraftItem: Identifiable {
         let id = UUID()
+        /// The ORIGINAL, never overwritten. Every edit is re-applied to this, which is what makes
+        /// them undoable — baking them in was the old model and it made a crop permanent the moment
+        /// you looked at another item.
         var image: UIImage
         var videoURL: URL? = nil
         var duration: Double = 0
         var isVideo: Bool { videoURL != nil }
+
+        // The edits, held BESIDE the picture rather than burnt into it, so switching away and back
+        // returns you to exactly what you had, still adjustable (owner 2026-08-04).
+        var cropped: UIImage? = nil       // the interactive crop's result, re-derivable from `image`
+        var filterIndex = 0
+        var drawing = PKDrawing()
+        var overlays: [TextOverlay] = []
+        var zoom: CGFloat = 1
+        var offset: CGSize = .zero
     }
 
     /// Everything in this post, in order, with `index` pointing at the one on the canvas.
@@ -330,13 +342,13 @@ struct StoryEditorView: View {
         .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
         // Images AND videos, because the + offers both. A picked video joins the post with its own
-        // poster frame; its frames are not editable here, which is why bakeCurrent leaves it alone.
+        // poster frame; its frames are not editable here, which is why the stash leaves them alone.
         .photosPicker(isPresented: $showAddPicker, selection: $addPick, maxSelectionCount: 9,
                       matching: .any(of: [.images, .videos]))
         .onChange(of: addPick) { _, picks in
             guard !picks.isEmpty else { return }
             Task {
-                await bakeCurrent()
+                stashCurrent()
                 for p in picks {
                     if let movie = try? await p.loadTransferable(type: PickedMovie.self) {
                         let asset = AVURLAsset(url: movie.url)
@@ -634,26 +646,38 @@ struct StoryEditorView: View {
 
     // MARK: - Items
 
-    /// Flatten what is on the canvas back into the item it belongs to, then clear the tools. Called
-    /// before leaving an item and before posting, so an edit is never lost by switching away.
-    @MainActor private func bakeCurrent() async {
+    /// Park the live tool state back on the item it belongs to. NOTHING IS FLATTENED: the picture is
+    /// left as it came in and the edits are stored next to it, so coming back finds the crop still a
+    /// crop you can change and the strokes still strokes you can undo.
+    @MainActor private func stashCurrent() {
         guard items.indices.contains(index) else { return }
-        // A video's frames cannot be edited here, so its poster is left exactly as it was.
-        if !items[index].isVideo {
-            let data = await flatten()
-            if let img = UIImage(data: data) { items[index].image = img }
-        }
-        croppedSource = nil
-        drawing = PKDrawing()
-        overlays = []
-        filterIndex = 0
-        photoZoom = 1; photoOffset = .zero
+        items[index].cropped = croppedSource
+        items[index].filterIndex = filterIndex
+        items[index].drawing = drawing
+        items[index].overlays = overlays
+        items[index].zoom = photoZoom
+        items[index].offset = photoOffset
+    }
+
+    /// The mirror image: put an item's edits back on the tools.
+    @MainActor private func restoreCurrent() {
+        guard items.indices.contains(index) else { return }
+        let it = items[index]
+        croppedSource = it.cropped
+        filterIndex = it.filterIndex
+        drawing = it.drawing
+        overlays = it.overlays
+        photoZoom = it.zoom
+        photoOffset = it.offset
+        selectedID = nil; editingID = nil
         recomputeEdited()
     }
 
     private func select(_ i: Int) {
         guard i != index, items.indices.contains(i) else { return }
-        Task { await bakeCurrent(); index = i; recomputeEdited() }
+        stashCurrent()
+        index = i
+        restoreCurrent()
     }
 
     private func remove(_ i: Int) {
@@ -667,23 +691,37 @@ struct StoryEditorView: View {
     // MARK: - Send
     private func send() async {
         posting = true
-        await bakeCurrent()
-        // Everything AFTER the first item rides along as extras; the audience is answered once.
-        let ordered = items
-        let first = ordered.first
-        let data = first.map { it -> Data in
-            it.image.jpegData(compressionQuality: 0.9) ?? Data()
-        } ?? Data()
+        stashCurrent()
+        let keep = index
+
+        // EVERY item is rendered HERE, at post time, from the edits stored beside it — which is what
+        // being able to un-crop after switching costs: the work moves from "on the way out of an
+        // item" to "once, when you actually post". `flatten` composes from the tool state rather
+        // than from what is on screen, so restoring an item is enough to render it correctly.
+        var rendered: [(data: Data, video: URL?)] = []
+        for i in items.indices {
+            if let u = items[i].videoURL {
+                // A video's frames are not editable here; its poster is what the strip showed.
+                rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u))
+                continue
+            }
+            index = i
+            restoreCurrent()
+            rendered.append((await flatten(), nil))
+        }
+        index = keep
+        restoreCurrent()
         posting = false
+
+        let data = rendered.first?.data ?? Data()
         guard !data.isEmpty else { postError = true; return }   // never hand off a zero-byte (broken) image
 
         var extras: [StoryExtra] = []
-        for it in ordered.dropFirst() {
-            if let u = it.videoURL {
-                extras.append(StoryExtra(video: StoryVideoPayload(
-                    url: u, thumbnail: it.image.jpegData(compressionQuality: 0.72) ?? Data())))
+        for r in rendered.dropFirst() {
+            if let u = r.video {
+                extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data)))
             } else {
-                extras.append(StoryExtra(photo: it.image.jpegData(compressionQuality: 0.9) ?? Data()))
+                extras.append(StoryExtra(photo: r.data))
             }
         }
         // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —

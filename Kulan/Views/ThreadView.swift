@@ -2424,7 +2424,6 @@ struct ThreadView: View {
             // capsule produced the "two lines" at the top.)
             // Grid: X + "Recents ▾" album dropdown header, Camera tile, then recent photos/videos.
             AttachRecentsStrip(
-                removedIds: deselectedIds,
                 onCamera: {
                     showAttachPanel = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showCamera = true }
@@ -2502,7 +2501,10 @@ struct ThreadView: View {
                     }
                 },
                 onCaptionFocused: { attachDetent = .large },
-                hasSelection: $recentsHasSelection)
+                hasSelection: $recentsHasSelection,
+                // Declared last on the strip, so it goes last here — Swift matches these by position
+                // as well as by name.
+                removedIds: deselectedIds)
                 .padding(.top, 10)
             // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
             // bar in the recents strip takes its place).
@@ -3454,11 +3456,11 @@ struct ThreadView: View {
                     gen.appliesPreferredTrackTransform = true
                     gen.maximumSize = CGSize(width: 320, height: 320)
                     let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
-                    items.append(.video(UUID(), movie.url, thumb, dur))
+                    items.append(.video(UUID().uuidString, movie.url, thumb, dur))
                 }
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       let ui = UIImage(data: data) {
-                items.append(.image(UUID(), ui))
+                items.append(.image(UUID().uuidString, ui))
             }
         }
         guard !items.isEmpty else { return }
