@@ -69,23 +69,27 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
           FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
+          # KEEP THIS IN STEP WITH THE BUILD. It is hardcoded here, so it does NOT change when the code
+          # does — build 458 went out carrying build 456's notes, which told testers to go and check a
+          # story crash that had already shipped two builds earlier. Rewrite this block before every
+          # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PLEASE TRY THESE FIRST. Watch a story with a video in it, on wifi and on mobile data. The app was crashing there and only a real phone can tell us it is gone. Then post a video story with text on it, with the pen on it, and cropped, and check the words land where you put them.
+            PLEASE TRY THIS FIRST. Open the app and look at your chat list. There should be a new chat called Fariin with a blue tick, at the top. Open it. The bell at the top right should ALREADY be crossed out without you touching it, and there should be no box to type in at the bottom, only a line saying only Fariin can send messages. If any of those three things is wrong, tell me.
 
-            THE CRASH IS FIXED. When a story video started downloading, one line assumed the connection would always ask us the same question, and on networks that ask a different one the app closed itself. That happens on hotel wifi, on some phone networks, and behind a work connection. The same line was also accepting any security certificate it was handed without checking it, which it should never have done.
+            THE OFFICIAL CHAT. This is where we tell you about new things, fixes and updates. It works the way Signal's does, and the important part is what is NOT there: no account sits behind it. There is no @fariin user to log in to, so nobody can ever pretend to be it. The app itself decides what is official, and the tick is drawn from that and nothing else.
 
-            MESSAGE REQUESTS. Somebody who has never messaged you now gets one message and then waits. You see Accept or Delete inside the conversation itself, not in a separate inbox you have to go and find. Accept and you are friends and can talk normally. Delete and it is gone. Their first message is limited to 300 characters so an unanswered request cannot be used to shout at you.
+            It is muted from the start and stays muted unless you turn it on. You can block it and you will stop getting updates, and nothing is lost if you unblock it later.
 
-            Who can message you is Everyone or My Friends. My Friends means people you have already accepted. There is no No One option, as you asked.
+            SENDING ONE, for you only. Settings now has Official Announcements, and only your account can see it. Please test it on yourself first: New Announcement, then Send to, then Chosen people, then pick yourself. Nobody else sees that. Write a title, write a message, add a picture, add a button, and send. Then open the Fariin chat and check it looks the way the preview said it would.
 
-            AA, CROP AND PEN NOW WORK ON VIDEOS. They were on the screen before and then quietly thrown away when you posted, so the video came out plain. Now they are painted into the video itself.
+            When you are happy, Send to Everyone is the same screen. You can also send to particular countries, or to a share of people rather than all of them, and you can set a date instead of sending now.
 
-            THE VIDEO EDITOR HAS THE PLUS BUTTON AND THE THUMBNAIL STRIP, like the photo one. Add several videos to one post, tap between them, and each one keeps its own trim, its own mute and its own drawings. Trim them all from the same trim screen instead of going in and out for each one.
+            You can add other admins in there too, and choose one by one what each of them is allowed to do. Only you can do that, and nobody can be made an owner.
 
-            USERNAMES TELL YOU AS YOU TYPE. It says Checking username, then either that the name is available or that it is already taken, and it fades between them instead of jumping. There is a small X in the field to clear it. The important part is underneath: the server now decides who gets a name, in one step, so two people tapping Done at the same moment can no longer both be told they won.
+            WHAT I KNOW IS MISSING, so you do not go looking for it. Announcements do not make your phone buzz at all, not even the security ones. The chat is muted on purpose and there is no notification behind it yet. That is a separate job and I have not started it.
 
-            A VIDEO ADDED IN THE PHOTO EDITOR shows a play mark now. It shows a still picture there, and without the mark you could not tell it was a video until after you posted it.
+            The Update Now button needs the App Store link, which cannot exist until the app is published. Until you set it in Announcements, Update Link, the app refuses to offer that button rather than giving you one that opens nothing.
 
-            WHAT TO WATCH FOR, and please tell me if you see it. Nothing that already worked should have changed: open your old chats and check none of them are asking to be accepted. Open a group. Send a normal message. Post a plain video story with no drawing on it, which still goes out the old way untouched.
+            WHAT TO WATCH FOR. Nothing that already worked should have changed. Open your old chats. Send a normal message. Post a story. Swipe the new Fariin chat to pin, mute and archive it and check each one actually holds.
 
         run: fastlane beta
