@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // the window's safe-area insets, read directly (see `bottomInset`)
 
 // The TEXT half of the story camera, to the owner's reference (2026-08-03): a coloured card with
 // the X top-left and the colour button top-right, the words in the middle, "Aa" bottom-left, and a
@@ -59,6 +60,14 @@ struct StoryTextCard: View {
     /// Measured rather than guessed: a hardware keyboard, a floating one and a language bar are all
     /// different heights, and a constant would be wrong on all three.
     @StateObject private var keyboard = KeyboardWatcher()
+
+    /// The home-indicator strip, read from the window the same way the editors read the top one.
+    /// The card's layout already excludes it; the keyboard's height does not.
+    private var bottomInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .first ?? 0
+    }
 
     private let charLimit = 700
     private var style: TextStoryStyle { TextStoryStyles.style(styleIndex) }
@@ -136,7 +145,17 @@ struct StoryTextCard: View {
                     }
                 }
                 .padding(.horizontal, 14)
-                .padding(.bottom, 14 + keyboard.height)   // ride just above the keyboard
+                // RIDE JUST ABOVE THE KEYBOARD, and this time actually 14pt above it (owner
+                // 2026-08-04: "Aa and Done button and keyboard has more space").
+                //
+                // `keyboard.height` is measured from the bottom of the SCREEN — it is
+                // `screenHeight - keyboardTop` — but this card is laid out inside the safe area, so
+                // its own bottom already sits about 34pt up on any phone with a home indicator.
+                // Padding by the full keyboard height therefore counted that strip twice and left
+                // the buttons ~48pt clear of the keys instead of 14. Take the inset back off.
+                .padding(.bottom, keyboard.height > 0
+                         ? max(10, 14 + keyboard.height - bottomInset)
+                         : 14)
                 .animation(.easeOut(duration: 0.22), value: keyboard.height)
             }
             .foregroundStyle(style.ink)
