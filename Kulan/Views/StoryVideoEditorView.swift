@@ -1,6 +1,8 @@
 import SwiftUI
 import AVFoundation
 import AVKit
+import PhotosUI
+import PencilKit
 
 // Video-story editor — the video plays looping on the same rounded canvas card as the photo
 // editor (muted poster-frame wash behind it, black frame above/below), with the same caption
@@ -18,6 +20,7 @@ struct StoryVideoEditorView: View {
     @State private var thumbnail: UIImage?
     @State private var thumbnailData: Data?
     @State private var pendingShare: StoryVideoShare?
+    @State private var pendingExtras: [StoryExtra] = []
     @State private var loadFailed = false
     @FocusState private var captionFocused: Bool
     @StateObject private var keyboard = KeyboardWatcher()   // manual keyboard rise (same as the photo editor)
@@ -35,6 +38,94 @@ struct StoryVideoEditorView: View {
 
     private var isTrimmed: Bool { trimStart > 0.05 || (duration > 0 && trimEnd < duration - 0.05) }
     private var trimmedLength: Double { max(0, trimEnd - trimStart) }
+
+    // MARK: - More than one clip
+
+    /// One video in this post. The edits are held BESIDE the clip rather than burnt into it, exactly
+    /// as the photo editor holds them, so switching away and back returns you to what you had and it
+    /// is all still adjustable. They are applied once, at export — see `VideoTranscoder.burnIn`.
+    struct Clip: Identifiable {
+        let id = UUID()
+        let url: URL
+        var duration: Double = 0
+        var poster: UIImage? = nil
+        var posterData: Data? = nil
+        var trimStart: Double = 0
+        var trimEnd: Double = 0
+        var muted = false
+        var drawing = PKDrawing()
+        var overlays: [TextOverlay] = []
+        var cropRect: CGRect? = nil
+    }
+
+    @State private var clips: [Clip] = []
+    @State private var index = 0
+
+    // The live tool state for the clip on screen. Parked onto its Clip when you switch away.
+    @State private var drawing = PKDrawing()
+    @State private var overlays: [TextOverlay] = []
+    @State private var cropRect: CGRect? = nil
+    @State private var selectedID: UUID?
+    @State private var editingID: UUID?
+    @State private var isDrawing = false
+    @State private var strokeInFlight = false
+    @State private var penHue: Double = 0
+    @State private var penWidth: CGFloat = 8
+    @State private var isHighlighter = false
+    @State private var showCrop = false
+    @State private var showAddPicker = false
+    @State private var addPick: [PhotosPickerItem] = []
+    @State private var canvasSize: CGSize = .zero
+
+    private var currentURL: URL { clips.indices.contains(index) ? clips[index].url : url }
+
+    /// Park the live tools back onto the clip they belong to.
+    @MainActor private func stashCurrent() {
+        guard clips.indices.contains(index) else { return }
+        clips[index].drawing = drawing
+        clips[index].overlays = overlays
+        clips[index].cropRect = cropRect
+        clips[index].trimStart = trimStart
+        clips[index].trimEnd = trimEnd
+        clips[index].muted = muted
+    }
+
+    /// The mirror image: put a clip's edits back on the tools, and put the clip on the player.
+    @MainActor private func restoreCurrent() {
+        guard clips.indices.contains(index) else { return }
+        let c = clips[index]
+        drawing = c.drawing
+        overlays = c.overlays
+        cropRect = c.cropRect
+        trimStart = c.trimStart
+        trimEnd = c.trimEnd
+        muted = c.muted
+        duration = c.duration
+        thumbnail = c.poster
+        thumbnailData = c.posterData
+        selectedID = nil; editingID = nil; isDrawing = false
+        player.isMuted = muted
+        looper = nil                     // a looper outlives its item; a stale one keeps the old clip
+        let item = AVPlayerItem(url: c.url)
+        looper = AVPlayerLooper(player: player, templateItem: item)
+        playing = true
+        player.play()
+    }
+
+    private func select(_ i: Int) {
+        guard i != index, clips.indices.contains(i) else { return }
+        stashCurrent()
+        index = i
+        restoreCurrent()
+    }
+
+    private func remove(_ i: Int) {
+        guard clips.count > 1, clips.indices.contains(i) else { return }
+        clips.remove(at: i)
+        if index >= clips.count { index = clips.count - 1 }
+        else if i < index { index -= 1 }
+        restoreCurrent()
+    }
 
     private func togglePlay() {
         playing.toggle()
@@ -102,6 +193,42 @@ struct StoryVideoEditorView: View {
                             if captionFocused { captionFocused = false } else { togglePlay() }
                         }
 
+                    // WHAT HE DREW, over the video. The same overlay views and the same transforms
+                    // the photo editor uses, so text placed on a clip sits where text placed on a
+                    // picture sits, and `videoBurnIn` re-renders this exact arrangement at export.
+                    ForEach($overlays) { $o in
+                        TextOverlayView(
+                            overlay: $o,
+                            isSelected: selectedID == o.id,
+                            canvasSize: canvasSize,
+                            interactive: !isDrawing && editingID == nil,
+                            onTap: { selectedID = o.id; editingID = o.id },
+                            onDragChange: { _ in },
+                            onDragEnd: { _ in },
+                            onSnap: { _, _ in }
+                        )
+                        .opacity(editingID == o.id ? 0 : 1)
+                    }
+
+                    if isDrawing {
+                        DrawingCanvas(drawing: $drawing, isActive: true,
+                                      penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                                      showsToolPicker: false,
+                                      inkType: isHighlighter ? .marker : .pen,
+                                      penWidth: penWidth,
+                                      onStroke: { live in
+                                          withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = live }
+                                      })
+                            .frame(width: geo.size.width, height: cardH)
+                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    } else if !drawing.bounds.isEmpty {
+                        Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
+                            .resizable()
+                            .frame(width: geo.size.width, height: cardH)
+                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                            .allowsHitTesting(false)
+                    }
+
                     // The play mark, only while paused, exactly as his reference draws it.
                     if !playing {
                         Image(systemName: "play.fill")
@@ -115,7 +242,9 @@ struct StoryVideoEditorView: View {
                     }
                 }
 
-                // Top controls: X (left), trim notice + mute (right).
+                // Top controls: X (left), trim notice + mute (right). ALL OF IT HIDES WHILE THE PEN
+                // IS DOWN and comes back when the finger lifts — his instruction on the photo editor,
+                // and the same rule has to hold here or the two screens behave differently.
                 VStack {
                     HStack {
                         Button { dismiss() } label: {
@@ -146,14 +275,28 @@ struct StoryVideoEditorView: View {
                     Spacer()
                 }
                 .ignoresSafeArea(.keyboard, edges: .bottom)
+                .opacity(strokeInFlight ? 0 : 1)
 
                 // Bottom bar — caption + NEXT, lifted manually above the keyboard (photo-editor math).
                 VStack {
                     Spacer()
-                    bottomBar
+                    if isDrawing { penBar } else { bottomBar }
                         .padding(.bottom, keyboard.height > 0
                             ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
                             : -14)
+                }
+                .opacity(strokeInFlight ? 0 : 1)
+
+                cropOverlay
+            }
+            .coordinateSpace(name: "canvas")
+            .onAppear { canvasSize = geo.size }
+            .onChange(of: geo.size) { _, sz in canvasSize = sz }
+            .overlay {
+                if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
+                    TextEditorOverlay(draft: $overlays[idx],
+                                      onCancel: { trimEmpty(id); editingID = nil },
+                                      onDone: { trimEmpty(id); editingID = nil })
                 }
             }
         }
@@ -164,12 +307,50 @@ struct StoryVideoEditorView: View {
         }
         .sheet(item: $pendingShare) { s in
             ShareStorySheet(image: s.payload.thumbnail, caption: s.caption, video: s.payload,
+                            extras: pendingExtras,
                             onPosted: { onPosted(); dismiss() })
         }
         .fullScreenCover(isPresented: $showTrim) {
-            StoryTrimView(url: url, duration: duration,
+            // ONE TRIM SCREEN FOR THE WHOLE POST (owner: "trimming multiple videos from a single trim
+            // screen"). The strip travels with it, so switching clips happens inside trim rather than
+            // by backing out to the editor and coming in again for each one.
+            StoryTrimView(url: currentURL, duration: duration,
                           trimStart: $trimStart, trimEnd: $trimEnd,
-                          onClose: { showTrim = false })
+                          clips: clips.map { StoryTrimView.Peer(id: $0.id, poster: $0.poster) },
+                          currentIndex: index,
+                          onSelect: { i in stashCurrent(); index = i; restoreCurrent() },
+                          onClose: { showTrim = false; stashCurrent() })
+        }
+        // + adds more clips. Videos only: this is the video editor, and a picture dropped in here
+        // would have nothing to play it.
+        .photosPicker(isPresented: $showAddPicker, selection: $addPick,
+                      maxSelectionCount: 10, matching: .videos)
+        .onChange(of: addPick) { _, picks in
+            guard !picks.isEmpty else { return }
+            Task {
+                for pick in picks {
+                    guard let movie = try? await pick.loadTransferable(type: PickedMovie.self) else { continue }
+                    var c = Clip(url: movie.url)
+                    let asset = AVURLAsset(url: movie.url)
+                    c.duration = (try? await asset.load(.duration))?.seconds ?? 0
+                    c.trimEnd = c.duration
+                    let gen = AVAssetImageGenerator(asset: asset)
+                    gen.appliesPreferredTrackTransform = true
+                    gen.maximumSize = CGSize(width: 1600, height: 1600)
+                    if let cg = try? await gen.image(at: CMTime(seconds: min(0.1, c.duration / 2), preferredTimescale: 600)).image {
+                        let img = UIImage(cgImage: cg)
+                        c.poster = img
+                        c.posterData = img.jpegData(compressionQuality: 0.72)
+                    }
+                    await MainActor.run { clips.append(c) }
+                }
+                await MainActor.run {
+                    addPick = []
+                    stashCurrent()
+                    index = max(0, clips.count - 1)
+                    restoreCurrent()
+                }
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
@@ -178,8 +359,10 @@ struct StoryVideoEditorView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 12) {
+            if !captionFocused { clipStrip }
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 10) {
+                    addMoreButton
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
                         // ...and the text itself carries a hairline shadow so it reads on white.
@@ -205,19 +388,24 @@ struct StoryVideoEditorView: View {
 
             if !captionFocused {
                 HStack(spacing: 14) {
-                    // TRIM ONLY, and only here. Aa, crop and pen draw ON a picture; on a video they
-                    // would have to be burned into every frame at export, which is a different job
-                    // from the photo editor's and not one to fake with a button that does nothing.
-                    HStack(spacing: 22) {
-                        Button { player.pause(); playing = false; showTrim = true } label: {
-                            Image(systemName: "scissors")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(isTrimmed ? .green : .white)
-                                .frame(width: 32, height: 32).contentShape(Rectangle())
+                    // THE SAME FIVE TOOLS THE PHOTO EDITOR HAS, plus trim, which only a video has.
+                    // Aa, crop and pen were photo-only because a video had nowhere to put them; they
+                    // are burned into the frames at export now, so there is no longer a reason for
+                    // this screen to offer less than that one.
+                    HStack(spacing: 20) {
+                        tool("textformat") { addTextOverlay() }
+                        tool("crop", active: cropRect != nil) {
+                            player.pause(); playing = false
+                            withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                         }
-                        .buttonStyle(StoryPressStyle())
+                        tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
+                             active: isDrawing) { isDrawing.toggle() }
+                        tool("scissors", active: isTrimmed) {
+                            player.pause(); playing = false; showTrim = true
+                        }
+                        tool("plus.square.on.square") { showAddPicker = true }
                     }
-                    .padding(.horizontal, 20).frame(height: 46)
+                    .padding(.horizontal, 18).frame(height: 46)
                     .liquidGlass(Capsule())
 
                     Spacer()
@@ -259,12 +447,201 @@ struct StoryVideoEditorView: View {
         .buttonStyle(StoryPressStyle()).disabled(thumbnailData == nil)
     }
 
+    /// One tool in the capsule. Same box, same ink, same press feel as the photo editor's.
+    private func tool(_ name: String, active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(active ? .green : .white)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(StoryPressStyle())
+    }
+
+    /// The clips in this post, above the caption bar, exactly as the photo editor draws them: the one
+    /// on screen has a blue frame and an X, the others are plain and switch to when tapped.
+    ///
+    /// Only when there is more than one. A single thumbnail of the clip already filling the screen is
+    /// a picture of what you are looking at.
+    @ViewBuilder private var clipStrip: some View {
+        if clips.count > 1 {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                ForEach(Array(clips.enumerated()), id: \.element.id) { i, c in
+                    ZStack(alignment: .topTrailing) {
+                        Group {
+                            if let poster = c.poster {
+                                Image(uiImage: poster).resizable().scaledToFill()
+                            } else {
+                                Color(white: 0.15)
+                            }
+                        }
+                        .frame(width: 48, height: 62)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(i == index ? Color.accentColor : .white.opacity(0.35),
+                                              lineWidth: i == index ? 2 : 1)
+                        }
+                        .onTapGesture { select(i) }
+
+                        if i == index {
+                            Button { remove(i) } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.black)
+                                    .frame(width: 18, height: 18)
+                                    .background(.white, in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .offset(x: 6, y: -6)
+                        }
+                    }
+                }
+            }
+            .padding(.trailing, 2)
+        }
+    }
+
+    /// Add another clip. The same button in the same place as the photo editor's, because reaching
+    /// for it and finding nothing there is the kind of difference nobody forgives between two screens
+    /// that are supposed to be the same screen.
+    private var addMoreButton: some View {
+        Button { showAddPicker = true } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .contentShape(Circle())
+        }
+        .buttonStyle(StoryPressStyle())
+    }
+
+    private func addTextOverlay() {
+        captionFocused = false
+        let o = TextOverlay(center: CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2))
+        overlays.append(o)
+        selectedID = o.id
+        editingID = o.id
+    }
+
+    private func trimEmpty(_ id: UUID) {
+        if let idx = overlays.firstIndex(where: { $0.id == id }),
+           overlays[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            overlays.remove(at: idx); selectedID = nil
+        }
+    }
+
+    /// Crop, in place, cross-faded — the chat editor's own cropper, the same one the photo story
+    /// editor uses. It works on the poster because a rectangle is all the export needs; the clip
+    /// itself is reframed during the burn-in.
+    @ViewBuilder private var cropOverlay: some View {
+        if showCrop, let poster = thumbnail {
+            ChatCropView(image: poster, inline: true,
+                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } },
+                         onRect: { r in
+                             // Re-cropping refines the crop you already have, so the new rectangle is
+                             // read INSIDE the old one rather than against the original.
+                             if let old = cropRect {
+                                 cropRect = CGRect(x: old.minX + r.minX * old.width,
+                                                   y: old.minY + r.minY * old.height,
+                                                   width: r.width * old.width,
+                                                   height: r.height * old.height)
+                             } else {
+                                 cropRect = r
+                             }
+                         }) { _ in }
+                .transition(.opacity)
+                .zIndex(20)
+        }
+    }
+
+    /// OUR pen bar, the same one the photo editor and the chat's image editor use: a colour track,
+    /// undo, pen vs highlighter, a width that cycles, and a tick to finish.
+    private var penBar: some View {
+        let live = penHue == 0 ? Color.white : Color(hue: penHue, saturation: 1, brightness: 1)
+        return VStack(spacing: 14) {
+            GradientSlider(value: $penHue, track: LinearGradient(
+                colors: [.white] + stride(from: 0.02, through: 1.0, by: 0.08).map { Color(hue: $0, saturation: 1, brightness: 1) },
+                startPoint: .leading, endPoint: .trailing))
+                .padding(.horizontal, 20)
+            HStack(spacing: 12) {
+                tool("arrow.uturn.backward") {
+                    var strokes = drawing.strokes
+                    if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
+                }
+                tool("pencil.tip", active: !isHighlighter) { isHighlighter = false }
+                tool("highlighter", active: isHighlighter) { isHighlighter = true }
+                Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
+                    Circle().fill(live)
+                        .frame(width: max(8, penWidth + 4), height: max(8, penWidth + 4))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(StoryPressStyle())
+                Spacer()
+                Button { isDrawing = false } label: {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                }
+                .buttonStyle(StoryPressStyle())
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 14)
+    }
+
+    /// Everything drawn on top of THIS clip, in one transparent image the size of the canvas it was
+    /// drawn on, plus the crop rectangle. The same builder and the same transforms the photo editor
+    /// uses, so text placed on a clip lands where text placed on a picture lands.
+    @MainActor private func burnIn(for c: Clip) -> StoryBurnIn? {
+        let hasArt = !c.drawing.bounds.isEmpty || !c.overlays.isEmpty
+        guard hasArt || c.cropRect != nil else { return nil }
+        let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+
+        var art: UIImage?
+        if hasArt {
+            let composed = ZStack(alignment: .bottom) {
+                Color.clear
+                if !c.drawing.bounds.isEmpty {
+                    Image(uiImage: c.drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale))
+                        .resizable()
+                }
+                ForEach(c.overlays) { o in
+                    storyStyledText(o, maxWidth: size.width * 0.9)
+                        .scaleEffect(o.scale)
+                        .rotationEffect(o.rotation)
+                        .position(o.center)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            let renderer = ImageRenderer(content: composed)
+            renderer.scale = UIScreen.main.scale
+            renderer.isOpaque = false          // black here would hide the whole video behind it
+            art = renderer.uiImage
+        }
+        return StoryBurnIn(overlay: art, cropRect: c.cropRect,
+                           canvasAspect: size.height > 0 ? size.width / size.height : nil)
+    }
+
+    private func payload(for c: Clip) -> StoryVideoPayload? {
+        guard let data = c.posterData else { return nil }
+        let cut = c.trimStart > 0.05 || (c.duration > 0 && c.trimEnd < c.duration - 0.05)
+        return StoryVideoPayload(url: c.url, thumbnail: data, muted: c.muted,
+                                 trim: cut ? c.trimStart...c.trimEnd : nil,
+                                 burn: burnIn(for: c))
+    }
+
     private func send() {
-        guard let thumbnailData else { return }
-        pendingShare = StoryVideoShare(
-            payload: StoryVideoPayload(url: url, thumbnail: thumbnailData, muted: muted,
-                                       trim: isTrimmed ? trimStart...trimEnd : nil),
-            caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
+        stashCurrent()
+        guard let first = clips.first, let head = payload(for: first) else { return }
+        // The rest ride behind the first, in the order he arranged them, each carrying its own trim
+        // and its own edits. The audience sheet is answered ONCE and they all inherit that answer.
+        pendingExtras = clips.dropFirst().compactMap { payload(for: $0) }.map { StoryExtra(video: $0) }
+        pendingShare = StoryVideoShare(payload: head,
+                                       caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// How many stories this post will become, so the notice can say it plainly.
@@ -292,6 +669,13 @@ struct StoryVideoEditorView: View {
         } else {
             loadFailed = true
             return
+        }
+        // The clip this editor was opened with becomes item ONE. Everything after it arrives through
+        // the +, so there is only ever one list and the single-clip case is just a list of length 1.
+        if clips.isEmpty {
+            clips = [Clip(url: url, duration: dur, poster: thumbnail, posterData: thumbnailData,
+                          trimStart: 0, trimEnd: dur, muted: muted)]
+            index = 0
         }
         // Editor preview plays with sound (stories are sound-on media, like every big app).
         try? AVAudioSession.sharedInstance().setCategory(.playback)

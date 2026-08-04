@@ -19,7 +19,16 @@ struct StoryTrimView: View {
     let duration: Double
     @Binding var trimStart: Double
     @Binding var trimEnd: Double
+    /// THE OTHER CLIPS IN THIS POST (owner: "trimming multiple videos from a single trim screen").
+    /// Switching happens in here rather than by backing out to the editor and coming in again for
+    /// each one. Empty = a single clip, and the strip does not draw at all.
+    var clips: [Peer] = []
+    var currentIndex: Int = 0
+    var onSelect: (Int) -> Void = { _ in }
     var onClose: () -> Void
+
+    /// Just enough of a clip to draw it in the strip and tell it apart.
+    struct Peer: Identifiable { let id: UUID; let poster: UIImage? }
 
     @State private var thumbnails: [UIImage] = []
     @State private var playhead: Double = 0
@@ -46,6 +55,7 @@ struct StoryTrimView: View {
 
             VStack(spacing: 0) {
                 header
+                peerStrip
                 Spacer(minLength: 0)
                 VideoPlayer(player: player)
                     .disabled(true)                       // our own play control, not Apple's chrome
@@ -65,7 +75,10 @@ struct StoryTrimView: View {
             }
         }
         .statusBarHidden(false)
-        .task { await load() }
+        // Keyed on the url so switching clips inside the trim screen reloads it in place — same
+        // screen, different video. Runs on first appearance too, so it replaces the plain `.task`
+        // rather than sitting beside it and loading everything twice.
+        .task(id: url) { await load() }
         .onDisappear { player.pause() }
         // The player follows the three things that can move it: play/pause, a handle drag preview,
         // and a playhead drag. One place, so they cannot disagree about where the video is.
@@ -112,6 +125,35 @@ struct StoryTrimView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, max(windowSafeTop - 22, 10))
+    }
+
+    /// The post's clips, so you can trim each one without leaving. The one being trimmed is framed.
+    @ViewBuilder private var peerStrip: some View {
+        if clips.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(clips.enumerated()), id: \.element.id) { i, c in
+                        Group {
+                            if let p = c.poster {
+                                Image(uiImage: p).resizable().scaledToFill()
+                            } else {
+                                Color(white: 0.15)
+                            }
+                        }
+                        .frame(width: 44, height: 58)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(i == currentIndex ? Color.accentColor : .white.opacity(0.3),
+                                              lineWidth: i == currentIndex ? 2 : 1)
+                        }
+                        .onTapGesture { if i != currentIndex { playing = false; onSelect(i) } }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .padding(.top, 10)
+        }
     }
 
     private var strip: some View {

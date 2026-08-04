@@ -267,7 +267,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, caption: caption, excluded: excluded, included: included, everyone: everyone, burn: burn) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, excluded: excluded, included: included, everyone: everyone) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -326,8 +326,8 @@ final class StoriesService {
             var lastError: Error?
             for attempt in 0..<3 {
                 do {
-                    try await postVideoSegment(videoURL: videoURL, range: range, burn: burn,
-                                               caption: i == 0 ? caption : "", muted: muted,
+                    try await postVideoSegment(videoURL: videoURL, range: range,
+                                               caption: i == 0 ? caption : "", muted: muted, burn: burn,
                                                expiryHours: expiryHours, excluded: excluded,
                                                included: included, everyone: everyone)
                     lastError = nil
