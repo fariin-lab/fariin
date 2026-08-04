@@ -1662,6 +1662,39 @@ struct ThreadView: View {
                     }
                 }
             }
+            // WHO IS ASKING, at the top, before you decide (owner 2026-08-04, with his reference).
+            //
+            // An OVERLAY rather than a row in the list. The list is UIKit and its rows are the
+            // conversation; a header is not a message and giving it a fake one would put it into
+            // scrolling, selection, signatures and the jump machinery for nothing. A pending request
+            // holds exactly ONE message, so the top of the screen is empty and an overlay sits
+            // exactly where the reference draws it.
+            .overlay(alignment: .top) {
+                if requestStance == .incoming { requestIntroCard }
+            }
+    }
+
+    /// The card above a stranger's first message: who they are, and that the conversation is private.
+    /// Their name and picture are the whole decision — you are about to let someone in or not, and
+    /// the old screen asked you to make that call from a name in the navigation bar.
+    private var requestIntroCard: some View {
+        VStack(spacing: 8) {
+            AvatarView(name: title, photoUrl: photoUrl, size: 88)
+            Text(title)
+                .font(.system(size: 20, weight: .semibold))
+                .lineLimit(1)
+            Label {
+                Text("This conversation is private")
+            } icon: {
+                Image(systemName: "person.2.fill")
+            }
+            .font(.system(size: 14))
+            .foregroundStyle(.secondary)
+        }
+        .padding(.top, 18)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)   // never steals a tap from the message underneath it
     }
 
     // Per-row CONTENT signature (what a bubble actually renders): text, edited, send state, reactions,
@@ -3685,11 +3718,12 @@ struct ThreadView: View {
     /// explicit that there is no separate requests inbox to go and find.
     private var requestBar: some View {
         VStack(spacing: 10) {
-            Text("\(title) wants to send you a message.")
-                .font(.subheadline.weight(.semibold))
-                .multilineTextAlignment(.center)
-            Text("Accept to start chatting, or delete this request.")
-                .font(.caption).foregroundStyle(.secondary)
+            // ONE LINE, his reference's wording. Who is asking, and their picture, are now the card
+            // at the top of the conversation — saying the name again down here, plus a sentence
+            // explaining what two labelled buttons already say, was three lines to answer yes or no.
+            Text("Accept message request from \(title)?")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             HStack(spacing: 10) {
                 Button {
