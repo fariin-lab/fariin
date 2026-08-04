@@ -11,7 +11,7 @@ import FirebaseMessaging
 /// holding, and a way to throw the others off.
 ///
 /// The record lives at `users/{uid}/devices/{deviceId}`, keyed by `identifierForVendor` —
-/// stable for as long as Kulan stays installed, and reset by a delete + reinstall, which is
+/// stable for as long as Fariin stays installed, and reset by a delete + reinstall, which is
 /// the behaviour we want: a reinstall IS a new session.
 ///
 /// TWO THINGS THIS DELIBERATELY DOES NOT PROMISE (both true of Discord's screen too):

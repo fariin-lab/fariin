@@ -531,7 +531,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func isAdmin(_ me: String) -> Bool { admins.contains(me) }
     func isOwner(_ me: String) -> Bool { !createdBy.isEmpty && createdBy == me }
 
-    // Per-flag admin rights (Telegram-style). Slugs kept small, mapped to what Kulan actually gates.
+    // Per-flag admin rights (Telegram-style). Slugs kept small, mapped to what Fariin actually gates.
     // Delegatable admin rights. Managing the admin TEAM (promote/demote/set-rights) is deliberately
     // NOT here — it is owner-only, so a limited admin can never mint an admin more powerful than
     // themselves or demote a peer the owner appointed.
@@ -752,8 +752,8 @@ struct SharedContactCard {
 }
 
 extension Message {
-    static let contactMarker = "kulan-contact:"
-    /// Marker format: "kulan-contact:<uid>|<photoURL-or-empty>|<name>" (name last — it may contain "|"-free
+    static let contactMarker = "fariin-contact:"
+    /// Marker format: "fariin-contact:<uid>|<photoURL-or-empty>|<name>" (name last — it may contain "|"-free
     /// arbitrary text; uid/photo never contain "|"). Returns nil for normal messages.
     var contactCard: SharedContactCard? {
         guard text.hasPrefix(Self.contactMarker) else { return nil }
@@ -778,8 +778,8 @@ struct SharedLocationCard {
 }
 
 extension Message {
-    static let locationMarker = "kulan-location:"
-    /// "kulan-location:<lat>|<lon>|<label-or-empty>"
+    static let locationMarker = "fariin-location:"
+    /// "fariin-location:<lat>|<lon>|<label-or-empty>"
     var locationCard: SharedLocationCard? {
         guard text.hasPrefix(Self.locationMarker) else { return nil }
         let parts = text.dropFirst(Self.locationMarker.count)
@@ -803,8 +803,8 @@ struct PinNoticeCard {
 }
 
 extension Message {
-    static let pinMarker = "kulan-pinned:"
-    /// "kulan-pinned:<messageId>|<label>" (label last — may contain any characters).
+    static let pinMarker = "fariin-pinned:"
+    /// "fariin-pinned:<messageId>|<label>" (label last — may contain any characters).
     var pinNotice: PinNoticeCard? {
         guard text.hasPrefix(Self.pinMarker) else { return nil }
         let parts = text.dropFirst(Self.pinMarker.count)
@@ -818,7 +818,7 @@ extension Message {
 }
 
 // MARK: - Poll (Telegram-style). E2EE-SAFE: the question + options ride the ENCRYPTED text pipeline as
-// a "kulan-poll:" marker (base64 JSON), so the server never sees them. Votes live in a per-voter
+// a "fariin-poll:" marker (base64 JSON), so the server never sees them. Votes live in a per-voter
 // subcollection (messages/{mid}/votes/{uid}) as plain option INDICES — meaningless without the
 // end-to-end-encrypted options — and each voter can only write their own doc.
 
@@ -830,7 +830,7 @@ struct PollCard: Equatable {
 }
 
 extension Message {
-    static let pollMarker = "kulan-poll:"
+    static let pollMarker = "fariin-poll:"
     var poll: PollCard? {
         guard text.hasPrefix(Self.pollMarker) else { return nil }
         let b64 = String(text.dropFirst(Self.pollMarker.count))
@@ -848,7 +848,7 @@ extension Message {
     }
 }
 
-// MARK: - Forward compatibility: structured feature payloads share the reserved "kulan-<feature>:"
+// MARK: - Forward compatibility: structured feature payloads share the reserved "fariin-<feature>:"
 // namespace over the text pipeline. A build that does NOT recognize a given feature (e.g. a stable
 // version receiving a payload from a newer beta) renders it as a system "sent with a newer version"
 // notice instead of the raw marker text. When you add a NEW feature marker, add its prefix to
@@ -856,11 +856,11 @@ extension Message {
 extension Message {
     static let knownFeatureMarkers: [String] = [contactMarker, locationMarker, pinMarker, pollMarker]
 
-    /// True when the text uses the reserved kulan-feature namespace with a feature this build doesn't
-    /// know — i.e. it was sent by a newer app version. Matched strictly (`^kulan-<name>:`) so ordinary
-    /// text that merely contains "kulan-" is never affected. (Alphanumeric so future names like
-    /// `kulan-poll2:` / `kulan-livelocation:` are still caught.)
-    static let featureMarkerPattern = "^kulan-[a-z0-9]+:"
+    /// True when the text uses the reserved fariin-feature namespace with a feature this build doesn't
+    /// know — i.e. it was sent by a newer app version. Matched strictly (`^fariin-<name>:`) so ordinary
+    /// text that merely contains "fariin-" is never affected. (Alphanumeric so future names like
+    /// `fariin-poll2:` / `fariin-livelocation:` are still caught.)
+    static let featureMarkerPattern = "^fariin-[a-z0-9]+:"
     var isUnsupportedFeature: Bool {
         guard let r = text.range(of: Message.featureMarkerPattern, options: .regularExpression) else { return false }
         return !Message.knownFeatureMarkers.contains(String(text[r]))

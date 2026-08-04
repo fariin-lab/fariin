@@ -1,7 +1,7 @@
 import Foundation
 
 // In-conversation search engine — the standard search pipeline semantics (an FTS5 unicode61 tokenizer +
-// prefix-match AND queries), reimplemented as our own code over Kulan's in-memory decrypted corpus.
+// prefix-match AND queries), reimplemented as our own code over Fariin's in-memory decrypted corpus.
 // E2EE means the server can never search messages; the only possible index is client-side, built from
 // text we've already decrypted, and never persisted as plaintext.
 //

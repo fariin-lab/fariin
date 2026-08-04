@@ -857,7 +857,7 @@ struct ThreadView: View {
         // DELETED HERE: the Share Contact picker sheet, with the attach tile that opened it. Contact
         // cards already SENT still render — Message.contactMarkerText and the card bubble are
         // untouched, so nobody's history changes.
-        // New-poll composer (groups): sends the poll as an encrypted "kulan-poll:" marker message.
+        // New-poll composer (groups): sends the poll as an encrypted "fariin-poll:" marker message.
         .sheet(isPresented: $showPollComposer) {
             PollComposerSheet { marker in
                 showAttachPanel = false
@@ -2508,7 +2508,7 @@ struct ThreadView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
-                        // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Kulan has no
+                        // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
                         // phone book — you introduce someone by sharing their profile from THEIR
                         // profile page, which is where the action still lives.
                         attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
@@ -3162,7 +3162,7 @@ struct ThreadView: View {
     }
 
     // DISPLAY-TIME guard for reply-quote snippets: quotes persisted BEFORE the safeText fix carry the
-    // raw "kulan-…:" marker forever (they're encrypted snapshots) — map them to friendly labels when
+    // raw "fariin-…:" marker forever (they're encrypted snapshots) — map them to friendly labels when
     // rendering, so old quotes clean up too.
     static func quoteLabel(_ t: String) -> String { quoteSafeLabel(t) }
     private static func _unusedQuoteLabelBody(_ t: String) -> String {
@@ -5704,7 +5704,7 @@ struct MessageBubble: View, Equatable {
         } else if let card = message.contactCard {
             // SHARED CONTACT card (user design): avatar + name + chevron, time+ticks, and a full-width
             // "message" pill that opens a chat with that contact. Rides the normal encrypted text
-            // pipeline (a "kulan-contact:" marker), so no new message fields / rules changes.
+            // pipeline (a "fariin-contact:" marker), so no new message fields / rules changes.
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     AvatarView(name: card.name, photoUrl: card.photo, size: 44)
@@ -6450,7 +6450,7 @@ struct FilePreview: UIViewControllerRepresentable {
 }
 
 // DISPLAY-TIME guard for reply-quote snippets (file scope — used by MessageBubble AND ThreadView):
-// quotes persisted BEFORE the safeText fix carry the raw "kulan-…:" marker forever (encrypted
+// quotes persisted BEFORE the safeText fix carry the raw "fariin-…:" marker forever (encrypted
 // snapshots) — map them to friendly labels when rendering, so old quotes clean up too.
 func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.contactMarker) { return "Contact" }

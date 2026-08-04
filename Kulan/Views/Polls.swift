@@ -1,7 +1,7 @@
 import SwiftUI
 import FirebaseFirestore
 
-// Polls. The poll content (question + options) travels E2EE inside the message text as a "kulan-poll:"
+// Polls. The poll content (question + options) travels E2EE inside the message text as a "fariin-poll:"
 // marker (see Message.poll). Votes are stored per-voter under messages/{mid}/votes/{uid} as option
 // indices only — the server can't read what the options mean, and each voter owns their own vote doc.
 

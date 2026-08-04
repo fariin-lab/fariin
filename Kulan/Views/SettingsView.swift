@@ -777,7 +777,7 @@ struct PrivacySettingsView: View {
             }
 
             Section {
-                // NO PHONE NUMBER ROW. Kulan does not use phone numbers — accounts are Apple/Google/
+                // NO PHONE NUMBER ROW. Fariin does not use phone numbers — accounts are Apple/Google/
                 // email and people are found by @handle — so a privacy control for who can see a
                 // number nobody has was answering a question the app never asks.
                 audienceRow("Last Seen & Online", key: "lastSeen", value: privLastSeen,

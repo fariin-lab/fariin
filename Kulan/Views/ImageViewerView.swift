@@ -3,7 +3,7 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import Photos
 
-// Direction-locked pan gesture recognizer. Kulan-local copy so the
+// Direction-locked pan gesture recognizer. Fariin-local copy so the
 // app target can use it (the StoryUI package has its own). Only begins in the allowed direction.
 final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
     enum Dir { case up, down, left, right, vertical }   // .vertical = the dismiss config (up AND down engage)

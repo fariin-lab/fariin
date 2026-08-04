@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Add a contact — modern-style layout (First/Last Name card + identifier below). Kulan is
+// Add a contact — modern-style layout (First/Last Name card + identifier below). Fariin is
 // handle-based (no phone numbers), so the identifier is the @username. The name you type is saved
 // locally (ContactNames) and shown for them in your chat list + headers; we find them by username.
 struct NewContactView: View {
@@ -33,7 +33,7 @@ struct NewContactView: View {
                             .background(Color(.secondarySystemGroupedBackground),
                                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                            // Identifier card (@username) — the real way Kulan finds people.
+                            // Identifier card (@username) — the real way Fariin finds people.
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack(spacing: 2) {
                                     Text("@").foregroundStyle(.secondary)

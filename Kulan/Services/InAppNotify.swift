@@ -86,7 +86,7 @@ import FirebaseAuth
     func playTone(_ override: String? = nil) {
         var name = override ?? (UserDefaults.standard.string(forKey: "notif.sound") ?? "rebound")
         // A "default" stored before the Apple-tone option was removed. It used to fall through to
-        // system sound 1007, which is Note — iMessage's tone coming out of Kulan.
+        // system sound 1007, which is Note — iMessage's tone coming out of Fariin.
         if name == "default" { name = "rebound" }
         guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
             AudioServicesPlaySystemSound(1007)   // last resort: a missing file must still make a noise

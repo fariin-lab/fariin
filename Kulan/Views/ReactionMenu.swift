@@ -3,7 +3,7 @@ import UIKit
 
 // Long-press reaction + actions menu, the any-emoji picker, and the "who reacted"
 // sheet. The standard reaction logic (one emoji per user, recents, full picker, reactor list),
-// our own Kulan design.
+// our own Fariin design.
 
 // Recently-used reaction emoji, persisted so the quick bar adapts to the user.
 enum ReactionRecents {

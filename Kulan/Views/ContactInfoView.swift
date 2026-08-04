@@ -6,7 +6,7 @@ import FirebaseFirestore
 // shared-media card. Real where the data exists (name/@handle, mute, block, clear,
 // shared media, bio); honest "coming soon" for features not built yet (calls live
 // on a separate branch; in-chat search isn't built). No fabricated data — the title
-// is the @handle (Kulan has no phone numbers).
+// is the @handle (Fariin has no phone numbers).
 // Where this profile was opened from — the action row + a call-log card adapt to it.
 // From a chat: you're already chatting, so offer Search (not Message). From the Calls
 // tab: offer Message (jump into the chat) + show the recent call with this person.
@@ -311,7 +311,7 @@ struct ContactInfoView: View {
                 Label { Text("Change Wallpaper") } icon: { MenuIcon("ic_wallpaper") }
             }
         }
-        // "Share Profile", not "Share Contact" — what it sends is a Kulan profile link, and there is no
+        // "Share Profile", not "Share Contact" — what it sends is a Fariin profile link, and there is no
         // contact card behind it (no phone book, no numbers).
         Button { showShare = true } label: { Label("Share Profile", systemImage: "square.and.arrow.up") }
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
@@ -1075,7 +1075,7 @@ struct ContactInfoView: View {
 
 
 
-    // Shareable contact link (opens/starts a chat with this user in Kulan).
+    // Shareable contact link (opens/starts a chat with this user in Fariin).
     private var shareText: String {
         handle.isEmpty ? "Chat with \(name) on Fariin"
                        : "Chat with \(name) on Fariin: kulan://u/\(handle)"
@@ -1209,7 +1209,7 @@ struct ContactInfoView: View {
         }
         // LOCAL FIRST, THE WAY SIGNAL DOES IT. Signal's media gallery is a query over its own message
         // database, so it renders offline and instantly; it never asks the network for something it has
-        // already received. Kulan has no SQLite store, but it does keep this chat's decrypted messages
+        // already received. Fariin has no SQLite store, but it does keep this chat's decrypted messages
         // in memory — that cache is what lets the conversation paint before the push transition
         // finishes, and you reach this profile BY WAY OF that conversation, so it is warm exactly when
         // you need it. Reading media out of it costs nothing, needs no connection, and answers on the

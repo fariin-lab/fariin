@@ -9,7 +9,7 @@ import CryptoKit
 // either side's key, the two phones compute DIFFERENT numbers and the mismatch is visible.
 //
 // The math follows the standard numeric-fingerprint construction (iterated SHA-512, five bytes
-// -> five decimal digits) because it's proven; the screen around it is Kulan's own.
+// -> five decimal digits) because it's proven; the screen around it is Fariin's own.
 enum SafetyNumber {
     private static let iterations = 5200          // key-stretch: makes a truncated-digest preimage costly
     private static let version: [UInt8] = [0x00, 0x00]
@@ -33,7 +33,7 @@ enum SafetyNumber {
     }
 
     // What travels in the QR code — a versioned tag so the scanner rejects any other QR.
-    static let qrPrefix = "kulanverify:v1:"
+    static let qrPrefix = "fariinverify:v1:"
     static func qrPayload(_ number: String) -> String { qrPrefix + number }
     static func numberFromQR(_ code: String) -> String? {
         guard code.hasPrefix(qrPrefix) else { return nil }

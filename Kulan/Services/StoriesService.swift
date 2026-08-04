@@ -74,7 +74,7 @@ final class StoriesService {
     // separate placeholder screen. Its image is served from URLCache (pre-stored on upload start); its
     // fixed id marks it so the viewer shows the "Uploading…" bar and blocks delete.
     static let uploadingStoryId = "story.uploading.placeholder"
-    private static let uploadingURLString = "https://kulan.local/uploading-placeholder.jpg"
+    private static let uploadingURLString = "https://fariin.local/uploading-placeholder.jpg"
     var uploadingStory: Story? {
         guard uploading, uploadingImage != nil else { return nil }
         return Story(id: Self.uploadingStoryId, authorUid: uid, createdAt: uploadStartedAt,

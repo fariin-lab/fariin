@@ -20,7 +20,7 @@ struct ContactCard: Equatable {
     }
 }
 
-// Local, per-device contact cards. Kulan has no server-side address book (and no phone numbers) —
+// Local, per-device contact cards. Fariin has no server-side address book (and no phone numbers) —
 // accounts are username-based — so a nickname you set here overrides the profile name in the chat
 // list + headers, and the note is a private reminder. Purely local; NEVER sent anywhere, which is
 // what lets the sheet promise "only visible to you" honestly.

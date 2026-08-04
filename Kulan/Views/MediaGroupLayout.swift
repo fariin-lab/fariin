@@ -4,7 +4,7 @@ import Foundation
 /// Mosaic layout for a media group (2...10 photos or videos sent as one message).
 ///
 /// OUR OWN CODE, THEIR ALGORITHM. Telegram-iOS reports no licence, so shipping their source would
-/// oblige publishing Kulan's — reading it to extract the algorithm is fine, pasting it is not (the
+/// oblige publishing Fariin's — reading it to extract the algorithm is fine, pasting it is not (the
 /// standing rule on this project). Everything below is written from
 /// `submodules/MosaicLayout/Sources/ChatMessageBubbleMosaicLayout.swift`, read 2026-07-28, and each rule
 /// cites where it comes from.

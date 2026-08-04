@@ -113,7 +113,7 @@ enum DemoMode {
     /// Blobs, not a plain gradient. A flat gradient blurs to itself, so the progressive fade at the
     /// bottom of the poster would be impossible to judge — there has to be detail for it to destroy.
     private static func profilePhoto(_ key: String, _ c1: UIColor, _ c2: UIColor, _ initial: String) -> String {
-        let urlStr = "https://kulan.local/pp-\(key).jpg"
+        let urlStr = "https://fariin.local/pp-\(key).jpg"
         guard !cached.contains("pp-\(key)"), let url = URL(string: urlStr) else { return urlStr }
         cached.insert("pp-\(key)")
         let size = CGSize(width: 900, height: 900)
@@ -266,7 +266,7 @@ enum DemoMode {
     // URLCache first, so story images render with no network/Firebase.
     private static func cache(_ key: String, _ c1: UIColor, _ c2: UIColor, _ text: String,
                               wide: Bool = false, size explicitSize: CGSize? = nil) -> String {
-        let urlStr = "https://kulan.local/\(key).jpg"
+        let urlStr = "https://fariin.local/\(key).jpg"
         guard !cached.contains(key), let url = URL(string: urlStr) else { return urlStr }
         cached.insert(key)
         let size = explicitSize ?? (wide ? CGSize(width: 1920, height: 1080) : CGSize(width: 1080, height: 1920))

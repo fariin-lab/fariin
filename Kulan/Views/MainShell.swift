@@ -477,7 +477,7 @@ struct CallHistoryRow: View {
 }
 
 // "New call" picker: A–Z grouped contacts, each with REAL voice + video call buttons + a side
-// index. (No "Create Call Link" / phone-number search — those aren't real Kulan features.)
+// index. (No "Create Call Link" / phone-number search — those aren't real Fariin features.)
 struct NewCallView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared

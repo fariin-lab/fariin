@@ -90,7 +90,7 @@ struct RootView: View {
                 if lockEnabled, lockDelay == 0 { locked = true }   // immediate lock
             }
             if new == .active {
-                // Re-lock only if Kulan was in the background longer than the grace period.
+                // Re-lock only if Fariin was in the background longer than the grace period.
                 if lockEnabled, !locked, let t = backgroundedAt,
                    lockDelay > 0, Date().timeIntervalSince(t) >= Double(lockDelay) {
                     locked = true

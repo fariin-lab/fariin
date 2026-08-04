@@ -8,7 +8,7 @@ struct ChatTarget: Identifiable, Hashable {
 
 // New Message screen: search by name/username (+ QR), and an A–Z sectioned list of
 // everyone you've chatted with, with a side index — native-styled. (No groups / phone
-// lookup / note-to-self: those aren't real features in Kulan, so they're omitted.)
+// lookup / note-to-self: those aren't real features in Fariin, so they're omitted.)
 struct NewChatView: View {
     let onOpen: (ChatTarget) -> Void
     init(onOpen: @escaping (ChatTarget) -> Void = { _ in }) { self.onOpen = onOpen }

@@ -376,7 +376,7 @@ struct BlockedUsersView: View {
     }
 }
 
-// DELETED HERE: PhoneNumberPrivacyView. Kulan has no phone numbers - accounts are Apple/Google/email
+// DELETED HERE: PhoneNumberPrivacyView. Fariin has no phone numbers - accounts are Apple/Google/email
 // and people are found by @handle - so a page choosing who may see your number was storing a
 // preference about a field that does not exist. Its own footer admitted as much. Removed 2026-07-29
 // along with its Privacy row and its entry in settings search.

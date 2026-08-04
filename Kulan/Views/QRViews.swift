@@ -5,7 +5,7 @@ import CoreImage.CIFilterBuiltins
 
 // Share-my-handle QR + a scanner — the main way two anonymous users connect in person.
 
-private func kulanLink(_ handle: String) -> String { "kulan://u/\(handle)" }
+private func fariinLink(_ handle: String) -> String { "kulan://u/\(handle)" }
 
 private func qrImage(from string: String) -> UIImage? {
     let filter = CIFilter.qrCodeGenerator()
@@ -25,7 +25,7 @@ struct MyQRView: View {
         NavigationStack {
             VStack(spacing: 20) {
                 Spacer()
-                if let img = qrImage(from: kulanLink(handle)) {
+                if let img = qrImage(from: fariinLink(handle)) {
                     Image(uiImage: img)
                         .interpolation(.none).resizable().scaledToFit()
                         .frame(width: 240, height: 240)
@@ -40,7 +40,7 @@ struct MyQRView: View {
                 Text("Scan this code in Fariin to start a chat.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Spacer()
-                ShareLink(item: kulanLink(handle)) {
+                ShareLink(item: fariinLink(handle)) {
                     Label("Share my link", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .background(Color.accentColor, in: Capsule())
@@ -56,7 +56,7 @@ struct MyQRView: View {
     }
 }
 
-// Camera QR scanner → resolves a Kulan link to a user.
+// Camera QR scanner → resolves a Fariin link to a user.
 struct ScanQRView: View {
     var onUser: (UserProfile) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -89,7 +89,7 @@ struct ScanQRView: View {
     private func resolve(_ code: String) {
         guard !handling else { return }
         guard let url = URL(string: code), url.scheme == "kulan", url.host == "u" else {
-            // Not a Kulan code: show feedback + re-arm — the scanner used to stay dead here.
+            // Not a Fariin code: show feedback + re-arm — the scanner used to stay dead here.
             notFound = true
             rearmScanner()
             return

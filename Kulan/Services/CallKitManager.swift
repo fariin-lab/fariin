@@ -216,7 +216,7 @@ extension CallKitManager: CXProviderDelegate {
         // on-speaker fix big apps use); .voiceChat (earpiece-tuned) otherwise. Bluetooth allowed.
         // NO setMode below this. setCategory(_:mode:options:) already applies the mode, and a second
         // unconditional setMode(.voiceChat) silently undid the .videoChat choice on every start/answer.
-        // It dates from a0f483b, when Kulan was voice-only and BOTH lines said .voiceChat; the line
+        // It dates from a0f483b, when Fariin was voice-only and BOTH lines said .voiceChat; the line
         // above later became video-aware and this leftover was never removed. Effect: video calls
         // answered through CallKit ran with EARPIECE-tuned echo cancellation on loudspeaker, which is
         // the hear-your-own-voice setup that didActivate (:152) was written to avoid.

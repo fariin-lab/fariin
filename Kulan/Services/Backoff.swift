@@ -15,7 +15,7 @@ enum Backoff {
 }
 
 // Terminal "this media is gone" registry (the standard approach: mark unrecoverable attachments as a final state
-// instead of retrying forever). In Kulan's mailman model a delivered 1:1 video is DELETED from the
+// instead of retrying forever). In Fariin's mailman model a delivered 1:1 video is DELETED from the
 // server — a 404 on it is permanent, so remember that and never re-fetch. Persisted like HiddenMessages.
 enum DeadMedia {
     private static var cache = Set<String>((UserDefaults.standard.string(forKey: "deadMedia") ?? "")

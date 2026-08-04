@@ -5,7 +5,7 @@ import UIKit
 //
 // This is what lets a reopened chat render its conversation SYNCHRONOUSLY at ThreadRepository.init
 // — fully painted and frozen BEFORE the push transition — instead of fading in a beat late while
-// the E2EE decrypt runs off the main thread. It's Kulan's local decrypted render-state / local DB:
+// the E2EE decrypt runs off the main thread. It's Fariin's local decrypted render-state / local DB:
 // the messages are already unlocked and ready, so the screen isn't empty when the push starts.
 //
 // First-ever open of a chat this session is still a cold async load (nothing cached yet); every

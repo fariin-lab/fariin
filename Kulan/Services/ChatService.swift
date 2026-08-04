@@ -211,7 +211,7 @@ enum ChatService {
     /// backgrounding mid-send does not kill the upload outright.
     @MainActor private static func beginUploadAssertion() -> UIBackgroundTaskIdentifier {
         var id: UIBackgroundTaskIdentifier = .invalid
-        id = UIApplication.shared.beginBackgroundTask(withName: "kulan-media-upload") {
+        id = UIApplication.shared.beginBackgroundTask(withName: "fariin-media-upload") {
             // iOS is about to reclaim it; ending it ourselves avoids the watchdog kill.
             if id != .invalid { UIApplication.shared.endBackgroundTask(id); id = .invalid }
         }
@@ -245,7 +245,7 @@ enum ChatService {
     /// Add members + a "X added Y" system message. New members can't read prior history
     /// (their per-message wraps don't exist) — honest and expected, like sender keys.
     /// Returns the display names of added members who have NO published key yet (they won't see
-    /// messages until they open Kulan) so the UI can warn the adder honestly.
+    /// messages until they open Fariin) so the UI can warn the adder honestly.
     @discardableResult
     static func addGroupMembers(cid: String, add: [String]) async throws -> [String] {
         let newOnes = add.filter { !$0.isEmpty }
@@ -277,7 +277,7 @@ enum ChatService {
                 update["names.\(u)"] = nm
                 addedNames.append(nm)
                 if let ph = p.photoUrl, !ph.isEmpty { update["photos.\(u)"] = ph }
-                if (p.publicKeyB64 ?? "").isEmpty { keyless.append(nm) }   // hasn't opened Kulan
+                if (p.publicKeyB64 ?? "").isEmpty { keyless.append(nm) }   // hasn't opened Fariin
             } else {
                 addedNames.append("New member")   // fallback so the event isn't blank
                 keyless.append("New member")

@@ -6,7 +6,7 @@ import FirebaseFirestore
 // page with Everyone / My Friends / No One.
 //
 // "MY FRIENDS", NOT "MY CONTACTS" (renamed 2026-07-29). The word contacts promises the phone book,
-// and Kulan has never read it — there are no phone numbers in this app at all. What it actually
+// and Fariin has never read it — there are no phone numbers in this app at all. What it actually
 // means is "people I share a chat with", and calling those friends is both true and the only
 // reading a user can arrive at without being told. Choices are
 // mirrored locally AND published to users/{me}.privacy so OTHER clients can honor them

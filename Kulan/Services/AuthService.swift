@@ -69,7 +69,7 @@ final class AuthService: NSObject {
             try? Auth.auth().signOut()
             throw AuthFlowError.noAccount
         }
-        // THE SIGN-UP DOOR, mirror guard: this Google/Apple identity ALREADY has a Kulan account.
+        // THE SIGN-UP DOOR, mirror guard: this Google/Apple identity ALREADY has a Fariin account.
         // Entering the old account under a "create" flow reads as the app losing your new account —
         // sign back out and point at the right door, exactly like the email door's emailTaken.
         if requireNewAccount, result.additionalUserInfo?.isNewUser != true {
@@ -319,7 +319,7 @@ final class AuthService: NSObject {
 
     // MARK: - Sign-in methods (Account settings: see what's connected, connect another)
 
-    /// The sign-in doors Kulan supports, in the order Account settings lists them.
+    /// The sign-in doors Fariin supports, in the order Account settings lists them.
     enum SignInMethod: String, CaseIterable, Identifiable {
         case apple, google, email
         var id: String { rawValue }
@@ -366,7 +366,7 @@ final class AuthService: NSObject {
             uid = result.user.uid
         } catch let e as NSError where e.code == AuthErrorCode.credentialAlreadyInUse.rawValue
                                     || e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
-            // That identity belongs to a DIFFERENT Kulan account. We must not silently switch
+            // That identity belongs to a DIFFERENT Fariin account. We must not silently switch
             // accounts here (it would look like the user's chats vanished) — say so plainly.
             throw AuthFlowError.alreadyLinkedElsewhere
         } catch let e as NSError where e.code == AuthErrorCode.providerAlreadyLinked.rawValue {

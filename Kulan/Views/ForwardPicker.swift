@@ -51,7 +51,7 @@ struct ForwardPicker: View {
         if message.isVideo { return "Video" }
         if message.isAudio { return "Voice message" }
         if message.isGif { return "GIF" }
-        return message.safeText   // never leak a raw kulan-…: marker (contact/location card)
+        return message.safeText   // never leak a raw fariin-…: marker (contact/location card)
     }
 
     // WHAT you're forwarding, visibly (owner's 416 report vs WhatsApp: "won't show what u

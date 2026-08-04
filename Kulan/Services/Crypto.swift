@@ -1,5 +1,5 @@
 //  Crypto.swift
-//  Kulan — native E2EE, wire-compatible with the React Native tweetnacl client.
+//  Fariin — native E2EE, wire-compatible with the React Native tweetnacl client.
 //
 //  This is a faithful Swift port of src/utils/crypto.ts. It uses libsodium
 //  (via swift-sodium), whose crypto_box_easy / crypto_secretbox_easy are
@@ -55,17 +55,19 @@ final class Crypto {
 
     private let sodium = Sodium()
     private let db = Firestore.firestore()
-    // Legacy APP-SCOPED key names (one keypair per device, whoever was signed in). Kept only so
-    // existing installs can migrate their real key to the per-uid slot below — see initKeys().
-    private static let legacySkKey = "kulan_secret_key_v1"
-    private static let legacyPkKey = "kulan_public_key_v1"
+    // Legacy APP-SCOPED key names (one keypair per device, whoever was signed in). This path is
+    // INERT since the 2026-08-03 rename: nothing has ever written a `fariin_` app-scoped key, so
+    // the migration branch in initKeys() can no longer fire. Left in place rather than deleted
+    // because it costs nothing and removing live crypto paths at 3am is how keys get lost.
+    private static let legacySkKey = "fariin_secret_key_v1"
+    private static let legacyPkKey = "fariin_public_key_v1"
 
     // PER-ACCOUNT keys. Scoping by uid is what makes sign-out safe: a different account simply
     // finds no entry and generates its own keypair, so we no longer have to DELETE keys on
     // sign-out — which used to make every past message permanently unreadable if you ever signed
     // back into the same account.
-    private static func skKeychainKey(_ uid: String) -> String { "kulan_secret_key_v1.\(uid)" }
-    private static func pkKeychainKey(_ uid: String) -> String { "kulan_public_key_v1.\(uid)" }
+    private static func skKeychainKey(_ uid: String) -> String { "fariin_secret_key_v1.\(uid)" }
+    private static func pkKeychainKey(_ uid: String) -> String { "fariin_public_key_v1.\(uid)" }
 
     // In-memory key state (set by ensureReady / preloadKey; read by the sync `decrypt`).
     private var myPublicKey: Bytes?
@@ -605,7 +607,7 @@ final class Crypto {
 // MARK: - Minimal Keychain (replaces expo-secure-store)
 
 enum Keychain {
-    private static let service = "com.kulan.messenger.crypto"
+    private static let service = "com.fariin.messenger.crypto"
 
     static func get(_ key: String) -> String? {
         let query: [String: Any] = [

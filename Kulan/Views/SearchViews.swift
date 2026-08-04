@@ -310,7 +310,7 @@ enum MessageSearch {
                         let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
                         if blockCutoff > 0, author != me,
                            date.timeIntervalSince1970 * 1000 > blockCutoff { return nil }
-                        // Index the SAFE label, not the raw "kulan-…:" payload — contact/location
+                        // Index the SAFE label, not the raw "fariin-…:" payload — contact/location
                         // cards then match and display as "Contact"/"Location", never the marker.
                         return SearchableMessage(id: doc.documentID, cid: c.id, chatName: name,
                                                  photoUrl: photo, text: quoteSafeLabel(text), date: date)
@@ -337,7 +337,7 @@ struct InChatMessage: Identifiable {
 extension MessageSearch {
     // Load (up to `limit`) of ONE chat's messages, decrypting only the text. Group messages are sealed
     // per-sender, so every author's key is warmed first (same as the global corpus loader).
-    // The reference approach indexes messages incrementally instead of re-scanning on every search. Kulan's version:
+    // The reference approach indexes messages incrementally instead of re-scanning on every search. Fariin's version:
     // cache the decrypted corpus per chat for a short TTL, so reopening search moments later doesn't
     // re-fetch + re-decrypt up to 1000 messages again.
     private static var corpusCache: [String: (at: Date, corpus: [InChatMessage])] = [:]

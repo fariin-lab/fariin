@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import CoreImage.CIFilterBuiltins
 
-// Kulan's own "verify encryption" screen (our look, not a copy of other messengers).
+// Fariin's own "verify encryption" screen (our look, not a copy of other messengers).
 // Shows the chat's safety number + a QR of it. Two people confirm their end-to-end
 // encryption is genuine either by comparing the number or by scanning each other's code;
 // a match marks the chat Verified. If a key ever changes (new device / re-install), the
@@ -196,7 +196,7 @@ struct VerifyEncryptionView: View {
 
     // Verified flag is keyed by the NUMBER, so if either key ever changes the number
     // changes and the chat is automatically no longer "verified" (re-verify required).
-    private func verifyKey(_ n: String) -> String { "kulan_verified_\(cid)_\(n)" }
+    private func verifyKey(_ n: String) -> String { "fariin_verified_\(cid)_\(n)" }
 
     private func qrImage(_ string: String) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator()
