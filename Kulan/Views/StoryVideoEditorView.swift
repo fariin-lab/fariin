@@ -73,6 +73,14 @@ struct StoryVideoEditorView: View {
     @State private var penWidth: CGFloat = 8
     @State private var isHighlighter = false
     @State private var showCrop = false
+    // Trim's own working state. It lives HERE, not in a pushed screen, because trimming is a mode of
+    // this editor now rather than a page you travel to — see `trimOverlay`.
+    @State private var trimThumbs: [UIImage] = []
+    @State private var trimPlayhead: Double = 0
+    @State private var trimScrub: Double?
+    @State private var trimDragging = false
+    @State private var trimOpenedStart: Double = 0   // what X puts back
+    @State private var trimOpenedEnd: Double = 0
     @State private var showAddPicker = false
     @State private var addPick: [PhotosPickerItem] = []
     @State private var canvasSize: CGSize = .zero
@@ -150,12 +158,21 @@ struct StoryVideoEditorView: View {
                 let cardTop: CGFloat = 8
                 let cardBottomGap: CGFloat = 44
                 let cardH = geo.size.height - cardTop - cardBottomGap
+                // TRIM ZOOMS THE VIDEO OUT, it does not cover it (owner 2026-08-04: "user never feel
+                // new page… just zoom out then trim appearing"). The card shrinks toward the TOP so
+                // every pixel it gives up appears at the bottom, which is where the strip arrives.
                 canvas(geo: geo, cardTop: cardTop, cardH: cardH)
+                    .scaleEffect(showTrim ? 0.78 : 1, anchor: .top)
+                    .offset(y: showTrim ? 44 : 0)
 
-                topControls
-                bottomStack(geo: geo)
+                if !showTrim {
+                    topControls
+                    bottomStack(geo: geo)
+                }
                 cropOverlay
+                trimOverlay
             }
+            .animation(.easeInOut(duration: 0.3), value: showTrim)
             .coordinateSpace(name: "canvas")
             .onAppear { canvasSize = geo.size }
             .onChange(of: geo.size) { _, sz in canvasSize = sz }
@@ -177,16 +194,21 @@ struct StoryVideoEditorView: View {
                             extras: pendingExtras,
                             onPosted: { onPosted(); dismiss() })
         }
-        .fullScreenCover(isPresented: $showTrim) {
-            // ONE TRIM SCREEN FOR THE WHOLE POST (owner: "trimming multiple videos from a single trim
-            // screen"). The strip travels with it, so switching clips happens inside trim rather than
-            // by backing out to the editor and coming in again for each one.
-            StoryTrimView(url: currentURL, duration: duration,
-                          trimStart: $trimStart, trimEnd: $trimEnd,
-                          clips: clips.map { StoryTrimView.Peer(id: $0.id, poster: $0.poster) },
-                          currentIndex: index,
-                          onSelect: { i in stashCurrent(); index = i; restoreCurrent() },
-                          onClose: { showTrim = false; stashCurrent() })
+        // Trim's filmstrip. Keyed on the clip, so switching clips inside trim redraws it in place —
+        // and it only runs while trim is actually open, since ten frame grabs is not free.
+        .task(id: showTrim ? currentURL.absoluteString : "") {
+            guard showTrim else { return }
+            await loadTrimThumbs()
+        }
+        // ONE PLACE DECIDES WHETHER THE VIDEO IS RUNNING. The trim strip drives `playing` directly
+        // (its play button, and it stops playback when you grab a handle), so the player has to
+        // follow the flag rather than only being told by togglePlay.
+        .onChange(of: playing) { _, on in on ? player.play() : player.pause() }
+        // Scrubbing: the handle drag and the playhead drag both report through `trimScrub`.
+        .onChange(of: trimScrub) { _, t in
+            guard let t else { return }
+            player.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                        toleranceBefore: .zero, toleranceAfter: .zero)
         }
         // + adds more clips. Videos only: this is the video editor, and a picture dropped in here
         // would have nothing to play it.
@@ -426,9 +448,7 @@ struct StoryVideoEditorView: View {
                         }
                         tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
                              active: isDrawing) { isDrawing.toggle() }
-                        tool("scissors", active: isTrimmed) {
-                            player.pause(); playing = false; showTrim = true
-                        }
+                        tool("scissors", active: isTrimmed) { openTrim() }
                         tool("plus.square.on.square") { showAddPicker = true }
                     }
                     .padding(.horizontal, 18).frame(height: 46)
@@ -580,6 +600,152 @@ struct StoryVideoEditorView: View {
                 .transition(.opacity)
                 .zIndex(20)
         }
+    }
+
+    // MARK: Trim, in place
+
+    /// TRIM IS A MODE OF THIS SCREEN, NOT A SCREEN (owner 2026-08-04, on the cover that used to slide
+    /// up from the bottom: "user never feel new page… just zoom out then trim appearing").
+    ///
+    /// It is built the way CROP already is on this same editor — an overlay in the same ZStack, shown
+    /// inside a `withAnimation` — so the two tools that take over the screen behave alike instead of
+    /// one sliding a page in and the other not.
+    ///
+    /// THE VIDEO UNDERNEATH IS THE EDITOR'S OWN PLAYER, still playing the same item at the same
+    /// moment. The old screen carried a SECOND AVPlayer on the same file, so opening trim re-loaded
+    /// the video and seeked it, and the picture jumped at the cut. Nothing reloads now; the card just
+    /// gets smaller.
+    ///
+    /// Only the chrome is drawn here. The middle is deliberately empty so the shrinking card shows
+    /// through it — a background would put the "new page" straight back.
+    @ViewBuilder private var trimOverlay: some View {
+        if showTrim {
+            VStack(spacing: 0) {
+                trimHeader
+                Spacer(minLength: 0)
+                if clips.count > 1 { trimPeerStrip }
+                VideoTrimStrip(duration: duration, thumbnails: trimThumbs,
+                               trimStart: $trimStart, trimEnd: $trimEnd,
+                               playhead: $trimPlayhead, scrubTime: $trimScrub,
+                               playing: $playing, draggingPlayhead: $trimDragging)
+                    .frame(height: 56)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 28)
+                    // Reserve the slot rather than let a late strip shove the layout (same reason the
+                    // old screen did it).
+                    .opacity(trimThumbs.isEmpty ? 0 : 1)
+            }
+            .transition(.opacity)
+            .zIndex(20)
+        }
+    }
+
+    private var trimHeader: some View {
+        HStack {
+            // X puts the handles back where they were. Done keeps them. Neither may leave half a cut.
+            Button { closeTrim(keep: false) } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            // The length you are about to KEEP, not the length of the file — that is the number you
+            // are deciding.
+            Text(trimClock(trimmedLength))
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14).frame(height: 32)
+                .liquidGlass(Capsule())
+
+            Spacer()
+
+            Button { closeTrim(keep: true) } label: {
+                Text("Done").font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 20).frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: true)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, max(windowSafeTop - 22, 10))
+    }
+
+    /// The post's other clips, so each can be trimmed without leaving (owner: "trimming multiple
+    /// videos from a single trim screen"). Same behaviour the old screen had, kept.
+    private var trimPeerStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(clips.enumerated()), id: \.element.id) { i, c in
+                    Group {
+                        if let p = c.poster { Image(uiImage: p).resizable().scaledToFill() }
+                        else { Color(white: 0.15) }
+                    }
+                    .frame(width: 44, height: 58)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(i == index ? Color.accentColor : .white.opacity(0.3),
+                                          lineWidth: i == index ? 2 : 1)
+                    }
+                    .onTapGesture {
+                        guard i != index else { return }
+                        // ORDER MATTERS: select() runs restoreCurrent(), which loads the new clip's
+                        // handles AND starts it playing. Pausing first would be undone a line later,
+                        // and the opened-values snapshot has to be taken after the handles change or
+                        // X would restore the WRONG clip's trim.
+                        select(i)
+                        playing = false
+                        trimOpenedStart = trimStart
+                        trimOpenedEnd = trimEnd
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func openTrim() {
+        playing = false
+        if trimEnd <= 0 { trimEnd = duration }   // the trim starts as "all of it"
+        trimOpenedStart = trimStart
+        trimOpenedEnd = trimEnd
+        withAnimation(.easeInOut(duration: 0.3)) { showTrim = true }
+    }
+
+    private func closeTrim(keep: Bool) {
+        if !keep { trimStart = trimOpenedStart; trimEnd = trimOpenedEnd }
+        stashCurrent()
+        trimThumbs = []
+        withAnimation(.easeInOut(duration: 0.3)) { showTrim = false }
+    }
+
+    private func trimClock(_ s: Double) -> String {
+        let t = Int(s.rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    /// Ten frames across the clip — the same filmstrip recipe the trim screen and VideoApprovalView
+    /// have always used.
+    private func loadTrimThumbs() async {
+        let asset = AVURLAsset(url: currentURL)
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.requestedTimeToleranceBefore = .zero
+        gen.requestedTimeToleranceAfter = .positiveInfinity
+        gen.maximumSize = CGSize(width: 160, height: 160)
+        let count = 10
+        var imgs: [UIImage] = []
+        for i in 0..<count {
+            let t = CMTime(seconds: duration * Double(i) / Double(count - 1), preferredTimescale: 600)
+            if let cg = try? await gen.image(at: t).image { imgs.append(UIImage(cgImage: cg)) }
+        }
+        await MainActor.run { trimThumbs = imgs }
     }
 
     /// OUR pen bar, the same one the photo editor and the chat's image editor use: a colour track,
