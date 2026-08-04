@@ -9,19 +9,37 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // ── OFFICIAL CHANNEL PERMISSIONS ──
+    // Declared up here, above the first block that uses them (the per-person announcement copies
+    // under /users/{uid}), so nothing depends on how the compiler orders declarations.
+    //
+    // Permission is a DOCUMENT, not a Cloud Function. `admins/{uid}` is the whole system and these
+    // rules are the server-side check. See the /announcements block at the bottom for why the
+    // official chat needs no account behind it.
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function adminData() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+    function adminIsOwner() {
+      return isAdmin() && adminData().get('role', '') == 'owner';
+    }
+    // The owner is never limited. Everybody else holds exactly what they were given - an empty list
+    // is a real state (an admin stood down but not removed), NOT a legacy "has everything". The group
+    // admin model made that mistake and has had to carry it ever since.
+    function adminCan(p) {
+      return isAdmin() && (adminData().get('role', '') == 'owner' || p in adminData().get('perms', []));
+    }
+
     // Profiles: any signed-in user can look up a handle to start a chat,
     // but you can only create/edit your OWN profile.
     match /users/{uid} {
       allow read: if signedIn();
       allow create, update: if signedIn() && request.auth.uid == uid;
-      // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
-      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
-      // unwanted request and nothing else.
-      allow delete: if signedIn()
-        && request.auth.uid in resource.data.users
-        && resource.data.get('type', '') != 'group'
-        && resource.data.get('startedBy', '') != ''
-        && resource.data.get('accepted', false) == false;
+      // NO delete. (A copy of the message-request decline rule was pasted here by mistake; it read
+      // conversation fields off a user document, so it could only ever error, and the real one lives
+      // on /conversations/{cid} where it belongs. Removed 2026-08-04, no behaviour change.)
 
       // Story distribution lists ("My Status" + custom lists) and per-user seen state.
       // Both are private to the owner.
@@ -46,6 +64,21 @@ service cloud.firestore {
       match /stickers/{doc} {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
+
+      // OFFICIAL CHANNEL, this person's half: muted, blocked, last read, delete-for-me. Private in
+      // both directions - what you have read is nobody's business, and the read COUNTS the admin
+      // screen shows come from anonymous shard counters, never from here.
+      match /officialChannel/{doc} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+
+      // Announcements sent to THIS PERSON by hand. A real copy, because a phone cannot filter itself
+      // against a list of chosen people it is not allowed to see - which is the whole reason a
+      // broadcast document must never carry that list.
+      match /announcements/{id} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if adminCan('targetChosen');
+      }
     }
 
     // Abuse reports (App Store Guideline 1.2 — users must be able to flag content
@@ -64,6 +97,92 @@ service cloud.firestore {
     match /stickerPacks/{packId} {
       allow read: if signedIn();
       allow write: if false;
+    }
+
+    // ── THE OFFICIAL CHANNEL ──────────────────────────────────────────────────────────────────
+    //
+    // There is no @fariin account and there is not meant to be. The official chat is built by the
+    // app itself around a fixed id, exactly the way Signal's release channel is, which is what makes
+    // it impossible to impersonate: there is no account to steal and no username to copy. What lives
+    // here is only the WORDS - one document per announcement, read by every phone on earth, with who
+    // it is for decided on the phone out of the fields it carries.
+    //
+    // Permission is a document, not a Cloud Function: `admins/{uid}` is the whole permission system,
+    // and the four helpers at the top of this file are the server-side check.
+
+    // Where "Update Now" sends people. Not hardcoded, because the app has no App Store id yet and a
+    // button that opens nothing is a fake feature. Owner sets it once; everybody reads it.
+    match /config/official {
+      allow read: if signedIn();
+      allow write: if adminIsOwner();
+    }
+
+    // The admin team. You may read your OWN row, which is how the app knows whether to show the admin
+    // screens at all; the owner may read the whole team.
+    match /admins/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || adminIsOwner());
+      // Only the owner appoints, and only ever an 'admin' - nobody can mint a second owner, so the
+      // owner's own row cannot be created, edited or deleted by any client. It is seeded once,
+      // out of band, and after that it is untouchable from the app.
+      allow create: if adminIsOwner() && request.resource.data.get('role', '') == 'admin';
+      allow update: if adminIsOwner()
+        && resource.data.get('role', '') == 'admin'
+        && request.resource.data.get('role', '') == 'admin';
+      allow delete: if adminIsOwner() && resource.data.get('role', '') == 'admin';
+    }
+
+    match /announcements/{id} {
+      // Everything here is a public broadcast, so every signed-in phone may read it. That also means
+      // a SCHEDULED announcement is on the server, readable, from the moment it is written - the same
+      // exposure Signal's release-notes file has the moment it is uploaded to their CDN. Scheduling
+      // is a convenience, not a secret.
+      allow read: if signedIn();
+
+      // Caps, because every phone in the world downloads this. A compromised admin account should not
+      // be able to push a megabyte of body text to a million people.
+      function wellFormed() {
+        return request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 120
+          && request.resource.data.body is string
+          && request.resource.data.body.size() > 0
+          && request.resource.data.body.size() <= 4000
+          && request.resource.data.get('buttons', []).size() <= 3;
+      }
+      // The permissions that are not just "may send at all" are checked HERE too, not only in the
+      // app. An admin limited to plain sends cannot reach for a country list or a security alert by
+      // driving Firestore directly.
+      function withinPermissions() {
+        return (request.resource.data.get('kind', '') != 'security' || adminCan('security'))
+          && (request.resource.data.audience.get('scope', '') != 'countries' || adminCan('targetCountry'))
+          && (request.resource.data.audience.get('scope', '') != 'chosen' || adminCan('targetChosen'));
+      }
+      // Taking one back is a TOMBSTONE, never a real delete: a phone that is offline right now holds
+      // the old copy and can only learn the announcement is gone from a document that still exists to
+      // say so. Which is also why delete is closed to everybody, forever.
+      function onlyWithdrawing() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'deletedAt'])
+          && request.resource.data.deleted == true;
+      }
+
+      allow create: if adminCan('send') && wellFormed() && withinPermissions();
+      allow update: if (adminCan('edit') && wellFormed() && withinPermissions())
+        || (adminCan('remove') && onlyWithdrawing());
+      allow delete: if false;
+
+      // HOW MANY people read it, never WHO. A hundred counter documents rather than one, because a
+      // single counter would put every reader on earth in a queue behind one lock (Firestore holds a
+      // document to roughly one write a second). Each phone may only ever add exactly one.
+      match /readShards/{shard} {
+        allow read: if isAdmin();
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['count'])
+          && request.resource.data.count == 1;
+        allow update: if signedIn()
+          && request.resource.data.keys().hasOnly(['count'])
+          && request.resource.data.count == resource.data.count + 1;
+        allow delete: if false;
+      }
     }
 
     // A conversation belongs to exactly two users.
@@ -454,14 +573,9 @@ service cloud.firestore {
           && request.auth.uid in storyData().recipientUids
           && validReceipt();
         allow update: if signedIn() && request.auth.uid == viewerUid && validReceipt();  // set/clear reaction
-        // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
-      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
-      // unwanted request and nothing else.
-      allow delete: if signedIn()
-        && request.auth.uid in resource.data.users
-        && resource.data.get('type', '') != 'group'
-        && resource.data.get('startedBy', '') != ''
-        && resource.data.get('accepted', false) == false;
+        // NO delete — a view receipt is not something a viewer takes back. (Second stray paste of the
+        // message-request decline rule; it read conversation fields off a view receipt, so it could
+        // only ever error. Removed 2026-08-04, no behaviour change.)
       }
     }
   }
