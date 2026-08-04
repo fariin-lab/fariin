@@ -52,7 +52,7 @@ struct VideoPlayerScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
             // ONLY the player content hides when a drag-close begins — the flying poster copy replaces
-            // it. Background and chrome stay live so the coordinator's root-alpha scrub (Signal's
+            // it. Background and chrome stay live so the coordinator's root-alpha scrub (the reference app's
             // fromView.alpha) can melt them into the chat with the finger, and back on cancel.
             playerContent
                 .opacity(dismissing ? 0 : 1)
@@ -74,7 +74,7 @@ struct VideoPlayerScreen: View {
         // the finger, constant 0.8 scale, root-alpha scrub, 0.25s spring.
         .overlay {
             // Unconditional: the system .zoom this used to be suppressed for is gone from chat media.
-            SignalDismissHost(
+            MediaDismissHost(
                 canBegin: { !zoomed && !scrubbing },
                 media: {
                     // The video's fitted rect from its stored dimensions (fallback: full screen).
@@ -85,7 +85,7 @@ struct VideoPlayerScreen: View {
                     }
                     // Fly the POSTER, not a live-region snapshot. Passing nil took the
                     // resizableSnapshotView branch, which captures whatever chrome has not finished
-                    // hiding yet - Signal always flies a still frame for video, never a layer or a
+                    // hiding yet - the reference app always flies a still frame for video, never a layer or a
                     // snapshot of the screen.
                     return (mediaFitRect(size, in: bounds), poster)
                 },
@@ -110,7 +110,7 @@ struct VideoPlayerScreen: View {
         .onDisappear { cleanup(); MediaPresentGate.noteClosed() }
     }
 
-    /// The still the transition flies. Signal flies a poster frame for video too — never a player
+    /// The still the transition flies. the reference app flies a poster frame for video too — never a player
     /// layer, never a snapshot of the live region — which is what makes video and photo behave alike.
     private var poster: UIImage? { message.thumbUrl.flatMap { DiskImageCache.shared.memoryImage($0) } }
 
@@ -167,7 +167,7 @@ struct VideoPlayerScreen: View {
     }
 
     // Video closes exactly like a photo: one pipeline, the UIKit animator pair. The button close
-    // flies the poster home through SignalDismissHost, same as the drag (its no-geometry fallback
+    // flies the poster home through MediaDismissHost, same as the drag (its no-geometry fallback
     // dismisses plainly, so closing is never blocked).
     private func closeViewer() { closeToken += 1 }
     /// The drag-close's exit: the flying poster IS the animation, so the presentation goes without one.

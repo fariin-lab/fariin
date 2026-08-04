@@ -1,8 +1,8 @@
 import UIKit
 
-// ===== UIKit bubble migration (Signal-style unified scrolling surface) =====
+// ===== UIKit bubble migration (reference-style unified scrolling surface) =====
 // The conversation "felt fragmented" because every bubble was a SwiftUI view hosted in a cell, each with
-// its own layout/animation/render lifecycle that ran DURING scroll. Signal renders every bubble as static
+// its own layout/animation/render lifecycle that ran DURING scroll. the reference app renders every bubble as static
 // UIKit content laid out ONCE, so scrolling is a single rigid surface that just follows contentOffset.
 //
 // This is stage 1 of that migration: the most common bubble — a plain 1:1 delivered text message — renders

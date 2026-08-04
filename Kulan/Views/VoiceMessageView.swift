@@ -383,14 +383,14 @@ struct WaveformBars: View {
             // claims is a race against the scroll view starting.
             //
             // So the axis is decided BEFORE the gesture is allowed to begin, which only UIKit can do, and
-            // which is how Signal's swipe recogniser works too. Vertical -> we fail instantly and the list
+            // which is how the reference app's swipe recogniser works too. Vertical -> we fail instantly and the list
             // scrolls, every time. Horizontal -> we claim, and keep it for the whole gesture in both
-            // directions (the WhatsApp rule the user asked for: "when moving the wave the bubble will never
+            // directions (the the reference app rule the user asked for: "when moving the wave the bubble will never
             // move"). Recognises simultaneously with everything else, so long-press-for-menu still works.
             .overlay {
                 WaveformGestureArea(progress: progress, onSeek: onSeek, onScrub: onScrub)
             }
-            // DRAGGABLE PLAYHEAD KNOB (WhatsApp model, user request): you can now drag to move
+            // DRAGGABLE PLAYHEAD KNOB (the reference app model, user request): you can now drag to move
             // through a voice note. It's a SMALL target on the playhead rather than the whole
             // waveform — that's the entire point. A full-width drag-scrub is what used to block chat
             // scrolling and swallow the reply-swipe, so the bar itself stays tap-only and only this
@@ -399,7 +399,7 @@ struct WaveformBars: View {
             .overlay(alignment: .leading) {
                 let w = max(1, geo.size.width)
                 let sx = w * CGFloat(max(0, min(1, progress)))
-                // Solid dot in the played colour, like WhatsApp's. A soft shadow keeps it visible
+                // Solid dot in the played colour, like the reference app's. A soft shadow keeps it visible
                 // whatever the bubble colour is (white dot on a light custom bubble, etc).
                 Circle()
                     .fill(played)

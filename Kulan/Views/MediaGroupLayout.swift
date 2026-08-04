@@ -3,7 +3,7 @@ import Foundation
 
 /// Mosaic layout for a media group (2...10 photos or videos sent as one message).
 ///
-/// OUR OWN CODE, THEIR ALGORITHM. Telegram-iOS reports no licence, so shipping their source would
+/// OUR OWN CODE, THEIR ALGORITHM. the reference app-iOS reports no licence, so shipping their source would
 /// oblige publishing Fariin's — reading it to extract the algorithm is fine, pasting it is not (the
 /// standing rule on this project). Everything below is written from
 /// `submodules/MosaicLayout/Sources/ChatMessageBubbleMosaicLayout.swift`, read 2026-07-28, and each rule
@@ -11,7 +11,7 @@ import Foundation
 ///
 /// THE POINT OF THE REWRITE (user, 2026-07-28: "Dont use always square, it must use the size of the
 /// picture"): the previous version picked a fixed arrangement per count, derived from screenshots that
-/// happened to be square photos. That is only correct for square photos. Telegram does not choose by
+/// happened to be square photos. That is only correct for square photos. the reference app does not choose by
 /// count — it chooses by SHAPE. Three wide landscape shots stack into full-width strips; three tall
 /// portrait shots sit side by side as columns; the count only breaks ties.
 ///
@@ -29,7 +29,7 @@ import Foundation
 enum MediaGroupLayout {
 
     /// Which outer edges of the whole group a tile touches, so the album can round only the corners
-    /// that are actually on the outside (Telegram's `MosaicItemPosition`).
+    /// that are actually on the outside (the reference app's `MosaicItemPosition`).
     struct Edges: OptionSet {
         let rawValue: Int
         static let top = Edges(rawValue: 1)
@@ -50,7 +50,7 @@ enum MediaGroupLayout {
         let size: CGSize
     }
 
-    /// Telegram's hairline is 1pt; ours is 2 so the seams read on a wallpaper.
+    /// the reference app's hairline is 1pt; ours is 2 so the seams read on a wallpaper.
     static let spacing: CGFloat = 2
 
     // Their constants, unchanged: a tile narrower or shorter than these reads as a sliver.
@@ -62,7 +62,7 @@ enum MediaGroupLayout {
     /// - Parameters:
     ///   - itemSizes: each item's natural pixel size, in order. Unknown → pass a square.
     ///   - maxSize: the box the group must fit. Width is the bubble's content width; height bounds the
-    ///     hand-tuned 2/3/4 arrangements. A square box matches what Telegram passes for grouped media.
+    ///     hand-tuned 2/3/4 arrangements. A square box matches what the reference app passes for grouped media.
     static func solve(itemSizes: [CGSize], maxSize: CGSize, spacing: CGFloat = spacing) -> Result {
         guard !itemSizes.isEmpty else { return Result(tiles: [], size: .zero) }
 

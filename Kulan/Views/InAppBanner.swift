@@ -6,7 +6,7 @@ import FirebaseAuth
 //
 // A push that lands while the app is OPEN used to be shown by the system: the standard grey
 // notification drop-down, which reads as "something outside the app happened" even though you are
-// looking at the app. WhatsApp, Telegram and Signal all draw their own, styled like the app, and
+// looking at the app. the reference app, the reference app and the reference app all draw their own, styled like the app, and
 // that is what this is: avatar, name, the message, tap to open, swipe up to send it away.
 //
 // The chat you are currently looking at never banners itself — see PushManager.willPresent.

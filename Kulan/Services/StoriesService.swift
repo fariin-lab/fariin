@@ -396,7 +396,7 @@ final class StoriesService {
         // RECIPROCAL, as the Stories settings footer promises ("If disabled, you won't see when
         // others view your stories"). The gate existed only on the SENDING half — your views were
         // hidden from others while their full Seen-by list, timestamps and reactions still showed
-        // to you (audit). WhatsApp's rule, and the one the copy already claims.
+        // to you (audit). the reference app's rule, and the one the copy already claims.
         guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return [] }
         let snap = try? await db.collection("stories").document(storyId).collection("views").getDocuments()
         let docs = snap?.documents ?? []

@@ -342,7 +342,7 @@ struct StoryCameraView: View {
                         .buttonStyle(.plain)
                     Spacer()
                     // A capsule because the reference has one, holding the flash on its own for now.
-                    // Signal's second glyph there is their single/multi CAPTURE MODE
+                    // the reference app's second glyph there is their single/multi CAPTURE MODE
                     // (PhotoCaptureViewController.swift:989, `captureModeButton` → `didTapBatchMode`),
                     // which takes a burst and sends them together. We have no such thing, and drawing
                     // a button that does nothing is the one thing this project never does.

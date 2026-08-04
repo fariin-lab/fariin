@@ -24,7 +24,7 @@ import UIKit
 //     and its own guard. There were roughly twenty-five contentOffset/contentInset writers in this file,
 //     each guarded by whoever wrote it, and each one was a chance to get it wrong.
 //
-// So the list is now INVERTED, which is what Telegram, WhatsApp and iMessage all do:
+// So the list is now INVERTED, which is what the reference app, the reference app and the reference app all do:
 //
 //   * The collection view carries a scaleY(-1) transform and so does every cell, so the two flips cancel
 //     and content renders upright. Only the VIEWPORT is mirrored.
@@ -90,7 +90,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // "a menu is dismissing right now" and holds cell reloads until the animation is over.
     var menuActionTick: Int = 0
     // Height of the top overlay (pinned-message bar) the list runs UNDER. The floating date pill drops below
-    // it so it isn't hidden behind the pin (Signal behavior). 0 â†’ pill sits at its normal top position.
+    // it so it isn't hidden behind the pin (the reference app behavior). 0 â†’ pill sits at its normal top position.
     var topOverlayHeight: CGFloat = 0
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area â€” reliable)
     @Binding var isAtBottom: Bool
@@ -281,7 +281,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // 0.6s BACKSTOP: UIKit's dismissal spring runs ~0.4-0.5s and a LARGE lifted preview (an album
         // mosaic) rides the long end. This window is a GATE, not a schedule — and it normally ends
         // EARLY, the moment the menu's own window hides (menuWindowDidHide), which is the same instant
-        // Signal's animator completion fires. The timer only covers the case that notification never
+        // the reference app's animator completion fires. The timer only covers the case that notification never
         // comes. (User report on the timer-only version: "the checkmark is coming late" — checkboxes
         // sat on the full 0.65s even though the menu was gone at ~0.4.)
         menuDismissArmedAt = Date()
@@ -469,7 +469,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         holdPress.delegate = self
         collectionView.addGestureRecognizer(holdPress)
 
-        // THE CUSTOM MENU DRIVER (experiment — CMContextMenu.swift). Signal's press: 0.2s to begin,
+        // THE CUSTOM MENU DRIVER (experiment — CMContextMenu.swift). the reference app's press: 0.2s to begin,
         // squeeze while it ripens, then the SAME press keeps streaming into the overlay so a finger
         // can slide onto a row or an emoji and lift to select. cancelsTouchesInView stays true (the
         // default): once the menu ripens, the touch belongs to it, not to the row underneath.
@@ -766,7 +766,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     // The one safety rule: never move the reader while their finger is on the glass. Deceleration is
-    // deliberately NOT included (Signal tracks it separately): a fling that is still coasting toward the
+    // deliberately NOT included (the reference app tracks it separately): a fling that is still coasting toward the
     // newest message should absolutely end up there. The first landing happens before the list is even
     // visible, so it is never gated.
     private func perform(_ intent: ScrollIntent) {
@@ -823,7 +823,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Land-when-safe
     //
-    // Signal's actual gate (CVLoadCoordinator.loadLandWhenSafe â†’ canLandLoad, read from their source
+    // the reference app's actual gate (CVLoadCoordinator.loadLandWhenSafe â†’ canLandLoad, read from their source
     // 2026-07-27). Note what is NOT in it: isDragging, isTracking, isDecelerating. Loads land WHILE your
     // finger is down; the reader is kept still by the layout, not by refusing the work.
     //
@@ -834,7 +834,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var canLandLoad: Bool {
         if keyboardAnimating, selectionAnimationState != .willAnimate { return false }
         if selectionAnimationState == .animating { return false }
-        // Signal's `contextMenuVisible`, from UIKit's own callbacks. NO selection exception here: the land
+        // the reference app's `contextMenuVisible`, from UIKit's own callbacks. NO selection exception here: the land
         // that opens selection mode is exactly the one that must wait, because it reloads the cell the
         // menu is animating back into.
         if contextMenuVisible { return false }
@@ -852,7 +852,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return true
     }
 
-    // Signal's `viewState.isUserScrolling`: FINGER DOWN ONLY. Deceleration is tracked separately and
+    // the reference app's `viewState.isUserScrolling`: FINGER DOWN ONLY. Deceleration is tracked separately and
     // deliberately does not count.
     private var isUserScrolling: Bool { collectionView.isDragging || collectionView.isTracking }
 
@@ -991,7 +991,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // of Firestore emissions collapses into a single land instead of a queue of stale ones.
     private var pendingIdsApply: [String]?
 
-    /// Signal's retry loop: `asyncAfter` takes longer than `async` under load, which is what you want here
+    /// the reference app's retry loop: `asyncAfter` takes longer than `async` under load, which is what you want here
     /// â€” it backs off exactly when the CPU is busy. The load lands the instant the block clears.
     private func scheduleLandRetry() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { [weak self] in
@@ -1043,7 +1043,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // finished dismissing, because reloading the cell the menu is animating BACK INTO
                 // strands the system's blur. That is true of exactly ONE cell — the source. Every
                 // other visible row can take its checkbox right now, while the menu is still fading,
-                // which is what Signal looks like: their selection UI appears with the dismissal, not
+                // which is what the reference app looks like: their selection UI appears with the dismissal, not
                 // after it. The source row fills in a beat later when the animator completes.
                 if selectionAnimationState == .willAnimate { refreshSelectionExceptMenuSource() }
                 return
@@ -1126,7 +1126,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // then wrong by that amount and corrected a frame late â€” the small jump when older messages
         // landed. Here the same rows are at the FAR END of the layout, past everything the reader can see,
         // so a stale height there cannot move anyone. It is re-measured purely so the row RENDERS
-        // correctly. (Modelling the separator as its own list item, the way Signal does, would remove even
+        // correctly. (Modelling the separator as its own list item, the way the reference app does, would remove even
         // this; it is no longer urgent.)
         let keep = newSet
         if currentIds.last != ids.last {   // the oldest loaded row changed â†’ the join moved
@@ -1380,7 +1380,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // every loaded row and on both insets â€” so a keyboard fold could drop the maximum by the keyboard's
     // height and make a reader scrolled far up measure a large NEGATIVE distance and answer "yes, at the
     // bottom", which then yanked them down. Here the newest message is at a fixed coordinate and the
-    // question is just "are we there". It cannot be wrong. 5pt is Signal's tolerance.
+    // question is just "are we there". It cannot be wrong. 5pt is the reference app's tolerance.
     private var isAtNewest: Bool { collectionView.contentOffset.y <= minContentOffsetY + 5 }
 
     /// AT REST, THE READER CAN NEVER BE BEYOND THE NEWEST MESSAGE. This is the invariant the keyboard
@@ -1427,7 +1427,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // top-down list produced when UIKit folded the safe area for us:
     //
     //   visual bottom = safe.bottom + composerBar + 12   home indicator, or the keyboard when it is up,
-    //                                                    then the bar riding on top of it, then Signal's
+    //                                                    then the bar riding on top of it, then the reference app's
     //                                                    small gap so the last bubble clears the pills
     //   visual top    = safe.top + pinned bar            status bar + nav bar, plus the pin bar if shown
     //
@@ -1559,16 +1559,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // with it down the safe area's bottom is the home indicator alone. The inset moves by
         // keyboard-minus-home-indicator, so every transition over-moved by ~34pt â€” down past the composer
         // on close, and back again when the settle corrected it. Exactly the reported overshoot, and
-        // exactly the double-count Signal's subtraction exists to avoid.
+        // exactly the double-count the reference app's subtraction exists to avoid.
         //
         // With no delta there is no arithmetic left to be wrong. updateInsets already recomputes the
         // clearance and, if the reader was at the newest message, puts them at the newest message â€”
-        // which is Signal's rule verbatim. Signal does this with performWithoutAnimation on every layout
+        // which is the reference app's rule verbatim. the reference app does this with performWithoutAnimation on every layout
         // pass while the bar moves; the smoothness comes from the BAR animating, not from us animating
         // alongside it. So the private-curve ride, the notification frames, the begin/end delta and the
         // close-ownership flag are all gone.
         //
-        // LATCH "was at the newest message" for the CLOSE (Signal's `wasScrolledToBottom` — theirs is
+        // LATCH "was at the newest message" for the CLOSE (the reference app's `wasScrolledToBottom` — theirs is
         // captured before the bar moves too). The live test cannot answer this later: a close can leave
         // the reader displaced (see keyboardDidHide), and once displaced they look like a reader in
         // history, whom nothing may move. So the question is asked NOW, while it is still answerable:
@@ -1744,7 +1744,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // THE CLOSE GLUE (larger-iPhone report: the last bubble visibly sat under the composer for the
         // beat between the close and the didHide settle — a taller keyboard displaces more, so big
         // screens made the transient obvious). One settle at the END means every frame before it can be
-        // wrong. Signal recomputes on every layout pass while the bar moves; this is that: for the whole
+        // wrong. the reference app recomputes on every layout pass while the bar moves; this is that: for the whole
         // willHide→didHide window, a reader the latch says was at the newest message is HELD there on
         // every pass — updateInsets can't do it, its change-detection guard stops running once the
         // insets have landed. Never while a finger or fling owns the list.
@@ -1758,7 +1758,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // above correctly stands down because a finger owns the list while the inset shrinks.
         clampToNewestIfBeyond()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
-        // (Signal passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this is the same
+        // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this is the same
         // region expressed as a rect). Remember the flip: adjusted .bottom is the VISUAL TOP inset (nav
         // bar) and adjusted .top is the visual bottom (composer). The controller's view is untransformed,
         // so its window frame is the plain screen region the list occupies.
@@ -1856,7 +1856,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The custom press coexists ONLY with the passive hold observer. Letting it run with the
         // scroll pan let the still-down finger keep scrolling the list behind the menu's blur (user:
         // "you feel scroll jump") — exclusivity makes UIKit prevent the pan the moment the press
-        // recognizes, which is exactly Signal's behaviour.
+        // recognizes, which is exactly the reference app's behaviour.
         if g === customPress || other === customPress {
             return g === holdPress || other === holdPress
         }
@@ -2060,7 +2060,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    /// Signal's two-beat open: the press has already ripened (0.2s), now the bubble squeezes to 0.95
+    /// the reference app's two-beat open: the press has already ripened (0.2s), now the bubble squeezes to 0.95
     /// for 0.2s more. Finger still down at the end → present; lifted → bounce back, nothing opens.
     private func beginCustomMenu(at loc: CGPoint) {
         guard activeMenu == nil,
@@ -2150,7 +2150,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // THE REAL MENU LIFETIME, from UIKit, replacing a long-press proxy that could not see it.
     //
-    // Signal's land gate blocks on `collectionViewActiveContextMenuInteraction.contextMenuVisible`. Ours
+    // the reference app's land gate blocks on `collectionViewActiveContextMenuInteraction.contextMenuVisible`. Ours
     // approximated that with the passive long-press recogniser, whose window closes one second after the
     // finger lifts â€” but a menu ACTION is tapped seconds later, while the user reads the menu. So when
     // "Select" was chosen, the gate was already wide open and the route flip it triggers (selection mode
@@ -2354,7 +2354,7 @@ final class InvertedMessageLayout: UICollectionViewLayout {
 
     override var collectionViewContentSize: CGSize { CGSize(width: layoutWidth, height: contentHeight) }
 
-    // ONE-CONNECTED-SHEET (the Telegram model): keep a full viewport of rows rendered on each side of the
+    // ONE-CONNECTED-SHEET (the the reference app model): keep a full viewport of rows rendered on each side of the
     // visible rect, so every bubble is already fully rendered before it scrolls on screen. Without this,
     // each hosted bubble builds its SwiftUI at the moment it enters the viewport â€” bubbles pop in one at a
     // time behind the moving sheet, which reads as independent elements instead of one surface. Gated

@@ -211,7 +211,7 @@ struct AuthMethodView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
 
-                // THE THREE DOORS ARE ONE SET. What made the reference screens (Twitch, and the
+                // THE THREE DOORS ARE ONE SET. What made the reference screens (the reference app, and the
                 // "How do you want to log in?" pattern) read as professional was that every choice
                 // is the SAME button — one shape, one height, one weight — and only the brand mark
                 // changes. Apple's own `whiteOutline` style is that button, so we use their API

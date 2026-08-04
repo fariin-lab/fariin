@@ -18,7 +18,7 @@ struct MainShell: View {
         callsRepo.calls.filter { $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt }.count
     }
 
-    // CONVERSATIONS WAITING, NOT MESSAGES WAITING — how Signal and WhatsApp both badge it. One person
+    // CONVERSATIONS WAITING, NOT MESSAGES WAITING — how the reference app and the reference app both badge it. One person
     // sending five messages moves this by ONE, not five: the badge answers "how many chats do I need to
     // open", which is the question a chat list badge is actually for.
     //
@@ -624,7 +624,7 @@ struct ChatsView: View {
         let h = profile.me?.handle ?? ""
         return h.isEmpty ? "Chat with me on Fariin." : "Chat with me on Fariin, my username is @\(h)"
     }
-    // Big-app empty state (TG/WA/Signal rule: one visual, one line, ONE button).
+    // Big-app empty state (the big messengers rule: one visual, one line, ONE button).
     // The stacked three-pill version read as clutter — secondary actions are quiet
     // inline text links instead.
     private var emptyWelcome: some View {
@@ -643,7 +643,7 @@ struct ChatsView: View {
             }
             // NOTHING ELSE. A fresh account used to get a "Find People" button plus "My QR" and
             // "Invite" links stacked under the message, which read as a landing page rather than an
-            // empty inbox. X, Signal and iMessage all show only a glyph, a title and one line here -
+            // empty inbox. X, the reference app and the reference app all show only a glyph, a title and one line here -
             // the actions already live in the compose button in the nav bar, so repeating them cluttered
             // the first thing a new user ever sees.
         }
@@ -703,7 +703,7 @@ struct ChatsView: View {
     /// In edit mode the List's own selection only reacts to taps on NON-interactive row content, and
     /// every chat row is a Button — so a tap on the avatar, the name, or the empty space was swallowed
     /// and pushed the chat instead of selecting it. Only the checkbox (outside the Button) worked.
-    /// Route those taps here so the whole row toggles, like Mail and Telegram.
+    /// Route those taps here so the whole row toggles, like Mail and the reference app.
     private func toggleSelection(_ id: String) {
         withAnimation(.smooth(duration: 0.2)) {
             if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
@@ -735,11 +735,11 @@ struct ChatsView: View {
         // long press waits for the menu, and clears the moment the finger lifts or a scroll steals
         // the touch. Nothing of ours is involved, so there is nothing that can be left behind.
         //
-        // A row used to stay lit while its chat was open (Signal's `selectRow`, build 441). It is
+        // A row used to stay lit while its chat was open (the reference app's `selectRow`, build 441). It is
         // deleted. On a phone that highlight is only ever VISIBLE during the back swipe, because
         // that is the one moment the list is on screen with a chat still on the stack — and it was
         // being cleared by `path.count` reaching zero, which happens when the pop FINISHES. So the
-        // grey sat there at full strength for the whole gesture. Signal solves that by deselecting
+        // grey sat there at full strength for the whole gesture. the reference app solves that by deselecting
         // inside the navigation transition's own animation, which SwiftUI gives no way to reach; the
         // owner chose the simpler end of that trade deliberately: no state, no grey, nothing to fade.
         Button {
@@ -763,7 +763,7 @@ struct ChatsView: View {
         .allowsHitTesting(!selecting)
         .overlay {
             if selecting {
-                // Whole row toggles, like Mail and Telegram (taps on a Button's content were
+                // Whole row toggles, like Mail and the reference app (taps on a Button's content were
                 // otherwise swallowed and only the checkbox worked).
                 Color.clear.contentShape(Rectangle())
                     .onTapGesture { toggleSelection(conv.id) }
@@ -1938,7 +1938,7 @@ struct ChatRow: View, Equatable {
 // This used to be a hand-rolled fake: emoji text pills ("📷 Photo", "🎥 Video call") in a fixed 330pt
 // box on a plain background, which read as a mock-up rather than the chat.
 //
-// Signal's model (verified in their source: `CLVTableDataSource.tableView(_:contextMenuConfigurationForRowAt:point:)`
+// the reference app's model (verified in their source: `CLVTableDataSource.tableView(_:contextMenuConfigurationForRowAt:point:)`
 // → `ChatListViewController.createPreviewController` → a real `ConversationViewController` with
 // `previewSetup()`) is to show the ACTUAL conversation view with only its chrome suppressed — real
 // image thumbnails, real voice notes, real call cells — and to set NO explicit size, letting UIKit size
@@ -1946,7 +1946,7 @@ struct ChatRow: View, Equatable {
 //
 // So: real `MessageBubble`s (the same view the chat renders), the chat's real wallpaper behind them,
 // bottom-aligned like a real conversation, at the screen's aspect. The one place we must diverge from
-// Signal is the frame: a SwiftUI preview auto-sizes to intrinsic content and would collapse, so the
+// the reference app is the frame: a SwiftUI preview auto-sizes to intrinsic content and would collapse, so the
 // size is stated explicitly and derived from the screen rather than being a magic number.
 private struct ChatPeekPreview: View {
     let cid: String
@@ -1963,7 +1963,7 @@ private struct ChatPeekPreview: View {
         _loaded = State(initialValue: !cached.isEmpty)
     }
 
-    // Screen-proportional, like the platter Signal gets for free from a full view controller.
+    // Screen-proportional, like the platter the reference app gets for free from a full view controller.
     private var size: CGSize {
         let screen = UIScreen.main.bounds.size
         return CGSize(width: screen.width, height: screen.height * 0.62)

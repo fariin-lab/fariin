@@ -402,7 +402,7 @@ enum ChatService {
         ])
     }
 
-    /// Restrict a member with an auto-expiring timeout (Telegram bannedRights model). `flags` is a
+    /// Restrict a member with an auto-expiring timeout (the reference app bannedRights model). `flags` is a
     /// subset of Conversation.Restrict raw values; `until` is an absolute ms timestamp (0 = clear).
     static func restrictMember(cid: String, uid: String, name: String, flags: [String], until: Double) async throws {
         let convRef = db.collection("conversations").document(cid)
@@ -462,7 +462,7 @@ enum ChatService {
 
     /// Encrypt + send a text message and bump the conversation. Throws
     /// MissingRecipientKeyError if the recipient has no key yet (never sends plaintext).
-    /// Sender-fetched link preview attached to a text send (Signal's model — see LinkPreviewService).
+    /// Sender-fetched link preview attached to a text send (the reference app's model — see LinkPreviewService).
     struct OutgoingLinkPreview {
         let url: String
         let title: String
@@ -1111,7 +1111,7 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
         }
         let msgRef = convRef.collection("messages").document()
-        // iMessage-style document preview (owner's reference): a PDF's first page — or an image
+        // reference-style document preview (owner's reference): a PDF's first page — or an image
         // file's own pixels — rides along as an ENCRYPTED thumbnail, the video-poster pipeline
         // reused (thumbUrl/thumbEnc parse on every message type). Best-effort: a failed preview
         // never fails the send; other document types keep the plain icon.
@@ -1244,7 +1244,7 @@ enum ChatService {
             try await sendImage(cid: targetCid, data: bytes, clientId: clientId, caption: m.text, forwarded: true)
         } else if m.isAlbum {
             // The album forwards as ONE album, grouped like the original — the owner rejected
-            // WhatsApp's break-apart-into-singles ("is broke is send one by one"). Each item
+            // the reference app's break-apart-into-singles ("is broke is send one by one"). Each item
             // decrypts from the source chat and re-seals for the target through the real album
             // pipeline. ANY missing item fails the whole forward — never deliver a smaller album
             // than the bubble showed.
@@ -1564,7 +1564,7 @@ enum ChatService {
             // TOMBSTONE, not a hole. The document survives carrying `deleted`, with every content
             // field stripped, so both sides see that something was here and was removed instead of a
             // message silently vanishing and leaving the other person wondering what they missed.
-            // This is what WhatsApp and Signal both do.
+            // This is what the reference app and the reference app both do.
             //
             // Costs nothing to keep: the MEDIA is still deleted from Storage below, and Storage is
             // where the money is. What remains is a few bytes of marker in a document that already

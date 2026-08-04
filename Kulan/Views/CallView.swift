@@ -744,7 +744,7 @@ struct FloatingCallWindow: View {
 
 // MARK: - LiveCallBarBackground
 
-// The "alive" wash for the minimized call bars (user reference: Telegram's animated call banner): a
+// The "alive" wash for the minimized call bars (user reference: the reference app's animated call banner): a
 // soft band of light drifting across the green every ~3s, so the bar reads as a LIVE call rather
 // than a static banner. Same technique as the sign-up logo's light sweep. TimelineView-driven at
 // 30fps over a 40pt strip — GPU-trivial, and it only exists while a bar is on screen.
@@ -834,7 +834,7 @@ struct MiniCallBar: View {
         .padding(.horizontal, 14)
         .frame(height: 40)
         .frame(maxWidth: .infinity)
-        .background(LiveCallBarBackground())   // Telegram-style living sweep, not a static green
+        .background(LiveCallBarBackground())   // reference-style living sweep, not a static green
         .onReceive(ticker) { now = $0 }
     }
 }

@@ -11,12 +11,12 @@ import UIKit
 //     progress 0.8 and are NOT recomputed as functions of position.
 //   • progress = clamp01(hypot(dx, dy) / 88)  (distanceToCompletion = 88pt).
 //   • The presented root's alpha (black bg + chrome, media hidden) driven DIRECTLY from progress —
-//     Signal's fromView.alpha scrub. Zero per-frame SwiftUI work.
+//     the reference app's fromView.alpha scrub. Zero per-frame SwiftUI work.
 //   • Release: FINISH on any progress (percentComplete > 0 — no velocity gate) with the 0.25s
 //     critically-damped spring toward a no-destination fallback frame (fromFrame shifted
 //     down by its height); gesture-cancel springs everything back.
 // Shared by the image viewer AND the video player — one code path.
-struct SignalDismissHost: UIViewRepresentable {
+struct MediaDismissHost: UIViewRepresentable {
     var canBegin: () -> Bool                                  // e.g. current page at min zoom
     var media: () -> (frame: CGRect, image: UIImage?)?        // fitted media rect (screen coords) + image if loaded
     var onHideContent: (Bool) -> Void                         // hide/show the live SwiftUI viewer (once per gesture)
@@ -29,13 +29,13 @@ struct SignalDismissHost: UIViewRepresentable {
     /// REAL corner radius, and the ability to hide that tile while the copy is flying onto it.
     var targetId: () -> String? = { nil }
     /// The region the copy may draw in at the BUBBLE end of the flight (the visible message viewport,
-    /// window coords) — Signal's `clippingAreaInsets`. Given one, the landing is clipped through it, so
+    /// window coords) — the reference app's `clippingAreaInsets`. Given one, the landing is clipped through it, so
     /// a copy flying home to a bubble half-scrolled under the header disappears BEHIND the bar instead
-    /// of landing on top of it. The open (SignalMediaOpen.fly) takes the same rect as `clip:`.
+    /// of landing on top of it. The open (MediaOpen.fly) takes the same rect as `clip:`.
     var clipRect: () -> CGRect? = { nil }
     /// Bump to run the BUTTON close through the same pipeline as the drag close: the copy flies home
     /// into its tile with the same landing spring (user report: the arrow used a different exit than
-    /// the drag). Signal's model too — their X runs the same dismiss animator the pan drives.
+    /// the drag). the reference app's model too — their X runs the same dismiss animator the pan drives.
     var closeToken: Int = 0
     var onDismiss: () -> Void
 
@@ -62,7 +62,7 @@ struct SignalDismissHost: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: SignalDismissHost
+        var parent: MediaDismissHost
         private weak var root: UIView?
         private var container: UIView?
         private var clipWrap: UIView?      // landing-only clipping view (the chat viewport), see finish()
@@ -70,18 +70,18 @@ struct SignalDismissHost: UIViewRepresentable {
         private var active = false
         private static let distanceToCompletion: CGFloat = 88    // visual scrub (scale/alpha) reference
         // Commit thresholds. Were 160pt / 800 — that much travel made closing feel like work (user:
-        // "too hard"). Telegram and WhatsApp commit around a short drag or any real flick, so a normal
+        // "too hard"). the reference app and the reference app commit around a short drag or any real flick, so a normal
         // downward swipe should already mean "close". Changing your mind still works: the decision uses
         // the NET downward offset, so dragging back up above the threshold cancels.
-        // Signal's own rule is `percentComplete > 0` — ANY movement commits and cancel is effectively
+        // the reference app's own rule is `percentComplete > 0` — ANY movement commits and cancel is effectively
         // unreachable (MediaInteractiveDismiss `.ended`). We deliberately do NOT copy that: being able
         // to drag down, change your mind and have it spring back is behaviour the user asked for and
         // liked. Instead the threshold is small enough that a deliberate short drag closes, which is
-        // what "it must work like Signal" actually means in feel.
-        // (The 40pt / 320pt-per-second commit thresholds are gone — see `.ended`. Signal commits on any
+        // what "it must work like the reference app" actually means in feel.
+        // (The 40pt / 320pt-per-second commit thresholds are gone — see `.ended`. the reference app commits on any
         // real movement, and so does this app's own profile photo viewer, the one that already feels right.)
 
-        init(_ p: SignalDismissHost) { parent = p }
+        init(_ p: MediaDismissHost) { parent = p }
 
         func install(from marker: UIView) {
             guard root == nil, let vc = marker.owningViewController else { return }
@@ -99,7 +99,7 @@ struct SignalDismissHost: UIViewRepresentable {
             // The blanket gesture-disabling that used to run here is GONE. It existed only to fight the
             // system `.zoom` transition's own interactive dismiss, and that transition is no longer used
             // for chat media anywhere — the album viewer was the last holdout and it now flies through
-            // SignalMediaOpen like everything else. What it actually did was walk the whole presentation
+            // MediaOpen like everything else. What it actually did was walk the whole presentation
             // chain and switch off EVERY pan and pinch that was not ours, twice, one of them 0.7s late.
             // Disabling gestures wholesale to protect one gesture is how a viewer ends up feeling dead in
             // ways nobody can trace, and there is nothing left for it to protect against.
@@ -123,7 +123,7 @@ struct SignalDismissHost: UIViewRepresentable {
         // cover, but recomputing against this root keeps the promise by construction.
         //
         // The copy lives in the WINDOW, above the presented root, so the root itself can be faded as
-        // one unit — the viewer's own black background and chrome ARE the thing that fades (Signal's
+        // one unit — the viewer's own black background and chrome ARE the thing that fades (the reference app's
         // `fromView.alpha` scrub). The viewer only hides its MEDIA; the copy replaces those pixels.
         @discardableResult
         private func buildCopy(_ m: (frame: CGRect, image: UIImage?)) -> UIView? {
@@ -185,7 +185,7 @@ struct SignalDismissHost: UIViewRepresentable {
             case .began:
                 guard !active, parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else { return }
                 active = true
-                // Signal zeroes the translation on .began (MediaInteractiveDismiss). Without it the
+                // the reference app zeroes the translation on .began (MediaInteractiveDismiss). Without it the
                 // first .changed already carries the recogniser's pre-recognition slop, so the copy
                 // JUMPS by ~10pt the instant the drag is picked up instead of starting under the finger.
                 g.setTranslation(.zero, in: root)
@@ -208,7 +208,7 @@ struct SignalDismissHost: UIViewRepresentable {
                 c.layer.shadowOpacity = Float(t)
                 // Background AND chrome melt together with the drag: the presented root (black bg +
                 // header + toolbar, media already hidden) is faded as one unit over the live chat —
-                // Signal's fromView.alpha scrub. Chrome used to vanish instantly here instead.
+                // the reference app's fromView.alpha scrub. Chrome used to vanish instantly here instead.
                 root.alpha = 1 - t
 
             case .ended:
@@ -224,10 +224,10 @@ struct SignalDismissHost: UIViewRepresentable {
                 // 2D length, matching the SCRUB. The visual progress above uses hypot on both axes but
                 // the commit test used o.y alone, so a diagonal drag could scrub the photo most of the way
                 // out and then snap all the way back. The 40pt / 320 thresholds themselves are the user's
-                // deliberate choice (Signal commits on ANY movement) and are unchanged.
+                // deliberate choice (the reference app commits on ANY movement) and are unchanged.
                 // SIGNAL'S RULE, ADOPTED. Their `.ended` is `percentComplete > 0` — any real movement
                 // commits. Ours demanded 40pt of travel OR a 320pt/s flick, and that gap is the "still
-                // doesn't feel like Signal" the user has reported for days: a short, deliberate drag
+                // doesn't feel like the reference app" the user has reported for days: a short, deliberate drag
                 // scrubbed the photo partway out and then snapped all the way back, which reads as the
                 // gesture refusing you.
                 //
@@ -235,7 +235,7 @@ struct SignalDismissHost: UIViewRepresentable {
                 // profile photo one the user says works correctly, is plain SwiftUI with none of this
                 // machinery — and it commits on `dist > 0`. Same gesture, same app, one rule apart.
                 //
-                // Cancel stays reachable, which is the one thing the user liked and Signal does not
+                // Cancel stays reachable, which is the one thing the user liked and the reference app does not
                 // really offer: drag back UP past where you started and the net offset goes negative, so
                 // it springs home. Anything with real downward intent closes.
                 if o.y > 0 {
@@ -270,19 +270,19 @@ struct SignalDismissHost: UIViewRepresentable {
             // thumbnail's exact rect and only fades at the very end, so it visibly "lands" on the tile.
             // The rect must still be ON SCREEN. `MediaOpenRects` keeps the last reported rect with no
             // liveness check, so after scrolling the source bubble away the copy used to fly to a
-            // stale offscreen position. Signal detects the missing context and falls back to dropping
+            // stale offscreen position. the reference app detects the missing context and falls back to dropping
             // straight down by one media height — do the same.
             let reported = parent.targetRect()
             let rootBounds = c.superview?.bounds ?? .zero
             let onScreen = reported.map { $0.intersects(rootBounds) } ?? false
             if let home = reported, onScreen, home.width > 1, home.height > 1 {
-                // THE LANDING IS CLIPPED THROUGH THE CHAT VIEWPORT, exactly Signal's clipping view
+                // THE LANDING IS CLIPPED THROUGH THE CHAT VIEWPORT, exactly the reference app's clipping view
                 // (MediaDismissAnimationController: `clippingView.frame = containerView.bounds.inset(by:
                 // toContext.clippingAreaInsets)` inside the spring). The wrap starts as the full root —
                 // no visual change at reparent time — and shrinks to the viewport while the copy flies,
                 // so a copy landing on a bubble half under the header slides BEHIND the bar. Both frames
                 // animate in the same block, which is what makes the child's coordinates interpolate
-                // through the moving clip the way Signal's do.
+                // through the moving clip the way the reference app's do.
                 var clipTarget: CGRect?
                 if let clip = parent.clipRect(), let rootView = c.superview,
                    clip.width > 1, clip.height > 1, clip != rootView.bounds {
@@ -300,12 +300,12 @@ struct SignalDismissHost: UIViewRepresentable {
                 // self capture, and the value cannot change mid-flight anyway.
                 let landingRadius = parent.targetId().map { MediaOpenRects.cornerRadius($0) } ?? 14
                 let spring = UISpringTimingParameters(
-                    dampingRatio: 1,     // Signal: springDamping 1, no overshoot on a landing
+                    dampingRatio: 1,     // the reference app: springDamping 1, no overshoot on a landing
                     initialVelocity: Self.springVelocity(velocity, from: c.center, to: center))
                 let animator = UIViewPropertyAnimator(duration: 0.25, timingParameters: spring)
                 let wrapTarget = clipTarget
                 animator.addAnimations {
-                    // FRAME match with transform identity, the way Signal lands
+                    // FRAME match with transform identity, the way the reference app lands
                     // (MediaDismissAnimationController: `frame = destinationFrame`, `transform =
                     // .identity`). The old version kept a transform SCALE derived from min(w,h) ratios,
                     // which cannot match a tile of a different aspect — the copy arrived the wrong
@@ -319,11 +319,11 @@ struct SignalDismissHost: UIViewRepresentable {
                     c.layer.cornerRadius = landingRadius
                     c.layer.shadowOpacity = 0
                     // The rest of the viewer (black + chrome) finishes melting over the land —
-                    // Signal's final spring does exactly this to fromView.
+                    // the reference app's final spring does exactly this to fromView.
                     self.root?.alpha = 0
                 }
                 c.layer.masksToBounds = true   // without this the corner radius was invisible
-                // NO alpha fade: Signal lands the copy opaque and swaps it for the real thumbnail.
+                // NO alpha fade: the reference app lands the copy opaque and swaps it for the real thumbnail.
                 // Fading it out at 0.8 was what made the return read as "vanishing near the tile".
                 animator.addCompletion { _ in
                     // Reveal the tile BEFORE the copy goes, so the two overlap for a frame and the swap
@@ -343,7 +343,7 @@ struct SignalDismissHost: UIViewRepresentable {
             }
 
             // No known source (e.g. opened from somewhere that doesn't report a rect): the original
-            // Signal behaviour — drift on and fade out from where the finger let go.
+            // the reference app behaviour — drift on and fade out from where the finger let go.
             // Leave the SCREEN rather than evaporating on the spot. Drifting 40pt while fading read as
             // the photo dissolving in mid-air; carrying it a full frame-height down is an exit.
             let target = CGPoint(x: fromFrame.midX + o.x,
@@ -368,8 +368,8 @@ struct SignalDismissHost: UIViewRepresentable {
             animator.startAnimation()
         }
 
-        // Cancel: a critically-damped spring back home that CONTINUES the release velocity (Signal's
-        // interactive-dismiss recovery), then restore the live content. Signal animates center +
+        // Cancel: a critically-damped spring back home that CONTINUES the release velocity (the reference app's
+        // interactive-dismiss recovery), then restore the live content. the reference app animates center +
         // transform only — the old path also animated the FRAME while the transform was mid-flight,
         // and frame math under a non-identity transform is what made the snap-back visibly choppy.
         private func cancel(velocity: CGPoint = .zero) {
@@ -414,7 +414,7 @@ func mediaFitRect(_ media: CGSize, in bounds: CGRect) -> CGRect {
 /// Flies a media copy from its bubble to its fullscreen position, then reveals the viewer.
 ///
 /// WHY THIS EXISTS. Opening used SwiftUI's `.navigationTransition(.zoom)`, which scales the ENTIRE
-/// presented cover — black backdrop, header, thumb strip, toolbar — out of the bubble. Signal instead
+/// presented cover — black backdrop, header, thumb strip, toolbar — out of the bubble. the reference app instead
 /// moves only the MEDIA, inside a clipping view, and cross-fades the backdrop
 /// (MediaZoomAnimationController). That is the whole difference, and it is why our open never matched
 /// theirs no matter how the timing was tuned.
@@ -424,14 +424,14 @@ func mediaFitRect(_ media: CGSize, in bounds: CGRect) -> CGRect {
 /// at this was a SwiftUI per-frame animation, which is why it felt different from the close even when
 /// the numbers matched — SwiftUI cannot hold a 1:1 frame animation the way a property animator does.
 @MainActor
-enum SignalMediaOpen {
+enum MediaOpen {
 
-    /// Signal's spring, from SignalUI/UIKitExtensions/UIKit+Animations.swift:
+    /// the reference app's spring, from SignalUI/UIKitExtensions/UIKit+Animations.swift:
     /// `springDamping: 1, springResponse: 0.25` is NOT `usingSpringWithDamping` — it expands to
     /// `stiffness = (2π / response)²` and `damping = 4π · damping / response` at mass 1, i.e. a
     /// critically damped spring. Reaching for `usingSpringWithDamping:` here is the usual way to get
     /// this subtly wrong: it is a different parameterisation and produces a visibly different curve.
-    /// Neither of Signal's animation controllers seeds an initial velocity, and that is deliberate.
+    /// Neither of the reference app's animation controllers seeds an initial velocity, and that is deliberate.
     static let duration: TimeInterval = 0.25
     static var spring: UISpringTimingParameters {
         let response: CGFloat = 0.25, damping: CGFloat = 1
@@ -493,7 +493,7 @@ enum SignalMediaOpen {
     }
 
     /// - Parameters:
-    ///   - image: the media to fly. Videos pass their poster — Signal flies a still frame for video too,
+    ///   - image: the media to fly. Videos pass their poster — the reference app flies a still frame for video too,
     ///            never a layer and never a snapshot of the screen.
     ///   - source: the bubble's rect in window coordinates (`MediaOpenRects`).
     ///   - sourceCornerRadius: the bubble's radius, interpolated to 0 as it fills the screen.

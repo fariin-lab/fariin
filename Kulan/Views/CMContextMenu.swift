@@ -1,20 +1,20 @@
 import SwiftUI
 import UIKit
 
-// THE CUSTOM LONG-PRESS MENU — Signal's architecture, our code. EXPERIMENT BRANCH ONLY until the
+// THE CUSTOM LONG-PRESS MENU — the reference app's architecture, our code. EXPERIMENT BRANCH ONLY until the
 // owner's device verdict (his deal 2026-07-30: ships alone, two TestFlights or we give up).
 //
-// Read 2026-07-30 from Signal-iOS CustomContextMenus/* (see kulan-signal-custom-menu-study memory).
+// Read 2026-07-30 from the reference app-iOS CustomContextMenus/* (see kulan-signal-custom-menu-study memory).
 // The whole idea in one line: Apple's menu is never involved. We SNAPSHOT the pressed bubble, hide
 // the real one, blur the whole screen in our own overlay, and place bar · message · menu ourselves,
 // shrinking the snapshot when a tall message would not fit. Every recognizer involved lives on THIS
 // overlay — nothing here touches the chat list's tap system (the convicted a1b2c7e defect cannot
 // exist in this shape).
 //
-// Signal's numbers, kept: press 0.2s · squeeze 0.95 over 0.2s · present spring 0.4s damping 0.8
+// the reference app's numbers, kept: press 0.2s · squeeze 0.95 over 0.2s · present spring 0.4s damping 0.8
 // v0 1.0 · blur-in 0.2s · menu scale-in from 0.2 anchored at the bubble corner · finger dead zone
 // 40pt · gaps 12pt · content padding = safe area clamped to ≥8pt · menu width 250 · min preview
-// scale (ours) 0.35 — Signal allows 0.1 but a chat bubble smaller than a third reads as broken.
+// scale (ours) 0.35 — the reference app allows 0.1 but a chat bubble smaller than a third reads as broken.
 
 // MARK: - Bubble rect registry
 
@@ -86,7 +86,7 @@ struct CMReactConfig {
 
 // MARK: - Overlay
 
-/// One presentation = one overlay instance, added directly to the window (Signal adds their
+/// One presentation = one overlay instance, added directly to the window (the reference app adds their
 /// controller's view the same way). Owns blur, dismiss catcher, preview snapshot, bar and card.
 final class CMOverlay: UIView {
 
@@ -103,7 +103,7 @@ final class CMOverlay: UIView {
     private let gapY: CGFloat = 12
     private let springDuration: TimeInterval = 0.4
     private let springDamping: CGFloat = 0.8
-    // Signal allows 0.1 and that is why their giant message fits with the whole menu below it —
+    // the reference app allows 0.1 and that is why their giant message fits with the whole menu below it —
     // 0.35 "for readability" was too timid, a monster message needs to become a small picture.
     private let minPreviewScale: CGFloat = 0.1
     private let deadZoneRadius: CGFloat = 40
@@ -134,7 +134,7 @@ final class CMOverlay: UIView {
 
         addSubview(blurView)
         // Full-screen invisible catcher UNDER the preview: a plain tap anywhere that no accessory
-        // claims dismisses the menu. Also the accessibility escape (Signal does exactly this).
+        // claims dismisses the menu. Also the accessibility escape (the reference app does exactly this).
         dismissCatcher.accessibilityLabel = "Dismiss menu"
         dismissCatcher.addTarget(self, action: #selector(dismissTapped), for: .touchUpInside)
         addSubview(dismissCatcher)
@@ -146,7 +146,7 @@ final class CMOverlay: UIView {
         previewView.layer.shadowColor = UIColor.black.cgColor
         previewView.layer.shadowOpacity = 0
         addSubview(previewView)
-        // (shadow is driven by setPreviewShadow, which no-ops on iOS 26 the way Signal's does)
+        // (shadow is driven by setPreviewShadow, which no-ops on iOS 26 the way the reference app's does)
         addSubview(card)
         if let bar { addSubview(bar) }
 
@@ -157,7 +157,7 @@ final class CMOverlay: UIView {
         }
         bar?.onSelect = { [weak self] selection in
             guard let self, let react else { return }
-            // Signal's model (ContextMenuController.showEmojiSheet): the "…" full picker presents
+            // the reference app's model (ContextMenuController.showEmojiSheet): the "…" full picker presents
             // OVER the still-open menu — blur and lifted message stay behind the sheet. Only a
             // direct emoji pick dismisses here; for .more the sheet's resolution (pick or cancel)
             // dismisses the overlay through `current`.
@@ -192,7 +192,7 @@ final class CMOverlay: UIView {
 
         card.sizeToFit()
         card.frame = frames.menu
-        // The card grows out of the bubble's corner (Signal sets the layer anchor to the aligned
+        // The card grows out of the bubble's corner (the reference app sets the layer anchor to the aligned
         // corner and scales from 0.2). Setting anchorPoint moves the frame, so re-assert it after.
         let cardFrame = card.frame
         card.layer.anchorPoint = CGPoint(x: alignRight ? 1 : 0, y: 0)
@@ -208,7 +208,7 @@ final class CMOverlay: UIView {
             bar.alpha = 0
         }
 
-        // Signal's `animationDuration / 2.0` = 0.2, plain (default ease-in-out), started the moment
+        // the reference app's `animationDuration / 2.0` = 0.2, plain (default ease-in-out), started the moment
         // the overlay appears — i.e. after the 0.2 press and the 0.2 squeeze, never during them.
         UIView.animate(withDuration: 0.2) {
             self.blurView.effect = UIBlurEffect(style: .regular)
@@ -229,7 +229,7 @@ final class CMOverlay: UIView {
             self.card.frame = frames.menu
         }
 
-        // The bar pops in slightly after the shift begins (Signal delays 0.1s when the preview
+        // The bar pops in slightly after the shift begins (the reference app delays 0.1s when the preview
         // shifts) with its own staggered emoji rise.
         let barDelay: TimeInterval = abs(travel) > 0.5 ? 0.1 : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + barDelay) { [weak self] in
@@ -242,7 +242,7 @@ final class CMOverlay: UIView {
         UIAccessibility.post(notification: .screenChanged, argument: card)
     }
 
-    /// Signal's `previewShadowVisible`: the lifted message drops a shadow on older systems, and none
+    /// the reference app's `previewShadowVisible`: the lifted message drops a shadow on older systems, and none
     /// at all on iOS 26 where the glass already separates it from the blur. Their setter returns
     /// early under `if #available(iOS 26, *)`, so the shadow stays at the 0 it was built with.
     private func setPreviewShadow(_ visible: Bool) {
@@ -262,10 +262,10 @@ final class CMOverlay: UIView {
         }
         bar?.playDismissal(duration: 0.2)
 
-        // Signal runs the background off in its OWN plain animation, not on the spring that carries
+        // the reference app runs the background off in its OWN plain animation, not on the spring that carries
         // the message home. A spring overshoots and settles, and driving a blur with it makes the
         // background wobble back in; a flat ease-out over the full 0.4 is what actually reads as
-        // Signal. The shadow rides here too, exactly as their `previewShadowVisible = false` does.
+        // the reference app. The shadow rides here too, exactly as their `previewShadowVisible = false` does.
         UIView.animate(withDuration: springDuration) {
             self.blurView.effect = nil
             self.blurView.backgroundColor = nil
@@ -289,7 +289,7 @@ final class CMOverlay: UIView {
 
     @objc private func dismissTapped() { dismiss(animated: true) }
 
-    // MARK: The layout math (Signal's targetPreviewFrame, simplified to our vertical stack)
+    // MARK: The layout math (the reference app's targetPreviewFrame, simplified to our vertical stack)
 
     /// bar (exterior top, gap 12) · preview · menu (exterior bottom, gap 12), all aligned to the
     /// bubble's own horizontal edge. Overflow bottom → shift up; overflow top → shift down; still
@@ -331,7 +331,7 @@ final class CMOverlay: UIView {
             s = stack(for: preview)
         }
 
-        // Still too tall → the preview gives up the difference (Signal scales the snapshot).
+        // Still too tall → the preview gives up the difference (the reference app scales the snapshot).
         let groupHeight = s.bottom - s.top
         if groupHeight > content.height {
             let targetPreviewHeight = preview.height - (groupHeight - content.height)
@@ -360,7 +360,7 @@ final class CMOverlay: UIView {
         return (preview, barFrame, menuFrame)
     }
 
-    // MARK: Continuous finger (Signal's star feature)
+    // MARK: Continuous finger (the reference app's star feature)
 
     /// The initiating long-press keeps streaming through here while the finger is still down. After
     /// a 40pt dead zone the location drives highlight in the card and focus in the bar.
@@ -388,7 +388,7 @@ final class CMOverlay: UIView {
         if wasArmed.bar, bar?.selectFocused(at: convert(p, to: bar!)) == true { return }
     }
 
-    /// After the initiating press ends, later drags are ours (Signal swaps in a local pan too).
+    /// After the initiating press ends, later drags are ours (the reference app swaps in a local pan too).
     private func installLocalPanIfNeeded() {
         guard localPan == nil else { return }
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panRecognized(_:)))
@@ -421,7 +421,7 @@ final class CMOverlay: UIView {
 // MARK: - Actions card
 
 /// The menu list: material capsule card, icon+label rows, touch-down highlight, touch-up select.
-/// Taps are a minimumPressDuration=0 long-press (Signal's trick) so a row highlights the moment a
+/// Taps are a minimumPressDuration=0 long-press (the reference app's trick) so a row highlights the moment a
 /// finger lands and selects when it lifts — a UITapGesture would only fire at the end.
 final class CMActionsCard: UIView {
 
@@ -447,11 +447,11 @@ final class CMActionsCard: UIView {
 
     init(actions: [CMAction]) {
         self.actions = actions
-        // LIQUID GLASS on iOS 26+, exactly what makes Signal's card read as native there (the owner's
+        // LIQUID GLASS on iOS 26+, exactly what makes the reference app's card read as native there (the owner's
         // zoomed side-by-side); the frosted material is only the fallback for older systems.
         if #available(iOS 26.0, *) {
             let glass = UIGlassEffect(style: .regular)
-            // Signal's flag: the INTERACTIVE glass is the brighter smoky-gray material in the
+            // the reference app's flag: the INTERACTIVE glass is the brighter smoky-gray material in the
             // owner's reference photo — plain .regular passed the dark wallpaper straight through.
             glass.isInteractive = true
             backdrop = UIVisualEffectView(effect: glass)
@@ -550,7 +550,7 @@ private final class CMActionRow: UIView {
     private let title = UILabel()
     private let icon = UIImageView()
     private let highlight = UIView()
-    // NO separator lines — the owner rejected them against Signal's clean glass ("u added lines
+    // NO separator lines — the owner rejected them against the reference app's clean glass ("u added lines
     // thats i don't"). The rows read as one sheet; the highlight fill is the only row chrome.
 
     var isHighlighted: Bool = false {
@@ -561,7 +561,7 @@ private final class CMActionRow: UIView {
         self.action = action
         super.init(frame: .zero)
 
-        // Signal's own highlight fill (their `.Signal.secondaryFill`); the system token is the same
+        // the reference app's own highlight fill (their `.the reference app.secondaryFill`); the system token is the same
         // idea and adapts to light/dark on its own.
         highlight.backgroundColor = .secondarySystemFill
         highlight.isHidden = true
@@ -590,7 +590,7 @@ private final class CMActionRow: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // HIGHLIGHT GEOMETRY, verbatim from Signal's row (`isHighlighted` didSet): on iOS 26 the
+        // HIGHLIGHT GEOMETRY, verbatim from the reference app's row (`isHighlighted` didSet): on iOS 26 the
         // fill is `bounds.insetBy(dx: 10, dy: 1)` with capsule corners, so it reads as a pill inset
         // from the card's edges; older systems fill the whole row square. Ours was full-bounds and
         // square everywhere, which is the edge-to-edge block in the owner's side-by-side.
@@ -602,7 +602,7 @@ private final class CMActionRow: UIView {
             highlight.frame = bounds
             highlight.layer.cornerRadius = 0
         }
-        // Signal's row metrics verbatim (ContextMenuActionsAccessory.ContextMenuActionRow): icon
+        // the reference app's row metrics verbatim (ContextMenuActionsAccessory.ContextMenuActionRow): icon
         // LEADING, and both margin and icon size step up on iOS 26 the way theirs do.
         let margin: CGFloat
         let iconSize: CGFloat
@@ -653,7 +653,7 @@ final class CMReactionBar: UIView {
 
     init(config: CMReactConfig) {
         self.config = config
-        // Liquid glass on iOS 26+, same as the card and same as Signal's bar there.
+        // Liquid glass on iOS 26+, same as the card and same as the reference app's bar there.
         if #available(iOS 26.0, *) {
             backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
         } else {

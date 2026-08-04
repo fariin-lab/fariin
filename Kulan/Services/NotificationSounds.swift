@@ -77,7 +77,7 @@ struct NotificationSound: Identifiable, Equatable {
     // The user asked for the Settings list everywhere, which is also the correct one: it is what pushes use.
     ///
     /// EVERY ENTRY IS OURS. The list used to open with a "Default" that was Apple's Note
-    /// (systemID 1007) — iMessage's tone. Fariin then sounded like iMessage in the foreground
+    /// (systemID 1007) — the reference app's tone. Fariin then sounded like the reference app in the foreground
     /// while the server's push played our Rebound, so one message made two different noises
     /// depending on whether the app happened to be open. A messenger's alert is how people
     /// know which app buzzed without looking, so it has to be ours and it has to be one sound.

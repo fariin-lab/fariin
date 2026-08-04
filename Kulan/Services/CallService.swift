@@ -610,13 +610,13 @@ final class CallService: NSObject {
         }
     }
 
-    // MARK: - Background camera (leaving the app keeps your video going, like WhatsApp)
+    // MARK: - Background camera (leaving the app keeps your video going, like the reference app)
     //
     // OLD BEHAVIOUR, and why it changed: we used to stop the capturer on didEnterBackground and
     // broadcast cams=false, because iOS suspended the session anyway and the other side was left
     // staring at a FROZEN last frame. iOS 18 opened background capture to any app with `voip` in
     // UIBackgroundModes (we have it) via AVCaptureSession.isMultitaskingCameraAccessEnabled, so
-    // stopping ourselves is now the ONLY thing preventing the WhatsApp behaviour.
+    // stopping ourselves is now the ONLY thing preventing the the reference app behaviour.
     //
     // We no longer guess. The app lifecycle no longer touches the camera at all; we react to what the
     // SESSION reports:
@@ -1010,7 +1010,7 @@ final class CallService: NSObject {
     }
 
     // Called by CallKit the instant it activates the audio session. The ringback starts at startCall
-    // (deliberate: immediate, Signal-verified) but the session may not be live yet then — on some
+    // (deliberate: immediate, the reference app-verified) but the session may not be live yet then — on some
     // devices the early player is SILENT until this fires, on others it is already audible. The old
     // unconditional stop+start covered the silent case but gave the audible case a hear-it, cut,
     // hear-it-again stutter on every call (user report). RESUME, don't restart: an already-playing

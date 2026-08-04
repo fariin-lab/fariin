@@ -138,7 +138,7 @@ struct ThreadView: View {
     // reloads through the menu's dismissal animation — UIKit's own callbacks can't see SwiftUI menus,
     // which is how Select kept stranding the system's blur backdrop over the whole chat.
     @State private var menuActionTick = 0
-    // Composer link-preview draft (sender-side fetch, Signal's model — see LinkPreviewService). The
+    // Composer link-preview draft (sender-side fetch, the reference app's model — see LinkPreviewService). The
     // card shows above the input the moment a pasted/typed link resolves; X suppresses that URL.
     @State private var linkDraft: LinkPreviewService.LinkDraft?
     @State private var suppressedLinkUrl: String?
@@ -160,10 +160,10 @@ struct ThreadView: View {
     @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left
     @State private var tappedLink: URL?                 // link tapped in a bubble → ONE screen-level confirm
     @State private var tappedUserNotFound = false       // @username tapped but no such user (screen-level alert)
-    // Telegram-style media open/close TEST (Settings > Privacy): the tapped photo/video springs from
+    // reference-style media open/close TEST (Settings > Privacy): the tapped photo/video springs from
     // the bubble rect instead of the system zoom transition.
     // Retired experiment (Settings toggle removed 2026-07-23): hard-off, ignoring any stored
-    // value, so nobody stays stuck on the Telegram media-open path with no way back.
+    // value, so nobody stays stuck on the the reference app media-open path with no way back.
     @AppStorage("readReceipts") private var readReceiptsOn = true   // feeds the uikit tick + its cache key
 
     // Arrival high-water mark (audit S6): per-message arrival classification, not per-batch. A class
@@ -263,7 +263,7 @@ struct ThreadView: View {
         if !searchActive {   // search owns the top area — the pin bar hides while searching
             pinnedBar
                 // Measure the pin bar's height and feed it to the list so the floating date pill drops BELOW
-                // it (Signal behavior). 0 when nothing is pinned (pinnedBar is empty) → the pill stays put.
+                // it (the reference app behavior). 0 when nothing is pinned (pinnedBar is empty) → the pill stays put.
                 .background {
                     GeometryReader { geo in
                         Color.clear.onChange(of: geo.size.height, initial: true) { _, h in
@@ -760,8 +760,8 @@ struct ThreadView: View {
                                     clipProvider: { MediaOpenRects.clipRect })
                 }
             }
-            // No transition modifier: SignalMediaOpen flies the media BEFORE this cover presents, and
-            // SignalDismissHost owns the drag-down close. The disabled ConditionalZoomTransition that
+            // No transition modifier: MediaOpen flies the media BEFORE this cover presents, and
+            // MediaDismissHost owns the drag-down close. The disabled ConditionalZoomTransition that
             // used to sit here was the last trace of the system zoom for chat media.
         }
         .photosPicker(isPresented: $showLibrary, selection: $photoItems, maxSelectionCount: Limits.mediaPerMessage, matching: .any(of: [.images, .videos]))
@@ -774,7 +774,7 @@ struct ThreadView: View {
         // Album gallery: swipe between all the album's photos, starting on the tapped one. SAME native
         // zoom hero as single photos (user spec): each album CELL is a matchedTransitionSource with the
         // synthetic per-item id, so the viewer grows out of the tapped tile and the button-close shrinks
-        // back into it. The drag-down close stays media-only via SignalDismissHost.
+        // back into it. The drag-down close stays media-only via MediaDismissHost.
         // The album list. Its viewers are presented from INSIDE it, so closing a photo returns to the
         // group instead of dropping you back out to the chat (explicit user requirement).
         //
@@ -798,13 +798,13 @@ struct ThreadView: View {
             // NO `.navigationTransition(.zoom)` here any more. The album viewer was the last place the
             // SYSTEM zoom transition still ran for chat media, and it is a third pipeline: it scales the
             // entire presented cover — backdrop, header, thumb strip, toolbar — out of the tapped tile,
-            // while single photos and videos fly only the media through SignalMediaOpen. Now that album
+            // while single photos and videos fly only the media through MediaOpen. Now that album
             // tiles fly too, leaving this on would run both animations over each other.
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid,
                               clipProvider: { MediaOpenRects.clipRect })
-                // No transition modifier: the poster flies via SignalMediaOpen before this presents,
+                // No transition modifier: the poster flies via MediaOpen before this presents,
                 // exactly like photos. One pipeline, both directions.
         }
         // Picked video → approval page (caption) before sending, like the image editor (not auto-send).
@@ -820,7 +820,7 @@ struct ThreadView: View {
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
                 // TELEGRAM MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
-                // Telegram's attachment menu is a spring bottom sheet — it slides up from the bottom
+                // the reference app's attachment menu is a spring bottom sheet — it slides up from the bottom
                 // edge with a quick spring, drags between part/full height, and a downward drag or flick
                 // dismisses it. That is EXACTLY the native sheet-with-detents behavior, so the system
                 // presentation owns it: no transition override. (The zoom morph fought the detent snap.)
@@ -910,7 +910,7 @@ struct ThreadView: View {
 
     private var threadContent: some View {
         threadPickers
-        // Signal's flow for the bar's "…": the sheet presents OVER the still-open menu blur, and
+        // the reference app's flow for the bar's "…": the sheet presents OVER the still-open menu blur, and
         // its resolution — pick OR cancel — is what closes the overlay (no overlay = no-op; the
         // old native-menu React… path reaches this same sheet with no overlay up).
         .sheet(item: $morePickerTarget, onDismiss: { CMOverlay.current?.dismiss(animated: true) }) { m in
@@ -1227,7 +1227,7 @@ struct ThreadView: View {
     /// Merely-unloaded ids are NOT dropped: `repo.pinnedPreviews` fetches those by id, so a pin
     /// older than the loaded window has a real name and a real snippet like any other.
     ///
-    /// Ids the repository has PROVEN are gone are dropped, which is Signal's rule — their banner
+    /// Ids the repository has PROVEN are gone are dropped, which is the reference app's rule — their banner
     /// shows nothing rather than a placeholder for a message it cannot resolve. Proven means a read
     /// came back saying the document does not exist, never a read that merely failed.
     private var visiblePinIds: [String] {
@@ -1321,7 +1321,7 @@ struct ThreadView: View {
                     } label: { Label("See All", systemImage: "list.bullet") }
                 } label: {
                     // Upright pin in a bordered circle (reference: image-2 style).
-                    // 22 in 36 is Signal's own proportion for this button: their banner pin is a
+                    // 22 in 36 is the reference app's own proportion for this button: their banner pin is a
                     // 24pt glyph with `contentInsets .init(margin: 6)`, so the glyph owns two thirds
                     // of the button. 17 in 34 was half of it, which is the "too small" he reported —
                     // the same wrong number, from the same wrong reasoning, as the menu icons.
@@ -1464,7 +1464,7 @@ struct ThreadView: View {
         }
         if msg.id == firstUnreadId { unreadDivider }
         if let pin = msg.pinNotice {
-            // Telegram-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
+            // reference-style "X pinned …" notice: centered capsule, tap jumps to the pinned message.
             pinNoticeRow(msg, pin, jumpTo: jumpTo).id(msg.id)
         } else if msg.isFeatureMarker && msg.contactCard == nil && msg.locationCard == nil && msg.poll == nil {
             // A reserved kulan-…: payload we can't render as a card — either a newer app version's
@@ -1496,7 +1496,7 @@ struct ThreadView: View {
                 },
                 // OPEN LIKE SIGNAL: fly only the MEDIA out of its bubble, then reveal the viewer.
                 // `.navigationTransition(.zoom)` scaled the ENTIRE cover - black backdrop, header, thumb
-                // strip, toolbar - out of the bubble, which is the one thing that never matched Signal
+                // strip, toolbar - out of the bubble, which is the one thing that never matched the reference app
                 // no matter how the timing was tuned. Falls straight through to the plain presentation
                 // when there is no live rect or no decoded image to fly, so opening can never be blocked.
                 // THE OPEN AND THE CLOSE MUST READ THE SAME GEOMETRY. The close already lands on the
@@ -1508,7 +1508,7 @@ struct ThreadView: View {
                     // Scoped key (.chat): All Media and the profile strip register the SAME ids.
                     // Through the gate so a fast re-open right after a close is never swallowed.
                     let key = MediaOpenRects.key(.chat, m.id)
-                    SignalMediaOpen.flyOrPresent(
+                    MediaOpen.flyOrPresent(
                         imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerImage = m } })
                 },
@@ -1520,7 +1520,7 @@ struct ThreadView: View {
                 // `"<messageId>-<index>"`, which is exactly the `startId` handed to us here.
                 onTapAlbum: { gallery, startId in
                     let key = MediaOpenRects.key(.chat, startId)
-                    SignalMediaOpen.flyOrPresent(
+                    MediaOpen.flyOrPresent(
                         imageUrl: gallery.first(where: { $0.id == startId })?.imageUrl,
                         rectKey: key, clip: MediaOpenRects.clipRect,
                         present: {
@@ -1529,10 +1529,10 @@ struct ThreadView: View {
                 },
                 onOpenAlbum: { m in albumScreen = m },
                 // Video takes the SAME path with its poster - one pipeline for all media, which is also
-                // how Signal does it (they fly a still frame for video, never a layer).
+                // how the reference app does it (they fly a still frame for video, never a layer).
                 onTapVideo: { m in
                     let key = MediaOpenRects.key(.chat, m.id)
-                    SignalMediaOpen.flyOrPresent(
+                    MediaOpen.flyOrPresent(
                         imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerVideo = m } })
                 },
@@ -1621,7 +1621,7 @@ struct ThreadView: View {
             //
             // …but SIMULTANEOUS means it also fires when the tap was meant for something inside a
             // bubble, which is why tapping a reply quote with the keyboard up both jumped AND closed
-            // the keyboard (user: it must work and not close the keyboard, like Signal). The dismissal
+            // the keyboard (user: it must work and not close the keyboard, like the reference app). The dismissal
             // is therefore DEFERRED by one runloop turn and cancellable: anything that handles a tap
             // itself and wants the keyboard kept (the quote jump) clears the flag in the same event,
             // and because the cancel and the dismissal cannot race — the dismissal runs strictly after
@@ -1661,7 +1661,7 @@ struct ThreadView: View {
     // read tick, pinned, album count. The native list reconfigures a visible row ONLY when its signature
     // changes — so the constant presence/typing/read re-renders of ThreadView's body don't reconfigure
     // (re-render) every visible bubble = no flashing.
-    // Per-emission signature cache (Signal's one-producer discipline): the BASE signatures are computed
+    // Per-emission signature cache (the reference app's one-producer discipline): the BASE signatures are computed
     // once per repo emission / read-cutoff / pin change and reused across every SwiftUI body re-run —
     // the old computed property re-hashed every message's text on EVERY body run (typing flags, presence
     // dots, keyboard focus…), pure churn during exactly the moments that need main-thread headroom.
@@ -2052,7 +2052,7 @@ struct ThreadView: View {
             row: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
-                    // This tap was FOR the quote — keep the keyboard (Signal keeps it too). Cancels
+                    // This tap was FOR the quote — keep the keyboard (the reference app keeps it too). Cancels
                     // the list's deferred tap-to-dismiss before it can run.
                     pendingKeyboardDismiss = false
                     Task {
@@ -2076,7 +2076,7 @@ struct ThreadView: View {
             uikitMenu: { id in uikitMenu(for: id) },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
             // CUSTOM LONG-PRESS MENU (experiment): every row's actions, the bar's config, and the
-            // keyboard policy — close on open, restore on close, Signal's keyboardWasActive model.
+            // keyboard policy — close on open, restore on close, the reference app's keyboardWasActive model.
             customMenuActions: { id in customMenuActions(for: id) },
             customReactConfig: { id in customReactInfo(for: id) },
             onCustomReact: { id, selection in handleCustomReact(id, selection) },
@@ -2137,12 +2137,12 @@ struct ThreadView: View {
         }
     }
 
-    // Pin/unpin + the Telegram-style in-chat notice. E2EE-SAFE: the snippet rides the ENCRYPTED text
+    // Pin/unpin + the reference-style in-chat notice. E2EE-SAFE: the snippet rides the ENCRYPTED text
     // pipeline as a feature marker (a plaintext system message would leak content to the server).
     // Older builds render the unknown marker as the graceful "newer version" notice.
     private func togglePin(_ m: Message) {
         if repo.pinnedMessageIds.contains(m.id) {
-            Task { await ChatService.removePinnedMessage(cid, m.id) }   // Telegram posts no unpin notice
+            Task { await ChatService.removePinnedMessage(cid, m.id) }   // the reference app posts no unpin notice
         } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
             Task {
                 await ChatService.addPinnedMessage(cid, m.id)
@@ -2155,7 +2155,7 @@ struct ThreadView: View {
     }
 
     // The notice's label, composed by the PINNER (who has the plaintext): a short quoted snippet for
-    // text, a friendly noun for media — mirrors Telegram exactly.
+    // text, a friendly noun for media — mirrors the reference app exactly.
     static func pinLabel(_ m: Message) -> String {
         if m.isImage || m.isAlbum { return "a photo" }
         if m.isVideo { return "a video" }
@@ -2170,9 +2170,9 @@ struct ThreadView: View {
     private func flashAndScroll(_ id: String) {
         nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
         highlightId = id
-        // Signal's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
+        // the reference app's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
         // (the bubble's own 0.4s ease drives the fade). The old 2.2s hold felt sluggish across every
-        // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ Signal's timing.
+        // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ the reference app's timing.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             if highlightId == id { withAnimation { highlightId = nil } }
         }
@@ -3135,7 +3135,7 @@ struct ThreadView: View {
     }
 
     // Centered gray system event ("X added Y", "Z left", "renamed to…") — group only.
-    // Telegram-style pin notice: "X pinned "snippet…"" / "X pinned a photo" — the system-row capsule
+    // reference-style pin notice: "X pinned "snippet…"" / "X pinned a photo" — the system-row capsule
     // with the pinner's name bolded; tapping jumps to the pinned message (pages history in if needed).
     private func pinNoticeRow(_ m: Message, _ pin: PinNoticeCard,
                               jumpTo: @escaping (String) -> Void) -> some View {
@@ -3279,7 +3279,7 @@ struct ThreadView: View {
     // has SETTLED — during the load we're programmatically pinning, and saving then would feed the
     // pin back into itself. Called from row/BOTTOM onAppear only (teardown-safe).
     // Trailing-debounced save (0.5s after the last row appearance): per-appearance saves ran an O(n)
-    // scan + a store write on every scroll tick — pure churn during scrolling (anti-Signal pattern).
+    // scan + a store write on every scroll tick — pure churn during scrolling (anti-the reference app pattern).
     private func schedulePersistScrollPosition() {
         visibleRows.persistWork?.cancel()
         let work = DispatchWorkItem { persistScrollPosition() }
@@ -3638,7 +3638,7 @@ struct ThreadView: View {
             .background(.bar)
     }
 
-    // A member an admin has restricted (Telegram-style timed mute) can't send until it expires.
+    // A member an admin has restricted (reference-style timed mute) can't send until it expires.
     private var iAmMuted: Bool {
         guard let conv = conversation, conv.isGroup else { return false }
         return conv.isMutedMember(AuthService.shared.uid ?? "", now: Date().timeIntervalSince1970 * 1000)
@@ -3714,7 +3714,7 @@ struct ThreadView: View {
             }
     }
 
-    // The composer's draft card (user reference: Messenger shows the preview BEFORE sending):
+    // The composer's draft card (user reference: the reference app shows the preview BEFORE sending):
     // thumb + title + description + domain, X to send without a preview.
     private func linkDraftRow(_ d: LinkPreviewService.LinkDraft) -> some View {
         HStack(spacing: 10) {
@@ -3879,10 +3879,10 @@ struct ThreadView: View {
     }
 
     /// THE PLATFORM'S OWN MODEL, not a number measured to the glass (owner, build 443: "sit
-    /// naturally on the safe area, just like iMessage, rather than floating above it").
+    /// naturally on the safe area, just like the reference app, rather than floating above it").
     ///
-    /// Read out of Signal's ConversationInputToolbar, which is the closest open implementation of the
-    /// convention iMessage follows. Two things define it:
+    /// Read out of the reference app's ConversationInputToolbar, which is the closest open implementation of the
+    /// convention the reference app follows. Two things define it:
     ///
     ///   contentView.bottomAnchor.constraint(equalTo: bottomAnchor)   // the BAR's bottom, not the
     ///                                                                // safe area's
@@ -4420,7 +4420,7 @@ struct SelectableRow: ViewModifier {
             HStack(spacing: 10) {
                 // READS ON ANY BACKGROUND (user: hard to see in light mode / over a wallpaper). The old
                 // unselected state was a hairline `circle` in secondary grey at 55% — it vanished over a
-                // photo wallpaper and was barely there in light mode. Signal's selection circle carries
+                // photo wallpaper and was barely there in light mode. the reference app's selection circle carries
                 // its own contrast rather than borrowing the background's: a filled disc UNDER a light
                 // ring, plus a soft shadow, so the control is legible over white, black, or a photo.
                 ZStack {
@@ -4451,7 +4451,7 @@ struct SelectableRow: ViewModifier {
 
 // Upload indicator: a thin white arc spinning on a subtle dark disc (replaces the heavy
 // frosted-material pinwheel) — one consistent look for photo / album / video uploads.
-/// The upload spinner, rebuilt on Signal's, read from their CircularProgressView and
+/// The upload spinner, rebuilt on the reference app's, read from their CircularProgressView and
 /// CVAttachmentProgressView rather than eyeballed.
 ///
 /// The difference is that theirs is in TWO phases, and ours was one. A constant arc spinning at a
@@ -4465,7 +4465,7 @@ struct SelectableRow: ViewModifier {
 /// Their numbers, not approximations of them.
 ///
 /// It stays INDETERMINATE on purpose. Firebase's `putFileAsync` reports no byte progress, so a
-/// filling ring would be a lie about something we cannot measure. Signal shows exactly this
+/// filling ring would be a lie about something we cannot measure. the reference app shows exactly this
 /// spinner in their own `unknownProgress` state, which is the honest one here.
 struct UploadingRing: View {
     /// The optimistic bubble's clientId. Given one, the ring reports real bytes.
@@ -4477,7 +4477,7 @@ struct UploadingRing: View {
 
     private static let phaseOne: Double = 1     // stroke grows and does its initial turn
     private static let phaseTwo: Double = 1     // one full revolution, repeated
-    private static let determinate: Double = 0.2   // Signal's Animation.Determinate.duration
+    private static let determinate: Double = 0.2   // the reference app's Animation.Determinate.duration
 
     /// nil until the first byte is reported — which is NOT the same as zero, and is why the ring
     /// spins at the start instead of sitting empty looking broken.
@@ -4495,14 +4495,14 @@ struct UploadingRing: View {
             Group {
                 if let fraction {
                     // DETERMINATE: the arc is the upload. Starts at the top and fills clockwise,
-                    // each step eased over Signal's 0.2s so a burst of progress events reads as one
+                    // each step eased over the reference app's 0.2s so a burst of progress events reads as one
                     // continuous movement rather than a series of jumps.
                     Circle().trim(from: 0, to: max(0.02, CGFloat(fraction)))
                         .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                         .animation(.easeOut(duration: Self.determinate), value: fraction)
                 } else {
-                    // INDETERMINATE, Signal's two phases: the stroke grows from nothing to half the
+                    // INDETERMINATE, the reference app's two phases: the stroke grows from nothing to half the
                     // circle while turning 270°, then that half circle spins for as long as it takes.
                     Circle().trim(from: 0, to: trimEnd)
                         .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
@@ -4592,7 +4592,7 @@ struct MessageBubble: View, Equatable {
     var onResend: (Message) -> Void = { _ in }
     var onJumpTo: (String) -> Void = { _ in }
     // Resolve the ORIGINAL message a reply points at (from the loaded list), so a photo/video/GIF
-    // reply can show a real thumbnail in the quote (WhatsApp-style) instead of "📷 Photo" text.
+    // reply can show a real thumbnail in the quote (reference-style) instead of "📷 Photo" text.
     // Returns nil if the original isn't loaded → the quote falls back to the text snippet.
     var resolveReplyOriginal: (String) -> Message? = { _ in nil }
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
@@ -4712,7 +4712,7 @@ struct MessageBubble: View, Equatable {
     // How many emoji this message qualifies as "jumbomoji" with — 0 when it is an ordinary message.
     private var jumbomojiCount: Int { message.text.jumbomojiCount }
 
-    /// Signal's `CVComponentBodyText.textMessageFont`, verbatim: multipliers on the body point size.
+    /// the reference app's `CVComponentBodyText.textMessageFont`, verbatim: multipliers on the body point size.
     /// Their base is `UIFont.dynamicTypeBodyClamped.pointSize`; ours is the fixed 17pt every other bubble
     /// uses, which is the same number at the default Dynamic Type setting.
     static func jumbomojiPointSize(_ count: Int) -> CGFloat {
@@ -4740,7 +4740,7 @@ struct MessageBubble: View, Equatable {
             // the reservation begins with a newline, and a trailing run that starts a new line still
             // participates in the concatenated Text's width, so the wrap column shrank by the meta's
             // width for the whole paragraph. Reserving nothing, and giving the meta its own row, is
-            // both simpler and exactly what Signal does when the footer cannot share the last line.
+            // both simpler and exactly what the reference app does when the footer cannot share the last line.
             VStack(alignment: .trailing, spacing: 2) {
                 bodyText
                     .foregroundColor(isMe ? onMyBubble : (dark ? .white : .black))
@@ -4797,7 +4797,7 @@ struct MessageBubble: View, Equatable {
         }
     }
 
-    // Signal's footer rule: the timestamp shares the message's LAST line when it fits, else drops to
+    // the reference app's footer rule: the timestamp shares the message's LAST line when it fits, else drops to
     // its OWN line. The inline invisible spacer below reserves the trailing room for the fit case; when
     // the widest unbreakable word leaves no room for the time (a long word / gibberish token that fills
     // the bubble width), the reservation can't push it — the time then painted OVER the text (user
@@ -5104,7 +5104,7 @@ struct MessageBubble: View, Equatable {
                         .padding(.leading, 12)
                         .onTapGesture { onTapSender(message.authorId) }
                 }
-                // "Forwarded" tag — the owner's pick (WhatsApp/Telegram behavior, our drawing):
+                // "Forwarded" tag — the owner's pick (the big messengers behavior, our drawing):
                 // above the bubble like the group sender name, ONE insertion point for every
                 // bubble type instead of patching each content branch.
                 if message.forwarded {
@@ -5129,7 +5129,7 @@ struct MessageBubble: View, Equatable {
                     // Jump-to flash: a brief dim pulse using the bubble's OWN shape + cluster corners, so
                     // it covers exactly the bubble with no generic-rounded-rect over/under-hang (user
                     // report). On content (not the outer row) so it hugs the bubble and rides the swipe
-                    // offset; reactions/sender-name stay un-dimmed like Signal.
+                    // offset; reactions/sender-name stay un-dimmed like the reference app.
                     .overlay(
                         UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)
                             .fill(Color.primary.opacity(isHighlighted ? 0.18 : 0))
@@ -5170,7 +5170,7 @@ struct MessageBubble: View, Equatable {
                     )
                     // REACTIONS HANG OFF THE BUBBLE'S EDGE, not in the gap below it (user: a badge
                     // floating between two bubbles belongs to neither, so you cannot tell WHICH
-                    // message was reacted to — his circled screenshots). WhatsApp and iMessage both
+                    // message was reacted to — his circled screenshots). the reference app and the reference app both
                     // attach it to the bubble, overlapping the corner it belongs to: trailing for my
                     // messages, leading for theirs. The overlay MUST come BEFORE .offset(dragX) or it
                     // is aligned to the un-moved layout frame and the swipe leaves it parked (the
@@ -5209,7 +5209,7 @@ struct MessageBubble: View, Equatable {
             .frame(maxWidth: maxBubbleWidth, alignment: isMe ? .trailing : .leading)
             if !isMe { Spacer(minLength: 0) }
         }
-        .animation(.easeInOut(duration: 0.4), value: isHighlighted)   // smooth found-result fade (Signal-like)
+        .animation(.easeInOut(duration: 0.4), value: isHighlighted)   // smooth found-result fade (reference-like)
         // Reply arrow at a FIXED spot inside the right edge (not riding the bubble → never off-screen).
         // It fades/scales in with the swipe distance and is revealed in the gap the bubble vacates.
         .overlay(alignment: .trailing) {
@@ -5292,7 +5292,7 @@ struct MessageBubble: View, Equatable {
         if message.deleted {
             // A deleted message is a NOTICE, not a message — so it must not wear the bubble. The
             // first version reused the bubble fill, which meant the sender's side took the chat
-            // colour and the placeholder screamed in purple (owner screenshot, with iMessage's
+            // colour and the placeholder screamed in purple (owner screenshot, with the reference app's
             // quiet "You unsent a message" capsule as the reference). This is our own take on that
             // register: a fixed neutral capsule on BOTH sides — hairline ring, near-transparent
             // fill, secondary text — identical in every chat colour, still sitting on the sender's
@@ -5349,7 +5349,7 @@ struct MessageBubble: View, Equatable {
                 // long-press (context menu) and swipe-to-reply never fired on file bubbles. A tap
                 // gesture opens the file; everything else bubbles up normally.
                 HStack(spacing: 10) {
-                    // Spinner while the optimistic file is still uploading; then the iMessage-style
+                    // Spinner while the optimistic file is still uploading; then the reference-style
                     // page preview when the sender attached one (PDF first page / image file), and
                     // the plain document icon for every other type and for old messages.
                     // ONE tile size per file, before and after the send lands. The local preview is
@@ -5728,7 +5728,7 @@ struct MessageBubble: View, Equatable {
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
                   firstLinkURL == nil {
-            // JUMBOMOJI — Signal's behaviour, read from their source (2026-07-28) rather than eyeballed.
+            // JUMBOMOJI — the reference app's behaviour, read from their source (2026-07-28) rather than eyeballed.
             //
             //   DisplayableText.swift:
             //     public static let kMaxJumbomojiCount: Int = 5
@@ -5755,7 +5755,7 @@ struct MessageBubble: View, Equatable {
             // and there is no reason to box it. An emoji story reply renders exactly like an emoji
             // message, card on top.
             //
-            // Signal's borderless message keeps the bubble VIEW and makes it transparent
+            // the reference app's borderless message keeps the bubble VIEW and makes it transparent
             // (isBubbleTransparent), so the text insets and the footer position are unchanged. Same here:
             // only the fill is dropped, so spacing and alignment match an ordinary bubble exactly.
             VStack(alignment: .trailing, spacing: 2) {
@@ -5785,7 +5785,7 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote   // NATURAL width — measurement only (its 150pt floor applies)
                 if let lp = message.linkPreview {
-                    // Only what TRAVELLED with the message renders (Signal's model) — no viewer-side
+                    // Only what TRAVELLED with the message renders (the reference app's model) — no viewer-side
                     // fetch, so old messages without an embedded preview stay plain links.
                     LinkPreviewCard(preview: lp, cid: cid, isMe: isMe, dark: dark)
                 }
@@ -5808,7 +5808,7 @@ struct MessageBubble: View, Equatable {
                     if let lp = message.linkPreview {
                         LinkPreviewCard(preview: lp, cid: cid, isMe: isMe, dark: dark)
                     }
-                    // Text + time: the invisible trailing reservation + overlaid time (Signal does the
+                    // Text + time: the invisible trailing reservation + overlaid time (the reference app does the
                     // same body/footer overlap). FILLED like the quote (user report): when the QUOTE
                     // drives the bubble width, an unstretched body line kept its trailing edge — and the
                     // time — mid-bubble; filling anchors the time to the bubble's right edge, always.
@@ -5922,7 +5922,7 @@ struct MessageBubble: View, Equatable {
         .onTapGesture { if message.sendState == nil { openAlbumItem(0) } }
     }
 
-    // THE MOSAIC, driven by the photos' real shapes (MediaGroupLayout, which is Telegram's algorithm
+    // THE MOSAIC, driven by the photos' real shapes (MediaGroupLayout, which is the reference app's algorithm
     // written as our own code — see that file's header).
     //
     // What this replaces: a switch on the COUNT with hardcoded fractions (W * 0.56, c * 1.2, 2x2 squares)
@@ -5946,10 +5946,10 @@ struct MessageBubble: View, Equatable {
     @ViewBuilder private var albumGrid: some View {
         let visible = visibleAlbumIndices
         let n = max(visible.count, 2)
-        let shown = min(n, 10)   // Telegram's album ceiling; anything beyond rides a "+N" on the last tile
+        let shown = min(n, 10)   // the reference app's album ceiling; anything beyond rides a "+N" on the last tile
         let sizes = (0 ..< shown).map { CGSize(width: albumAspect(visible[safe: $0] ?? $0), height: 1) }
         // A square box: the width is the bubble's, and the height only bounds the hand-tuned 2/3/4
-        // arrangements, exactly as Telegram bounds them.
+        // arrangements, exactly as the reference app bounds them.
         let solved = MediaGroupLayout.solve(itemSizes: sizes,
                                             maxSize: CGSize(width: albumWidth, height: albumWidth))
         ZStack(alignment: .topLeading) {
@@ -6151,7 +6151,7 @@ struct MessageBubble: View, Equatable {
                         // hero ids glitch the transition).
                         .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
                 } else if let o = original, !o.deleted {
-                    // Photo / GIF / video / album reply → real thumbnail (WhatsApp-style preview).
+                    // Photo / GIF / video / album reply → real thumbnail (reference-style preview).
                     // Never for a deleted original: its thumbnail is gone from Storage, so this would
                     // draw an empty box next to the words saying it was deleted.
                     replyMediaThumb(o)
@@ -6201,7 +6201,7 @@ struct MessageBubble: View, Equatable {
         }
     }
 
-    // A small thumbnail of the replied-to media (photo / GIF / video / album), 34pt like WhatsApp.
+    // A small thumbnail of the replied-to media (photo / GIF / video / album), 34pt like the reference app.
     @ViewBuilder private func replyMediaThumb(_ o: Message) -> some View {
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
         Group {
@@ -6460,9 +6460,9 @@ func quoteSafeLabel(_ t: String) -> String {
     return t
 }
 
-// MARK: - Jumbomoji detection (Signal's rules, read from Signal-iOS source 2026-07-28)
+// MARK: - Jumbomoji detection (the reference app's rules, read from the reference app-iOS source 2026-07-28)
 
-// Signal keeps a hand-maintained table of emoji scalar ranges and binary-searches it
+// the reference app keeps a hand-maintained table of emoji scalar ranges and binary-searches it
 // (`UnicodeScalar.isEmoji` in String+SSK.swift). Swift exposes the same information through Unicode
 // properties, so this asks the Unicode tables directly instead of shipping a table that goes stale every
 // time Unicode adds emoji. The one correction their table also makes: ASCII digits, '#' and '*' report
@@ -6481,20 +6481,20 @@ private extension Unicode.Scalar {
 }
 
 extension String {
-    /// Signal's `containsOnlyEmojiIgnoringWhitespace`:
+    /// the reference app's `containsOnlyEmojiIgnoringWhitespace`:
     ///     return self.allSatisfy { $0.isEmoji || $0.isZeroWidthJoiner || $0.properties.isWhitespace }
     var containsOnlyEmojiIgnoringWhitespace: Bool {
         guard !unicodeScalars.isEmpty else { return false }
         return unicodeScalars.allSatisfy { $0.isEmojiScalar || $0.isZeroWidthJoiner || $0.properties.isWhitespace }
     }
 
-    /// Signal's `DisplayableText.jumbomojiCount(in:)`, including its two easily-missed details: whitespace
+    /// the reference app's `DisplayableText.jumbomojiCount(in:)`, including its two easily-missed details: whitespace
     /// is ignored for the emoji-only test AND stripped before counting (so "X Y" is two, not three), and
     /// SIX or more returns 0 — an ordinary message with a bubble, not a count capped at five.
     var jumbomojiCount: Int {
         guard containsOnlyEmojiIgnoringWhitespace else { return 0 }
         let count = filter { !$0.isWhitespace }.count   // grapheme clusters, so a ZWJ family is one
-        guard count > 0, count <= 5 else { return 0 }   // Signal: kMaxJumbomojiCount = 5
+        guard count > 0, count <= 5 else { return 0 }   // the reference app: kMaxJumbomojiCount = 5
         return count
     }
 }

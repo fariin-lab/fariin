@@ -237,7 +237,7 @@ final class AuthService: NSObject {
             reportLogin()
         } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
             // A SIGN-UP door must not quietly sign you in (user decision 2026-07-24, matching
-            // Twitch): this screen says Create Account, so an email that already has an account is
+            // the reference app): this screen says Create Account, so an email that already has an account is
             // an error that points at Log In. Previously we signed them in when the password
             // matched, which left people inside an existing account with no explanation.
             throw AuthFlowError.emailTaken
@@ -300,7 +300,7 @@ final class AuthService: NSObject {
 
     // MARK: - Signing in with a code, for when the password is gone
 
-    /// Ask for a six-digit code by email. The owner's reference was Discord's "check your email for
+    /// Ask for a six-digit code by email. The owner's reference was the reference app's "check your email for
     /// a login link"; a CODE rather than a link on his pick, because a link that opens the app needs
     /// a domain association and only works when the mail is on the same phone, and a code works from
     /// any device and any mail app.

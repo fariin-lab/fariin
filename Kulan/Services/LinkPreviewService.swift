@@ -1,16 +1,16 @@
 import Foundation
 import UIKit
 
-// Open-Graph link previews, SENDER-SIDE (Signal's model, adopted 2026-07-29 with the user's reference
+// Open-Graph link previews, SENDER-SIDE (the reference app's model, adopted 2026-07-29 with the user's reference
 // screenshots). The sender's device fetches the page once while composing; the preview — title,
 // description, image — travels INSIDE the encrypted message. The recipient never contacts the site:
 // no IP leak to whoever runs the link, and the card renders instantly from the message itself.
 //
 // This file started as a VIEWER-side fetcher (every reader's phone pinged the URL at display time).
-// That was both the privacy leak Signal's design exists to avoid, and the reason cards often failed
+// That was both the privacy leak the reference app's design exists to avoid, and the reason cards often failed
 // to appear at all — sites like x.com serve an empty JS shell to in-app fetchers, so the reader saw
 // nothing. When even the sender's fetch fails, the message simply carries no preview — exactly
-// Signal's behaviour.
+// the reference app's behaviour.
 actor LinkPreviewService {
     static let shared = LinkPreviewService()
 

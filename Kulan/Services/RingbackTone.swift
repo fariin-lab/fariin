@@ -5,7 +5,7 @@ import Foundation
 // unavailable. Ended: a short descending two-beep when a connected call hangs up.
 // These mirror the call-state sounds big messaging apps play.
 enum RingbackTone {
-    // Ringback (440+480 Hz), Signal-style cadence, user-tuned 2026-07-22: 1.8s ring / 3.4s quiet
+    // Ringback (440+480 Hz), reference-style cadence, user-tuned 2026-07-22: 1.8s ring / 3.4s quiet
     // (5.2s cycle). The old 1.2s gap rang again too soon and sounded like one constant noise
     // instead of a phone ringing. Looped forever by the player.
     static func wavData(sampleRate: Int = 8000) -> Data {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The link-preview card inside a text bubble (the Messenger/Signal look the user asked for, reference
+// The link-preview card inside a text bubble (the the big messengers look the user asked for, reference
 // screenshots 2026-07-29): big image on top, then title / description / domain, tappable to open.
 // Renders ONLY what travelled inside the message (Message.LinkPreviewData) — the sender fetched and
 // sealed it; this view never contacts the site. A pending (just-sent) bubble carries the plaintext

@@ -6,9 +6,9 @@ import FirebaseFirestore
 import AuthenticationServices   // Sign in with Apple button (connect Apple in Account settings)
 
 // Custom-SVG row label (template asset tinted like an SF Symbol, sized to a list row).
-// ONE row style for every settings row (the owner's Signal side-by-side: ours read cramped and
+// ONE row style for every settings row (the owner's the reference app side-by-side: ours read cramped and
 // mixed — some rows had asset icons, some plain SF labels, all at the 44pt List default).
-// Signal's rhythm: ~54pt rows, a steady 26pt icon column, 17pt text.
+// the reference app's rhythm: ~54pt rows, a steady 26pt icon column, 17pt text.
 // Not private: the settings SEARCH results draw their rows with this too. They used to build
 // their own Labels from SF Symbols, so searching "Devices" produced a row that looked nothing like
 // the Devices row one tap away (owner screenshot). One row style, one icon set, one place to change
@@ -22,7 +22,7 @@ struct SettingsRowLabel: View {
     var body: some View {
         Label {
             Text(title).font(.system(size: 17))
-                .padding(.vertical, 6)   // lifts the row to Signal's roomy height
+                .padding(.vertical, 6)   // lifts the row to the reference app's roomy height
         } icon: {
             Group {
                 if system {
@@ -128,7 +128,7 @@ struct SettingsView: View {
             // list, not on the overlay, so hiding it moves no part of the header the morph flies out
             // of — and it comes back only after the close animation has landed.
             .toolbar(showPhoto ? .hidden : .automatic, for: .tabBar)
-            .listSectionSpacing(20)   // Signal's steady card rhythm — .compact left the gaps uneven
+            .listSectionSpacing(20)   // the reference app's steady card rhythm — .compact left the gaps uneven
             .contentMargins(.top, 4, for: .scrollContent)   // remove the big gap above the avatar
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
             .toolbar {

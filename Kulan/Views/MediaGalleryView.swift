@@ -133,9 +133,9 @@ struct MediaGalleryView: View {
             loaded = true
         }
         .fullScreenCover(item: $viewerImage) { msg in
-            // No system .zoom any more: SignalMediaOpen flies the tapped tile's media (see flyOpen),
+            // No system .zoom any more: MediaOpen flies the tapped tile's media (see flyOpen),
             // the same pipeline as the conversation. Leaving the zoom on ran both animations at once
-            // and left the zoom's own dismiss pan fighting SignalDismissHost's.
+            // and left the zoom's own dismiss pan fighting MediaDismissHost's.
             ImageViewerView(message: msg, in: mediaItems.filter { $0.isImage && !$0.isGif },
                             cid: cid,
                             clipProvider: { gridFrame == .zero ? nil : gridFrame },
@@ -580,10 +580,10 @@ struct MediaGalleryView: View {
         else if m.isImage { flyOpen(m, poster: m.imageUrl) { viewerImage = m } }
     }
 
-    // OPEN LIKE THE CHAT: fly only the media out of its tile (SignalMediaOpen), then reveal the viewer.
+    // OPEN LIKE THE CHAT: fly only the media out of its tile (MediaOpen), then reveal the viewer.
     // This screen used the system .zoom while the conversation flew - the SAME viewer opened with two
     // different animations depending on where you tapped, and the zoom transition's own interactive
-    // dismiss pan ran ALONGSIDE SignalDismissHost's, two gestures fighting over one close. The tile's
+    // dismiss pan ran ALONGSIDE MediaDismissHost's, two gestures fighting over one close. The tile's
     // rect is already registered (MediaRectReporter, the drag-close's landing target), so the open now
     // reads the same registry the close lands on - one pipeline, both directions, every entry point.
     private func flyOpen(_ m: Message, poster: String?, present rawPresent: @escaping () -> Void) {
@@ -592,8 +592,8 @@ struct MediaGalleryView: View {
         let present = { MediaPresentGate.present(rawPresent) }
         let key = MediaOpenRects.key(.gallery, m.id)
         // Resolves through BOTH cache tiers â€” memory only was why the first tap after returning from
-        // the background slid up from the bottom instead of flying. See SignalMediaOpen.flyOrPresent.
-        SignalMediaOpen.flyOrPresent(imageUrl: poster, rectKey: key, present: present)
+        // the background slid up from the bottom instead of flying. See MediaOpen.flyOrPresent.
+        MediaOpen.flyOrPresent(imageUrl: poster, rectKey: key, present: present)
     }
     private func toggle(_ m: Message) {
         if selection.contains(m.id) { selection.remove(m.id) } else { selection.insert(m.id) }

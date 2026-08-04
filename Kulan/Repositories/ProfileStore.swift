@@ -100,7 +100,7 @@ final class ProfileStore {
     /// passes, and `deleteAccount()` below is that purge (also reachable from "Delete It Now").
     ///
     /// Apple's in-app-deletion rule (5.1.1(v)) is satisfied by deletion being STARTED in the app; a
-    /// grace period is allowed, which is how Instagram and WhatsApp do it.
+    /// grace period is allowed, which is how the reference app and the reference app do it.
     func scheduleDeletion() async throws {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
         let due = Calendar.current.date(byAdding: .day, value: Self.gracePeriodDays, to: Date()) ?? Date()

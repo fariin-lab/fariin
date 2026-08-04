@@ -575,7 +575,7 @@ struct StoriesRow: View {
         .buttonStyle(.plain)
     }
 
-    // addBadge (my card, NO stories yet): WhatsApp add-status look — a centered circle avatar (profile
+    // addBadge (my card, NO stories yet): the reference app add-status look — a centered circle avatar (profile
     // photo or letter fallback) with the green + attached to its corner. Never a duplicated small
     // avatar (the "two Ms" bug), never the profile photo blown up as the card cover.
     @ViewBuilder private func coverImage(_ cover: String?, name: String, avatarName: String? = nil,

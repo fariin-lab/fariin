@@ -64,7 +64,7 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
             let v = velocity(in: view)
             switch dir {
             case .left, .right: if abs(v.y) > abs(v.x) { state = .cancelled }
-            // NO self-cancel for a vertical dismiss drag. Signal's DirectionalPanGestureRecognizer
+            // NO self-cancel for a vertical dismiss drag. the reference app's DirectionalPanGestureRecognizer
             // takes `.vertical` as an OptionSet that matches neither their `.up/.down` nor
             // `.left/.right` case, so it falls through to `default: break` and never cancels. Ours
             // cancelled whenever |vx| > |vy| for one sample — and a cancelled recogniser is DEAD for
@@ -84,8 +84,8 @@ struct ImageViewerView: View {
     let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
     // REMOVED: `telegramSourceRect` + `TGOpenState`, a SECOND open animation that lived alongside
-    // SignalMediaOpen.fly. Every call site passed nil, so it never ran — but it was a whole parallel
-    // pipeline with a different spring (0.38 vs Signal's 0.25), a hardcoded 16pt radius, and
+    // MediaOpen.fly. Every call site passed nil, so it never ran — but it was a whole parallel
+    // pipeline with a different spring (0.38 vs the reference app's 0.25), a hardcoded 16pt radius, and
     // `UIScreen.main.bounds` instead of the transition container. Exactly the duplicated-view and
     // frame-mismatch hazard the media transition is supposed to be free of. One pipeline now: the
     // UIKit animator pair in SignalMediaDismiss.swift owns both directions.
@@ -101,7 +101,7 @@ struct ImageViewerView: View {
     // like the message bubble's delete.
     var onDeleteForMe: ((Message) -> Void)? = nil
     // The visible viewport of the screen the media came from (window coords) — the drag-close's landing
-    // is clipped through it (Signal's clippingAreaInsets). The conversation wires this to the message
+    // is clipped through it (the reference app's clippingAreaInsets). The conversation wires this to the message
     // list's live viewport; profile/gallery leave it nil (no clipping, same as before).
     var clipProvider: () -> CGRect? = { nil }
     // Which screen's tile registry this viewer lands on (chat bubble vs All Media tile vs profile
@@ -187,7 +187,7 @@ struct ImageViewerView: View {
     private let zoomFitTolerance: CGFloat = 1.02
 
     private func closeViewer() {
-        // ZOOM OUT FIRST, like Signal — but the close must NEVER be hostage to the zoom-out. The old
+        // ZOOM OUT FIRST, like the reference app — but the close must NEVER be hostage to the zoom-out. The old
         // version re-called itself until the zoom read ≤ 1.02, and with a STALE pageZoom (reported high
         // while the scroll view is actually at fit) zoomOutToFit no-ops, no zoom callback fires, and the
         // retry loop spun forever with the back arrow dead (user report: after a drag, the arrow stopped
@@ -199,13 +199,13 @@ struct ImageViewerView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeToken += 1 }
         } else {
             // ONE exit for every way out (user report: the arrow cut away while the drag flew home).
-            // The token routes the button close through SignalDismissHost's fly-home; its no-geometry
+            // The token routes the button close through MediaDismissHost's fly-home; its no-geometry
             // fallback calls onDismiss, so closing can never be blocked.
             closeToken += 1
         }
     }
     /// The drag-close's exit. The flying copy IS the animation, so the presentation itself must go
-    /// without one — SignalDismissHost calls this with its copy still covering the same pixels.
+    /// without one — MediaDismissHost calls this with its copy still covering the same pixels.
     ///
     /// …which is what this now actually does. It used to be a bare `dismiss()`, so the cover ALSO
     /// played its own slide-out underneath the copy: invisible, because the copy covers those pixels,
@@ -225,7 +225,7 @@ struct ImageViewerView: View {
             Color.black.ignoresSafeArea()
             // ONLY the media hides when a drag-close begins — the flying copy replaces it 1:1. The
             // black background and the chrome stay LIVE: the coordinator fades the whole presented
-            // root with the finger (Signal's fromView.alpha scrub), so chrome melts into the chat
+            // root with the finger (the reference app's fromView.alpha scrub), so chrome melts into the chat
             // with the drag instead of vanishing on its first frame, and fades back if you cancel.
             pagerLayer
                 .opacity(dismissing ? 0 : 1)
@@ -234,7 +234,7 @@ struct ImageViewerView: View {
         .overlay {
             // The interactive drag-down close. Unconditional: the system .zoom transition this used to
             // be suppressed for is gone from every chat-media entry point.
-            SignalDismissHost(
+            MediaDismissHost(
                 canBegin: { pageZoom <= zoomFitTolerance },
                 media: {
                     // The SAME warm-cache chain the page itself renders from. `loaded` only fills from
@@ -716,7 +716,7 @@ struct ImageViewerView: View {
 // Host VC that drives ZoomableMediaView (pinch/double-tap zoom for one page).
 // DELETED HERE: the per-page drag-down-to-dismiss pan (`allowsDismissPan` + `handleDismiss`, a
 // YBImageBrowser-derived interaction with its own thresholds and spring). Every caller disabled it —
-// the drag-to-close is driven at the CONTAINER level by SignalDismissHost so it can never fight the
+// the drag-to-close is driven at the CONTAINER level by MediaDismissHost so it can never fight the
 // TabView pager — so it was a third, unreachable dismiss implementation with different numbers.
 struct ZoomImageView: UIViewControllerRepresentable {
     let image: UIImage
@@ -727,7 +727,7 @@ struct ZoomImageView: UIViewControllerRepresentable {
     // the full screen (the chrome floats over it) — the same unclipped growth as the video editor's
     // scaleEffect zoom, so at full zoom there are no top/bottom borders. Viewers keep the default clip.
     var clipsZoomOverflow: Bool = true
-    // Bumped by the container to ask this page to zoom back to fit. Signal zooms out BEFORE it starts a
+    // Bumped by the container to ask this page to zoom back to fit. the reference app zooms out BEFORE it starts a
     // dismiss, with the comment "Swapping mediaView for presentationView will be perceptible if we're not
     // zoomed out all the way" - closing a zoomed photo otherwise swaps a zoomed view for an unzoomed
     // transition and the swap is visible as a jump. A counter rather than a Bool so repeated requests
@@ -798,7 +798,7 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate {
     }
 
     // Editor swaps the image (filter/crop applied) — refresh in place, keeping the zoom view.
-    /// Return this page to fit. Signal zooms out BEFORE dismissing - swapping a zoomed live view for an
+    /// Return this page to fit. the reference app zooms out BEFORE dismissing - swapping a zoomed live view for an
     /// unzoomed transition copy is visible as a jump, which their own source calls "perceptible".
     func zoomOutToFit(animated: Bool) {
         guard let sv = scrollView, sv.zoomScale != sv.minimumZoomScale else { return }

@@ -2,7 +2,7 @@ import SwiftUI
 
 // Signing in without a password: we email a six-digit code and you type it here.
 //
-// The owner's reference was Discord's "check your email for a login link — no password needed"
+// The owner's reference was the reference app's "check your email for a login link — no password needed"
 // (2026-08-03). He chose a CODE over a link when asked, and the reasons are worth keeping: a link
 // that opens the app needs a domain association and an Apple entitlement, it only works when the
 // mail is opened on the phone you are signing in on, and Google shut down the piece that used to

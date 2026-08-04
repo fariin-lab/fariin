@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-// EXPERIMENTAL Telegram-style media open/close (Settings > Privacy > "Telegram Media Open").
-// Telegram never uses a system transition for its gallery: the tapped image itself is animated from
+// EXPERIMENTAL reference-style media open/close (Settings > Privacy > "the reference app Media Open").
+// the reference app never uses a system transition for its gallery: the tapped image itself is animated from
 // the bubble's exact rect to the fullscreen fitted rect with a spring, over a black backdrop that
 // fades in — and flies back into the bubble on close. This file provides the shared pieces; the
 // viewers opt in when ThreadView hands them a source rect (toggle ON), otherwise nothing changes.
@@ -34,7 +34,7 @@ import UIKit
     /// different bubble radius visibly changed shape at the moment the copy took over.
     static func cornerRadius(_ key: String) -> CGFloat { radii[key] ?? 14 }
 
-    /// The visible message viewport in window coordinates — Signal's `clippingAreaInsets`, as a rect.
+    /// The visible message viewport in window coordinates — the reference app's `clippingAreaInsets`, as a rect.
     /// Published by the message list controller on every layout pass. The transition's flying copy is
     /// clipped to this region at the bubble end of BOTH directions, so a bubble half-scrolled under the
     /// header is revealed from behind the bar instead of flying over it. Written only by the chat list;
@@ -45,7 +45,7 @@ import UIKit
 
 /// Whether a media bubble should render itself, so a transition can HIDE the tile it is flying to or
 /// from. Without this the copy converges onto an already-visible thumbnail: for one moment the same
-/// photo is on screen twice, and there is no cross-fade at the landing. Signal hides the source view for
+/// photo is on screen twice, and there is no cross-fade at the landing. the reference app hides the source view for
 /// exactly the duration of the transition and restores it before removing the copy.
 ///
 /// Alpha, never `isHidden`: a hidden view stops reporting its frame, which would erase the very rect the
@@ -89,7 +89,7 @@ struct MediaRectReporter: ViewModifier {
 /// the user felt: the photo had landed back in its bubble and looked ready, but tapping it did nothing
 /// for the rest of that window (user: "I have to wait a short time before it becomes tappable again").
 ///
-/// Signal has no such window because its viewer is a UIKit custom transition: the interactive dismiss
+/// the reference app has no such window because its viewer is a UIKit custom transition: the interactive dismiss
 /// calls `completeTransition`, and the presenting controller is ready in that same instant. We can't
 /// borrow the mechanism through a `fullScreenCover`, but we can borrow the principle — gate on the
 /// cover ACTUALLY being gone, which the viewer reports from `onDisappear`. Combined with dismissing
@@ -131,7 +131,7 @@ struct MediaRectReporter: ViewModifier {
 // DELETED HERE: `TGMediaZoomLayer` and `TGOpenState` — a complete second open/close animation, in
 // SwiftUI, that ran alongside the UIKit pair in SignalMediaDismiss.swift. Every call site passed nil so
 // it never fired, but it disagreed with the real pipeline on every number that matters: spring response
-// 0.38 with 0.86 damping against Signal's 0.25 critically damped, a hardcoded 16pt corner radius against
+// 0.38 with 0.86 damping against the reference app's 0.25 critically damped, a hardcoded 16pt corner radius against
 // the bubble's real one, `UIScreen.main.bounds` against the transition container's geometry, and
 // `aspectRatio(.fill)` on a view with no clipping view around it.
 //

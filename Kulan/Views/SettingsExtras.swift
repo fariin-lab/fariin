@@ -110,7 +110,7 @@ struct NotificationsSettingsView: View {
 // lock-screen push (server reads users.notifSound) and the in-app banner tone.
 struct NotificationSoundView: View {
     @AppStorage("notif.sound") private var soundName = "rebound"
-    // Our own tones only. "default" was Apple's Note (iMessage's sound) and is gone; a stored
+    // Our own tones only. "default" was Apple's Note (the reference app's sound) and is gone; a stored
     // "default" from before now resolves to Rebound wherever it is read.
     private let sounds = ["rebound", "chime", "pop", "pulse", "marimba"]
 
@@ -148,7 +148,7 @@ struct NotificationSoundView: View {
 //
 // Rewritten 2026-07-27. It used to be a "Linked Devices" page whose hero was a Link a New
 // Device button for a desktop app that does not exist â€” the user's word for it was "ghost".
-// It is now what Discord's Devices screen is: every phone signed in to this account, which
+// It is now what the reference app's Devices screen is: every phone signed in to this account, which
 // one you are holding, and a way to throw the others off. Every field on it is real.
 
 struct DevicesView: View {
@@ -269,7 +269,7 @@ struct DevicesView: View {
     private func row(_ s: DeviceSession) -> some View {
         HStack(spacing: 14) {
             // A colored device tile â€” the flat grey glyph read as unfinished (user feedback,
-            // Telegram's device tiles as the reference; our green, our glyph).
+            // the reference app's device tiles as the reference; our green, our glyph).
             Image(systemName: "iphone")
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.white)

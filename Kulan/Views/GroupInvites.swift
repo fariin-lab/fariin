@@ -2,7 +2,7 @@ import SwiftUI
 import FirebaseFirestore
 import FirebaseFunctions
 
-// Group invite links (Telegram-style). An invite is a top-level `invites/{code}` doc pointing at a
+// Group invite links (reference-style). An invite is a top-level `invites/{code}` doc pointing at a
 // group, with optional expiry + usage cap + "require admin approval". Any signed-in user can READ one
 // (to resolve a kulan://g/<code> deep link); only a group admin can create/edit/revoke. Joining goes
 // through the joinGroupViaInvite Cloud Function (admin SDK) so a stranger never writes the group doc.

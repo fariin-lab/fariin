@@ -108,7 +108,7 @@ struct Message: Identifiable, Equatable {
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
-    /// was here and removed, the way WhatsApp and Signal do it, instead of a message silently
+    /// was here and removed, the way the reference app and the reference app do it, instead of a message silently
     /// vanishing and leaving the other person wondering what they missed. The content is stripped
     /// server-side and the media is deleted from Storage, so what remains is a few bytes of marker.
     var deleted: Bool = false
@@ -160,7 +160,7 @@ struct Message: Identifiable, Equatable {
         return m
     }
 
-    /// A link preview that TRAVELLED WITH THE MESSAGE (Signal's model): the sender fetched it, sealed
+    /// A link preview that TRAVELLED WITH THE MESSAGE (the reference app's model): the sender fetched it, sealed
     /// it, and the recipient renders it without ever contacting the site. All text fields arrive
     /// decrypted here; the image is an encrypted storage blob exactly like a photo's.
     struct LinkPreviewData: Equatable {
@@ -444,11 +444,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var onlyAdminsSend: Bool           // announcement mode: only admins may send (groups)
     var membersCanAdd: Bool            // group: non-admins may add members (default false)
     var membersCanEditInfo: Bool       // group: non-admins may edit name/photo/desc (default false)
-    // Per-flag admin rights (Telegram model): uid → granted right slugs. An admin with NO entry
+    // Per-flag admin rights (the reference app model): uid → granted right slugs. An admin with NO entry
     // has ALL rights (legacy behaviour); the owner (createdBy) always has all. See Conversation.Right.
     var inviteCode: String             // group's current primary invite-link code ("" = none)
     var adminRights: [String: [String]]
-    // Per-member restrictions (Telegram bannedRights): uid → restricted flags + an auto-expiring
+    // Per-member restrictions (the reference app bannedRights): uid → restricted flags + an auto-expiring
     // `until` timestamp (ms). Empty flags or a past `until` = no restriction. See Conversation.Restrict.
     var restrictedFlags: [String: [String]]
     var restrictedUntil: [String: Double]
@@ -531,7 +531,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func isAdmin(_ me: String) -> Bool { admins.contains(me) }
     func isOwner(_ me: String) -> Bool { !createdBy.isEmpty && createdBy == me }
 
-    // Per-flag admin rights (Telegram-style). Slugs kept small, mapped to what Fariin actually gates.
+    // Per-flag admin rights (reference-style). Slugs kept small, mapped to what Fariin actually gates.
     // Delegatable admin rights. Managing the admin TEAM (promote/demote/set-rights) is deliberately
     // NOT here — it is owner-only, so a limited admin can never mint an admin more powerful than
     // themselves or demote a peer the owner appointed.
@@ -558,7 +558,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         return granted.contains(right.rawValue)
     }
 
-    // Per-member restrictions (Telegram bannedRights). Slugs the client enforces at send time.
+    // Per-member restrictions (the reference app bannedRights). Slugs the client enforces at send time.
     enum Restrict: String, CaseIterable, Identifiable {
         case sendText, sendMedia, sendVoice, sendStickers, sendPolls, sendReactions, pinMessages, addMembers, changeInfo
         var id: String { rawValue }
@@ -793,7 +793,7 @@ extension Message {
     }
 }
 
-// MARK: - Pinned-message notice (Telegram-style "X pinned …" row in the chat). E2EE-SAFE: the
+// MARK: - Pinned-message notice (reference-style "X pinned …" row in the chat). E2EE-SAFE: the
 // snippet rides the ENCRYPTED text pipeline as a feature marker — a plaintext system message would
 // leak message content to the server.
 
@@ -817,7 +817,7 @@ extension Message {
     }
 }
 
-// MARK: - Poll (Telegram-style). E2EE-SAFE: the question + options ride the ENCRYPTED text pipeline as
+// MARK: - Poll (reference-style). E2EE-SAFE: the question + options ride the ENCRYPTED text pipeline as
 // a "fariin-poll:" marker (base64 JSON), so the server never sees them. Votes live in a per-voter
 // subcollection (messages/{mid}/votes/{uid}) as plain option INDICES — meaningless without the
 // end-to-end-encrypted options — and each voter can only write their own doc.

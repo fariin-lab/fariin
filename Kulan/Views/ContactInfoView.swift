@@ -209,7 +209,7 @@ struct ContactInfoView: View {
     // Split into layers so the type-checker doesn't time out on one giant modifier chain.
     var body: some View {
         withAlerts
-            // In-place viewer (Telegram model, user request): the photo grows OUT of the avatar
+            // In-place viewer (the reference app model, user request): the photo grows OUT of the avatar
             // circle and closes back INTO it — never a page. An overlay (not a cover) so the
             // profile stays visible behind and the drag can melt the white away.
             .overlay {
@@ -237,7 +237,7 @@ struct ContactInfoView: View {
     }
 
     @ViewBuilder private var sections: some View {
-        // The extra .padding(.top, 8) on each block below + the container's 20 = Signal's ~28pt
+        // The extra .padding(.top, 8) on each block below + the container's 20 = the reference app's ~28pt
         // section rhythm (owner's circled side-by-side: ours sat tight and uneven against theirs).
         if useModernHeader {
             // One block, not two: the poster owns the name AND the round actions, because both sit
@@ -256,7 +256,7 @@ struct ContactInfoView: View {
         if !isSelf { settingsCard.padding(.top, 8) }
         // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
         // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
-        // A HEADED section gets Signal's taller run-up: their header inset is
+        // A HEADED section gets the reference app's taller run-up: their header inset is
         // `defaultSpacingBetweenSections (20) + 12` above the title, so 12 on top of this
         // container's 20 — where a plain card keeps the 8 used elsewhere on the page.
         if !media.isEmpty || mediaHint > 0 {
@@ -276,7 +276,7 @@ struct ContactInfoView: View {
         if !isSelf { dangerCard.padding(.top, 8) }
     }
 
-    // Block / Report always VISIBLE at the bottom of the profile (WhatsApp pattern, user
+    // Block / Report always VISIBLE at the bottom of the profile (the reference app pattern, user
     // decision) — a user who feels unsafe must see the way out, not hunt a "..." menu.
     private var dangerCard: some View {
         VStack(spacing: 0) {
@@ -318,7 +318,7 @@ struct ContactInfoView: View {
     }
 
     // The "More" tile's menu: housekeeping only. Block/Report moved OUT to the always-visible
-    // dangerCard at the bottom of the page (WhatsApp pattern, user decision).
+    // dangerCard at the bottom of the page (the reference app pattern, user decision).
     @ViewBuilder private var moreMenuItems: some View {
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
@@ -469,7 +469,7 @@ struct ContactInfoView: View {
     private var withSheets: some View {
         coreScroll
             .fullScreenCover(item: $viewerImage) { msg in
-                // No system .zoom: SignalMediaOpen flies the tapped thumb (see the strip's tap),
+                // No system .zoom: MediaOpen flies the tapped thumb (see the strip's tap),
                 // the same pipeline as the conversation and the gallery. The story cover below still
                 // uses .zoom - stories deliberately keep the system hero transition.
                 ImageViewerView(message: msg, cid: cid, rectScope: .profile)
@@ -813,7 +813,7 @@ struct ContactInfoView: View {
                     Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 18)   // Signal's tall profile rows (~58pt)
+            .padding(.horizontal, 16).padding(.vertical, 18)   // the reference app's tall profile rows (~58pt)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -916,7 +916,7 @@ struct ContactInfoView: View {
     private var hero: some View {
         VStack(spacing: 6) {
             ZStack {
-                // Story ring (Instagram/WhatsApp pattern): a colored gradient ring means this person has
+                // Story ring (the reference app/the reference app pattern): a colored gradient ring means this person has
                 // an active public story — tap the avatar to watch it instead of opening the photo.
                 //
                 // ALWAYS RENDERED, only faded: the ring is wider than the avatar, so rendering it
@@ -947,7 +947,7 @@ struct ContactInfoView: View {
             .onTapGesture {
                 // What the eye sees, not what the url says — no picture means nothing to open.
                 let hasPhoto = heroHasPhoto
-                // Both a story AND a photo → ASK which one (WhatsApp's "Select an action"). A single
+                // Both a story AND a photo → ASK which one (the reference app's "Select an action"). A single
                 // tap can't serve both, and silently preferring the story is what made the profile
                 // photo unreachable. With only one of them available, go straight there.
                 if publicStory != nil, hasPhoto { showAvatarChoice = true }
@@ -1170,13 +1170,13 @@ struct ContactInfoView: View {
                                 // OPEN LIKE THE CHAT: fly the thumb's media out of its tile (one
                                 // pipeline, every entry point), falling back to a plain presentation.
                                 // The system .zoom here scaled the whole cover AND ran its own dismiss
-                                // pan alongside SignalDismissHost's.
+                                // pan alongside MediaDismissHost's.
                                 .onTapGesture {
                                     let key = MediaOpenRects.key(.profile, m.id)
                                     // Both cache tiers, not memory only — see flyOrPresent.
                                     // Videos → the PLAYER (audit: they went to the image viewer,
                                     // whose loader guards on imageUrl and spun forever).
-                                    SignalMediaOpen.flyOrPresent(
+                                    MediaOpen.flyOrPresent(
                                         imageUrl: url, rectKey: key,
                                         present: { MediaPresentGate.present {
                                             if m.isVideo { viewerVideo = m } else { viewerImage = m }
@@ -1229,7 +1229,7 @@ struct ContactInfoView: View {
             mutedUntil = muteUntil
             blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
         }
-        // LOCAL FIRST, THE WAY SIGNAL DOES IT. Signal's media gallery is a query over its own message
+        // LOCAL FIRST, THE WAY SIGNAL DOES IT. the reference app's media gallery is a query over its own message
         // database, so it renders offline and instantly; it never asks the network for something it has
         // already received. Fariin has no SQLite store, but it does keep this chat's decrypted messages
         // in memory — that cache is what lets the conversation paint before the push transition
@@ -1295,7 +1295,7 @@ struct SharedMediaGridView: View {
     }
 }
 
-// In-place profile-photo viewer (tap the hero avatar). Telegram model, per the user's request:
+// In-place profile-photo viewer (tap the hero avatar). the reference app model, per the user's request:
 // the circle GROWS out of the avatar, stays a circle the whole time, and closes back INTO the
 // avatar — never presented as a page/cover. While the finger holds and moves the photo (or
 // swipes down), the white theme backdrop melts away with drag distance so the profile shows
@@ -1397,7 +1397,7 @@ struct ProfilePhotoViewer: View {
     var body: some View {
         GeometryReader { geo in
             let origin = geo.frame(in: .global).origin
-            // Signal's exact sizing: AvatarViewController pins its CircleView to the view width minus
+            // the reference app's exact sizing: AvatarViewController pins its CircleView to the view width minus
             // 48 (24pt inset each side), with no upper cap — so on a wide phone the circle keeps
             // growing instead of stopping at an arbitrary maximum, which is what our `min(…, 360)` did.
             let d = geo.size.width - 48
@@ -1443,7 +1443,7 @@ struct ProfilePhotoViewer: View {
                         .onChanged { if zoom == 1, !closing, progress == 1 { drag = $0.translation } }
                         .onEnded { v in
                             guard zoom == 1, !closing else { return }
-                            // Signal's rule, matched exactly (MediaInteractiveDismiss): progress is the
+                            // the reference app's rule, matched exactly (MediaInteractiveDismiss): progress is the
                             // straight-line distance over distanceToCompletion = 88, and `.ended`
                             // finishes whenever `percentComplete > 0` — ANY real movement closes it,
                             // cancel is effectively unreachable. Ours demanded 120pt before it would

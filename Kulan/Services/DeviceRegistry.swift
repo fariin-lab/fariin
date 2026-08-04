@@ -7,14 +7,14 @@ import FirebaseMessaging
 /// Every phone signed in to this account, as a real list you can act on.
 ///
 /// Replaces the old "Linked Devices" screen, which advertised a desktop app that does not
-/// exist. Discord's Devices screen was the reference: what is signed in, which one you are
+/// exist. the reference app's Devices screen was the reference: what is signed in, which one you are
 /// holding, and a way to throw the others off.
 ///
 /// The record lives at `users/{uid}/devices/{deviceId}`, keyed by `identifierForVendor` —
 /// stable for as long as Fariin stays installed, and reset by a delete + reinstall, which is
 /// the behaviour we want: a reinstall IS a new session.
 ///
-/// TWO THINGS THIS DELIBERATELY DOES NOT PROMISE (both true of Discord's screen too):
+/// TWO THINGS THIS DELIBERATELY DOES NOT PROMISE (both true of the reference app's screen too):
 ///  * A device that is switched off is signed out when it next opens, not the instant you tap.
 ///    Its push tokens go immediately though, so it stops ringing and stops receiving right away.
 ///  * Messages already on that phone stay on it. They are stored locally and encrypted, and no

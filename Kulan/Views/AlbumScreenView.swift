@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The screen you land on when you tap a group of photos (WhatsApp's album view, user reference).
+// The screen you land on when you tap a group of photos (the reference app's album view, user reference).
 //
 // Before this, tapping any photo in a group jumped STRAIGHT into a full-screen photo and left you to
 // swipe sideways blind — you couldn't see what else was in the group or pick from it. Now the group

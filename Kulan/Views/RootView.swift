@@ -121,7 +121,7 @@ struct RootView: View {
             phase = .welcome
             return
         }
-        // Returning user: boot INSTANTLY from the on-disk cache (the WhatsApp model).
+        // Returning user: boot INSTANTLY from the on-disk cache (the the reference app model).
         // Launch must never wait on the network — offline, each awaited server call
         // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
         // is Keychain-only now, so the whole fast path is local.
@@ -237,7 +237,7 @@ struct OnboardingView: View {
     /// person resolve any handle, which is how @search, the QR scanner and invite links work, and
     /// the users document carries no email and no phone — name, handle, about, photo, public key,
     /// privacy settings. So resolving a handle reveals a profile and nothing behind it, exactly as
-    /// on Instagram, X or Telegram where usernames are public by design. This adds no new door.
+    /// on the reference app, X or the reference app where usernames are public by design. This adds no new door.
     /// It does make scraping the namespace easier, and that exposure already exists via @search;
     /// real rate limiting would mean routing every lookup through a Cloud Function and paying a
     /// round trip on all of them. Worth writing down, not worth doing before launch.

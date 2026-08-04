@@ -145,7 +145,7 @@ final class ThreadRepository {
     var pinnedMessageIds: [String] = []   // up to 5 pinned messages (standard)
 
     // THE PINNED MESSAGES THEMSELVES, fetched by id and independent of how far back the chat is
-    // loaded. This is Signal's model, read from their source: `pinnedMessageData(for:)` reads the
+    // loaded. This is the reference app's model, read from their source: `pinnedMessageData(for:)` reads the
     // message out of their own database, and their banner shows nothing at all rather than a
     // placeholder (ConversationViewController+PinnedMessages.swift:93, +Banners.swift:1204).
     //
@@ -215,7 +215,7 @@ final class ThreadRepository {
     /// Stored (not computed) so every read in one render is the same snapshot and we
     /// don't re-filter per row.
     private(set) var items: [Message] = []
-    // One-producer discipline (Signal model): the repo publishes derived lookups ONCE per data change,
+    // One-producer discipline (the reference app model): the repo publishes derived lookups ONCE per data change,
     // instead of every consumer re-deriving them per render/per cell. indexById kills the O(n) scans the
     // row builder / swipe gate / date pill did per call; itemsVersion lets the view cache per-emission
     // work (row signatures) instead of recomputing it on every SwiftUI body run.

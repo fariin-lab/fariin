@@ -3,7 +3,7 @@ import SwiftUI
 // App-wide "alive" empty state: ContentUnavailableView with the icon doing a quiet
 // periodic bounce (native symbol effect, no Lottie dependency). Same call shape as
 // the system convenience init, so swapping a static empty state in is one line.
-// Rule of use (TG/WA/Signal): animate waiting/empty moments only, never busy screens.
+// Rule of use (the big messengers): animate waiting/empty moments only, never busy screens.
 struct EmptyStateView: View {
     let title: String
     let icon: String

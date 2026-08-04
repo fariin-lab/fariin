@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Forward a message to one or more chats. Pick chats (multi-select), optionally add your own
-// text, tap Send — the sheet closes INSTANTLY (owner's pick, WhatsApp model) and the re-sends
+// text, tap Send — the sheet closes INSTANTLY (owner's pick, the reference app model) and the re-sends
 // run behind: each message re-encrypts for its target via ChatService.forwardMessage, then the
 // added text follows as its own message. onQueued fires a "Sent to …" toast at close;
 // onFailed reports a partial failure honestly instead of holding the sheet hostage.
@@ -54,7 +54,7 @@ struct ForwardPicker: View {
         return message.safeText   // never leak a raw fariin-…: marker (contact/location card)
     }
 
-    // WHAT you're forwarding, visibly (owner's 416 report vs WhatsApp: "won't show what u
+    // WHAT you're forwarding, visibly (owner's 416 report vs the reference app: "won't show what u
     // forwarding?"): real decrypted thumbnails for media — the same SecureImageView the chat
     // renders with — as an overlapping stack, with a quote line for text-only forwards.
     private struct Thumb { let url: String; let enc: EncMeta?; let isVideo: Bool }
@@ -111,7 +111,7 @@ struct ForwardPicker: View {
     /// The bottom bar IS the chat composer, on purpose.
     ///
     /// Send used to live in the top-right toolbar while the text field sat at the bottom, so you
-    /// typed down here and then reached the whole height of the screen to send. WhatsApp and the
+    /// typed down here and then reached the whole height of the screen to send. the reference app and the
     /// apps copying it put send beside the text, and on that one detail they are simply right: your
     /// thumb is already there.
     ///
@@ -243,7 +243,7 @@ struct ForwardPicker: View {
         let queued = onQueued, failed = onFailed
         onSent()
         dismiss()
-        // Telegram model (owner's 416 report: "i still land on where i sent from"): forwarding to
+        // the reference app model (owner's 416 report: "i still land on where i sent from"): forwarding to
         // ONE chat lands you IN that chat — watching your forward arrive IS the confirmation, so no
         // toast there. Several chats can't all be landed in → stay put, the toast confirms instead.
         // Same route a banner tap uses; MainShell foregrounds Chats and pushes.
