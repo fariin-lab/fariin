@@ -111,7 +111,7 @@ struct StoryVideoEditorView: View {
         duration = c.duration
         thumbnail = c.poster
         thumbnailData = c.posterData
-        selectedID = nil; editingID = nil; isDrawing = false
+        selectedID = nil; editingID = nil; isDrawing = false; strokeInFlight = false
         player.isMuted = muted
         // BOTH LINES MATTER. Dropping the looper stops it re-queueing, but the items it has ALREADY
         // queued are sitting in the player and would keep the previous clip playing over the new
@@ -381,13 +381,27 @@ struct StoryVideoEditorView: View {
                               onStroke: { live in
                                   withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = live }
                               })
-                    .frame(width: geo.size.width, height: cardH)
-                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    // THE PEN DRAWS IN SCREEN SPACE, exactly like the photo editor's, and NOT in the
+                    // card's space (owner 2026-08-04: pen on a video, "when i click done is not
+                    // working").
+                    //
+                    // The canvas used to be the CARD — width by cardH, sitting 8pt down the screen —
+                    // so a stroke's coordinates were card coordinates. Both the things that redraw
+                    // those strokes afterwards read them as SCREEN coordinates: the still image below
+                    // renders `geo.size` worth of drawing and then squeezes it into cardH, and
+                    // `burnIn` composes at the full canvas size for the export. So the moment you
+                    // tapped the tick your marks jumped up and squashed by the height of the two gaps,
+                    // and the exported video disagreed with both. Nothing was wrong with the button.
+                    //
+                    // One space for everything now, which is the rule this editor already states for
+                    // text: what you draw on a clip lands where you drew it, on screen and in the file.
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
             } else if !drawing.bounds.isEmpty {
                 Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
                     .resizable()
-                    .frame(width: geo.size.width, height: cardH)
-                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     .allowsHitTesting(false)
             }
 
@@ -446,8 +460,13 @@ struct StoryVideoEditorView: View {
                             player.pause(); playing = false
                             withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                         }
+                        // THE VIDEO HOLDS STILL WHILE YOU DRAW, the way it already does for crop and
+                        // for trim (owner 2026-08-04: "plz play and pause fix"). It used to keep
+                        // playing and looping under your hand, and you could not stop it, because
+                        // every tap on the picture belongs to the pen while the pen is out. Tapping
+                        // the tick gives you the video back, running, where you left it.
                         tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
-                             active: isDrawing) { isDrawing.toggle() }
+                             active: isDrawing) { setDrawing(!isDrawing) }
                         tool("scissors", active: isTrimmed) { openTrim() }
                         tool("plus.square.on.square") { showAddPicker = true }
                     }
@@ -710,6 +729,20 @@ struct StoryVideoEditorView: View {
         }
     }
 
+    /// Entering and leaving the pen. The clip freezes for it and starts again when you are done,
+    /// which is what crop and trim have always done — the pen was the one tool that left the video
+    /// running under a hand that had no way to stop it.
+    ///
+    /// It also clears `strokeInFlight`. That flag hides the chrome while a stroke is in progress and
+    /// is cleared by PencilKit's end-of-stroke callback; if that callback is ever missed, the flag
+    /// stays set and the tick is invisible at opacity 0 — a Done button you cannot see is a Done
+    /// button that does not work, and this makes leaving the tool always put it back.
+    private func setDrawing(_ on: Bool) {
+        isDrawing = on
+        strokeInFlight = false
+        playing = !on   // the onChange above is the one place that starts and stops the player
+    }
+
     private func openTrim() {
         playing = false
         if trimEnd <= 0 { trimEnd = duration }   // the trim starts as "all of it"
@@ -772,7 +805,7 @@ struct StoryVideoEditorView: View {
                 }
                 .buttonStyle(StoryPressStyle())
                 Spacer()
-                Button { isDrawing = false } label: {
+                Button { setDrawing(false) } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
