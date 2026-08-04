@@ -312,7 +312,6 @@ struct EmailAuthView: View {
     @State private var password = ""
     @State private var busy = false
     @State private var error: String?
-    @State private var resetSent = false
     @FocusState private var focus: Bool
 
     var body: some View {
@@ -354,31 +353,37 @@ struct EmailAuthView: View {
                 if mode == .login {
                     // The way in when the password is gone, offered BEFORE the reset link: getting a
                     // code and being in beats setting a new password you also have to remember.
+                    //
+                    // `.primary`, NOT `Color.accentColor`. accentColor reads the asset catalogue and
+                    // ignores the `.tint(.primary)` KulanApp sets to keep iOS blue out of this app,
+                    // so this link was rendering system blue on an otherwise monochrome screen. Same
+                    // mistake as the restore screen; two places, one cause.
                     NavigationLink {
                         LoginCodeView(email: email, onAuthed: onAuthed)
                     } label: {
                         Text("Log in with a code instead")
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(.primary)
                     }
                     .padding(.top, 2)
 
-                    // A line of green text under a button is not an answer. Sending a reset
-                    // is exactly the moment a person leaves the app for a mail client, so it
-                    // has to stop them and say where to look.
-                    Button("Forgot password?") {
-                        guard !email.isEmpty else { error = "Type your email above first."; return }
-                        Task {
-                            do {
-                                try await AuthService.shared.resetPassword(email: email)
-                                await MainActor.run { resetSent = true; error = nil }
-                            } catch {
-                                await MainActor.run { self.error = plain(error) }
-                            }
-                        }
+                    // A PAGE, not a tap that fires. This used to call resetPassword the instant it
+                    // was pressed, with no chance to read the address back — and refused outright
+                    // with "Type your email above first" when the field was empty, which tells
+                    // somebody off instead of helping them.
+                    //
+                    // That pairing was the dangerous part: the backend answers identically whether
+                    // or not an account exists (so it cannot be used to discover who is on Fariin),
+                    // so a typo'd address produces a cheerful "sent" and a wait for mail that was
+                    // never going to come. Showing the address on its own page, before anything is
+                    // sent, is the only place that mistake can still be caught.
+                    NavigationLink {
+                        ForgotPasswordView(email: email)
+                    } label: {
+                        Text("Forgot password?")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 }
 
                 if let error {
@@ -391,14 +396,10 @@ struct EmailAuthView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { focus = true }
-        // Names the address, because the commonest reason a reset "never arrives" is that
-        // it went somewhere else. Names the spam folder, which is the second commonest.
-        // And names the code, which is the door that does not depend on the mail at all.
-        .alert("Check your email", isPresented: $resetSent) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("We sent a link to \(email) for setting a new password. It can take a minute. If you cannot find it, look in your spam folder, or log in with a code instead.")
-        }
+        // The "Check your email" alert that used to live here has moved INTO ForgotPasswordView.
+        // An alert is the wrong shape for that moment anyway: it is dismissed and gone, and the
+        // one thing a person needs at exactly that second is the address to check, still readable
+        // while they go looking for the mail.
     }
 
     private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
@@ -440,4 +441,134 @@ struct EmailAuthView: View {
     // here as a private function, which is exactly why Delete Account was still showing people
     // "The supplied auth credential is malformed or has expired".
     private func plain(_ error: Error) -> String? { AuthService.plainMessage(error) }
+}
+
+// MARK: - Forgot password
+
+/// One field, one button, and then the address you sent it to, left on screen.
+///
+/// This replaced a "Forgot password?" that fired on the tap itself. Two things were wrong with
+/// that. It refused an empty field with "Type your email above first", which is a telling-off
+/// rather than help. And with a filled field it sent instantly, so nobody ever saw the address
+/// before it went — which matters more here than almost anywhere, because `requestPasswordReset`
+/// answers identically whether or not an account exists (deliberately, so the box cannot be used
+/// to discover who is on Fariin). A typo therefore produced a confident "sent" and a wait for mail
+/// that could never arrive. This page is the last place that mistake is catchable.
+///
+/// Kept to one screen on purpose: the sent state REPLACES the form rather than pushing another
+/// page. The address stays readable at exactly the moment somebody switches to their mail app to
+/// go looking for it, which an alert cannot do, because an alert is gone the second it is
+/// dismissed.
+struct ForgotPasswordView: View {
+    @State var email: String
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var busy = false
+    @State private var error: String?
+    @State private var sentTo: String?
+    @FocusState private var focus: Bool
+
+    private var trimmed: String { email.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        ZStack {
+            AuthPalette.page.ignoresSafeArea()
+            VStack(spacing: 14) {
+                Spacer().frame(height: 40)
+                if let sentTo { sentState(sentTo) } else { form }
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { focus = sentTo == nil }
+    }
+
+    @ViewBuilder private var form: some View {
+        Text("Reset your password")
+            .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
+
+        Text("We'll email you a link to set a new one.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.bottom, 6)
+
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Email").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
+                .keyboardType(.emailAddress)
+                .textContentType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.send)
+                .onSubmit { send() }
+                .focused($focus)
+                .font(.system(size: 17))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 16).frame(height: 50)
+                .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+
+        Button { send() } label: {
+            Group {
+                if busy { ProgressView().tint(AuthPalette.page) }
+                else { Text("Send reset link") }
+            }
+            .authPrimaryPill()
+        }
+        .disabled(busy || trimmed.isEmpty)
+        .opacity(trimmed.isEmpty ? 0.55 : 1)
+
+        if let error {
+            Text(error).font(.footnote).foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder private func sentState(_ address: String) -> some View {
+        Text("Check your email")
+            .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
+
+        // NAMED, not "we sent it to you". The commonest reason a reset never arrives is that it
+        // went somewhere else, and the person cannot notice that unless the address is in front
+        // of them.
+        Text("We sent a link to \(address).")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+
+        // The second commonest reason, said before they go hunting rather than after.
+        Text("It can take a minute. If it is not there, look in your spam folder.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 2)
+
+        Button { dismiss() } label: {
+            Text("Back to log in").authPrimaryPill()
+        }
+        .padding(.top, 18)
+    }
+
+    private func send() {
+        guard !trimmed.isEmpty, !busy else { return }
+        // Say it plainly before trying, the same early refusal the other doors make.
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
+        busy = true; error = nil
+        focus = false
+        Task {
+            do {
+                try await AuthService.shared.resetPassword(email: trimmed)
+                await MainActor.run { sentTo = trimmed; error = nil }
+            } catch {
+                await MainActor.run { self.error = AuthService.plainMessage(error) }
+            }
+            await MainActor.run { busy = false }
+        }
+    }
 }
