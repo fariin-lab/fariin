@@ -57,7 +57,7 @@ struct SettingsView: View {
 
     private var inviteText: String {
         let h = profile.me?.handle ?? ""
-        return h.isEmpty ? "Chat with me on Kulan." : "Chat with me on Kulan — my username is @\(h)"
+        return h.isEmpty ? "Chat with me on Fariin." : "Chat with me on Fariin, my username is @\(h)"
     }
 
     var body: some View {
@@ -374,7 +374,7 @@ struct AccountSettingsView: View {
                 }
             }
         } message: {
-            Text("You'll need to sign back in to use Kulan on this device.")
+            Text("You'll need to sign back in to use Fariin on this device.")
         }
         // Deletion is a PAGE, not a one-tap alert: it names the account, spells out what's lost,
         // and re-verifies you first (an alert can't do the provider re-auth, and skipping it is
@@ -486,7 +486,7 @@ struct AccountSettingsView: View {
     private func exportData() async {
         exporting = true
         let me = AuthService.shared.uid ?? ""
-        var out = "Kulan — Data Export\n\n"
+        var out = "Fariin, data export\n\n"
         out += "Name: \(profile.me?.name ?? "")\n"
         out += "Username: @\(profile.me?.handle ?? "")\n"
         if let about = profile.me?.about, !about.isEmpty { out += "Bio: \(about)\n" }
@@ -515,7 +515,7 @@ struct AccountSettingsView: View {
             out += "\n"
         }
 
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Kulan-Data-Export.txt")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Fariin-Data-Export.txt")
         try? out.write(to: url, atomically: true, encoding: .utf8)
         await MainActor.run { exportFile = ExportFile(url: url); exporting = false }
     }
@@ -754,7 +754,7 @@ struct PrivacySettingsView: View {
             Section {
                 NavigationLink { AppLockPage() } label: { Text("App Lock") }
             } footer: {
-                Text("Require Face ID to unlock Kulan.")
+                Text("Require Face ID to unlock Fariin.")
             }
 
             // HIDDEN, not removed (owner, 2026-08-02: "Dont delete just hide… i need Modern Header
@@ -783,7 +783,7 @@ struct PrivacySettingsView: View {
                 audienceRow("Last Seen & Online", key: "lastSeen", value: privLastSeen,
                             footerText: "Who can see when you're online and when you were last active.")
                 audienceRow("Profile Picture", key: "photo", value: privPhoto,
-                            footerText: "Who can see your profile photo when they find you on Kulan.")
+                            footerText: "Who can see your profile photo when they find you on Fariin.")
                 audienceRow("Bio", key: "bio", value: privBio,
                             footerText: "Who can see the few words about you.")
                 audienceRow("Calls", key: "calls", value: privCalls,
@@ -835,21 +835,21 @@ struct AboutView: View {
     var body: some View {
         List {
             Section {
-                Link(destination: URL(string: "https://kulan-2ef85.web.app")!) {
+                Link(destination: URL(string: "https://fariin.com")!) {
                     Text("Support Center").foregroundStyle(.primary)
                 }
-                Link(destination: URL(string: "mailto:kulanchat@gmail.com")!) {
+                Link(destination: URL(string: "mailto:support@fariin.com")!) {
                     Text("Report a Problem").foregroundStyle(.primary)
                 }
             } footer: {
-                Text("Kulan has zero tolerance for objectionable content or abusive behavior. Reports are reviewed within 24 hours.")
+                Text("Fariin has zero tolerance for objectionable content or abusive behavior. Reports are reviewed within 24 hours.")
             }
             Section {
                 LabeledContent("Version", value: "\(appVersion) (\(buildNumber))")
-                Link(destination: URL(string: "https://kulan-2ef85.web.app/privacy.html")!) {
+                Link(destination: URL(string: "https://fariin.com/privacy")!) {
                     Text("Privacy Policy").foregroundStyle(.primary)
                 }
-                Link(destination: URL(string: "https://kulan-2ef85.web.app/terms.html")!) {
+                Link(destination: URL(string: "https://fariin.com/terms")!) {
                     Text("Terms & Conditions").foregroundStyle(.primary)
                 }
             } header: {

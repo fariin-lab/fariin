@@ -25,7 +25,7 @@ struct RootView: View {
             case .loading:
                 // Static branded launch screen (no spinner) — matches the native iOS launch
                 // screen so boot feels instant, like other chat apps. No "loading" UI.
-                Text("Kulan").font(.system(size: 40, weight: .bold, design: .rounded))
+                Text("Fariin").font(.system(size: 40, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
             case .welcome:
                 // Signed out → the front door (Apple / Google / email). After any door
@@ -107,7 +107,7 @@ struct RootView: View {
         guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
             locked = false; return   // no passcode/biometrics set up — don't lock the user out
         }
-        ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Kulan") { ok, _ in
+        ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Fariin") { ok, _ in
             DispatchQueue.main.async { if ok { locked = false } }
         }
     }
@@ -206,7 +206,7 @@ struct LockScreen: View {
             Theme.bg(scheme == .dark).ignoresSafeArea()
             VStack(spacing: 18) {
                 Image(systemName: "lock.fill").font(.system(size: 44)).foregroundStyle(.secondary)
-                Text("Kulan is locked").font(.headline)
+                Text("Fariin is locked").font(.headline)
                 Button { onUnlock() } label: {
                     Label("Unlock", systemImage: "faceid").font(.body.weight(.semibold))
                         .padding(.horizontal, 24).frame(height: 48)
@@ -250,7 +250,7 @@ struct OnboardingView: View {
                     Text("Create your profile")
                         .font(.system(size: 23, weight: .bold)).foregroundStyle(.primary)
                         .padding(.top, 16)
-                    Text("This is how people will find and know you on Kulan.")
+                    Text("This is how people will find and know you on Fariin.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 5).padding(.horizontal, 24)
@@ -320,7 +320,7 @@ struct OnboardingView: View {
                     // App Store Guideline 1.2: users must agree to the terms (which
                     // include a zero-tolerance policy for objectionable content and
                     // abusive users) before they can post content. Links open in Safari.
-                    Text("By tapping Continue you agree to Kulan's [Terms](https://kulan-2ef85.web.app/terms.html) and [Privacy Policy](https://kulan-2ef85.web.app/privacy.html). Kulan has zero tolerance for objectionable content or abusive behavior.")
+                    Text("By tapping Continue you agree to Fariin's [Terms](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy). Fariin has zero tolerance for objectionable content or abusive behavior.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

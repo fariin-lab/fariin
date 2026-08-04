@@ -4,7 +4,7 @@ import SwiftUI
 struct ContentView: View {
     var body: some View {
         VStack(spacing: 12) {
-            Text("Kulan")
+            Text("Fariin")
                 .font(.largeTitle.weight(.bold))
             Text("Native build — Phase 1")
                 .font(.subheadline)

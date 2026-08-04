@@ -3087,7 +3087,7 @@ struct ThreadView: View {
                 if error is MissingRecipientKeyError {
                     sendError = isGroup
                         ? "No one in this group has set up encryption yet. Your message will send once a member opens Kulan."
-                        : "\(title) hasn't opened Kulan yet, so encryption isn't set up. Your message will send once they do."
+                        : "\(title) hasn't opened Fariin yet, so encryption isn't set up. Your message will send once they do."
                 }
             }
         }

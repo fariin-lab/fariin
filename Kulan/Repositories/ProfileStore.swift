@@ -146,7 +146,7 @@ final class ProfileStore {
         // the delete is expected to succeed. The guard stays as a backstop: bail while everything
         // is still intact rather than destroy data we can't finish deleting.
         guard !AuthService.shared.needsRecentLogin else {
-            throw NSError(domain: "Kulan", code: 17014, userInfo: [NSLocalizedDescriptionKey:
+            throw NSError(domain: "Fariin", code: 17014, userInfo: [NSLocalizedDescriptionKey:
                 "Please verify it's you and try again — nothing has been deleted yet."])
         }
 

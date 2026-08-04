@@ -31,7 +31,7 @@ struct WelcomeView: View {
                     ShiningLogo()
                         .frame(width: 108, height: 108)
                         .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                    Text("Welcome to Kulan")
+                    Text("Welcome to Fariin")
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.primary)
                         .padding(.top, 22)
@@ -227,7 +227,7 @@ struct AuthMethodView: View {
                 }
 
                 if mode == .create {
-                    Text("By continuing you agree to Kulan's [Terms](https://kulan-2ef85.web.app/terms.html) and [Privacy Policy](https://kulan-2ef85.web.app/privacy.html).")
+                    Text("By continuing you agree to Fariin's [Terms](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
                         .font(.caption2).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).tint(.primary)
                         .padding(.top, 10)

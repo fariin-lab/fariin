@@ -226,7 +226,7 @@ struct AttachRecentsStrip: View {
             // shared selection (otherwise the picker silently shows only the old subset forever).
             if status == .limited {
                 HStack(spacing: 8) {
-                    Text("Only some photos are shared with Kulan.")
+                    Text("Only some photos are shared with Fariin.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     Button("Manage") { presentLimitedPicker() }

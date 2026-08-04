@@ -60,8 +60,8 @@ struct VerifyEncryptionView: View {
                              message: Text("The scanned code doesn't match your safety number. Your messages are still encrypted, but you couldn't confirm \(peerName)'s device. Try scanning again, or compare the numbers by hand."),
                              dismissButton: .default(Text("OK")))
             case .invalid:
-                return Alert(title: Text("Not a Kulan code"),
-                             message: Text("That QR code isn't a Kulan verification code. Ask \(peerName) to open Encryption on their side."),
+                return Alert(title: Text("Not a Fariin code"),
+                             message: Text("That QR code isn't a Fariin verification code. Ask \(peerName) to open Encryption on their side."),
                              dismissButton: .default(Text("OK")))
             }
         }
@@ -232,7 +232,7 @@ private struct VerifyScanSheet: View {
                     Spacer()
                 }
                 Spacer()
-                Text("Point at their Kulan verification code")
+                Text("Point at their Fariin verification code")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.primary)
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .liquidGlass(Capsule())

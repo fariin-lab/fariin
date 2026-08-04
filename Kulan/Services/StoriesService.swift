@@ -262,7 +262,7 @@ final class StoriesService {
 
         // Transcode BEFORE creating the doc — a failed/cancelled transcode leaves zero server state.
         guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted) else {
-            throw NSError(domain: "Kulan", code: 1,
+            throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }
         try Task.checkCancellation()

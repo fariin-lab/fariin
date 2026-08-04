@@ -50,7 +50,7 @@ struct NewContactView: View {
                                 .background(Color(.secondarySystemGroupedBackground),
                                             in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                                Text("Kulan finds people by @username — there are no phone numbers. The name you enter is how they'll show in your chats.")
+                                Text("Fariin finds people by @username — there are no phone numbers. The name you enter is how they'll show in your chats.")
                                     .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 4)
                             }
                         }

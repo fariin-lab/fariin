@@ -47,7 +47,7 @@ final class AuthService: NSObject {
                 reportLogin()
                 return
             } catch let e as NSError where e.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
-                // This Apple/Google identity already has a Kulan account — enter it.
+                // This Apple/Google identity already has a Fariin account — enter it.
                 // (Apple invalidates the used token; the error carries a fresh credential.)
                 let updated = (e.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential) ?? credential
                 let result = try await Auth.auth().signIn(with: updated)
@@ -308,7 +308,7 @@ final class AuthService: NSObject {
             .httpsCallable("verifyLoginCode")
             .call(["email": email, "code": code])
         guard let data = result.data as? [String: Any], let token = data["token"] as? String else {
-            throw NSError(domain: "Kulan", code: -1,
+            throw NSError(domain: "Fariin", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "Could not sign you in. Try again."])
         }
         let signIn = try await Auth.auth().signIn(withCustomToken: token)
@@ -462,11 +462,11 @@ enum AuthFlowError: LocalizedError {
         case .notSignedIn: return "You're not signed in."
         case .alreadyConnected: return "That's already connected to this account."
         case .alreadyLinkedElsewhere:
-            return "That login already belongs to a different Kulan account. Sign out and log in with it instead."
+            return "That login already belongs to a different Fariin account. Sign out and log in with it instead."
         case .noAccount:
             return "You haven't signed up with this account before. Go back and choose Sign Up to continue."
         case .accountExists:
-            return "This account already has a Kulan account. Go back and choose Log In instead."
+            return "This account already has a Fariin account. Go back and choose Log In instead."
         }
     }
 }

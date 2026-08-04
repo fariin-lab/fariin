@@ -37,7 +37,7 @@ struct MyQRView: View {
                     Text(name).font(.title3.weight(.semibold))
                     Text("@\(handle)").foregroundStyle(.secondary)
                 }
-                Text("Scan this code in Kulan to start a chat.")
+                Text("Scan this code in Fariin to start a chat.")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Spacer()
                 ShareLink(item: kulanLink(handle)) {
@@ -76,7 +76,7 @@ struct ScanQRView: View {
                     Spacer()
                 }
                 Spacer()
-                Text(notFound ? "No Kulan user found" : "Point at a Kulan QR code")
+                Text(notFound ? "No Fariin user found" : "Point at a Fariin QR code")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.primary)
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .liquidGlass(Capsule())

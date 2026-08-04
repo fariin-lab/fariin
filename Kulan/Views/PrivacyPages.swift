@@ -177,7 +177,7 @@ struct AppLockPage: View {
                     }
                 }
             } footer: {
-                Text("Require Face ID or your passcode to unlock Kulan.")
+                Text("Require Face ID or your passcode to unlock Fariin.")
             }
             Section {
                 Toggle("Screen Security", isOn: $screenSecurity).tint(.green)

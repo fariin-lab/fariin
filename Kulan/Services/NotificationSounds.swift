@@ -59,7 +59,7 @@ struct NotificationSound: Identifiable, Equatable {
     // in the app bundle. These are our own synthesised tones (Kulan/Resources/Ringtones), so there's
     // no licensing question and nothing is copied from another app.
     static let ringtones: [NotificationSound] = [
-        NotificationSound(id: "kulan",   name: "Kulan (default)", bundleFile: "kulan_ringtone.wav"),
+        NotificationSound(id: "kulan",   name: "Fariin (default)", bundleFile: "kulan_ringtone.wav"),
         NotificationSound(id: "ascend",  name: "Ascend",  bundleFile: "ring_ascend.wav"),
         NotificationSound(id: "beacon",  name: "Beacon",  bundleFile: "ring_beacon.wav"),
         NotificationSound(id: "ripple",  name: "Ripple",  bundleFile: "ring_ripple.wav"),

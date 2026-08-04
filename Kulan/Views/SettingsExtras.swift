@@ -289,7 +289,7 @@ struct DevicesView: View {
                             .foregroundStyle(Color.accentColor)
                     }
                 }
-                Text([s.os, s.appVersion.isEmpty ? nil : "Kulan \(s.appVersion)"]
+                Text([s.os, s.appVersion.isEmpty ? nil : "Fariin \(s.appVersion)"]
                         .compactMap { $0 }.joined(separator: " Â· "))
                     .font(.caption).foregroundStyle(.secondary)
                 statusLine(s)

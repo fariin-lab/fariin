@@ -108,7 +108,7 @@ struct AddToGroupView: View {
                 await MainActor.run {
                     working = nil
                     if keyless.isEmpty { dismiss() }
-                    else { noticeIsSuccess = true; notice = "\(contactName) hasn't opened Kulan yet — they'll see messages once they do." }
+                    else { noticeIsSuccess = true; notice = "\(contactName) hasn't opened Fariin yet — they'll see messages once they do." }
                 }
             } catch {
                 await MainActor.run { working = nil; noticeIsSuccess = false; notice = error.localizedDescription }

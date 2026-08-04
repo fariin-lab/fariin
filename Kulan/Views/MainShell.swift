@@ -622,7 +622,7 @@ struct ChatsView: View {
     // Reuses the existing flows (NewChatView search, MyQRView, Settings' invite text).
     private var inviteText: String {
         let h = profile.me?.handle ?? ""
-        return h.isEmpty ? "Chat with me on Kulan." : "Chat with me on Kulan — my username is @\(h)"
+        return h.isEmpty ? "Chat with me on Fariin." : "Chat with me on Fariin, my username is @\(h)"
     }
     // Big-app empty state (TG/WA/Signal rule: one visual, one line, ONE button).
     // The stacked three-pill version read as clutter — secondary actions are quiet

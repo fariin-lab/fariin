@@ -167,7 +167,7 @@ struct InviteLinkSheet: View {
                     Section {
                         Text(inv.url).font(.callout.monospaced()).textSelection(.enabled)
                         Button { UIPasteboard.general.string = inv.url } label: { Label("Copy Link", systemImage: "doc.on.doc") }
-                        ShareLink(item: URL(string: inv.url) ?? URL(string: "https://kulan.app")!) {
+                        ShareLink(item: URL(string: inv.url) ?? URL(string: "https://fariin.com")!) {
                             Label("Share Link", systemImage: "square.and.arrow.up")
                         }
                     } footer: {

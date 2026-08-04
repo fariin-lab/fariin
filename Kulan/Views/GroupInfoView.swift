@@ -595,7 +595,7 @@ struct AddMembersSheet: View {
                                 await MainActor.run {
                                     if keyless.isEmpty { dismiss() }
                                     else {
-                                        noticeText = "\(keyless.joined(separator: ", ")) hasn't opened Kulan yet — they'll see messages once they do."
+                                        noticeText = "\(keyless.joined(separator: ", ")) hasn't opened Falan yet — they'll see messages once they do."
                                         adding = false
                                     }
                                 }
