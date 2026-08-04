@@ -529,10 +529,11 @@ struct StoryEditorView: View {
                             withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                         }
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
-                        // The fourth tool in his drawing: add another picture or video to this post.
-                        // Same action as the + in the caption bar, because reaching for either and
-                        // getting something different is worse than having it twice.
-                        capsuleTool("plus.square.on.square", active: false) { showAddPicker = true }
+                        // NO FOURTH TOOL. It used to be a second "add another picture", kept on the
+                        // reasoning that two doors to one action beat two doors to two different
+                        // ones. He has now seen both and called it: "remove the bottom Upload Story
+                        // button because it is a duplicate. Keep the one in the caption bar exactly
+                        // as it is." Same call he made on the video editor an hour earlier.
                     }
                     .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
                     .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
