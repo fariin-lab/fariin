@@ -981,6 +981,8 @@ struct EditProfileView: View {
     @State private var origHandle = ""
     @State private var origAbout = ""
     @State private var confirmDiscard = false
+    @FocusState private var bioFocused: Bool
+    private static let bioAnchor = "bio.field"   // the row the scroller pulls above the keyboard
     private var hasUnsavedText: Bool {
         firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
     }
@@ -1167,6 +1169,12 @@ struct EditProfileView: View {
 
     private var editForm: some View {
         Group {
+            // A ScrollViewReader so the BIO can pull itself back above the keyboard as it grows
+            // (owner 2026-08-04: the second line disappears behind the keys). A Form scrolls a field
+            // into view when it FIRST gains focus and then considers the job done — but this field
+            // grows downward as you type, so every new line pushed the cursor further under the
+            // keyboard while the scroll position stayed where it was.
+            ScrollViewReader { scroller in
             Form {
                 // Avatar header on the plain grouped background (Contacts / Settings edit style).
                 Section {
@@ -1255,7 +1263,22 @@ struct EditProfileView: View {
                 Section {
                     TextField("A few words about you", text: $about, axis: .vertical)
                         .lineLimit(1...5)
-                        .onChange(of: about) { _, v in if v.count > 140 { about = String(v.prefix(140)) } }
+                        .focused($bioFocused)
+                        .id(Self.bioAnchor)
+                        .onChange(of: about) { _, v in
+                            if v.count > 140 { about = String(v.prefix(140)) }
+                            // Follow the cursor DOWN: anchor .bottom keeps the newest line just
+                            // above the keyboard rather than centring the whole field.
+                            if bioFocused { withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) } }
+                        }
+                        .onChange(of: bioFocused) { _, focused in
+                            // On focus too: the field can already be several lines tall when you
+                            // come back to edit it, and that lands under the keyboard immediately.
+                            guard focused else { return }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) }
+                            }
+                        }
                 } header: {
                     Text("Bio")
                 }
@@ -1263,6 +1286,7 @@ struct EditProfileView: View {
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
+            }
             }
             // X and Save moved OUT to the screen (see `body`). They belong to the whole screen, not
             // to the form: attached here they vanished the moment you switched to the Large tab,
