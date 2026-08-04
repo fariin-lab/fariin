@@ -328,20 +328,35 @@ struct EmailAuthView: View {
     let mode: AuthMethodView.Mode
     var onAuthed: () -> Void
 
+    private enum Field { case email, password }
+
     @State private var email = ""
     @State private var password = ""
     @State private var busy = false
     @State private var error: String?
-    @FocusState private var focus: Bool
+    @State private var reveal = false
+    @FocusState private var focus: Field?
+
+    /// Sign-up's only rule, checked live so the answer is on screen before the button is pressed
+    /// rather than after a round trip to Firebase.
+    private var passwordLongEnough: Bool { password.count >= 6 }
+    private var canSubmit: Bool {
+        !email.isEmpty && !password.isEmpty && (mode == .login || passwordLongEnough)
+    }
 
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
                 .dismissesKeyboardOnTap()
+            // TWO SPACERS, not a fixed 40 at the top. Pinned to the top, the form left a dead gap
+            // between the button and the keyboard that made the page look unfinished. Balanced
+            // spacers centre it in whatever room the keyboard leaves, so the block rises with the
+            // keyboard instead of stranding itself above it.
             VStack(spacing: 14) {
-                Spacer().frame(height: 40)
+                Spacer(minLength: 24)
                 Text(mode == .create ? "Sign up with Email" : "Log in with Email")
                     .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
+                    .padding(.bottom, 4)
 
                 field("Email") {
                     TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
@@ -349,11 +364,64 @@ struct EmailAuthView: View {
                         .textContentType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .focused($focus)
+                        .focused($focus, equals: .email)
+                        // Return moves on rather than closing the keyboard, so the whole form is
+                        // fillable without ever reaching for the screen.
+                        .submitLabel(.next)
+                        .onSubmit { focus = .password }
                 }
+
                 field("Password") {
-                    SecureField("", text: $password, prompt: Text(mode == .create ? "At least 6 characters" : "Your password").foregroundStyle(.tertiary))
-                        .textContentType(mode == .create ? .newPassword : .password)
+                    HStack(spacing: 8) {
+                        // Swapped rather than toggled, because SecureField cannot be told to show
+                        // its text. Focus is restored by hand on the next runloop: replacing the
+                        // view drops first responder, and a keyboard that vanishes when you tap
+                        // the eye is worse than no eye at all.
+                        Group {
+                            if reveal {
+                                TextField("", text: $password, prompt: passwordPrompt)
+                                    .textContentType(mode == .create ? .newPassword : .password)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                            } else {
+                                SecureField("", text: $password, prompt: passwordPrompt)
+                                    .textContentType(mode == .create ? .newPassword : .password)
+                            }
+                        }
+                        .focused($focus, equals: .password)
+                        .submitLabel(.go)
+                        .onSubmit { if canSubmit { submit() } }
+
+                        if !password.isEmpty {
+                            Button {
+                                reveal.toggle()
+                                DispatchQueue.main.async { focus = .password }
+                            } label: {
+                                Image(systemName: reveal ? "eye.slash" : "eye")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, height: 28)   // a real target, not a glyph
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                // The rule, kept ON SCREEN while it is being met. It used to live in the
+                // placeholder, which disappears the moment somebody starts typing — exactly when
+                // they need to know how far they have to go.
+                if mode == .create {
+                    HStack(spacing: 6) {
+                        Image(systemName: passwordLongEnough ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 12))
+                        Text("At least 6 characters")
+                        Spacer()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(passwordLongEnough ? .primary : .secondary)
+                    .animation(.easeInOut(duration: 0.15), value: passwordLongEnough)
+                    .padding(.top, -6)
                 }
 
                 Button {
@@ -368,8 +436,13 @@ struct EmailAuthView: View {
                     }
                     .authPrimaryPill()
                 }
-                .disabled(busy || email.isEmpty || password.isEmpty)
-                .opacity(email.isEmpty || password.isEmpty ? 0.55 : 1)
+                .disabled(busy || !canSubmit)
+                // 0.3, not 0.55. At 0.55 the black pill turned a solid mid-grey that read as a
+                // broken button rather than one waiting for you; faded far enough back, it reads
+                // as not-yet.
+                .opacity(canSubmit ? 1 : 0.3)
+                .animation(.easeInOut(duration: 0.15), value: canSubmit)
+                .padding(.top, 4)
 
                 if mode == .login {
                     // The way in when the password is gone, offered BEFORE the reset link: getting a
@@ -411,16 +484,23 @@ struct EmailAuthView: View {
                     Text(error).font(.footnote).foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                 }
-                Spacer()
+                Spacer(minLength: 24)
             }
             .padding(.horizontal, 24)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { focus = true }
+        .onAppear { focus = .email }
         // The "Check your email" alert that used to live here has moved INTO ForgotPasswordView.
         // An alert is the wrong shape for that moment anyway: it is dismissed and gone, and the
         // one thing a person needs at exactly that second is the address to check, still readable
         // while they go looking for the mail.
+    }
+
+    /// One prompt, built once, because the reveal toggle swaps between two different field types
+    /// and the two must not be allowed to say different things.
+    private var passwordPrompt: Text {
+        Text(mode == .create ? "At least 6 characters" : "Your password")
+            .foregroundStyle(.tertiary)
     }
 
     private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
