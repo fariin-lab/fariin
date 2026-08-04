@@ -1395,19 +1395,17 @@ struct EditProfileView: View {
         }
         saving = true; error = nil
         do {
-            // Only ask the server about the handle when the handle CHANGED — this lookup is a
-            // network round trip, and it was running on every save, photo-only saves included.
-            if h.lowercased() != origHandle.lowercased(),
-               let existing = await ChatService.findByHandle(h), existing.id != AuthService.shared.uid {
-                error = "That username is taken"; saving = false; return
-            }
+            // NO PRE-CHECK. `updateProfile` claims the name in one server transaction when it has
+            // changed, which is the only test that can actually settle who gets it — a query here
+            // could only ever report what was true a round trip ago.
             // The photo goes first, and a failure stops here: closing over a photo that never landed
             // would tell you it saved when it did not.
             guard await applyPendingPhoto() else { saving = false; return }
             if hasUnsavedText { try await profile.updateProfile(name: n, handle: h, about: about) }
             dismiss()
         } catch {
-            self.error = "Could not save: \(error.localizedDescription)"
+            let msg = error.localizedDescription
+            self.error = msg.contains("username") || msg.contains("Username") ? msg : "Could not save: \(msg)"
         }
         saving = false
     }

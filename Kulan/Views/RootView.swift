@@ -453,19 +453,20 @@ struct OnboardingView: View {
         }
         saving = true; error = nil
         do {
-            // KEPT even though the field now checks live, and it is not redundant. The live check
-            // answers a question about a moment that has already passed: somebody else can claim
-            // the same name in the seconds between the tick appearing and Continue being pressed.
-            // This is the one that decides, and it runs against the server at the instant of the
-            // write. The live version is for the eyes; this is for correctness.
-            if let existing = await ChatService.findByHandle(h), existing.id != AuthService.shared.uid {
-                error = "That username was just taken. Try another."; saving = false; return
-            }
+            // NO PRE-CHECK ANY MORE. There used to be a findByHandle query here to catch somebody
+            // claiming the name in the seconds between the tick appearing and Continue being
+            // pressed — a real race, but a query can never close it, because two clients can both
+            // read "free" in the same millisecond. `claimUsername` settles it in ONE transaction on
+            // the server, so the query was buying a nicer sentence at the cost of a round trip and
+            // a false sense that it was the thing deciding.
             try await ProfileStore.shared.updateProfile(name: n, handle: h)
             await Crypto.shared.publishPublicKey()   // doc now exists — ensure key is live
             onDone()
         } catch {
-            self.error = "Could not save: \(error.localizedDescription)"
+            // The server's own words when it has any — "Sorry, this username is already taken." reads
+            // as an answer; "Could not save: ..." reads as the app breaking.
+            let msg = error.localizedDescription
+            self.error = msg.contains("username") || msg.contains("Username") ? msg : "Could not save: \(msg)"
         }
         saving = false
     }

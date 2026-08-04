@@ -1,0 +1,439 @@
+rules_version = '2';
+
+// Kulan Firestore security rules.
+// Only signed-in users; you can only read/write conversations you belong to.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Profiles: any signed-in user can look up a handle to start a chat,
+    // but you can only create/edit your OWN profile.
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == uid;
+      // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
+      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
+      // unwanted request and nothing else.
+      allow delete: if signedIn()
+        && request.auth.uid in resource.data.users
+        && resource.data.get('type', '') != 'group'
+        && resource.data.get('startedBy', '') != ''
+        && resource.data.get('accepted', false) == false;
+
+      // Story distribution lists ("My Status" + custom lists) and per-user seen state.
+      // Both are private to the owner.
+      match /storyLists/{listId} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+      match /storyContexts/{authorUid} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+
+      // Signed-in devices (Settings > Devices): one doc per phone, holding its model,
+      // iOS version, app version, first/last seen and its push tokens. Private to the
+      // owner in both directions - only you can see where you are signed in, and
+      // deleting a doc here is how you sign that device out.
+      match /devices/{deviceId} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+
+      // Which sticker packs you have added, and the order you keep them in. A subcollection
+      // rather than a field on the user doc precisely because any signed-in user can READ a
+      // user doc (handle lookup) - what stickers you use is nobody else's business.
+      match /stickers/{doc} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // Abuse reports (App Store Guideline 1.2 — users must be able to flag content
+    // and report abusive users). Any signed-in user can FILE a report; the reporter
+    // field must be themselves. No client can read, edit, or delete reports — the
+    // operator reviews them in the Firebase console and acts within 24 hours.
+    match /reports/{reportId} {
+      allow create: if signedIn() && request.auth.uid == request.resource.data.reporterUid;
+      allow read, update, delete: if false;
+    }
+
+    // Official sticker packs. Published by us and readable by everyone signed in; no client
+    // may ever write one. There is no in-app pack creator and there is not meant to be - that
+    // is exactly what keeps stickers free of moderation, reporting and takedowns. Packs are
+    // put here by the publisher script over the admin REST API, which bypasses these rules.
+    match /stickerPacks/{packId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // A conversation belongs to exactly two users.
+    match /conversations/{cid} {
+      function convData() {
+        return get(/databases/$(database)/documents/conversations/$(cid)).data;
+      }
+      // MESSAGE REQUESTS (owner spec, 2026-08-04). Two fields carry the whole thing: `startedBy`
+      // marks a conversation as belonging to the request era at all, and `accepted` says whether the
+      // other person has answered. A document with NO `startedBy` predates this and is fully open —
+      // without that, every chat anybody already had would become a pending request the moment these
+      // rules went live.
+      //
+      // THE CLIENT IS NOT THE ENFORCEMENT. It decides what the screen offers; these rules decide what
+      // the database accepts, and they hold against a patched client, which is the only version of a
+      // limit that means anything.
+      function isRequestPending() {
+        return resource.data.get('startedBy', '') != '' && resource.data.get('accepted', false) == false;
+      }
+      // The other party of a 1:1 being created.
+      function otherMember() {
+        return request.resource.data.users[0] == request.auth.uid
+          ? request.resource.data.users[1] : request.resource.data.users[0];
+      }
+      // "My Friends" means an accepted conversation already exists. At CREATE time none can, so a
+      // friends-only account simply cannot be opened by a stranger. Everyone is the default, and an
+      // unreadable or absent setting reads as Everyone rather than as a refusal.
+      // GUARDED BY exists(). A `get` on a document that is not there does not evaluate to null in
+      // rules, it ERRORS, and an error is not a `false` that the next `||` branch can recover from —
+      // it fails the whole expression. An account with no profile document reads as Everyone, which
+      // is the same direction every other unknown in this file leans.
+      function acceptsFromStrangers(u) {
+        return !exists(/databases/$(database)/documents/users/$(u))
+          || get(/databases/$(database)/documents/users/$(u)).data.get('privacy', {}).get('messages', 'everyone') != 'contacts';
+      }
+      allow read: if signedIn() && request.auth.uid in resource.data.users;
+      // 1:1 must be exactly 2; a group ("type":"group") may have 2–30 members and the
+      // creator must be in its admins list.
+      allow create: if signedIn()
+        && request.auth.uid in request.resource.data.users
+        && (
+          // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
+          // and evaluating the 1:1 branch would send it through a privacy lookup it has no business
+          // doing — and, when that lookup errors, deny a group that was perfectly legal.
+          (
+            request.resource.data.get('type', '') == 'group'
+            && request.resource.data.users.size() >= 2
+            && request.resource.data.users.size() <= 30
+            && request.auth.uid in request.resource.data.admins
+          )
+          || (
+            request.resource.data.users.size() == 2
+            && (request.auth.uid == otherMember() || acceptsFromStrangers(otherMember()))
+          )
+        );
+      // A member may update the conversation. Membership (`users`) can change ONLY when:
+      //   • it's unchanged as a SET (normal sends — the client rewrites order each send), OR
+      //   • a group ADMIN is making the change (add/remove/promote), OR
+      //   • a member is removing ONLY THEMSELVES (leaving the group).
+      // The set-equal branch preserves the original 1:1 behaviour exactly.
+      allow update: if signedIn() && request.auth.uid in resource.data.users
+        && (
+          // 1:1 ONLY (not a 2-member group): members unchanged as a SET, any field.
+          (
+            resource.data.get('type', '') != 'group'
+            && resource.data.users.size() == 2
+            && request.resource.data.users.hasAll(resource.data.users)
+            && resource.data.users.hasAll(request.resource.data.users)
+            && request.resource.data.users.size() == 2
+            // ONE MESSAGE, AND ONLY ONE. While a request is unanswered the person who sent it may
+            // no longer touch `lastSender`, `lastMessage` or `accepted` — which is what stops a
+            // second message (the message rule below reads `lastSender` to decide) and stops anyone
+            // accepting their own request. Their own housekeeping still works: they can still block,
+            // mute, archive or clear the thread they started.
+            && (
+              !isRequestPending()
+              || request.auth.uid != resource.data.get('lastSender', '')
+              || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                   'blockedBy', 'blockedAt', 'blockClearedAt', 'mutedBy', 'archivedBy',
+                   'pinnedBy', 'pinOrder', 'clearedAt', 'unreadCount', 'typing', 'lastRead'
+                 ])
+            )
+          )
+          // Group ADMIN may change anything (membership, title, admins) — but a NON-owner admin
+          // must keep the owner (createdBy) in BOTH admins and users. Only the owner can remove
+          // themselves, and that goes through the self-leave branch below.
+          || (resource.data.get('type', '') == 'group' && request.auth.uid in resource.data.admins
+              && (request.auth.uid == resource.data.get('createdBy', '')
+                  || (resource.data.get('createdBy', '') in request.resource.data.admins
+                      && resource.data.get('createdBy', '') in request.resource.data.users)))
+          // Group NON-admin member: members unchanged AND only send/per-user fields touched
+          // (cannot self-promote, rename, change type/createdBy, etc.).
+          || (
+            resource.data.get('type', '') == 'group'
+            && request.resource.data.users.hasAll(resource.data.users)
+            && resource.data.users.hasAll(request.resource.data.users)
+            && request.resource.data.users.size() == resource.data.users.size()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                 'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'updatedAt',
+                 'unreadCount', 'typing', 'lastRead', 'pinnedBy', 'mutedBy', 'archivedBy',
+                 'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt',
+                 'lastReactionEnc', 'lastReactionBy', 'lastReactionToAuthor', 'lastReactionAt',
+                 'names', 'photos', 'posters'
+               ])
+            // names/photos/posters are the per-member profile mirrors every chat list reads.
+            // A member may refresh THEIR OWN entry only — the map diff is pinned to their uid,
+            // so nobody can rewrite another member's name or face. Without this branch a plain
+            // member's profile-photo save was refused here, and because the app fanned it out in
+            // one atomic batch, one group refusal failed the save for every conversation.
+            && (!('names' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.get('names', {}).diff(resource.data.get('names', {})).affectedKeys().hasOnly([request.auth.uid]))
+            && (!('photos' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.get('photos', {}).diff(resource.data.get('photos', {})).affectedKeys().hasOnly([request.auth.uid]))
+            && (!('posters' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.get('posters', {}).diff(resource.data.get('posters', {})).affectedKeys().hasOnly([request.auth.uid]))
+          )
+          // Group NON-admin may EDIT INFO only when the admin enabled membersCanEditInfo.
+          || (
+            resource.data.get('type', '') == 'group'
+            && resource.data.get('membersCanEditInfo', false) == true
+            && request.resource.data.users.hasAll(resource.data.users)
+            && resource.data.users.hasAll(request.resource.data.users)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'avatarUrl', 'desc', 'updatedAt'])
+          )
+          // Group NON-admin may ADD members (only additions, max 30) when membersCanAdd is on.
+          || (
+            resource.data.get('type', '') == 'group'
+            && resource.data.get('membersCanAdd', false) == true
+            && request.resource.data.users.hasAll(resource.data.users)
+            && request.resource.data.users.size() > resource.data.users.size()
+            && request.resource.data.users.size() <= 30
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['users', 'names', 'photos', 'unreadCount', 'updatedAt'])
+          )
+          // Any group member may remove ONLY themselves (leave).
+          || (
+            resource.data.get('type', '') == 'group'
+            && resource.data.users.hasAll(request.resource.data.users)
+            && !(request.auth.uid in request.resource.data.users)
+            && resource.data.users.size() == request.resource.data.users.size() + 1
+          )
+        );
+      // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
+      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
+      // unwanted request and nothing else.
+      allow delete: if signedIn()
+        && request.auth.uid in resource.data.users
+        && resource.data.get('type', '') != 'group'
+        && resource.data.get('startedBy', '') != ''
+        && resource.data.get('accepted', false) == false;
+
+      // Messages: only the two members. Blocking is SILENT — a blocked person's
+      // message still writes (it looks "sent" to them), but the blocker's client
+      // hides it and the push function skips their notification. You may delete
+      // only your own message.
+      match /messages/{mid} {
+        allow read: if signedIn() && request.auth.uid in convData().users;
+        allow create: if signedIn()
+          && request.auth.uid == request.resource.data.authorId
+          && request.auth.uid in convData().users
+          // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
+          && (convData().get('onlyAdminsSend', false) == false
+              || request.auth.uid in convData().get('admins', []))
+          // A pending request carries ONE message. `lastSender` is empty until the request is sent,
+          // so the first message passes; after that only the RECIPIENT may write, and their reply is
+          // itself the acceptance. The requester's second attempt is refused here, by the database.
+          && (
+               convData().get('startedBy', '') == ''
+               || convData().get('accepted', false) == true
+               || convData().get('lastSender', '') == ''
+               || convData().get('lastSender', '') != request.auth.uid
+             )
+          // Restricted member (Telegram-style timed mute): a member whose restrictedFlags contains
+          // 'sendText' with restrictedUntil still in the future cannot create ANY message. Admins and
+          // the owner are ALWAYS exempt in-rule (so a rogue admin can't grief a co-admin/owner by
+          // writing a restriction for them). Auto-lifts when the timeout passes.
+          && (
+               request.auth.uid in convData().get('admins', [])
+               || request.auth.uid == convData().get('createdBy', '')
+               || !(
+                    'sendText' in convData().get('restrictedFlags', {}).get(request.auth.uid, [])
+                    && convData().get('restrictedUntil', {}).get(request.auth.uid, 0) > request.time.toMillis()
+                  )
+             );
+        // Participants may edit reactions; the AUTHOR may also edit their own text, and rewrite their
+        // own album array (deleting ONE album item for everyone = removing it from the album; the
+        // client deletes the whole message when the last item goes).
+        allow update: if signedIn()
+          && request.auth.uid in convData().users
+          && (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+            || (request.auth.uid == resource.data.authorId
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited']))
+            || (request.auth.uid == resource.data.authorId
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['album']))
+            // "Delete for Everyone": the AUTHOR may turn their own message into a tombstone -
+            // deleted:true, text emptied, type back to 'text', every content field REMOVED.
+            // The end state is pinned (no content key may remain and text/type are fixed), so
+            // this branch cannot be used to edit a message into anything except the marker.
+            // Without it the app's tombstone write was refused and fell back to a hard delete,
+            // so "deleted" messages vanished instead of leaving the placeholder.
+            || (request.auth.uid == resource.data.authorId
+                && request.resource.data.get('deleted', false) == true
+                && request.resource.data.get('text', '-') == ''
+                && request.resource.data.get('type', '-') == 'text'
+                && !request.resource.data.keys().hasAny(
+                     ['enc', 'imageUrl', 'videoUrl', 'thumbUrl', 'audioUrl', 'fileUrl', 'album',
+                      'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'linkPreview',
+                      'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
+                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded'])
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+                     ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
+                      'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
+                      'duration', 'blurhash', 'linkPreview', 'poll', 'locationCard',
+                      'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
+                      'viewOnce', 'mentions', 'forwarded']))
+          );
+        allow delete: if signedIn() && request.auth.uid == resource.data.authorId;
+
+        // Poll votes: one doc per voter (messages/{mid}/votes/{uid}). Any member may READ (to tally),
+        // but a voter may only write their OWN vote doc — no one can forge or overwrite another's vote.
+        // The poll's question/options stay E2EE in the message text; a vote is just option indices.
+        match /votes/{voter} {
+          allow read: if signedIn() && request.auth.uid in convData().users;
+          allow write: if signedIn() && request.auth.uid == voter && request.auth.uid in convData().users;
+        }
+      }
+
+      // Pending join requests from invite links. Created + resolved by the join/approve/deny Cloud
+      // Functions (admin SDK, which bypasses these rules); group members may READ to show the pending
+      // list. No direct client writes.
+      match /joinRequests/{ruid} {
+        allow read: if signedIn() && request.auth.uid in convData().users;
+        allow write: if false;
+      }
+    }
+
+    // Group invite links (code → group). Any signed-in user may READ one (to resolve a
+    // kulan://g/<code> deep link and preview the group before joining). Only an admin of the target
+    // group may create / edit (set expiry, usage limit, approval) / revoke it. The actual membership
+    // add is done by the joinGroupViaInvite Cloud Function (admin SDK), never by a client write here.
+    match /invites/{code} {
+      // GET only (you must already know the exact code) — NOT list, or any signed-in user could
+      // enumerate every group's invite/title/photo and mass-join.
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.cid is string
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(request.resource.data.cid)).data.admins;
+      allow update, delete: if signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(resource.data.cid)).data.admins;
+    }
+
+    // Group calls: a single coordination doc per group (active flag + who started). Any member
+    // of the conversation may read it (to show a "Join call" bar) and write it (start/end).
+    match /groupCalls/{cid} {
+      allow read, write: if signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.users;
+    }
+
+    // Calls: ephemeral WebRTC signaling (offer/answer + ICE candidates). Scoped to the
+    // TWO participants only — otherwise any signed-in user could read SDP/ICE (eavesdrop),
+    // inject candidates, force-end strangers' calls, or spoof caller-ID via the VoIP push.
+    match /calls/{callId} {
+      function parties() {
+        return get(/databases/$(database)/documents/calls/$(callId)).data;
+      }
+      allow read: if signedIn()
+        && (request.auth.uid == resource.data.caller || request.auth.uid == resource.data.callee);
+      allow create: if signedIn()
+        && request.auth.uid == request.resource.data.caller
+        && request.resource.data.callee is string
+        && request.resource.data.callee != request.auth.uid;
+      // Either party may update the call, but neither can change who's on it.
+      allow update: if signedIn()
+        && (request.auth.uid == resource.data.caller || request.auth.uid == resource.data.callee)
+        && request.resource.data.caller == resource.data.caller
+        && request.resource.data.callee == resource.data.callee;
+      // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
+      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
+      // unwanted request and nothing else.
+      allow delete: if signedIn()
+        && request.auth.uid in resource.data.users
+        && resource.data.get('type', '') != 'group'
+        && resource.data.get('startedBy', '') != ''
+        && resource.data.get('accepted', false) == false;
+      match /{sub}/{candidate} {
+        allow read, write: if signedIn()
+          && (request.auth.uid == parties().caller || request.auth.uid == parties().callee);
+      }
+    }
+
+    // Stories: ephemeral 24h photo status. Audience is enforced by recipientUids
+    // (rules-protected, not E2EE in v1). A scheduled function deletes them at 24h.
+    match /stories/{storyId} {
+      function storyData() {
+        return get(/databases/$(database)/documents/stories/$(storyId)).data;
+      }
+      // Only the author or someone in the audience can read a story — PLUS "Everyone" (public)
+      // stories, which any signed-in user may read (they surface from the author's profile to
+      // anyone who finds them). The profile query filters on `public == true`; the DIRECT
+      // `resource.data.public == true` form (not .get(...)) is what lets that query validate. It's
+      // safe: only the public-filtered query reaches this clause (author/recipient reads short-circuit
+      // on the clauses above), so a doc lacking the field never evaluates it, and all new stories
+      // write the field anyway.
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.authorUid
+        || request.auth.uid in resource.data.recipientUids
+        || resource.data.public == true
+      );
+      allow create: if signedIn()
+        && request.auth.uid == request.resource.data.authorUid
+        && request.resource.data.recipientUids.size() <= 1000   // limit fan-out abuse
+        // Kill "immortal stories": expiry must be within ~30h of now (client sets +24h; the
+        // margin tolerates device-clock skew). Blocks a hostile client from setting expiresAt
+        // years out so cleanupStories never collects it.
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt < request.time + duration.value(30, 'h')
+        // Pin mediaPath to THIS story's own folder. Defense-in-depth: onStoryDeleted already ignores
+        // the client field, but this stops a hostile client even writing a foreign path.
+        // Type must match the path: photo stories point at photo.jpg, video stories at video.mp4
+        // (a lying type would only break the author's own story, but keep the pair consistent).
+        && ((request.resource.data.type == 'video'
+             && request.resource.data.mediaPath == 'stories/' + storyId + '/video.mp4')
+            || (request.resource.data.type != 'video'
+             && request.resource.data.mediaPath == 'stories/' + storyId + '/photo.jpg'));
+      // Author-only, and the identity + lifetime fields are IMMUTABLE. The old rule pinned
+      // nothing, so an author could rewrite authorUid to impersonate a victim (every recipient
+      // then renders the victim's name/photo on the attacker's image) or push expiresAt out to
+      // never expire. mediaUrl/caption/replyCount stay mutable (mediaUrl is filled in after the
+      // upload; those don't enable impersonation or immortality).
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.authorUid
+        && request.resource.data.authorUid == resource.data.authorUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.recipientUids == resource.data.recipientUids
+        && request.resource.data.mediaPath == resource.data.mediaPath
+        // type is pinned with the path (they were validated as a pair at create).
+        && request.resource.data.type == resource.data.type;
+      allow delete: if signedIn() && request.auth.uid == resource.data.authorUid;
+
+      // A recipient records they viewed it; the author can read the viewer list.
+      match /views/{viewerUid} {
+        allow read: if signedIn() && (
+          request.auth.uid == storyData().authorUid
+          || request.auth.uid == viewerUid
+        );
+        // Only `viewedAt` + a short `reaction` string may be written — no injected fields, no
+        // unbounded/junk reaction (the receipt-spoofing hole).
+        function validReceipt() {
+          return request.resource.data.keys().hasOnly(['viewedAt', 'reaction'])
+            && (!('reaction' in request.resource.data)
+                || (request.resource.data.reaction is string && request.resource.data.reaction.size() <= 16));
+        }
+        allow create: if signedIn()
+          && request.auth.uid == viewerUid
+          && request.auth.uid in storyData().recipientUids
+          && validReceipt();
+        allow update: if signedIn() && request.auth.uid == viewerUid && validReceipt();  // set/clear reaction
+        // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
+      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
+      // unwanted request and nothing else.
+      allow delete: if signedIn()
+        && request.auth.uid in resource.data.users
+        && resource.data.get('type', '') != 'group'
+        && resource.data.get('startedBy', '') != ''
+        && resource.data.get('accepted', false) == false;
+      }
+    }
+  }
+}
+
+
