@@ -57,8 +57,11 @@ struct AnnouncementAdminView: View {
                         HStack {
                             Label("Update Link", systemImage: "arrow.down.app")
                             Spacer()
+                            // Both branches spelled as Color. A bare `.secondary` is a
+                            // HierarchicalShapeStyle and `.red` is a Color, so the ternary has no
+                            // common type and the compiler says so at length.
                             Text(config.hasAppStoreUrl ? "Set" : "Not set")
-                                .foregroundStyle(config.hasAppStoreUrl ? .secondary : .red)
+                                .foregroundStyle(config.hasAppStoreUrl ? Color.secondary : Color.red)
                         }
                     }
                 } header: {
@@ -175,7 +178,7 @@ private struct AnnouncementDetailView: View {
             } footer: {
                 // Say plainly what this number is and is not, because "read receipts" in a messenger
                 // normally means names, and here it deliberately never can.
-                Text("How many people have opened this announcement. Names are never recorded for a broadcast — only a count.")
+                Text("How many people have opened this announcement. For a broadcast only the count is recorded, never who.")
             }
 
             if admin.can(.edit) || admin.can(.remove) {
@@ -285,8 +288,8 @@ struct AnnouncementComposeView: View {
             "kind": draft.kind.rawValue,
             "title": draft.title.isEmpty ? "Title" : draft.title,
             "body": draft.body.isEmpty ? "Your message goes here." : draft.body,
-            "buttons": draft.buttons.filter(\.isUsable).map(\.map),
-            "audience": draft.audience.map,
+            "buttons": draft.buttons.filter(\.isUsable).map(\.asMap),
+            "audience": draft.audience.asMap,
             "publishAt": Timestamp(date: draft.publishAt),
         ]
         if let url = draft.mediaUrl { map["mediaUrl"] = url }
@@ -491,7 +494,7 @@ struct AnnouncementComposeView: View {
             // has a phone number, so the only country we know is the one the phone is set to.
             return "Matched against the country each phone is set to. People who have their phone set to another country will not see it."
         case .chosen:
-            return "A private copy for each person. Use this for testing before a real send."
+            return "A private copy for each person, and nobody else can read it. Use this to test an announcement on yourself before it goes to everybody."
         }
     }
 
@@ -631,20 +634,21 @@ private struct AnnouncementAudienceView: View {
 
     /// Regions the phone can name, sorted by name. Not a hardcoded list: the system already knows
     /// every country and how to spell it in the reader's language.
-    private var allCountries: [Country] {
-        Locale.Region.isoRegions
-            .filter { $0.subRegions.isEmpty }   // real countries, not continents
-            .compactMap { r in
-                guard let name = Locale.current.localizedString(forRegionCode: r.identifier) else { return nil }
-                return Country(code: r.identifier, name: name)
-            }
-            .sorted { $0.name < $1.name }
-    }
+    ///
+    /// Built ONCE. As a computed property this ran on every body evaluation, which means roughly
+    /// three hundred locale lookups and a sort on every single keystroke in the search field below.
+    private static let allCountries: [Country] = Locale.Region.isoRegions
+        .filter { $0.subRegions.isEmpty }   // real countries, not continents
+        .compactMap { r in
+            guard let name = Locale.current.localizedString(forRegionCode: r.identifier) else { return nil }
+            return Country(code: r.identifier, name: name)
+        }
+        .sorted { $0.name < $1.name }
 
     private var filteredCountries: [Country] {
         let q = countrySearch.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return allCountries }
-        return allCountries.filter { $0.name.lowercased().contains(q) }
+        guard !q.isEmpty else { return Self.allCountries }
+        return Self.allCountries.filter { $0.name.lowercased().contains(q) }
     }
 
     var body: some View {

@@ -158,7 +158,7 @@ enum AnnouncementAdmin {
         /// ids onto a document the whole world reads would publish exactly the thing a private send
         /// is meant to keep private.
         func map(createdBy: String, editing: Bool) -> [String: Any] {
-            var audienceMap = audience.map
+            var audienceMap = audience.asMap
             audienceMap["chosenCount"] = chosen.count
             if let minBuildOverride { audienceMap["minBuild"] = minBuildOverride }
 
@@ -166,7 +166,7 @@ enum AnnouncementAdmin {
                 "kind": kind.rawValue,
                 "title": title.trimmingCharacters(in: .whitespacesAndNewlines),
                 "body": body.trimmingCharacters(in: .whitespacesAndNewlines),
-                "buttons": buttons.filter(\.isUsable).map(\.map),
+                "buttons": buttons.filter(\.isUsable).map(\.asMap),
                 "audience": audienceMap,
                 "publishAt": Timestamp(date: publishAt),
                 "deleted": false,
@@ -194,12 +194,27 @@ enum AnnouncementAdmin {
 
     // MARK: Publish
 
+    /// Where an announcement's record lives depends on who it is for, and the split is a PRIVACY
+    /// boundary, not a filing preference.
+    ///
+    /// `announcements` is read by every phone on earth, which is the whole trick that makes a
+    /// broadcast cost one write. A send to CHOSEN PEOPLE must never be written there: the words would
+    /// be readable by anybody who queries the collection, which is the exact opposite of what picking
+    /// three people by name means. (Marking it `scope: chosen` and filtering on the phone hides it
+    /// from the app and from nobody else.)
+    ///
+    /// So a chosen send writes a private copy per recipient plus ONE admin-only record in
+    /// `announcementLog`, which is also the only place the recipient list is ever stored — and it has
+    /// to be stored, or a withdrawal has no way to reach the copies it needs to strike.
+    private static func collection(for scope: AnnouncementAudience.Scope) -> String {
+        scope == .chosen ? "announcementLog" : "announcements"
+    }
+
     /// Writes the announcement, and for a chosen send, one copy per recipient.
     ///
-    /// The copies are written in a batch so a half-delivered announcement is not a state that can
-    /// exist. Firestore caps a batch at 500 writes, so a longer list is split — and the broadcast
-    /// document goes in the FIRST batch, because if a later batch fails the admin history must still
-    /// show the announcement that partly went out rather than losing it.
+    /// The copies are written in batches because Firestore caps a batch at 500 writes. The record
+    /// goes first, so a later batch failing leaves an announcement that partly went out visible in
+    /// the history rather than lost.
     static func publish(_ draft: Draft, editing: Bool = false) async throws {
         guard let uid = AuthService.shared.uid else { throw AdminError.notAllowed("Sign in first.") }
         let store = AdminStore.shared
@@ -226,15 +241,23 @@ enum AnnouncementAdmin {
             draft.mediaHeight = h
         }
 
-        let doc = db.collection("announcements").document(draft.id)
         let payload = draft.map(createdBy: uid, editing: editing)
-        try await doc.setData(payload, merge: editing)
+        let home = collection(for: draft.audience.scope)
 
-        guard draft.audience.scope == .chosen else { return }
+        guard draft.audience.scope == .chosen else {
+            try await db.collection(home).document(draft.id).setData(payload, merge: editing)
+            return
+        }
+
+        // The admin-only record, carrying the recipient list so this can be taken back later.
+        var record = payload
+        record["recipients"] = draft.chosen.map(\.id)
+        try await db.collection(home).document(draft.id).setData(record, merge: editing)
 
         // The personal copies. `createdAt` cannot be a server timestamp on these: the phone sorts the
         // chat by it, and a pending server timestamp reads as nil, which would put a brand-new
-        // announcement at the very bottom of the channel until the write came back.
+        // announcement at the very bottom of the channel until the write came back. The recipient
+        // list is stripped — nobody needs to know who else was sent this.
         var copy = payload
         copy["createdAt"] = Timestamp(date: Date())
         copy["publishAt"] = Timestamp(date: draft.publishAt)
@@ -254,14 +277,17 @@ enum AnnouncementAdmin {
     /// Takes an announcement back. A tombstone rather than a hard delete, because a phone that is
     /// offline right now has the old copy and will only ever learn the announcement is gone from a
     /// document that still exists to tell it so.
-    static func remove(_ a: Announcement, chosen: [String] = []) async throws {
+    static func remove(_ a: Announcement) async throws {
         guard AdminStore.shared.can(.remove) else {
             throw AdminError.notAllowed("You cannot delete announcements.")
         }
-        try await db.collection("announcements").document(a.id)
+        try await db.collection(collection(for: a.audience.scope)).document(a.id)
             .setData(["deleted": true, "deletedAt": FieldValue.serverTimestamp()], merge: true)
 
-        for chunk in chosen.chunked(into: 400) {
+        // A chosen send has no shared document for a phone to read, so the tombstone above reaches
+        // nobody on its own. The recipient list on the admin-only record is what makes withdrawing
+        // one of these possible at all — see the note on `collection(for:)`.
+        for chunk in a.recipients.chunked(into: 400) {
             let batch = db.batch()
             for uid in chunk {
                 let ref = db.collection("users").document(uid).collection("announcements").document(a.id)
@@ -292,11 +318,20 @@ enum AnnouncementAdmin {
     // MARK: Reading, for the admin screens
 
     /// Everything, including scheduled, expired and deleted ones — the opposite of what a phone sees.
+    /// Both homes, merged: broadcasts from `announcements` and chosen sends from `announcementLog`.
     static func history(limit: Int = 60) async -> [Announcement] {
-        let snap = try? await db.collection("announcements")
-            .order(by: "publishAt", descending: true)
-            .limit(to: limit).getDocuments()
-        return (snap?.documents ?? []).map { Announcement(id: $0.documentID, data: $0.data()) }
+        async let broadcasts = db.collection("announcements")
+            .order(by: "publishAt", descending: true).limit(to: limit).getDocuments()
+        async let chosen = db.collection("announcementLog")
+            .order(by: "publishAt", descending: true).limit(to: limit).getDocuments()
+
+        let a = (try? await broadcasts)?.documents ?? []
+        let b = (try? await chosen)?.documents ?? []
+        return (a + b)
+            .map { Announcement(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.sortAt > $1.sortAt }
+            .prefix(limit)
+            .map { $0 }
     }
 
     static func admins() async -> [AdminRecord] {

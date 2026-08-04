@@ -34,7 +34,7 @@ struct OfficialChatView: View {
             .background(NavTitleView(onTap: {}) { headerLabel })
             .toolbar(.hidden, for: .tabBar)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbar }
+            .toolbar { officialToolbar }
             .navigationDestination(item: $pushedScreen) { screen in
                 switch screen {
                 case .appearance:    AppearanceSettingsView()
@@ -142,7 +142,10 @@ struct OfficialChatView: View {
         }
     }
 
-    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+    /// Not named `toolbar`: `.toolbar { toolbar }` reads a property with the same name as the
+    /// modifier it is being handed to, which is exactly the kind of thing the type-checker resolves
+    /// differently on a bad day.
+    @ToolbarContentBuilder private var officialToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             // The bell IS the state, the way Signal's screenshot shows it: a struck-through bell means
             // this chat is quiet. It starts struck through for everybody and stays that way unless

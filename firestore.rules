@@ -131,6 +131,18 @@ service cloud.firestore {
       allow delete: if adminIsOwner() && resource.data.get('role', '') == 'admin';
     }
 
+    // A send to CHOSEN PEOPLE never touches /announcements. The words would be readable by anybody
+    // who queries that collection, which is the opposite of what picking three people by name means -
+    // and marking it "chosen" and filtering on the phone would hide it from the app and from nobody
+    // else. Its record lives here instead, admin-only, and this is also the ONLY place the recipient
+    // list is stored. It has to be stored somewhere: withdrawing one of these has to reach every
+    // private copy, and without the list there is nothing to reach.
+    match /announcementLog/{id} {
+      allow read: if isAdmin();
+      allow create, update: if adminCan('targetChosen');
+      allow delete: if false;
+    }
+
     match /announcements/{id} {
       // Everything here is a public broadcast, so every signed-in phone may read it. That also means
       // a SCHEDULED announcement is on the server, readable, from the moment it is written - the same
@@ -155,7 +167,10 @@ service cloud.firestore {
       function withinPermissions() {
         return (request.resource.data.get('kind', '') != 'security' || adminCan('security'))
           && (request.resource.data.audience.get('scope', '') != 'countries' || adminCan('targetCountry'))
-          && (request.resource.data.audience.get('scope', '') != 'chosen' || adminCan('targetChosen'));
+          // A chosen send is REFUSED here outright, by anybody, including the owner. This collection
+          // is world-readable, so putting one here would publish it - the privacy boundary is
+          // enforced by this line rather than by the app remembering to use the other collection.
+          && request.resource.data.audience.get('scope', '') != 'chosen';
       }
       // Taking one back is a TOMBSTONE, never a real delete: a phone that is offline right now holds
       // the old copy and can only learn the announcement is gone from a document that still exists to

@@ -163,7 +163,10 @@ struct AnnouncementButton: Equatable, Identifiable {
         l.label == r.label && l.action == r.action && l.value == r.value
     }
 
-    var map: [String: Any] { ["label": label, "action": action.rawValue, "value": value] }
+    /// Named `asMap`, not `map`: `buttons.map(\.map)` is a key path called `map` handed to a method
+    /// called `map`, which is legal and awful to read and exactly where a confusing type-check error
+    /// comes from.
+    var asMap: [String: Any] { ["label": label, "action": action.rawValue, "value": value] }
 
     init(label: String, action: Action, value: String) {
         self.label = label
@@ -221,7 +224,7 @@ struct AnnouncementAudience: Equatable {
     /// world. The copies under each recipient are the only record.
     var chosenCount: Int = 0
 
-    var map: [String: Any] {
+    var asMap: [String: Any] {
         ["scope": scope.rawValue, "countries": countries, "ppm": ppm,
          "minBuild": minBuild, "chosenCount": chosenCount]
     }
@@ -272,6 +275,10 @@ struct Announcement: Identifiable, Equatable {
     /// personally and must not re-run the country / rollout filters (it already passed them: a human
     /// chose it).
     var isPersonal: Bool = false
+    /// Who a chosen send went to. Present ONLY on the admin-only record in `announcementLog`, never
+    /// on anything a phone can read, and it exists for one reason: taking the announcement back. A
+    /// withdrawal has to reach every private copy, and without the list there is nothing to reach.
+    var recipients: [String] = []
 
     init(id: String, data: [String: Any], personal: Bool = false) {
         self.id = id
@@ -290,6 +297,7 @@ struct Announcement: Identifiable, Equatable {
         self.createdBy = data["createdBy"] as? String ?? ""
         self.createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date.distantPast
         self.isPersonal = personal
+        self.recipients = data["recipients"] as? [String] ?? []
     }
 
     /// One-line version for the chat list. Deliberately the TITLE, not the body: a release note opens
@@ -349,6 +357,10 @@ extension Announcement {
 /// (`setMuted(Long.MAX_VALUE)` on Android, `alwaysMutedTimestamp` on iOS) and the promise in the
 /// welcome message — "we are here to share important updates, not spam your notifications" — is only
 /// true if the mute is real before anybody touches anything.
+/// Document shape, for reference when reading the writers below:
+/// `{ muted: Bool, blocked: Bool, pinned: Bool, archived: Bool, lastReadAt: ms, clearedAt: ms }`.
+/// Every setter writes ONE field with `merge: true` rather than the whole document, so two settings
+/// changed on two devices in the same second cannot overwrite each other.
 struct OfficialChannelState: Equatable {
     var muted: Bool = true
     var blocked: Bool = false
@@ -357,11 +369,6 @@ struct OfficialChannelState: Equatable {
     var lastReadAtMillis: Double = 0
     /// Delete-for-me watermark, same idea as a normal chat's `clearedAt`.
     var clearedAtMillis: Double = 0
-
-    var map: [String: Any] {
-        ["muted": muted, "blocked": blocked, "pinned": pinned, "archived": archived,
-         "lastReadAt": lastReadAtMillis, "clearedAt": clearedAtMillis]
-    }
 
     init() {}
 
