@@ -117,6 +117,20 @@ service cloud.firestore {
           || (
             request.resource.data.users.size() == 2
             && (request.auth.uid == otherMember() || acceptsFromStrangers(otherMember()))
+            // EVERY NEW 1:1 IS BORN AS A REQUEST, and the database is what says so.
+            //
+            // Without this there was a way around the whole feature: the media send paths touch the
+            // conversation with a merge write carrying only `users` and `updatedAt`, which CREATES
+            // the document when it is missing — and a document with no `startedBy` reads as one from
+            // before requests existed, so it was exempt from the one-message limit. The real app
+            // cannot reach that (every route into a chat runs openConversation first), but "the
+            // client would never do that" is not enforcement.
+            //
+            // COST, accepted deliberately by the owner 2026-08-04: a client that does not write
+            // these two fields cannot start a NEW chat. Build 455 and earlier are such clients.
+            // Their existing conversations are untouched.
+            && request.resource.data.get('startedBy', '') == request.auth.uid
+            && request.resource.data.get('accepted', true) == false
           )
         );
       // A member may update the conversation. Membership (`users`) can change ONLY when:
@@ -151,6 +165,18 @@ service cloud.firestore {
                    'accepted', 'startedBy'
                  ])
             )
+            // ACCEPTED IS A ONE-WAY DOOR, and `startedBy` never changes once written.
+            //
+            // `openConversation` decides whether a conversation is new by reading it first, and on a
+            // fresh install with no cache and no network that read comes back empty for a chat that
+            // exists perfectly well on the server. It would then seed `accepted: false` over an
+            // accepted conversation and turn a real friendship back into a pending request, days
+            // later, when the queued write finally landed. Cheap to prevent here, and impossible to
+            // notice in testing.
+            && !(resource.data.get('accepted', false) == true
+                 && request.resource.data.get('accepted', true) == false)
+            && (resource.data.get('startedBy', '') == ''
+                || request.resource.data.get('startedBy', '') == resource.data.startedBy)
           )
           // Group ADMIN may change anything (membership, title, admins) — but a NON-owner admin
           // must keep the owner (createdBy) in BOTH admins and users. Only the owner can remove

@@ -152,51 +152,8 @@ struct StoryVideoEditorView: View {
                 let cardH = geo.size.height - cardTop - cardBottomGap
                 canvas(geo: geo, cardTop: cardTop, cardH: cardH)
 
-                // Top controls: X (left), trim notice + mute (right). ALL OF IT HIDES WHILE THE PEN
-                // IS DOWN and comes back when the finger lifts — his instruction on the photo editor,
-                // and the same rule has to hold here or the two screens behave differently.
-                VStack {
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .shadow(color: .black.opacity(0.35), radius: 2)
-                                .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
-                        }
-                        Spacer()
-                        // NOTHING IS THROWN AWAY ANY MORE, so the notice stopped being a warning and
-                        // became a fact: a long video posts as several stories that play one after
-                        // another. It used to read "First 30s will be shared", which was the app
-                        // telling you it was about to discard the rest.
-                        if segmentCount > 1 {
-                            Text("Posts as \(segmentCount) stories")
-                                .font(.footnote.weight(.medium)).foregroundStyle(.primary)
-                                .padding(.horizontal, 12).frame(height: 32)
-                                .liquidGlass(Capsule())
-                        }
-                        Button { muted.toggle(); player.isMuted = muted } label: {
-                            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
-                        }
-                    }
-                    .padding(.horizontal, 16).padding(.top, max(windowSafeTop - 22, 10))
-                    Spacer()
-                }
-                .ignoresSafeArea(.keyboard, edges: .bottom)
-                .opacity(strokeInFlight ? 0 : 1)
-
-                // Bottom bar — caption + NEXT, lifted manually above the keyboard (photo-editor math).
-                VStack {
-                    Spacer()
-                    if isDrawing { penBar } else { bottomBar }
-                        .padding(.bottom, keyboard.height > 0
-                            ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
-                            : -14)
-                }
-                .opacity(strokeInFlight ? 0 : 1)
-
+                topControls
+                bottomStack(geo: geo)
                 cropOverlay
             }
             .coordinateSpace(name: "canvas")
@@ -265,6 +222,63 @@ struct StoryVideoEditorView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
         .onDisappear { player.pause() }
+    }
+
+    /// X on the left, the split notice and mute on the right.
+    ///
+    /// ALL OF IT HIDES WHILE THE PEN IS DOWN and comes back when the finger lifts — his instruction
+    /// on the photo editor, and the same rule has to hold here or the two screens behave differently.
+    ///
+    /// Out of `body` for the same reason `canvas` is: this file hit "unable to type-check this
+    /// expression in reasonable time" twice, and naming a piece is the cure both times.
+    private var topControls: some View {
+        VStack {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .shadow(color: .black.opacity(0.35), radius: 2)
+                        .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
+                }
+                Spacer()
+                // NOTHING IS THROWN AWAY ANY MORE, so the notice stopped being a warning and became a
+                // fact: a long video posts as several stories that play one after another. It used to
+                // read "First 30s will be shared", which was the app telling you it was about to
+                // discard the rest.
+                if segmentCount > 1 {
+                    Text("Posts as \(segmentCount) stories")
+                        .font(.footnote.weight(.medium)).foregroundStyle(.primary)
+                        .padding(.horizontal, 12).frame(height: 32)
+                        .liquidGlass(Capsule())
+                }
+                Button { muted.toggle(); player.isMuted = muted } label: {
+                    Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, max(windowSafeTop - 22, 10))
+            Spacer()
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .opacity(strokeInFlight ? 0 : 1)
+    }
+
+    /// The caption bar and NEXT, or the pen palette while drawing, lifted manually above the keyboard
+    /// with the photo editor's own measurement.
+    private func bottomStack(geo: GeometryProxy) -> some View {
+        let lift = keyboard.height > 0
+            ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
+            : -14
+        return VStack {
+            Spacer()
+            Group {
+                if isDrawing { penBar } else { bottomBar }
+            }
+            .padding(.bottom, lift)
+        }
+        .opacity(strokeInFlight ? 0 : 1)
     }
 
     /// THE CANVAS: the wash, the looping clip, the text, the pen and the play mark.
