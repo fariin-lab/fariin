@@ -147,100 +147,7 @@ struct StoryVideoEditorView: View {
                 let cardTop: CGFloat = 8
                 let cardBottomGap: CGFloat = 44
                 let cardH = geo.size.height - cardTop - cardBottomGap
-                if cardH > 0 {
-                    // Muted wash behind the video — poster frame, same recipe as the photo editor.
-                    if let thumbnail {
-                        Image(uiImage: thumbnail).resizable().scaledToFill()
-                            .frame(width: geo.size.width, height: cardH)
-                            .blur(radius: 90, opaque: true)
-                            .saturation(0.4)
-                            .overlay(Color.black.opacity(0.4))
-                            .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
-                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                            .allowsHitTesting(false)
-                    } else {
-                        RoundedRectangle(cornerRadius: 40, style: .continuous)
-                            .fill(Color(white: 0.08))
-                            .frame(width: geo.size.width, height: cardH)
-                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                    }
-                    // The looping video, aspect-fit, contained in the card.
-                    //
-                    // PINCH ZOOMS IT (owner 2026-08-04). The scale lives on the player view and the
-                    // mask stays put, so the video grows INSIDE the card instead of spilling over its
-                    // rounded edge. Springs back if you pinch below 1, and 4x is as far in as a story
-                    // is worth going.
-                    LoopingPlayerView(player: player)
-                        .frame(width: geo.size.width, height: cardH)
-                        .scaleEffect(zoom)
-                        .mask {
-                            RoundedRectangle(cornerRadius: 40, style: .continuous)
-                                .frame(width: geo.size.width, height: cardH)
-                        }
-                        .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { v in zoom = min(4, max(0.9, baseZoom * v)) }
-                                .onEnded { _ in
-                                    baseZoom = max(1, zoom)
-                                    if zoom < 1 { withAnimation(.snappy(duration: 0.25)) { zoom = 1 } }
-                                }
-                        )
-                        // Tap puts the keyboard away if it is up, otherwise it plays and pauses —
-                        // the caption always wins, because a tap meant for dismissing a keyboard
-                        // should never also stop the video.
-                        .onTapGesture {
-                            if captionFocused { captionFocused = false } else { togglePlay() }
-                        }
-
-                    // WHAT HE DREW, over the video. The same overlay views and the same transforms
-                    // the photo editor uses, so text placed on a clip sits where text placed on a
-                    // picture sits, and `videoBurnIn` re-renders this exact arrangement at export.
-                    ForEach($overlays) { $o in
-                        TextOverlayView(
-                            overlay: $o,
-                            isSelected: selectedID == o.id,
-                            canvasSize: canvasSize,
-                            interactive: !isDrawing && editingID == nil,
-                            onTap: { selectedID = o.id; editingID = o.id },
-                            onDragChange: { _ in },
-                            onDragEnd: { _ in },
-                            onSnap: { _, _ in }
-                        )
-                        .opacity(editingID == o.id ? 0 : 1)
-                    }
-
-                    if isDrawing {
-                        DrawingCanvas(drawing: $drawing, isActive: true,
-                                      penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
-                                      showsToolPicker: false,
-                                      inkType: isHighlighter ? .marker : .pen,
-                                      penWidth: penWidth,
-                                      onStroke: { live in
-                                          withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = live }
-                                      })
-                            .frame(width: geo.size.width, height: cardH)
-                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                    } else if !drawing.bounds.isEmpty {
-                        Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
-                            .resizable()
-                            .frame(width: geo.size.width, height: cardH)
-                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                            .allowsHitTesting(false)
-                    }
-
-                    // The play mark, only while paused, exactly as his reference draws it.
-                    if !playing {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 34))
-                            .foregroundStyle(.white)
-                            .frame(width: 84, height: 84)
-                            .background(Color.black.opacity(0.45), in: Circle())
-                            .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                    }
-                }
+                canvas(geo: geo, cardTop: cardTop, cardH: cardH)
 
                 // Top controls: X (left), trim notice + mute (right). ALL OF IT HIDES WHILE THE PEN
                 // IS DOWN and comes back when the finger lifts — his instruction on the photo editor,
@@ -355,6 +262,108 @@ struct StoryVideoEditorView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
         .onDisappear { player.pause() }
+    }
+
+    /// THE CANVAS: the wash, the looping clip, the text, the pen and the play mark.
+    ///
+    /// Lifted out of `body` because the type-checker gave up on it — "unable to type-check this
+    /// expression in reasonable time" is what a SwiftUI ZStack says when it has grown one branch too
+    /// many, and the cure is to name a piece of it rather than to simplify what it draws.
+    @ViewBuilder private func canvas(geo: GeometryProxy, cardTop: CGFloat, cardH: CGFloat) -> some View {
+        if cardH > 0 {
+            // Muted wash behind the video — poster frame, same recipe as the photo editor.
+            if let thumbnail {
+                Image(uiImage: thumbnail).resizable().scaledToFill()
+                    .frame(width: geo.size.width, height: cardH)
+                    .blur(radius: 90, opaque: true)
+                    .saturation(0.4)
+                    .overlay(Color.black.opacity(0.4))
+                    .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    .allowsHitTesting(false)
+            } else {
+                RoundedRectangle(cornerRadius: 40, style: .continuous)
+                    .fill(Color(white: 0.08))
+                    .frame(width: geo.size.width, height: cardH)
+                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+            }
+            // The looping video, aspect-fit, contained in the card.
+            //
+            // PINCH ZOOMS IT (owner 2026-08-04). The scale lives on the player view and the
+            // mask stays put, so the video grows INSIDE the card instead of spilling over its
+            // rounded edge. Springs back if you pinch below 1, and 4x is as far in as a story
+            // is worth going.
+            LoopingPlayerView(player: player)
+                .frame(width: geo.size.width, height: cardH)
+                .scaleEffect(zoom)
+                .mask {
+                    RoundedRectangle(cornerRadius: 40, style: .continuous)
+                        .frame(width: geo.size.width, height: cardH)
+                }
+                .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { v in zoom = min(4, max(0.9, baseZoom * v)) }
+                        .onEnded { _ in
+                            baseZoom = max(1, zoom)
+                            if zoom < 1 { withAnimation(.snappy(duration: 0.25)) { zoom = 1 } }
+                        }
+                )
+                // Tap puts the keyboard away if it is up, otherwise it plays and pauses —
+                // the caption always wins, because a tap meant for dismissing a keyboard
+                // should never also stop the video.
+                .onTapGesture {
+                    if captionFocused { captionFocused = false } else { togglePlay() }
+                }
+
+            // WHAT HE DREW, over the video. The same overlay views and the same transforms
+            // the photo editor uses, so text placed on a clip sits where text placed on a
+            // picture sits, and `videoBurnIn` re-renders this exact arrangement at export.
+            ForEach($overlays) { $o in
+                TextOverlayView(
+                    overlay: $o,
+                    isSelected: selectedID == o.id,
+                    canvasSize: canvasSize,
+                    interactive: !isDrawing && editingID == nil,
+                    onTap: { selectedID = o.id; editingID = o.id },
+                    onDragChange: { _ in },
+                    onDragEnd: { _ in },
+                    onSnap: { _, _ in }
+                )
+                .opacity(editingID == o.id ? 0 : 1)
+            }
+
+            if isDrawing {
+                DrawingCanvas(drawing: $drawing, isActive: true,
+                              penColor: penHue == 0 ? .white : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                              showsToolPicker: false,
+                              inkType: isHighlighter ? .marker : .pen,
+                              penWidth: penWidth,
+                              onStroke: { live in
+                                  withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = live }
+                              })
+                    .frame(width: geo.size.width, height: cardH)
+                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+            } else if !drawing.bounds.isEmpty {
+                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
+                    .resizable()
+                    .frame(width: geo.size.width, height: cardH)
+                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    .allowsHitTesting(false)
+            }
+
+            // The play mark, only while paused, exactly as his reference draws it.
+            if !playing {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.white)
+                    .frame(width: 84, height: 84)
+                    .background(Color.black.opacity(0.45), in: Circle())
+                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
     }
 
     private var bottomBar: some View {
