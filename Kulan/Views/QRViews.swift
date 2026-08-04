@@ -5,7 +5,11 @@ import CoreImage.CIFilterBuiltins
 
 // Share-my-handle QR + a scanner — the main way two anonymous users connect in person.
 
-private func fariinLink(_ handle: String) -> String { "kulan://u/\(handle)" }
+// An https link, so a phone WITHOUT Fariin that scans this code still lands somewhere real
+// instead of showing "Safari cannot open the page because the address is invalid". Camera.app
+// reads it as a normal web link, and on a phone that does have the app, the Universal Link
+// hands it straight over.
+private func fariinLink(_ handle: String) -> String { KulanApp.userLink(handle: handle) }
 
 private func qrImage(from string: String) -> UIImage? {
     let filter = CIFilter.qrCodeGenerator()
@@ -88,14 +92,20 @@ struct ScanQRView: View {
 
     private func resolve(_ code: String) {
         guard !handling else { return }
-        guard let url = URL(string: code), url.scheme == "kulan", url.host == "u" else {
+        // THE SAME PARSER THE APP OPENS LINKS WITH, deliberately. This used to test for
+        // `scheme == "kulan"` by hand, and the moment the printed code above became an https
+        // link that hand-written test would have rejected our own QR — the scanner refusing the
+        // exact code it had just drawn. Sharing one parser makes that class of mismatch
+        // impossible rather than merely unlikely. It also means codes printed or screenshotted
+        // back when they were kulan:// still scan, because the parser still reads both.
+        guard let url = URL(string: code),
+              case .user(let handle)? = KulanApp.route(from: url) else {
             // Not a Fariin code: show feedback + re-arm — the scanner used to stay dead here.
             notFound = true
             rearmScanner()
             return
         }
         handling = true
-        let handle = url.pathComponents.last(where: { $0 != "/" }) ?? ""
         Task {
             if let user = await ChatService.findByHandle(handle) {
                 await MainActor.run { onUser(user); dismiss() }

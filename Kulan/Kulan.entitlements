@@ -8,5 +8,22 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<!-- Universal Links. Without this key an https link is just a web page and iOS never
+	     offers it to us, which is the state the app was in while a perfectly good
+	     apple-app-site-association file sat unused in web/ for months.
+
+	     Both hosts are listed because fariin.com and www.fariin.com are different origins to
+	     iOS, and a link pasted with the www is not rare.
+
+	     THIS KEY CANNOT SHIP ALONE. The App ID com.kulan.messenger.native must have the
+	     Associated Domains capability enabled in the Apple Developer portal, otherwise
+	     get_provisioning_profile mints a profile without the entitlement and the build dies
+	     at the signing step. Signing here is manual (see fastlane/Fastfile), so nothing
+	     enables it for us. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:fariin.com</string>
+		<string>applinks:www.fariin.com</string>
+	</array>
 </dict>
 </plist>

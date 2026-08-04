@@ -21,7 +21,10 @@ struct GroupInvite: Identifiable, Equatable {
     var revoked: Bool
     var id: String { code }
 
-    var url: String { "kulan://g/\(code)" }
+    // An https link, not kulan://. This is the string an admin copies and sends to somebody who
+    // by definition is NOT in the group yet, and quite possibly does not have Fariin at all — the
+    // one audience a custom scheme cannot reach. See KulanApp.route(from:).
+    var url: String { KulanApp.groupLink(code: code) }
     var isExpired: Bool { expireAt > 0 && expireAt < Date().timeIntervalSince1970 * 1000 }
     var isFull: Bool { usageLimit > 0 && usedCount >= usageLimit }
     var isActive: Bool { !revoked && !isExpired && !isFull }

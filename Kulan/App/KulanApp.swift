@@ -22,24 +22,82 @@ struct KulanApp: App {
         }
     }
 
-    // kulan://u/<handle> — open (or start) a chat with that user.
-    // kulan://g/<code>   — open the "Join group" sheet for an invite link.
+    // TWO SHAPES, ONE MEANING.
+    //   https://fariin.com/u/<handle>  ·  kulan://u/<handle>   open (or start) a chat with them
+    //   https://fariin.com/g/<code>    ·  kulan://g/<code>     open the "Join group" sheet
+    //
+    // The https form is what we now put in every share sheet, because a custom scheme is only a
+    // link on a phone that already has the app. Sent to anybody else it is dead text: no page, no
+    // preview, nothing to tap. For a messenger, where invites are how anyone new arrives, that is
+    // a hole in the product rather than a rough edge. An https link works for all of them, and
+    // opens the app for the people who have it.
+    //
+    // kulan:// is KEPT, not replaced. Links already sent live in other people's chat histories
+    // forever, and the fallback pages on fariin.com use the scheme themselves to hop into the app
+    // (an https link back to the domain you are already on does not re-trigger a Universal Link).
     private func handleDeepLink(_ url: URL) {
-        guard url.scheme == "kulan" else { return }
-        if url.host == "g" {
+        guard let route = Self.route(from: url) else { return }
+        switch route {
+        case .group(let code):
             guard Flags.groupsEnabled else { return }
-            let code = url.pathComponents.last(where: { $0 != "/" }) ?? ""
-            guard !code.isEmpty else { return }
             AppRouter.shared.pendingInviteCode = code
-            return
+        case .user(let handle):
+            Task {
+                guard let user = await ChatService.findByHandle(handle),
+                      let cid = try? await ChatService.openConversation(other: user) else { return }
+                await MainActor.run { AppRouter.shared.pendingChatId = cid }
+            }
         }
-        guard url.host == "u" else { return }
-        let handle = url.pathComponents.last(where: { $0 != "/" }) ?? ""
-        guard !handle.isEmpty else { return }
-        Task {
-            guard let user = await ChatService.findByHandle(handle),
-                  let cid = try? await ChatService.openConversation(other: user) else { return }
-            await MainActor.run { AppRouter.shared.pendingChatId = cid }
+    }
+
+    enum DeepLink: Equatable { case user(String), group(String) }
+
+    /// The web host every shared link points at. One constant, because the entitlement, the
+    /// apple-app-site-association file on fariin.com and the parser below must all name the same
+    /// host or the link quietly opens Safari with no error anywhere.
+    static let linkHost = "https://fariin.com"
+
+    /// Built HERE, beside the parser that reads them back, so a change to one shape cannot leave
+    /// the other behind. Percent-encoded because a handle is user-supplied text.
+    static func userLink(handle: String) -> String {
+        "\(linkHost)/u/\(handle.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? handle)"
+    }
+
+    static func groupLink(code: String) -> String {
+        "\(linkHost)/g/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? code)"
+    }
+
+    /// Reads either link shape into one answer. Static and pure so it can be tested without a
+    /// running app, and so the two shapes cannot drift apart the way parallel parsers do.
+    static func route(from url: URL) -> DeepLink? {
+        let kind: String
+        let value: String
+
+        switch url.scheme?.lowercased() {
+        case "kulan":
+            // kulan://u/<handle> — the host carries the kind, the path carries the value.
+            kind = url.host ?? ""
+            value = url.pathComponents.last(where: { $0 != "/" }) ?? ""
+
+        case "https":
+            // Only our own domain, and only the two paths the site actually claims. Anything
+            // else reaching this method is not ours to act on.
+            let host = (url.host ?? "").lowercased()
+            guard host == "fariin.com" || host == "www.fariin.com" else { return nil }
+            let parts = url.pathComponents.filter { $0 != "/" }
+            guard parts.count >= 2 else { return nil }
+            kind = parts[0]
+            value = parts[1]
+
+        default:
+            return nil
+        }
+
+        guard !value.isEmpty else { return nil }
+        switch kind {
+        case "u": return .user(value)
+        case "g": return .group(value)
+        default:  return nil
         }
     }
 }
