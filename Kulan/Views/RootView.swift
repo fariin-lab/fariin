@@ -135,6 +135,7 @@ struct RootView: View {
             try? await Crypto.shared.ensureReady()
             Push.register(); Push.saveVoipToken()
             DeviceRegistry.shared.start()   // record this phone in Settings › Devices, and watch for a remote sign-out
+            startOfficialChannel()
             phase = .main
             Task {   // background refresh + key self-heal, off the boot path
                 await ProfileStore.shared.loadMine()
@@ -160,9 +161,20 @@ struct RootView: View {
         if ready {
             Push.register(); Push.saveVoipToken()   // notifications + VoIP token now that we're signed in
             DeviceRegistry.shared.start()
+            startOfficialChannel()
             Task { await SendQueue.drainAll() }   // queued sends from a previous run (see drainAll)
         }
         phase = ready ? .main : .onboarding
+    }
+
+    /// The official channel, the admin permissions that decide whether the compose screens exist, and
+    /// the one piece of config the "Update Now" button needs. All three are cheap listeners on small
+    /// documents, and all three must be running before the chat list draws its first frame — the
+    /// channel is a row in that list.
+    private func startOfficialChannel() {
+        OfficialChannelStore.shared.start()
+        AdminStore.shared.start()
+        OfficialConfig.shared.start()
     }
 
     #if DEBUG

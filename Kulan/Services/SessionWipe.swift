@@ -12,6 +12,13 @@ enum SessionWipe {
         ConversationsRepository.shared.reset()
         StoriesRepository.shared.reset()
         CallsRepository.shared.reset()
+        // The official channel and the admin rights that go with it are per-account: the next person
+        // to sign in on this phone must not inherit the last one's read watermark, their mute, or —
+        // the sharp one — their admin permissions, which would put a live Send Announcement screen in
+        // a stranger's Settings until the listener caught up.
+        OfficialChannelStore.shared.reset()
+        AdminStore.shared.reset()
+        OfficialConfig.shared.stop()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         ProfileStore.shared.me = nil
         Drafts.shared.clear()                   // unsent plaintext

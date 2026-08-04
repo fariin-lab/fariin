@@ -1828,18 +1828,23 @@ enum ChatService {
     }
 
     static func resetUnread(_ cid: String) async {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markRead(); return }
         try? await db.collection("conversations").document(cid)
             .updateData(["unreadCount.\(uid)": 0])
     }
 
     /// Manually flag a chat as unread — shows a badge until reopened.
     static func markUnread(_ cid: String) async {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markUnread(); return }
         try? await db.collection("conversations").document(cid)
             .updateData(["unreadCount.\(uid)": 1])
     }
 
     /// Mark this conversation read up to now (drives the other person's read receipts).
     static func markRead(_ cid: String) async {
+        // Nobody to send a receipt to. The channel's own read state is the watermark in the person's
+        // private state document, which `resetUnread` already moved.
+        if OfficialChannel.isOfficial(cid) { return }
         guard pref("readReceipts") else { return }   // privacy: don't send read receipts
         try? await db.collection("conversations").document(cid)
             .setData(["lastRead": [uid: FieldValue.serverTimestamp()]], merge: true)
@@ -1865,7 +1870,13 @@ enum ChatService {
         }
     }
 
+    // THE OFFICIAL CHANNEL HAS NO CONVERSATION DOCUMENT. Its per-person state (muted, pinned,
+    // archived, cleared) lives in one small document the person owns, so these five actions are
+    // routed here rather than at every call site. Doing it at the call sites would have meant an
+    // `if official` in the chat list, the archive screen, the context menu, the swipe actions and the
+    // mute sheet — five chances to miss one and leave a button that looks alive and does nothing.
     static func setPinned(_ cid: String, _ value: Bool) async {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return }
         try? await db.collection("conversations").document(cid)
             .setData(["pinnedBy": [uid: value]], merge: true)
     }
@@ -1892,11 +1903,13 @@ enum ChatService {
     }
 
     static func setArchived(_ cid: String, _ value: Bool) async {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setArchived(value); return }
         try? await db.collection("conversations").document(cid)
             .setData(["archivedBy": [uid: value]], merge: true)
     }
 
     static func setMuted(_ cid: String, _ value: Bool) async {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setMuted(value); return }
         let until: Double = value ? 9_999_999_999_999 : 0
         try? await db.collection("conversations").document(cid)
             .setData(["mutedBy": [uid: until]], merge: true)
@@ -1904,6 +1917,12 @@ enum ChatService {
 
     /// Mute until a specific epoch-ms time (0 = unmute, far-future = always).
     static func setMute(_ cid: String, until: Double) async {
+        if OfficialChannel.isOfficial(cid) {
+            // The official channel's mute is a plain on/off. A timed mute would expire and start
+            // making noise on its own, which is the opposite of the promise the welcome message makes.
+            OfficialChannelStore.shared.setMuted(until > Date().timeIntervalSince1970 * 1000)
+            return
+        }
         try? await db.collection("conversations").document(cid)
             .setData(["mutedBy": [uid: until]], merge: true)
     }
@@ -1996,6 +2015,7 @@ enum ChatService {
 
     /// "Delete for me" — hides the thread until a newer message arrives (clearedAt).
     static func deleteForMe(_ cid: String) async {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.clearHistory(); return }
         try? await db.collection("conversations").document(cid).setData([
             "clearedAt": [uid: Date().timeIntervalSince1970 * 1000],
             "unreadCount": [uid: 0],

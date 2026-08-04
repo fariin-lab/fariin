@@ -32,7 +32,11 @@ struct MainShell: View {
     private var unreadChatsBadge: Int {
         let me = AuthService.shared.uid ?? ""
         guard !me.isEmpty else { return 0 }
-        return chatsRepo.conversations.filter {
+        // The official channel counts here exactly like any other chat. It is MUTED, not silent:
+        // muting stops the noise, it does not hide that something arrived, and a row showing an
+        // unread badge while the tab above it shows none is the kind of disagreement that reads as
+        // a bug (the same rule the blocked-chat audit landed on).
+        return (chatsRepo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 }).filter {
             !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                 && (Flags.groupsEnabled || !$0.isGroup)   // audit: a hidden legacy group badged a list that refused to show it
                 && $0.unread(me) > 0
@@ -582,6 +586,7 @@ struct ChatsView: View {
     private var profile = ProfileStore.shared
     private var router = AppRouter.shared
     private var storiesRepo = StoriesRepository.shared   // @Observable: drives the chat-list story rings
+    private var officialChannel = OfficialChannelStore.shared   // @Observable: the one synthetic row in the list
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
@@ -846,7 +851,12 @@ struct ChatsView: View {
     }
 
     private var visible: [Conversation] {
-        repo.conversations
+        // The official channel joins the list as an ordinary Conversation value, so every filter,
+        // sort, badge and swipe below treats it like any other chat and none of them had to learn
+        // what an announcement is. It is nil until it has something to say — Signal keeps its release
+        // channel hidden the same way (`shouldThreadBeVisible = false`) so a brand-new account never
+        // opens onto an empty official chat.
+        (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
             .filter { !$0.isCleared(me) && !$0.isArchived(me) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
             // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
@@ -1012,6 +1022,15 @@ struct ChatsView: View {
                 Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }
             }
         }
+        // The official channel's mute is a plain on/off, not a timer. A "Mute for 1 hour" that
+        // silently never un-mutes would be a label that lies — and un-muting on a timer is the exact
+        // behaviour the channel promises never to have.
+        if OfficialChannel.isOfficial(conv.id) {
+            let quiet = conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
+            Button { Task { await ChatService.setMuted(conv.id, !quiet) } } label: {
+                Label { Text(quiet ? "Unmute" : "Mute") } icon: { MenuIcon(system: quiet ? "bell" : "bell.slash") }
+            }
+        } else {
         // Native submenu (clean popover) instead of a custom mute sheet.
         Menu {
             if conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000) {
@@ -1022,6 +1041,7 @@ struct ChatsView: View {
             Button("Mute for 1 week") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(168)) } }
             Button("Mute Always") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) } }
         } label: { Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash") } }
+        }
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
             Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
                     conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash"))
@@ -1341,8 +1361,14 @@ struct ChatsView: View {
             // identity — a new chat can never inherit the previous chat's @State
             // (repo/cid), which was the cross-routing bug.
             .navigationDestination(for: ChatTarget.self) { t in
-                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo)
-                    .id(t.id)
+                // The official channel gets its own screen. ThreadView is built around a composer and
+                // an encrypted message pipeline, neither of which exists here.
+                if OfficialChannel.isOfficial(t.id) {
+                    OfficialChatView().id(t.id)
+                } else {
+                    ThreadView(cid: t.id, title: t.name, photoUrl: t.photo)
+                        .id(t.id)
+                }
             }
             .sheet(isPresented: $showNew) {
                 NewChatView { t in
@@ -1477,7 +1503,9 @@ struct ArchivedChatsView: View {
     }
     private var archived: [Conversation] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        return repo.conversations
+        // The official channel can be archived like any other chat, so it has to be findable here or
+        // archiving it would look like deleting it.
+        return (repo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 })
             .filter { $0.isArchived(me) && !$0.isCleared(me) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
             .filter { q.isEmpty || $0.displayName(me).lowercased().contains(q) }
@@ -1540,7 +1568,11 @@ struct ArchivedChatsView: View {
             .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Search archived")
             .navigationDestination(for: ChatTarget.self) { t in
-                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
+                if OfficialChannel.isOfficial(t.id) {
+                    OfficialChatView().id(t.id)
+                } else {
+                    ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
+                }
             }
             // THE SAME VIEWER, AND THE SAME WAY OUT, as every other story in the app.
             //
@@ -1705,6 +1737,10 @@ struct ChatRow: View, Equatable {
         #if DEBUG
         if DemoMode.active { return conv.lastMessageCipher }   // demo previews are stored plaintext
         #endif
+        // The official channel is a public broadcast, so its preview is already plaintext — there is
+        // no key and nothing to decrypt. Running it through the decryptor would return an empty
+        // string and the row would show a blank line.
+        if OfficialChannel.isOfficial(conv.id) { return conv.lastMessageCipher }
         if conv.leaksBlocked(me) { return "" }   // don't leak a blocked person's message into the list
         // Group last-message is sealed by its sender → decrypt with the sender's key, not the cid pair.
         if conv.isGroup {
@@ -1909,8 +1945,17 @@ struct ChatRow: View, Equatable {
             let _ = clockTick   // dependency: the tick task's flip must re-evaluate muted/timeStr
             // Rule: a story ring must NOT enlarge the row — the photo shrinks a hair
             // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
-            AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
-                       size: storySeen.isEmpty ? 56 : 49)
+            Group {
+                // The official channel has no account and therefore no profile photo to fetch: its
+                // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
+                // other row, so nothing about the list's rhythm changes.
+                if OfficialChannel.isOfficial(conv.id) {
+                    OfficialAvatar(size: storySeen.isEmpty ? 56 : 49)
+                } else {
+                    AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
+                               size: storySeen.isEmpty ? 56 : 49)
+                }
+            }
                 // This circle is the story's zoom anchor: opening from here grows the viewer out
                 // of THIS ring, and closing shrinks back into it (the standard behavior).
                 // Anchored on the PHOTO ONLY — with the ring inside the anchor, the hero
@@ -1930,6 +1975,10 @@ struct ChatRow: View, Equatable {
                     Text(conv.displayName(me))
                         .font(.system(size: 16, weight: unread > 0 ? .bold : .semibold))   // heavier when unread
                         .lineLimit(1)
+                    // The one place in the whole list a tick can appear, and it is drawn from a
+                    // hardcoded id rather than any field on any document — so there is nothing a
+                    // copycat account could write to earn one.
+                    if OfficialChannel.isOfficial(conv.id) { VerifiedTick(size: 15) }
                     if muted {
                         Image(systemName: "bell.slash.fill")
                             .font(.system(size: 11)).foregroundStyle(.tertiary)
@@ -2058,7 +2107,24 @@ private struct ChatPeekPreview: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ChatWallpaperBackground(cid: cid)
-            if !loaded {
+            if OfficialChannel.isOfficial(cid) {
+                // The channel's messages are announcements, not documents under this cid, so the
+                // generic fetch below would find nothing and claim the chat was empty.
+                ScrollView {
+                    VStack(spacing: 3) {
+                        ForEach(OfficialChannelStore.shared.visible.suffix(8)) { a in
+                            AnnouncementRow(announcement: a, dark: scheme == .dark,
+                                            onImageTap: { _ in }, onButtonTap: { _ in })
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 12)
+                }
+                .defaultScrollAnchor(.bottom)
+                .scrollDisabled(true)
+            } else if !loaded {
                 ProgressView()
             } else if msgs.isEmpty {
                 Text("No messages yet").font(.subheadline).foregroundStyle(.secondary)
@@ -2090,7 +2156,7 @@ private struct ChatPeekPreview: View {
         .frame(width: size.width, height: size.height)
         .clipped()
         .task {
-            guard !loaded else { return }
+            guard !loaded, !OfficialChannel.isOfficial(cid) else { return }
             // Newest-first fetch → ascending for display.
             let fetched = await ChatService.galleryContent(cid, limit: 14)
             msgs = Array(fetched.reversed()).filter { !$0.isSystem }
