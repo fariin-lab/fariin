@@ -160,43 +160,63 @@ final class StoriesService {
         let storyId = UUID().uuidString
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
+        // THE PHOTO STARTS MOVING FIRST. Everything below used to be strictly serial — resolve the
+        // audience, write the story doc, compress, and only THEN send the first byte — so two full
+        // network round trips sat in front of the slowest step in the whole operation.
+        //
+        // The justification for that order was written in a comment here: "the Storage READ rule for
+        // downloadURL() checks this doc's authorUid, so it must exist before we resolve the URL". THAT
+        // IS NO LONGER TRUE, and storage.rules says so in as many words: "Writes happen at upload time
+        // (before the story doc exists), so write is just auth + size + type", and read is now plain
+        // `request.auth != null` with no Firestore lookup at all. The rule was relaxed because the
+        // audience check was denying the AUTHOR's own getDownloadURL; the ordering here was never
+        // updated to match, so the code kept paying for a constraint that had been removed.
+        //
+        // Compression and upload now run CONCURRENTLY with the audience resolve and the doc write.
+        // The chain is only as long as its slowest branch instead of the sum of both.
+        let docRef = db.collection("stories").document(storyId)
+        let ref = Storage.storage().reference().child(path)
+
+        // Returns the compressed bytes so the cache warming below does not have to redo the work.
+        async let uploadedJPEG: Data = {
+            try Task.checkCancellation()
+            // Decoding, resizing and re-encoding a 12MP photo is real work; it belongs off the main
+            // actor and, more to the point, it belongs BEFORE the doc write rather than after it.
+            let jpeg = ChatService.downscaledJPEG(image)
+            let meta = StorageMetadata(); meta.contentType = "image/jpeg"
+            _ = try await ref.putDataAsync(jpeg, metadata: meta)
+            return jpeg
+        }()
+
         let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
 
         // Empty recipients is OK: it's still MY OWN story (the `mine` query loads by authorUid, so I
         // always see it) — just with no other viewers yet (e.g. a brand-new account with no contacts).
         // The audience sheet already warns when you HAVE contacts but narrowed the audience to none, so
         // reaching here with empty recipients means "own story only", which is valid — don't block it.
-
-        // Create the story doc FIRST (mediaUrl filled in after upload). The Storage READ
-        // rule for downloadURL() checks this doc's authorUid, so it must exist before we
-        // resolve the URL — otherwise getDownloadURL() is denied and the post fails.
-        let docRef = db.collection("stories").document(storyId)
-        try await docRef.setData([
-            "authorUid": me,
-            "createdAt": FieldValue.serverTimestamp(),
-            "expiresAt": Timestamp(date: Date().addingTimeInterval(expiryHours * 3600)),
-            "type": "image",
-            "mediaPath": path,
-            "mediaUrl": "",
-            "caption": caption,
-            "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
-            // Public ("Everyone") stories are viewable by anyone who finds your profile — the read
-            // rules gate on this flag. Contacts still get it in their tray via recipientUids below.
-            "public": everyone,
-            "allowsReplies": true,
-            "replyCount": 0,
-            "recipientUids": Array(recipients),
-        ])
-
-        // Upload the image, then resolve + persist its download URL. If anything fails OR the user cancels,
-        // remove the doc (and any uploaded bytes) so we never leave a story with no image — or a story the
-        // user explicitly cancelled — visible to the audience.
         do {
-            try Task.checkCancellation()   // cancelled after the doc was created → undo it below
-            let jpeg = ChatService.downscaledJPEG(image)
-            let ref = Storage.storage().reference().child(path)
-            let meta = StorageMetadata(); meta.contentType = "image/jpeg"
-            _ = try await ref.putDataAsync(jpeg, metadata: meta)
+            try await docRef.setData([
+                "authorUid": me,
+                "createdAt": FieldValue.serverTimestamp(),
+                "expiresAt": Timestamp(date: Date().addingTimeInterval(expiryHours * 3600)),
+                "type": "image",
+                "mediaPath": path,
+                "mediaUrl": "",
+                "caption": caption,
+                "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
+                // Public ("Everyone") stories are viewable by anyone who finds your profile — the
+                // read rules gate on this flag. Contacts still get it in their tray via
+                // recipientUids below.
+                "public": everyone,
+                "allowsReplies": true,
+                "replyCount": 0,
+                "recipientUids": Array(recipients),
+            ])
+
+            // Both halves were in flight together; wait for the photo to land before asking for its
+            // URL. If the doc write above threw, this child task is cancelled and awaited on the way
+            // out, and the catch deletes whatever reached Storage.
+            let jpeg = try await uploadedJPEG
             try Task.checkCancellation()   // cancelled during upload → undo
             let url = try await ref.downloadURL().absoluteString
             try await docRef.updateData(["mediaUrl": url])
@@ -214,8 +234,12 @@ final class StoriesService {
                                                     for: URLRequest(url: u))
             }
         } catch {
+            // Undo BOTH halves. Either can have got somewhere before the other failed, now that they
+            // run together, so neither cleanup is optional. Storage deletes are `allow delete: if
+            // false` for clients, so that one fails harmlessly and onStoryDeleted sweeps the bytes
+            // when the doc goes; it stays here so the intent is on the record.
             try? await docRef.delete()
-            try? await Storage.storage().reference().child(path).delete()
+            try? await ref.delete()
             throw error
         }
     }
