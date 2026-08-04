@@ -457,6 +457,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var lastReactionToAuthor: String   // author of the reacted-to message
     var lastReactionAtMillis: Double   // 0 = none; previewed only while newer than updatedAt
     var updatedAtMillis: Double
+    // MESSAGE REQUESTS. `startedBy` is who opened this 1:1; `accepted` is whether the other person
+    // has answered. A conversation with NO `startedBy` predates the request system and is accepted —
+    // otherwise every chat anyone already has would turn into a pending request overnight, which is
+    // the one thing this must never do. Groups never carry it.
+    var startedBy: String
+    var accepted: Bool
 
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -497,6 +503,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.membersCanEditInfo = data["membersCanEditInfo"] as? Bool ?? false
         self.inviteCode = data["inviteCode"] as? String ?? ""
         self.adminRights = stringArrayMap(data["adminRights"])
+        self.startedBy = data["startedBy"] as? String ?? ""
+        // Absent means "from before this existed" — accepted. Present means the flag decides.
+        self.accepted = data["accepted"] as? Bool ?? (data["startedBy"] == nil)
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String

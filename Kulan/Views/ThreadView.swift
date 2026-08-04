@@ -609,6 +609,10 @@ struct ThreadView: View {
                 restrictedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if repo.iBlocked {
                 blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if requestStance == .incoming {
+                requestBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if requestStance == .awaitingReply {
+                awaitingReplyBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotMessageThem {
                 cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
@@ -3662,8 +3666,73 @@ struct ThreadView: View {
     // Do we already share this chat (either side has sent something)? If so, messaging
     // always stays open — the Messages-privacy gate only blocks COLD new chats.
     private var hasChatHistory: Bool {
-        !(conversation?.lastMessageCipher ?? "").isEmpty
+        // An ACCEPTED conversation is the whole definition of "we have talked", and it is the same
+        // test the rules make. It used to be "any message exists", which under message requests would
+        // have let a stranger's own unanswered request count as history and unlock the very gate it
+        // was supposed to be waiting behind.
+        if let c = conversation, !c.startedBy.isEmpty { return c.accepted }
+        return !(conversation?.lastMessageCipher ?? "").isEmpty
             || repo.items.contains { !$0.text.isEmpty || $0.isImage || $0.isVideo || $0.isAudio || $0.isFile || $0.isGif }
+    }
+
+    /// Where this conversation stands as a message request. One value; see [MessageRequests].
+    private var requestStance: MessageRequests.Stance {
+        guard !isGroup, let c = conversation else { return .open }
+        return MessageRequests.stance(c, myUid: me)
+    }
+
+    /// THEIR request, waiting for me. Accept or Delete, in the conversation itself — his spec was
+    /// explicit that there is no separate requests inbox to go and find.
+    private var requestBar: some View {
+        VStack(spacing: 10) {
+            Text("\(title) wants to send you a message.")
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.center)
+            Text("Accept to start chatting, or delete this request.")
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button {
+                    Task { try? await MessageRequests.decline(cid); dismiss() }
+                } label: {
+                    Text("Delete").font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .liquidGlass(Capsule(), interactive: true)
+
+                Button {
+                    Task { try? await MessageRequests.accept(cid) }
+                } label: {
+                    Text("Accept").font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .background(Color.accentColor, in: Capsule())
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
+    /// MY request, unanswered. One message is the whole allowance, so there is nothing to type into —
+    /// a live composer here would only let someone write a second message and watch it fail.
+    private var awaitingReplyBar: some View {
+        VStack(spacing: 3) {
+            Label("Message request sent", systemImage: "paperplane")
+                .font(.subheadline.weight(.semibold))
+            Text("You can send another message once \(title) replies.")
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 
     // The other person's Messages privacy (Settings > Privacy > Messages). "My Contacts" /
@@ -4064,13 +4133,19 @@ struct ThreadView: View {
     // Just the text field — trailing buttons are stable siblings (so the mic view never
     // unmounts when the field swaps to the recording row mid-hold).
     private var messageField: some View {
-        TextField("Message", text: $input, axis: .vertical)
+        TextField(requestStance == .firstMessage ? "Say hello" : "Message", text: $input, axis: .vertical)
             .font(.system(size: 17))
             .lineLimit(1...6)
             .focused($inputFocused)
             .padding(.leading, 14)
             .padding(.vertical, 9)   // single-line field height ~40 to match the + button
             .onChange(of: input) { _, v in
+                // A first message to a stranger is capped. Trimmed as it is typed rather than
+                // refused on send, so you can see the limit instead of losing what you wrote to it.
+                if requestStance == .firstMessage, v.count > MessageRequests.firstMessageLimit {
+                    input = String(v.prefix(MessageRequests.firstMessageLimit))
+                    return
+                }
                 // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
                 if typingBox.suppressNext { typingBox.suppressNext = false; return }
                 // Don't broadcast "typing" while we're seeding the field for an inline EDIT.

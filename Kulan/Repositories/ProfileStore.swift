@@ -110,7 +110,7 @@ final class ProfileStore {
         // server (`claimUsername`), and a direct write from the client would walk straight around it
         // — which is the exact race the username system exists to close. Name and bio are ours to
         // write; the name is claimed, and a refusal throws so Save stops with the server's words.
-        if h.lowercased() != (me?.handleLower ?? "").lowercased(), !h.isEmpty {
+        if h.lowercased() != (me?.handle ?? "").lowercased(), !h.isEmpty {
             try await ChatService.claimHandle(h)
         }
         try await db.collection("users").document(uid).setData([

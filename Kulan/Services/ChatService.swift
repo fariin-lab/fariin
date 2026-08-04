@@ -83,6 +83,11 @@ enum ChatService {
         if !exists {
             seed["unreadCount"] = [uid: 0, other.id: 0]
             seed["typing"] = [uid: false, other.id: false]
+            // A brand-new 1:1 is a REQUEST until the other person answers. Stamped once, here, on the
+            // only write that can create the document — so the two fields can never be added later to
+            // a conversation that was already running. See [MessageRequests].
+            seed["startedBy"] = uid
+            seed["accepted"] = false
         }
         try await ref.setData(seed, merge: true)
         return cid
