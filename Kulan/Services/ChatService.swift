@@ -73,7 +73,14 @@ enum ChatService {
         // point calls this unconditionally (New Chat, @search, a kulan:// link, a contact tap), so
         // it fired constantly (audit). Names/photos still refresh on every open, as before.
         let ref = db.collection("conversations").document(cid)
-        let exists = (try? await ref.getDocument())?.exists ?? false
+        // "DOES NOT EXIST" AND "I COULD NOT FIND OUT" ARE DIFFERENT ANSWERS, and this line used to
+        // collapse them into one. A failed read became `exists = false`, which on a fresh install
+        // with no cache and no network is exactly what happens for a chat that exists perfectly well
+        // on the server — and the seed below would then have stamped a running conversation as a
+        // brand-new request. The rules refuse the worst of it, but the app should not be asking.
+        let snapshot = try? await ref.getDocument()
+        let exists = snapshot?.exists ?? false
+        let answered = snapshot != nil
         var seed: [String: Any] = [
             "users": [uid, other.id],
             "names": [uid: me?.name ?? "Me", other.id: other.name.isEmpty ? other.handle : other.name],
@@ -83,11 +90,17 @@ enum ChatService {
         if !exists {
             seed["unreadCount"] = [uid: 0, other.id: 0]
             seed["typing"] = [uid: false, other.id: false]
-            // A brand-new 1:1 is a REQUEST until the other person answers. Stamped once, here, on the
-            // only write that can create the document — so the two fields can never be added later to
-            // a conversation that was already running. See [MessageRequests].
-            seed["startedBy"] = uid
-            seed["accepted"] = false
+            // A brand-new 1:1 is a REQUEST until the other person answers. Stamped once, here, on
+            // the only write that can create the document — so the two fields can never be added
+            // later to a conversation that was already running. See [MessageRequests].
+            //
+            // ONLY WHEN THE READ ACTUALLY ANSWERED. If it did not, we do not know this is new, and
+            // guessing wrong turns somebody's real chat into a pending request. Creating a genuinely
+            // new chat while offline is then refused by the rules, which is the safe way to be wrong.
+            if answered {
+                seed["startedBy"] = uid
+                seed["accepted"] = false
+            }
         }
         try await ref.setData(seed, merge: true)
         return cid
