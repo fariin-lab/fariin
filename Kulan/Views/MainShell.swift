@@ -1414,6 +1414,7 @@ struct ArchivedChatsView: View {
     @State private var showDeleteSelected = false
     @State private var viewerGroup: StoryGroup?   // tap an archived story card → view it
     @State private var prefsTick = 0              // re-render after Unhide
+    @Namespace private var storyNS                // hero zoom: archived card ⇄ viewer
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
@@ -1445,11 +1446,13 @@ struct ArchivedChatsView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .matchedTransitionSource(id: "arch-\(g.id)", in: storyNS)   // hero source for the zoom close
                     .contextMenu {
                         Button { StoryPrefs.toggleHidden(g.authorUid); prefsTick += 1 } label: {
                             Label("Unhide Story", systemImage: "tray.and.arrow.up")
                         }
                     }
+                    .id(g.authorUid)   // stable identity → each menu stays bound to its own person
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
@@ -1475,45 +1478,48 @@ struct ArchivedChatsView: View {
                     EmptyStateView(title: "Nothing archived", icon: "archivebox",
                                    text: "Chats you archive and stories you hide will show here.")
                 } else {
-                    List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
-                        if !archivedStories.isEmpty {
-                            archivedStoriesRow
+                    VStack(spacing: 0) {
+                        // THE STORIES ROW SITS OUTSIDE THE LIST, exactly as it does on the main
+                        // chat page, and for the reason written there since build 147: inside a
+                        // List a long press lifts the WHOLE CELL as one preview, so every card in
+                        // the row rises together and the menu belongs to the row rather than to the
+                        // story you pressed. That is what he is seeing. Out here each card carries
+                        // its own menu, and `.id(authorUid)` keeps that menu bound to its person.
+                        if !archivedStories.isEmpty { archivedStoriesRow }
+                        List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
+                            ForEach(archived) { conv in
+                                Button {
+                                    if selecting {   // whole row toggles in edit mode, not just the checkbox
+                                        withAnimation(.smooth(duration: 0.2)) {
+                                            if selection.contains(conv.id) { selection.remove(conv.id) }
+                                            else { selection.insert(conv.id) }
+                                        }
+                                        return
+                                    }
+                                    path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
+                                                           photo: conv.displayPhoto(me)))
+                                } label: {
+                                    ChatRow(conv: conv, me: me, dark: dark,
+                                            draft: Drafts.shared.text(conv.id),
+                                            voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
+                                }
+                                .buttonStyle(.plain)
+                                .tag(conv.id)
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
-                                .selectionDisabled()
-                        }
-                        ForEach(archived) { conv in
-                            Button {
-                                if selecting {   // whole row toggles in edit mode, not just the checkbox
-                                    withAnimation(.smooth(duration: 0.2)) {
-                                        if selection.contains(conv.id) { selection.remove(conv.id) }
-                                        else { selection.insert(conv.id) }
-                                    }
-                                    return
+                                // Native swipe platter (grey) — no white listRowBackground override
+                                // that painted over the row content on swipe.
+                                .swipeActions(edge: .trailing) {
+                                    Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
+                                        Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                    }.tint(.indigo)
                                 }
-                                path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
-                                                       photo: conv.displayPhoto(me)))
-                            } label: {
-                                ChatRow(conv: conv, me: me, dark: dark,
-                                        draft: Drafts.shared.text(conv.id),
-                                        voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
-                            }
-                            .buttonStyle(.plain)
-                            .tag(conv.id)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                            // Native swipe platter (grey) — no white listRowBackground override
-                            // that painted over the row content on swipe.
-                            .swipeActions(edge: .trailing) {
-                                Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
-                                    Label("Unarchive", systemImage: "tray.and.arrow.up")
-                                }.tint(.indigo)
                             }
                         }
+                        .listStyle(.plain)
+                        .environment(\.editMode, .constant(selecting ? .active : .inactive))
+                        .overlay { if archived.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: search) } }
                     }
-                    .listStyle(.plain)
-                    .environment(\.editMode, .constant(selecting ? .active : .inactive))
-                    .overlay { if archived.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: search) } }
                 }
             }
             .navigationTitle("Archived")
@@ -1523,9 +1529,18 @@ struct ArchivedChatsView: View {
             .navigationDestination(for: ChatTarget.self) { t in
                 ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
+            // THE SAME VIEWER, AND THE SAME WAY OUT, as every other story in the app.
+            //
+            // It used to run with `ownSwipeDismiss: true`, which hands the close to the story
+            // library's own pan — a different gesture with different physics from the one the chat
+            // list and the profile use. `false` plus the zoom transition is the app's close: drag
+            // down, hold it part way, let go and it springs back into the card it grew out of. The
+            // card carries the matching hero source, which is what that comment said this cover did
+            // not have.
             .fullScreenCover(item: $viewerGroup) { g in
-                StoryViewer(group: g, ownSwipeDismiss: true,   // no zoom hero on this cover -> library pan closes
+                StoryViewer(group: g, ownSwipeDismiss: false,
                             onClose: { viewerGroup = nil }, onProfile: { _ in viewerGroup = nil })
+                    .navigationTransition(.zoom(sourceID: "arch-\(g.id)", in: storyNS))
             }
             .toolbar {
                 if selecting {
