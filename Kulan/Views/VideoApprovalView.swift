@@ -5,6 +5,9 @@ import UIKit
 // One clip in the (multi-)video editor: local url + poster thumb + duration (both straight from the picker).
 struct ApprovalClip: Identifiable {
     let id = UUID()
+    /// The photo library id this clip came from, so removing it here can untick it in the picker.
+    /// nil for anything that was not picked from the library.
+    var assetId: String? = nil
     let url: URL
     var thumb: UIImage?
     var duration: Double
@@ -30,6 +33,8 @@ struct VideoApprovalView: View {
     }
 
     @State private var clipList: [ApprovalClip]
+    /// Removed here → deselect there (see MediaApprovalView.onRemove).
+    var onRemove: (String) -> Void = { _ in }
     @State private var current = 0
     @State private var stash: [UUID: ClipTrim] = [:]
     let onSend: (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void
@@ -50,11 +55,12 @@ struct VideoApprovalView: View {
 
     // Multiple videos → the same editor with the thumbnail rail.
     init(clips: [ApprovalClip], onSendMulti: @escaping (_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void,
-         selfDismissOnSend: Bool = true) {
+         selfDismissOnSend: Bool = true, onRemove: @escaping (String) -> Void = { _ in }) {
         _clipList = State(initialValue: clips)
         self.onSend = { _, _, _ in }
         self.onSendMulti = onSendMulti
         self.selfDismissOnSend = selfDismissOnSend
+        self.onRemove = onRemove
     }
 
     private var activeURL: URL { clipList[current].url }
@@ -272,6 +278,7 @@ struct VideoApprovalView: View {
 
     private func removeClip(_ i: Int) {
         guard clipList.count > 1, clipList.indices.contains(i) else { return }
+        if let aid = clipList[i].assetId { onRemove(aid) }
         stash.removeValue(forKey: clipList[i].id)
         clipList.remove(at: i)
         if i == current {

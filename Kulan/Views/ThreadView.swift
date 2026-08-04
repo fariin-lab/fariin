@@ -47,6 +47,9 @@ struct ThreadView: View {
     @State private var panelVideoApprove: VideoWrap?    // video picked FROM the sheet → trim editor OVER the sheet (X returns to it)
     @State private var panelMediaApprove: MediaWrap?    // mixed picked FROM the sheet → pager OVER the sheet (X returns to it)
     @State private var panelMultiVideo: MultiVideoWrap? // ALL-video multi FROM the sheet → multi-video editor over it
+    /// Removed inside an approval screen while the media sheet is still open behind it. Handed to the
+    /// strip so its ticks match what is actually in the post.
+    @State private var deselectedIds: Set<String> = []
     @State private var multiVideoApprove: MultiVideoWrap? // ALL-video multi (main picker) → multi-video editor
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
     struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
@@ -60,8 +63,8 @@ struct ThreadView: View {
     // exact page + thumbnail rail — user spec); any mix keeps the pager.
     static func videoClips(from items: [ApprovalMedia]) -> [ApprovalClip]? {
         let clips = items.compactMap { item -> ApprovalClip? in
-            if case .video(_, let url, let thumb, let dur) = item {
-                return ApprovalClip(url: url, thumb: thumb, duration: dur)
+            if case .video(let aid, let url, let thumb, let dur) = item {
+                return ApprovalClip(assetId: aid, url: url, thumb: thumb, duration: dur)
             }
             return nil
         }
@@ -2421,6 +2424,7 @@ struct ThreadView: View {
             // capsule produced the "two lines" at the top.)
             // Grid: X + "Recents ▾" album dropdown header, Camera tile, then recent photos/videos.
             AttachRecentsStrip(
+                removedIds: deselectedIds,
                 onCamera: {
                     showAttachPanel = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showCamera = true }
@@ -2547,6 +2551,7 @@ struct ThreadView: View {
         // Mixed approval pager OVER the sheet: X returns to the sheet; Send delivers the group + closes it.
         .fullScreenCover(item: $panelMediaApprove) { wrap in
             MediaApprovalView(items: wrap.items,
+                              onRemove: { deselectedIds.insert($0) },
                               onSend: { ordered, caption, hd in
                                   Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
                                   showAttachPanel = false
@@ -2562,7 +2567,7 @@ struct ThreadView: View {
                     for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
                 }
                 showAttachPanel = false
-            }, selfDismissOnSend: false)
+            }, selfDismissOnSend: false, onRemove: { deselectedIds.insert($0) })
         }
     }
 

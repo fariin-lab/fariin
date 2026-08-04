@@ -74,6 +74,11 @@ struct AttachRecentsStrip: View {
     var onOpenMedia: ([ApprovalMedia]) -> Void = { _ in }        // tapping media WHILE selecting → the mixed approval pager
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
+    /// Ids the approval screen removed while it was open over this sheet. The selection deliberately
+    /// SURVIVES opening the editor (X comes back here and re-picking everything was the old
+    /// complaint), so the one thing that must travel back is a removal — otherwise a video dropped
+    /// in the editor is still ticked here (owner 2026-08-04).
+    var removedIds: Set<String> = []
     @FocusState private var captionFocused: Bool
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -119,6 +124,11 @@ struct AttachRecentsStrip: View {
             load(); loadAlbums()
         }
         .onChange(of: selectedIds.isEmpty) { _, empty in hasSelection = !empty }
+        .onChange(of: removedIds) { _, gone in
+            guard !gone.isEmpty else { return }
+            selectedIds.removeAll { gone.contains($0) }
+            for id in gone { selectedAssets.removeValue(forKey: id) }
+        }
     }
 
     // X close (48pt glass) + a "Recents ▾" title. (Selection is per-thumbnail via the checkbox — no
@@ -492,10 +502,10 @@ struct AttachRecentsStrip: View {
                         gen.appliesPreferredTrackTransform = true
                         gen.maximumSize = CGSize(width: 320, height: 320)
                         let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
-                        out.append(.video(UUID(), url, thumb, dur))
+                        out.append(.video(a.localIdentifier, url, thumb, dur))
                     }
                 } else if let ui = await Self.fullImage(a) {
-                    out.append(.image(UUID(), ui))
+                    out.append(.image(a.localIdentifier, ui))
                 }
             }
             await MainActor.run {
@@ -575,10 +585,10 @@ struct AttachRecentsStrip: View {
                         gen.appliesPreferredTrackTransform = true
                         gen.maximumSize = CGSize(width: 640, height: 640)
                         let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
-                        ordered.append(.video(UUID(), url, thumb, dur))
+                        ordered.append(.video(a.localIdentifier, url, thumb, dur))
                     }
                 } else if let ui = await Self.fullImage(a) {
-                    ordered.append(.image(UUID(), ui))
+                    ordered.append(.image(a.localIdentifier, ui))
                 }
             }
             await MainActor.run {

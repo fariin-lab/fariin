@@ -10,11 +10,15 @@ enum SendMedia {
 
 // One media item awaiting approval — the mixed-selection unit (the approval flow treats images
 // and videos as one attachment list).
+// THE ID IS THE PHOTO LIBRARY'S OWN ID where there is one (owner 2026-08-04: remove a video in the
+// editor, go back, and it was still ticked in the picker). It used to be a fresh UUID minted at the
+// handoff, which threw away the only link back to what the picker had selected — so a removal here
+// could never reach it. Camera captures, which have no library id, still get a UUID string.
 enum ApprovalMedia: Identifiable {
-    case image(UUID, UIImage)
-    case video(UUID, URL, UIImage?, Double)   // id, local url, poster thumb, duration (s)
+    case image(String, UIImage)
+    case video(String, URL, UIImage?, Double)   // id, local url, poster thumb, duration (s)
 
-    var id: UUID {
+    var id: String {
         switch self {
         case .image(let id, _): return id
         case .video(let id, _, _, _): return id
@@ -39,6 +43,9 @@ enum ApprovalMedia: Identifiable {
 // final images + video URLs so the chat can deliver the whole group in one action.
 struct MediaApprovalView: View {
     @State var items: [ApprovalMedia]
+    /// Removed here → deselect there. The picker stays open behind this screen and keeps its own
+    /// selection, so a removal has to be told to it or the tick outlives the item.
+    var onRemove: (String) -> Void = { _ in }
     var onSend: (_ ordered: [SendMedia], _ caption: String, _ hd: Bool) -> Void   // ORDERED mixed group
     // false when presented OVER the media sheet: the caller closes the sheet (whole stack, one motion);
     // self-dismissing first flashed the sheet for a beat before it closed.
@@ -388,12 +395,15 @@ struct MediaApprovalView: View {
 
     // MARK: - Mutations + send
 
-    private func replace(_ id: UUID, with item: ApprovalMedia) {
+    private func replace(_ id: String, with item: ApprovalMedia) {
         if let i = items.firstIndex(where: { $0.id == id }) { items[i] = item }
     }
 
     private func remove(_ i: Int) {
         guard items.indices.contains(i) else { return }
+        // Tell the picker BEFORE dropping it: it keeps its own selection, and without this the tick
+        // stayed on something the user had just removed.
+        onRemove(items[i].id)
         items.remove(at: i)
         if items.isEmpty { dismiss(); return }
         if page >= items.count { page = items.count - 1 }
