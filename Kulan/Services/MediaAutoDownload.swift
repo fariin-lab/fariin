@@ -77,6 +77,11 @@ enum MediaAutoDownloader {
 
     static func sweep(_ items: [Message], cid: String) {
         for m in items {
+            // "Save to Photos" (Settings > Chats) rides this pass: it is already the one place that
+            // walks a chat's media with the keys in hand. It does its own incoming/view-once/
+            // already-saved checks, and it is a no-op when the setting is off.
+            AutoSaveToPhotos.consider(m, cid: cid)
+
             if m.isVideo, AutoDownloadPrefs.allowedNow(.videos), VideoCache.url(for: m.id) == nil,
                let u = m.videoUrl, !u.isEmpty {
                 fetch(id: m.id, url: u, meta: m.enc, cid: cid) { VideoCache.store($0, for: m.id) }

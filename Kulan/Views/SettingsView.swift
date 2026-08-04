@@ -101,6 +101,9 @@ struct SettingsView: View {
                     // NO App Icon row here: it lives inside Appearance, and one door is enough (user
                     // 2026-07-29, after seeing both). Two rows leading to the same page reads as a
                     // duplicate, which is what it was.
+                    NavigationLink { ChatsSettingsView() } label: {
+                        SettingsRowLabel("Chats", system: "bubble.left.and.bubble.right")
+                    }
                     NavigationLink { StorySettingsView() } label: {
                         SettingsRowLabel("Stories", "ic_stories")
                     }
