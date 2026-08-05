@@ -589,9 +589,24 @@ service cloud.firestore {
       );
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
-        // A banned account cannot post anything anybody else can find. This is the surface that
-        // matters: chat is end-to-end encrypted and private, so it is not what an App Store reviewer
-        // can be shown. A public story is.
+        // NO NEW PUBLIC STORIES, from any client. The app stopped offering the "Everyone" audience,
+        // and this is what makes that real rather than cosmetic — the app is the part an attacker
+        // replaces, so a rule has to say it too.
+        //
+        // Why the audience went: it gave no discovery (the only public-story query is "show me this
+        // one person's", run from their profile — there is no browse or feed), while costing two
+        // serious things. An audience with no recipient list has no key to seal a story with, so its
+        // existence forced EVERY story in the app to be stored unencrypted. And it was the one place
+        // an App Store reviewer could be shown a stranger's content, which is what Apple pulled
+        // Telegram over on 2026-08-04.
+        //
+        // Signal has no public story either. All four of their modes are recipient lists, which is
+        // exactly why every Signal story can be encrypted.
+        //
+        // The READ rule below still honours `public == true` — stories already posted keep working
+        // until they expire, which is at most 24 hours.
+        && request.resource.data.get('public', false) == false
+        // A banned account cannot post anything anybody else can find.
         && !isBanned()
         && request.resource.data.recipientUids.size() <= 1000   // limit fan-out abuse
         // Kill "immortal stories": expiry must be within ~30h of now (client sets +24h; the

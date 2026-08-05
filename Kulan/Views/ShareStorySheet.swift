@@ -58,7 +58,10 @@ struct ShareStorySheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var repo = ConversationsRepository.shared
     // Remember the last audience choice (as standard messengers do) instead of resetting each post.
-    @State private var mode = UserDefaults.standard.integer(forKey: "storyAudMode")   // 0 contacts, 1 except, 2 only
+    // 3 was the removed "Everyone". Anybody who last posted publicly still has a 3 saved here, and
+    // without this clamp they would keep posting publicly forever with no option on screen to change
+    // it — the setting would be invisible AND stuck.
+    @State private var mode = min(UserDefaults.standard.integer(forKey: "storyAudMode"), 2)   // 0 friends, 1 except, 2 only
     @State private var excluded = Set(UserDefaults.standard.stringArray(forKey: "storyAudExcluded") ?? [])
     @State private var included = Set(UserDefaults.standard.stringArray(forKey: "storyAudIncluded") ?? [])
     @State private var emptyAudienceAlert = false
@@ -113,7 +116,23 @@ struct ShareStorySheet: View {
     @ViewBuilder private var audienceList: some View {
         List {
             Section {
-                optionRow(3, "globe", "Everyone")
+                // "EVERYONE" IS GONE, and it was the cause of two separate problems rather than a
+                // feature anybody was getting value from.
+                //
+                // It gave NO discovery. The only query for a public story is "show me this person's
+                // public stories", run when you are already standing on their profile — there is no
+                // browse, no explore, no feed. So it never helped anybody find anybody. All it did
+                // was let a stranger who had already found you watch your story.
+                //
+                // For that, it cost: every story in the app had to be stored unencrypted, because an
+                // audience with no recipient list has no key to seal it with; and it was the one
+                // surface where an App Store reviewer could be shown content posted by somebody else
+                // — the exact thing Apple pulled Telegram over on 2026-08-04.
+                //
+                // Signal has no public story either. Their four modes (default, blockList, explicit,
+                // disabled) are all recipient LISTS, which is why every Signal story can be sealed.
+                // We are matching that.
+                //
                 // "Friends", not "contacts" — there is no phone book behind this, only the people you
                 // chat with. See the Audience enum in PrivacyPages for the full reasoning.
                 optionRow(0, "person.fill", "My friends")
@@ -122,9 +141,7 @@ struct ShareStorySheet: View {
             } header: {
                 Text("Who can see your story")
             } footer: {
-                if mode == 3 {
-                    Text("Anyone who finds your profile can see this story. Your friends also see it in their story tray.")
-                }
+                Text("Only people you have chatted with can see your story. There is no public option, which is what lets a story be encrypted for the people you send it to.")
             }
             if mode == 1 {
                 Section {
@@ -191,15 +208,14 @@ struct ShareStorySheet: View {
         // recipientUids would be empty and the story would post to literally no one).
         let contactIds = Set(contacts.map { $0.id })
         let effective: Set<String>
-        if mode == 3 { effective = contactIds }   // public: contacts get the tray copy, strangers view via your profile
-        else if mode == 2 { effective = included.intersection(contactIds) }
+        if mode == 2 { effective = included.intersection(contactIds) }
         else if mode == 1 { effective = contactIds.subtracting(excluded) }
         else { effective = contactIds }
         // Block ONLY when you HAVE contacts but narrowed the audience down to literally no one
         // (excluded everyone / picked nobody). If you simply have NO contacts yet, posting is fine —
         // it's still YOUR OWN story (always visible to you); it just has no other recipients until
         // you add contacts. Without this, a brand-new user could never post their first story.
-        if mode != 3 && effective.isEmpty && !contactIds.isEmpty {   // "Everyone" is public → never empty
+        if effective.isEmpty && !contactIds.isEmpty {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             emptyAudienceAlert = true
             return
@@ -220,7 +236,7 @@ struct ShareStorySheet: View {
                 caption: caption,
                 excluded: mode == 1 ? excluded : [],
                 included: mode == 2 ? included : [],
-                everyone: mode == 3
+                everyone: false
             )
         } else {
             StoriesService.shared.postStoryBackground(
@@ -228,7 +244,7 @@ struct ShareStorySheet: View {
                 caption: caption,
                 excluded: mode == 1 ? excluded : [],
                 included: mode == 2 ? included : [],
-                everyone: mode == 3
+                everyone: false
             )
         }
         // The rest, in order, behind the first. The background posters already CHAIN rather than
@@ -242,12 +258,12 @@ struct ShareStorySheet: View {
                 StoriesService.shared.postVideoStoryBackground(
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim, caption: "",
                     excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
-                    everyone: mode == 3)
+                    everyone: false)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: "",
                     excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
-                    everyone: mode == 3)
+                    everyone: false)
             }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
