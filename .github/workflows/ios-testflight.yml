@@ -74,22 +74,24 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PLEASE TRY THIS FIRST. Open your own story and swipe up. The story should shrink into the card under your finger, the viewers sheet should rise with it, and they should move as one thing. Then drag the sheet down. The sheet should close and your story should grow back to full screen. The viewer must NOT close. That was the big rebuild in this batch: the whole interaction is our own system now, built the way Telegram builds theirs, after reading their actual code.
+            EVERY REPORT FROM TONIGHT IS IN THIS BUILD. In your order:
 
-            THE BLACK HEADER ON STORY CLOSE IS GONE. Your screenshot: drag a story down and a black band rides on top of the picture. The band was the strip of screen above the story card, painted black inside the shrinking screen. The instant a close starts now, that black steps aside and only the picture pulls away over the chat list, like the Snapchat clip you sent. If you release and it springs back, the black returns with it.
+            CLOSING THE SHEET CANNOT CLOSE THE STORY ANY MORE. Your screenshot: dragging the viewers sheet down dragged the whole story page with it. I had asked Apple's page-close gesture to wait its turn and your phone proved it does not wait. Now the moment the sheet opens, that gesture is switched off completely, and it comes back the moment the sheet closes. Scroll down with the sheet open and only the sheet moves.
 
-            SENDING SEVERAL PHOTOS: EVERY PICTURE HAS ITS OWN RING NOW. Each one fills with its own progress, and each one carries an X while it uploads. Tap the X and only that picture is cancelled; the rest of the album keeps going and arrives without it.
+            THE BLACK HEADER ON STORY CLOSE, FIXED FOR REAL THIS TIME. My earlier fix waited for Apple to announce the close, but the zoom shrink starts before that announcement ever comes. Now the black steps aside the instant your finger starts the downward drag, so what pulls away is the picture alone, like Telegram.
 
-            CANCEL ACTUALLY CANCELS NOW. You found it: cancel an album mid-upload, and a minute later the photos arrived anyway. The truth is the cancel only hid the bubble; the upload kept running behind it. Now cancel reaches into the upload itself and stops it. A cancelled album can never land late.
+            VIDEO STORIES POST AGAIN. This one was the server: it only accepted photo files for stories, refused every video's files by name, and the app then deleted its own half-made story. That is why a video uploaded fully and never appeared. Fixed on the server an hour after your report, so it also works on the old build.
 
-            THE STORY + BUTTON USES OUR OWN PICKER, ALWAYS. It was opening Apple's photo picker, and if you had started with a video it would only show you videos. Now the + always opens our Photos and Albums grid, it always shows both pictures and videos, and if you add a picture to a video story the whole post moves into the full editor that carries both side by side.
+            ZOOMED-OUT STORY PHOTOS POST LIKE TELEGRAM. Pinch a photo smaller and post: the story is now baked as one full frame, your photo over a soft dark blur of itself. No more smeared side bands invented at watch time.
 
-            THE PROFILE PHOTO MELTS INTO THE PAGE NOW. Your circles were real: a dark band arriving at the name, and a hard line where the photo met the background. Both were the shape of the fade, not a missing layer. The blur now stays out of the name area and the fade ends flat before the photo runs out, so there is no line left to find. No scrim, no darkening, works with bright and dark photos in both modes.
+            THE CARDS ROW RUNS ON TELEGRAM'S ENGINE. Read from their code: a real scroller's physics drives the row, so the swipe follows your finger, glides with native momentum, and snaps to a card. The story swap under the card happens exactly when the row stops. Tap a side card and it glides over; tap the middle card and the sheet closes.
 
-            RESET ALL NOTIFICATIONS WORKS. It was greyed out unless something was muted, and it never touched the things you had actually changed, like the sound and the preview switch on that same page. It is always tappable now and resets the page too. It does not touch Show Notifications, on purpose.
+            SWIPE THE SHEET SIDEWAYS. With the viewers sheet open, drag it left or right and it slides to the next or previous story's own sheet, Telegram's exact thresholds, while the cards row and the story behind follow. At the ends it rubber-bands.
 
-            CAN'T CALL UPDATES LIVE. If someone sets calls to No One while your chat with them is open, the next tap on the call button says so. No need to leave and come back. Part of this was already in the last build, so make sure you are on this one before testing.
+            THE SHAKING BLUR ON VIDEOS IS GONE. The loading veil over a video was a live blur that trembles while the card scales. It is a frozen image now and moves as one piece with the card.
 
-            WHAT TO CHECK, IN ORDER. Your story: swipe up slowly, let go halfway, drag the sheet down, tap the dark area, swipe the little cards row, tap the middle card. A friend's story: drag down to close, no black band, fast flick too. Send an album of 5 photos on slow internet and cancel one with its X, then send another and cancel the whole thing with long press. Story +: photo first then add a video, video first then add a photo. And the profile page of someone with a dark photo.
+            THE COMPOSER RESPECTS YOUR PICTURE. The tool capsule and NEXT no longer sit on the photo: the canvas ends above the bar now, so a tall photo shows as the boxed card with the controls on black. While you are zoomed into an image, a sideways swipe pans the picture and never flips to the next one; the thumbnails are how you switch. The photo picker from + is always dark like the rest of the story screens. A chosen video can never vanish silently again, and the trim screen no longer shows two X buttons stacked in a corner.
+
+            WHAT TO CHECK, IN ORDER. Sheet open: drag down, the story page must not move. Sheet open: drag sideways to the next story's sheet. Friend's story: drag down, no black band at any speed. Post a video story, then a zoomed-out photo story. Cards row: slow drag, hard flick, tap a side card. Composer: tall photo, check the buttons sit on black; zoom in and swipe; + then video.
 
         run: fastlane beta
