@@ -344,34 +344,90 @@ struct BlockedUsersView: View {
     private var repo = ConversationsRepository.shared
     @Environment(\.colorScheme) private var scheme
     @State private var toUnblock: Conversation?   // row awaiting the "Unblock?" confirm
+    @State private var search = ""
+    @State private var showPicker = false
+    /// uid → @handle, filled once per person. A conversation carries a name and a photo but not a
+    /// username, and the username is what tells two people with the same display name apart — which
+    /// on a BLOCK list is the difference that matters most.
+    @State private var handles: [String: String] = [:]
+
     private var me: String { AuthService.shared.uid ?? "" }
     private var blocked: [Conversation] {
-        repo.conversations.filter { $0.blockedBy[me] == true }
+        let all = repo.conversations.filter { $0.blockedBy[me] == true }
             .sorted { $0.updatedAtMillis > $1.updatedAtMillis }
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return all }
+        return all.filter {
+            $0.name(for: me).lowercased().contains(q)
+                || (handles[$0.otherUid(me)] ?? "").lowercased().contains(q)
+        }
+    }
+
+    private func blockedRow(_ conv: Conversation) -> some View {
+        HStack(spacing: 12) {
+            AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conv.name(for: me)).font(.body)
+                if let h = handles[conv.otherUid(me)], !h.isEmpty {
+                    Text("@\(h)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// One fetch per blocked person, once. Anyone already known is skipped, so re-entering the page
+    /// or a conversations refresh costs nothing.
+    private func loadHandles() async {
+        for conv in repo.conversations where conv.blockedBy[me] == true {
+            let uid = conv.otherUid(me)
+            guard !uid.isEmpty, handles[uid] == nil else { continue }
+            if let p = await ProfileStore.shared.fetch(uid) {
+                await MainActor.run { handles[uid] = p.handle }
+            }
+        }
     }
 
     var body: some View {
-        Group {
-            if blocked.isEmpty {
-                ContentUnavailableView("No blocked users", systemImage: "hand.raised",
-                                       description: Text("People you block will appear here."))
-            } else {
-                List {
+        List {
+            Section {
+                Button { showPicker = true } label: {
+                    Label { Text("Block User…") } icon: { Image(systemName: "hand.raised.fill") }
+                        .foregroundStyle(Color.red)
+                }
+            }
+            Section {
+                if blocked.isEmpty {
+                    // Inside the List rather than replacing it, so the Block User row above stays
+                    // reachable when nobody is blocked yet — which is exactly when you want it.
+                    Text(search.isEmpty ? "People you block will appear here." : "No match.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
+                } else {
                     ForEach(blocked) { conv in
-                        HStack(spacing: 12) {
-                            AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 40)
-                            Text(conv.name(for: me)).font(.body)
-                            Spacer()
-                            Button("Unblock") { toUnblock = conv }
-                                .buttonStyle(.borderless)   // explicit â€” a default Button in a List row fires on ANY row tap
-                                .font(.subheadline.weight(.semibold))
+                        blockedRow(conv)
+                            // SWIPE LEFT TO UNBLOCK, per his reference. The permanent inline Unblock
+                            // button is gone: an undo-the-block action sitting in every row is one
+                            // mis-tap from undoing something somebody chose deliberately, and it made
+                            // each row read as a button.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button { toUnblock = conv } label: {
+                                    Label("Unblock", systemImage: "hand.raised.slash")
+                                }
                                 .tint(.red)
-                        }
+                            }
                     }
                 }
-                .listStyle(.plain)
+            } header: {
+                if !blocked.isEmpty { Text("Blocked") }
             }
         }
+        .listStyle(.insetGrouped)
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+        .sheet(isPresented: $showPicker) { BlockPickerView() }
+        .task(id: repo.conversations.count) { await loadHandles() }
         .navigationTitle("Blocked Users")
         .navigationBarTitleDisplayMode(.inline)
         // Confirm before unblocking â€” an accidental row tap must not silently unblock someone.
@@ -380,6 +436,60 @@ struct BlockedUsersView: View {
             Button("Cancel", role: .cancel) {}
             Button("Unblock", role: .destructive) {
                 if let conv = toUnblock { Task { await ChatService.setBlocked(conv.id, false) } }
+            }
+        }
+    }
+}
+
+/// Pick somebody to block, from the people you already have a chat with.
+///
+/// DELIBERATELY NOT A SEARCH OF EVERY ACCOUNT, and this is the one decision in this screen worth
+/// defending. Blocking a stranger you have never met protects you from nothing: they cannot reach you
+/// until they message you, and the moment they do the chat is here to be blocked from. Meanwhile a
+/// directory search would turn this page into a way to test whether any given @handle exists, which
+/// is a question a block list has no business answering.
+private struct BlockPickerView: View {
+    @Environment(\.dismiss) private var dismiss
+    private var repo = ConversationsRepository.shared
+    @State private var query = ""
+    private var me: String { AuthService.shared.uid ?? "" }
+
+    private var candidates: [Conversation] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return repo.conversations
+            .filter { !$0.isGroup && $0.blockedBy[me] != true && !$0.otherUid(me).isEmpty }
+            .filter { q.isEmpty || $0.name(for: me).lowercased().contains(q) }
+            .sorted { $0.updatedAtMillis > $1.updatedAtMillis }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if candidates.isEmpty {
+                    Text(query.isEmpty ? "You have no chats to block." : "No match.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ForEach(candidates) { conv in
+                        Button {
+                            Task { await ChatService.setBlocked(conv.id, true) }
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 40)
+                                Text(conv.name(for: me)).foregroundStyle(.primary)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .searchable(text: $query, prompt: "Search")
+            .navigationTitle("Block User")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() }.tint(.primary) }
             }
         }
     }
