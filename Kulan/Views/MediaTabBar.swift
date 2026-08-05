@@ -8,19 +8,20 @@ import UIKit
 // highlight is fake and custom, is not real apple". The Calls page bar he is pointing at is a plain
 // `Picker` with `.pickerStyle(.segmented)`, so this is the same control with the same style.
 //
-// THE TRACK IS OURS, THE CONTROL AND ITS MOVING PILL ARE APPLE'S. His follow-up: "the bar is looks
-// grey… make it like the calls page, and All Media bar and Back button it most be same". On the Calls
-// page that control lives INSIDE the navigation bar, so the bar supplies the glass and the control
-// never draws a track of its own. On a page there is no bar to inherit from, so it paints the grey
-// capsule he photographed. `ClearSegmentedTrack` takes that track away and `liquidGlass` puts the
-// Back button's own material in its place.
+// THE TRACK IS THE CONTROL'S OWN AGAIN, AND THE FOURTH SWING IS OVER. His follow-up back then was
+// "the bar is looks grey… make it like the calls page", and the answer was `ClearSegmentedTrack`,
+// which erased the control's `.normal` background image so a glass capsule behind it could show.
 //
-// WHY THIS IS SAFE NOW AND WAS NOT BEFORE, because it has already cost one build. Erasing the track
-// used to erase the selected pill with it — "Active tab Is gone" — since iOS drew the pill INTO the
-// track's background image. On iOS 26 it does not: in his own screenshot the glass pill is visibly
-// TALLER than the grey capsule and floats over it, which is only possible if they are separate
-// layers. So the erase is gated to iOS 26 and up. Below that the pill is still part of the track and
-// the grey stays, which is the correct trade: a dull bar beats a bar with no selection on it.
+// THAT ERASE TOOK THE SELECTED PILL WITH IT, both times. It had already cost one build once ("Active
+// tab Is gone"), and the comment that used to sit here argued the second attempt was safe because on
+// iOS 26 the pill looked like a separate, taller layer in a screenshot. It is not. He is on iOS 26,
+// the erase was gated to iOS 26, and he has now photographed the same bar with no selection on any
+// tab. The screenshot reasoning was wrong and it cost a second round.
+//
+// MediaGalleryView's own comment already said this deletion had happened and that "nothing replaces
+// it" — but the call was only removed from that file's notes, never from this one, so the bug it
+// describes stayed live. Do not add it back. A grey track with a visible selection beats a glass
+// track with none, and that is the whole trade.
 //
 // STILL TRUE, AND THE REASON THIS FILE HAS SWUNG FOUR TIMES: do not hand-draw the control itself.
 // A drawn track with a drawn pill is an imitation of Apple's, and he recognises it from one screen
@@ -34,9 +35,10 @@ struct MediaTabBar: View {
     let titles: [String]
     @Binding var selection: Int
 
-    /// The system segmented control's own height. Stated so the scroll views can reserve a matching
-    /// top margin — a floating bar and the content that must clear it cannot each guess.
-    static let barHeight: CGFloat = 32
+    /// The bar's own height. Stated so the scroll views can reserve a matching top margin — a
+    /// floating bar and the content that must clear it cannot each guess. 42 on the owner's spec
+    /// (was the segmented control's natural 32).
+    static let barHeight: CGFloat = 42
     /// Full vertical slot the bar occupies, including the air above and below it.
     static let slotHeight: CGFloat = barHeight + 16
 
@@ -47,47 +49,16 @@ struct MediaTabBar: View {
             }
         }
         .pickerStyle(.segmented)
-        .background { ClearSegmentedTrack() }
+        // NO `ClearSegmentedTrack` HERE ANY MORE, AND THAT IS THE MISSING HIGHLIGHT.
+        //
+        // It erased the control's `.normal` background image so a hand-made glass capsule behind it
+        // could show through. iOS draws the SELECTED PILL as part of that same surface, so clearing
+        // it took the pill with it and every tab looked unselected — which is exactly what the owner
+        // photographed. MediaGalleryView's own comment already records this and says "nothing
+        // replaces it", but the call was only removed from that file's notes and not from here, so
+        // the bug it describes has been live the whole time.
         .frame(height: Self.barHeight)
         // The same call the Back button's circle makes, so the two read as one material.
         .liquidGlass(Capsule())
-    }
-}
-
-/// Clears the grey capsule a standalone `UISegmentedControl` paints for itself, leaving Apple's
-/// control and Apple's moving pill untouched.
-///
-/// A zero-size, non-interactive view planted behind the picker: from its own place in the hierarchy
-/// it can reach the control SwiftUI built and change that ONE instance. The appearance proxy would
-/// have been fewer lines and would also have reached the Calls page, Edit Profile and Add Story,
-/// where the bar is correct already and must stay that way.
-///
-/// It touches the `.normal` background only. `.selected`, the divider images and the tint are left
-/// exactly as the system set them, because those are what the pill is made of.
-private struct ClearSegmentedTrack: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView(frame: .zero)
-        v.isUserInteractionEnabled = false
-        v.backgroundColor = .clear
-        return v
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard #available(iOS 26.0, *) else { return }
-        // Next runloop: on the first pass this view exists before the picker's own host does, so the
-        // search finds nothing and the track stays grey until something else redraws it.
-        DispatchQueue.main.async {
-            guard let root = uiView.superview?.superview ?? uiView.superview else { return }
-            clear(in: root)
-        }
-    }
-
-    private func clear(in view: UIView) {
-        if let seg = view as? UISegmentedControl {
-            seg.backgroundColor = .clear
-            seg.setBackgroundImage(UIImage(), for: .normal, barMetrics: .default)
-            return
-        }
-        for sub in view.subviews { clear(in: sub) }
     }
 }
