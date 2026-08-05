@@ -10,6 +10,14 @@ import FirebaseFirestore
 // contact-screen section, group header tap) is closed until this flips to true.
 enum Flags {
     static let groupsEnabled = false
+    /// Puts the Verification console in Settings. OFF (owner, 2026-08-05): the whole system is built,
+    /// wired and enforced — this only decides whether the door to it is on the wall. Turning it on is
+    /// this one word; nothing else has to change, and badges granted while it was off keep showing.
+    ///
+    /// Hiding it here does NOT weaken anything. The Firestore rules gate every write on the `verify`
+    /// capability independently, so the console being absent from the screen and the console being
+    /// unusable by a stranger are two separate defences and only the second one ever mattered.
+    static let verificationConsole = false
     /// Lets a person choose between the modern poster header and the classic circle in Settings.
     /// OFF (owner, 2026-08-02): everyone gets the modern header and nobody is offered the choice.
     /// The setting page and the classic header are both kept, wired and working — this only decides

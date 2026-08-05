@@ -140,7 +140,7 @@ struct SettingsView: View {
                     // thereby somebody who can put the app's name behind a stranger's identity, so
                     // this section appears only for `.verify` and the rules check the same thing
                     // again before any write lands.
-                    if admin.can(.verify) {
+                    if Flags.verificationConsole, admin.can(.verify) {
                         Section {
                             NavigationLink { VerificationAdminView() } label: {
                                 SettingsRowLabel("Verification", system: "checkmark.seal")
