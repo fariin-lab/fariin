@@ -196,10 +196,22 @@ struct StoryEditorView: View {
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1200, height: 1200)
         let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
-        guard let cg = try? await gen.image(at: t).image else { return }
+        // A poster that cannot be decoded must NOT drop the video on the floor — a `guard return`
+        // here made a picked clip silently never appear ("i chose video, is not working"). The item
+        // joins with a black poster instead; the clip itself is fine and the export never reads
+        // this bitmap.
+        let poster: UIImage
+        if let cg = try? await gen.image(at: t).image {
+            poster = UIImage(cgImage: cg)
+        } else {
+            let side = CGSize(width: 1080, height: 1920)
+            poster = UIGraphicsImageRenderer(size: side).image { ctx in
+                UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: side))
+            }
+        }
         await MainActor.run {
             stashCurrent()
-            items.append(DraftItem(image: UIImage(cgImage: cg), videoURL: url, duration: dur))
+            items.append(DraftItem(image: poster, videoURL: url, duration: dur))
             index = max(0, items.count - 1)
             recomputeEdited()
         }
@@ -472,7 +484,10 @@ struct StoryEditorView: View {
                 }
                 // …and out of the way while a stroke is under the finger, same as the pen bar below.
                 // The X and Done are in the top corners, which is exactly where a drawing runs off.
-                .opacity(draggingID == nil && editingID == nil && !strokeInFlight ? 1 : 0)
+                // AND DURING TRIM: the trim overlay carries its own X/✓ in the same corners, and
+                // the composer's X kept drawing UNDER it — his screenshot showed the two close
+                // buttons stacked on top of each other.
+                .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
                 // The bottom bar and the crop overlay used to sit HERE, inside the canvas. They are
