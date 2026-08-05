@@ -47,8 +47,12 @@ struct NotificationsSettingsView: View {
                 Toggle("Message Preview", isOn: $messagePreview)
                     .tint(.green)
                     .onChange(of: messagePreview) { _, on in
-                        // The push server reads this per recipient â€” OFF sends a nameless
-                        // "New message" instead of the sender's name.
+                        // This comment used to say the push server read the preference. It did not.
+                        // The value was written here and never looked at, so the switch did nothing
+                        // for as long as it has existed. `onNewMessage` honours it as of 2026-08-05:
+                        // OFF sends "Fariin / New message" with no sender name, no group name and no
+                        // mention hint — which matters beyond the lock screen, because every field in
+                        // a push travels through Apple's servers in the clear.
                         Task { try? await ProfileStore.shared.setNotifPrefs(preview: on) }
                     }
                 NavigationLink { NotificationSoundView() } label: {
