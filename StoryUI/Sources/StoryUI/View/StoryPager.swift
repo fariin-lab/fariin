@@ -346,7 +346,16 @@ struct StoryPager: UIViewControllerRepresentable {
                 // LIST behind the cover, not a blurred copy of itself. The stationary container
                 // goes clear (the cover's presentation background is already clear at rest); the
                 // MOVING card keeps its own solid backing so the story never turns transparent.
-                card.backgroundColor = .black
+                // BOTH CLEAR NOW. This used to paint the moving card black so the story could not go
+                // transparent mid-drag, and leaned on `maskToCard` to clip that black back to the
+                // 9:16 card. The page is taller than the card, so whenever the clip did not bite,
+                // the strip of page above the card came along as a black header sitting on top of
+                // the story — the bar he circled, twice.
+                //
+                // The card paints its own black inside its own rounded rect now (StoryDetailView),
+                // so there is no black out here to leak. What pulls away is the picture and nothing
+                // else, which is what Snapchat's dismissal actually is.
+                card.backgroundColor = .clear
                 pager.view.backgroundColor = .clear
                 dismissBackdrop.isHidden = true
                 dismissBlur.isHidden = true

@@ -150,6 +150,20 @@ struct StoryDetailView: View {
                                    height: cardHeight(width: proxy.size.width,
                                                       containerH: proxy.size.height,
                                                       footerH: footerH))
+                            // THE CARD CARRIES ITS OWN BLACK, inside its own rounded rect.
+                            //
+                            // The dismiss used to paint the whole moving page black so the story
+                            // could never go transparent mid-drag, and then relied on a mask to clip
+                            // that black back to the card. When the mask did not bite, the strip of
+                            // page ABOVE the 9:16 card shrank into view as a black header sitting on
+                            // top of the story. That is the bar he circled.
+                            //
+                            // Putting the black here instead means there IS no black outside the
+                            // card for a clip to fail to remove: the card is opaque by construction,
+                            // and everything around it can be transparent at every moment of the
+                            // drag. Snapchat's dismissal looks the way it does for the same reason —
+                            // what pulls away is the picture and nothing else.
+                            .background(Color.black)
                             // Flatten the card (photo + UIKit blur backdrop) into ONE layer first: a bare
                             // .clipShape does NOT clip the ImageLoader's UIVisualEffectView (its backdrop
                             // composites separately and spills past the mask, so the bottom stayed square).
