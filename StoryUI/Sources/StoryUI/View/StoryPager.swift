@@ -355,8 +355,12 @@ struct StoryPager: UIViewControllerRepresentable {
                 // horizontal follow. It shrinks in place; it does not ride off with the finger.
                 let scale = 1.0 - 0.7 * frac
                 card.layer.cornerCurve = .continuous    // Apple squircle
-                card.layer.cornerRadius = min(40, ty * 0.3) // grows from 0 as you pull down
-                card.layer.masksToBounds = true
+                // CLIPPED TO THE STORY, NOT TO THE PAGE, which is the black header he circled. The
+                // page is taller than the 9:16 card and the strip above it is the page's own black
+                // background; rounding the PAGE shrank that strip into view as a black band inside
+                // the card. Masking to the story means what pulls away is the story. See
+                // StoryCardMorph.maskToCard.
+                StoryCardMorph.shared.maskToCard(cornerRadius: min(40, ty * 0.3), scale: scale)
                 // Horizontal follow clamped: a flick's large t.x must not yank the card sideways.
                 let tx = max(-60, min(60, t.x * 0.7))
                 card.transform = CGAffineTransform(translationX: tx, y: ty * 0.85)
@@ -390,6 +394,9 @@ struct StoryPager: UIViewControllerRepresentable {
                         card.transform = .identity
                         card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
                     } completion: { _ in
+                        // The dismiss clip comes off only once the card is home, or the story would
+                        // pop back to full-page bounds mid-spring.
+                        StoryCardMorph.shared.clearMask()
                         self.pager?.view.backgroundColor = .black   // restore the solid backing at rest
                         StoryPager.dismissActive = false            // cube live again at rest
                         self.parent.onCancel()

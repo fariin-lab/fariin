@@ -161,6 +161,35 @@ public final class StoryCardMorph {
         CATransaction.commit()
     }
 
+    /// Clip the moving card to the STORY during a swipe-down dismiss.
+    ///
+    /// The page is TALLER THAN THE STORY. The card starts at the safe-area top and is 9:16, so the
+    /// strip above it is the page's own black background — invisible normally, because it sits behind
+    /// the status bar. The dismiss scales the whole page, which shrank that strip along with
+    /// everything else and brought it into view as a black header inside the rounded card. Snapchat
+    /// and Telegram have no such band because what shrinks for them is the story, not a page with a
+    /// story in it.
+    ///
+    /// `cornerRadius` is the radius wanted ON SCREEN; it is divided by the scale here, because the
+    /// mask lives in the card's own untransformed coordinates.
+    public func maskToCard(cornerRadius: CGFloat, scale: CGFloat) {
+        guard let card else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        applyMask(rect: contentRect(in: card), cornerRadius: cornerRadius / max(scale, 0.05))
+        CATransaction.commit()
+    }
+
+    /// Drop the dismiss clip when the drag springs back.
+    public func clearMask() {
+        guard let card else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.layer.mask = nil
+        maskLayer = nil
+        CATransaction.commit()
+    }
+
     /// Back to full screen, square, unmasked. Called when the sheet is fully shut.
     public func reset() {
         guard let card else { return }
