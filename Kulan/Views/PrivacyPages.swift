@@ -261,7 +261,13 @@ struct MessagesPrivacyPage: View {
                 Toggle("Typing Indicators", isOn: $typingIndicators).tint(.green)
                     .onChange(of: typingIndicators) { _, v in PrivacyPrefs.setFlag("typingIndicators", v) }
             } footer: {
-                Text("These are reciprocal — if you turn one off, you won't see it from others either.")
+                // IT PROMISED RECIPROCITY THE APP DOES NOT IMPLEMENT. `ChatService.setTyping`,
+                // `setRecording` and `markRead` each guard on these flags, so turning one off stops
+                // YOU SENDING it. Nothing anywhere gates RECEIVING: the other person's ticks and
+                // their typing bubble carry on showing exactly as before. The old line was a promise
+                // about how you appear to others AND about what you can see, and only the first half
+                // was true. Making it reciprocal is a behaviour change and his call, not a rewrite.
+                Text("Turning one off stops you sending it. You will still see read receipts and typing from other people.")
             }
         }
         .navigationTitle("Messages")

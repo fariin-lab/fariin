@@ -74,7 +74,14 @@ struct DeleteAccountView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 32)
 
-                Text("Your account is deleted as soon as you're verified.")
+                // IT CONTRADICTED THE PREVIOUS SCREEN, about the most consequential action in the
+                // app. Step one says the account is hidden at once and deleted for good after the
+                // grace period, and that you can sign in before then to bring it back — which is what
+                // `ProfileStore` actually does, and what the deletion email says. This step said it
+                // was deleted the moment you verified. One of them had to be wrong and it was this
+                // one, in the direction that would stop somebody trying to recover an account they
+                // still could have had back.
+                Text("Once verified, your account is hidden immediately and permanently deleted after \(ProfileStore.gracePeriodDays) days. Sign in before then to restore it.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32).padding(.top, 14)

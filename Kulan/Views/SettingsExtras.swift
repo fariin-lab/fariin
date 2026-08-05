@@ -73,6 +73,11 @@ struct NotificationsSettingsView: View {
                 Toggle("In-App Preview", isOn: $inAppPreview).tint(.green)
             } header: {
                 Text("In-App Notifications")
+            } footer: {
+                // The section had no footer at all, and "In-App Preview" says nothing on its own —
+                // it is the only one of the three whose name does not describe what it does. All
+                // three are real: `InAppNotify` and `PushManager` both read them.
+                Text("How a message announces itself while you already have Fariin open. Preview shows the sender and the message in the banner; with it off the banner says only that something arrived.")
             }
 
             Section {
