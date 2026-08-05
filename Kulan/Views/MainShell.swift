@@ -1465,11 +1465,44 @@ struct ArchivedChatsView: View {
     }
     private var storyCardW: CGFloat { (UIScreen.main.bounds.width - 24 - 30) / 4 }
 
+    /// The archived row's long-press menu. Deliberately short: this is a drawer you visit to take
+    /// something OUT of, so the actions are the ones that belong to that, and every one of them is
+    /// real. It does not reuse the chat page's `chatMenu` because half of that menu (Archive, Pin)
+    /// makes no sense on a chat that is already archived.
+    @ViewBuilder private func archivedMenu(_ conv: Conversation) -> some View {
+        Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
+            Label { Text("Unarchive") } icon: { MenuIcon("ic_archive") }
+        }
+        if conv.hasUnreadMark(me) {
+            Button {
+                Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
+            } label: {
+                Label { Text("Read") } icon: { MenuIcon("ic_menu_unread") }
+            }
+        } else {
+            Button { Task { await ChatService.markUnread(conv.id) } } label: {
+                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }
+            }
+        }
+        Button(role: .destructive) {
+            Task { await ChatService.deleteForMe(conv.id) }
+        } label: {
+            Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
+        }
+    }
+
     // Horizontal cards of hidden people; tap to view, long-press to Unhide.
     private var archivedStoriesRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 10) {
-                ForEach(archivedStories) { g in
+                // KEYED ON `authorUid`, THE SAME THING THE `.id()` BELOW SETS, and that mismatch is
+                // his "long press the first story and it opens the second".
+                //
+                // `ForEach` was keying on `StoryGroup.id` while the row then re-declared its identity
+                // as `authorUid`. Two different answers to "which view is this", so when SwiftUI
+                // rebuilt the row it could hand a card's context menu to the neighbour it thought was
+                // the same view. One key, declared once, and there is nothing left to disagree.
+                ForEach(archivedStories, id: \.authorUid) { g in
                     Button { viewerGroup = g } label: {
                         VStack(spacing: 6) {
                             ZStack(alignment: .bottomLeading) {
@@ -1493,7 +1526,8 @@ struct ArchivedChatsView: View {
                             Label("Unhide Story", systemImage: "tray.and.arrow.up")
                         }
                     }
-                    .id(g.authorUid)   // stable identity → each menu stays bound to its own person
+                    // No `.id()` here any more: the ForEach above keys on `authorUid`, so the identity
+                    // is already stable. Declaring it twice was the whole problem.
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
@@ -1557,6 +1591,14 @@ struct ArchivedChatsView: View {
                                         Label("Unarchive", systemImage: "tray.and.arrow.up")
                                     }.tint(.indigo)
                                 }
+                                // THERE WAS NO LONG-PRESS MENU HERE AT ALL, and that is both of his
+                                // reports about this list. The chat page has carried one since it was
+                                // built; this list only ever had swipe actions, so a long press had
+                                // nothing to open — AND nothing to hand the press to. A List row with
+                                // no menu keeps the press highlight it lit on touch-down, which is the
+                                // grey that never went away. Giving the row a menu takes the gesture
+                                // and takes the highlight with it.
+                                .contextMenu { archivedMenu(conv) }
                             }
                         }
                         .listStyle(.plain)
