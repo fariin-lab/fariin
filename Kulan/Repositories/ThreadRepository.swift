@@ -87,6 +87,9 @@ final class ThreadRepository {
     private var outboxObserver: NSObjectProtocol?
     private var convListener: ListenerRegistration?
     private var userListener: ListenerRegistration?
+    /// Separate from `userListener` because presence lives in its own subcollection now, so the
+    /// server can enforce the Last Seen audience rather than the reading client. See PresenceService.
+    private var presenceListener: ListenerRegistration?
     let cid: String
 
     private let pageSize = 40
@@ -408,11 +411,25 @@ final class ThreadRepository {
                 if needsRebuild { self.rebuild() }
             }
         // The other user's presence (online / last active) — 1:1 only (no single "other" in a group).
+        //
+        // TWO listeners now, because presence moved off the user document into
+        // `users/{other}/presence/state` so the server can enforce "Last Seen: My Contacts" instead of
+        // trusting the reading app to (see PresenceService). The privacy MAP stays on the user
+        // document — it has to be readable by anyone, since it is what tells a stranger's client what
+        // it may show in the first place.
+        //
+        // A denied presence read is a normal outcome here, not an error: it is what somebody who has
+        // hidden their last seen from non-contacts looks like. The snapshot simply never arrives and
+        // the header shows nothing, which is exactly right.
         if isOneToOne, !other.isEmpty {
             userListener = db.collection("users").document(other)
                 .addSnapshotListener { [weak self] snap, _ in
+                    self?.otherPrivacy = (snap?.data()?["privacy"] as? [String: String]) ?? [:]
+                }
+            presenceListener = db.collection("users").document(other)
+                .collection("presence").document("state")
+                .addSnapshotListener { [weak self] snap, _ in
                     let d = snap?.data()
-                    self?.otherPrivacy = (d?["privacy"] as? [String: String]) ?? [:]
                     self?.otherOnline = d?["online"] as? Bool ?? false
                     if let ts = d?["lastActive"] as? Timestamp { self?.otherLastActive = ts.dateValue() }
                 }
@@ -769,9 +786,10 @@ final class ThreadRepository {
         outboxObserver = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
+        presenceListener?.remove(); presenceListener = nil
         expiryTimer?.invalidate(); expiryTimer = nil
         typingExpiry?.invalidate(); typingExpiry = nil
     }
 
-    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); expiryTimer?.invalidate(); typingExpiry?.invalidate() }
+    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); presenceListener?.remove(); expiryTimer?.invalidate(); typingExpiry?.invalidate() }
 }

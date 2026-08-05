@@ -57,6 +57,28 @@ service cloud.firestore {
       // conversation fields off a user document, so it could only ever error, and the real one lives
       // on /conversations/{cid} where it belongs. Removed 2026-08-04, no behaviour change.)
 
+      // ONLINE / LAST SEEN. In its own document precisely so it can carry its own read rule.
+      //
+      // It used to live on the user document, which every signed-in account can read — it has to be,
+      // so a stranger can look up a handle to start a chat. That meant "Last Seen: My Contacts" was
+      // enforced only by the READING app: anybody querying Firestore directly got your last-seen time
+      // whatever you had chosen. The client cannot be the thing enforcing a privacy setting, because
+      // the client is the part an attacker replaces.
+      //
+      // "Contact" here means what it means everywhere else in the app: you two have a conversation.
+      // A 1:1 conversation id is the two uids sorted and joined with an underscore, which the rule can
+      // rebuild, so this needs no extra field and no list to maintain.
+      match /presence/state {
+        allow read: if signedIn() && (
+          request.auth.uid == uid
+          || get(/databases/$(database)/documents/users/$(uid)).data
+               .get('privacy', {}).get('lastSeen', 'everyone') == 'everyone'
+          || exists(/databases/$(database)/documents/conversations/$(
+               request.auth.uid < uid ? request.auth.uid + '_' + uid : uid + '_' + request.auth.uid))
+        );
+        allow write: if signedIn() && request.auth.uid == uid;
+      }
+
       // Story distribution lists ("My Status" + custom lists) and per-user seen state.
       // Both are private to the owner.
       match /storyLists/{listId} {
