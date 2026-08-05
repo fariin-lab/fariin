@@ -183,8 +183,31 @@ private extension PlayerView {
         // `.initial` too: an item that is already failed when we start watching would otherwise
         // never send a change, and never sending one is the bug.
         statusObservation = player?.currentItem?.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
-            guard item.status == .failed else { return }
-            DispatchQueue.main.async { self?.handleFailedItem() }
+            guard let self else { return }
+            if item.status == .failed {
+                DispatchQueue.main.async { self.handleFailedItem() }
+                return
+            }
+            // PREROLL BELONGS HERE, AND NOWHERE EARLIER. This is the fix for the build 462 crash.
+            //
+            // `AVPlayer.preroll(atRate:completionHandler:)` RAISES AN OBJECTIVE-C EXCEPTION if the
+            // player has no current item ready — and an Objective-C exception in Swift is not
+            // catchable, it goes straight to `abort()`. I called it immediately after
+            // `replaceCurrentItem`, which is exactly the moment the item is NOT ready yet, so the
+            // first story video played on a device with any latency at all killed the app.
+            // Symbolicated frame 10 of his report: `-[AVPlayer prerollAtRate:completionHandler:]`
+            // → objc_exception_throw → abort.
+            //
+            // `.readyToPlay` is the state the documentation requires and the only one that is safe.
+            guard item.status == .readyToPlay else { return }
+            DispatchQueue.main.async {
+                guard self.url == url || self.cachedFileInUse == url else { return }   // reused meanwhile
+                guard self.player?.currentItem === item else { return }                // item swapped meanwhile
+                self.player?.preroll(atRate: 1) { [weak self] finished in
+                    guard finished, let self, self.url == url || self.cachedFileInUse == url else { return }
+                    self.removeActivityIndicatory()
+                }
+            }
         }
 
         // LET AVFOUNDATION WAIT. This was forced to `false`, which tells the player to start the
@@ -193,12 +216,9 @@ private extension PlayerView {
         // behaviour is to hold until it can play through, and holding for a moment on a picture beats
         // starting on a stutter.
         self.player?.automaticallyWaitsToMinimizeStalling = true
-        // AND DECODE THE FIRST FRAMES BEFORE SHOWING ANYTHING. `preroll` fills the render pipeline so
-        // the first thing on screen is a frame rather than the black the layer starts as.
-        self.player?.preroll(atRate: 1) { [weak self] _ in
-            guard let self, self.url == url || self.cachedFileInUse == url else { return }
-            self.removeActivityIndicatory()
-        }
+        // The preroll that used to be here is in the status observer above. Calling it at this point
+        // is what crashed build 462: the item is not ready yet, and preroll raises an Objective-C
+        // exception rather than returning an error. Do not move it back.
         self.getVideoLength(videoURL: url)
         self.playerLayer.player = self.player
         self.playerLayer.videoGravity = .resizeAspectFill
