@@ -33,11 +33,11 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 // WHY THE WINDOW PANS EXIST AT ALL: Apple's zoom transition installs its own interactive-dismiss pan
 // up the presentation chain, and it sees every touch in the cover no matter who hit-tests it. That
 // pan tracking a sheet drag is why dragging the sheet down used to close the WHOLE story viewer.
-// While this view is in a window, every system "_UI…" pan up the chain is made to wait for ours
-// (`require(toFail:)`), and ours begin on every vertical drag — so the system dismiss can never
-// engage while the sheet exists, and is untouched the moment it unmounts. Telegram does the same
-// thing by policy: their outer gestures are refused entirely while the view list is open
-// (`allowsInteractiveGestures() == false` in StoryItemSetContainerComponent).
+// `require(toFail:)` on it was tried and DID NOT HOLD on the device (build 466) — so while the
+// sheet is in a window the foreign pans up the chain are DISABLED outright and restored on unmount:
+// see `suspendForeignPans`. Telegram does the same thing by policy: their outer gestures are
+// refused entirely while the view list is open (`allowsInteractiveGestures() == false` in
+// StoryItemSetContainerComponent).
 //
 // RELEASE: no internal animator any more. Every finger-up reports (progress, where the drag started,
 // velocity) to the host, which owns the ONE spring that settles sheet + story morph + carousel on the
@@ -112,6 +112,8 @@ final class StoryViewersSheetView: UIView {
     /// interactive dismiss. `cancelsTouchesInView = false` keeps the SwiftUI carousel tracking.
     private lazy var bandGuard = DirectionalSheetPan(axis: .horizontal, target: self, action: #selector(handleBandGuard(_:)))
     private weak var installedWindow: UIWindow?
+    /// Foreign pans switched OFF while the sheet exists — see `suspendForeignPans`.
+    private var suspendedPans: [UIPanGestureRecognizer] = []
 
     /// Progress when the current drag began, so the finger maps 1:1 from wherever it grabbed.
     private var dragStart: CGFloat = 0
@@ -162,6 +164,7 @@ final class StoryViewersSheetView: UIView {
             old.removeGestureRecognizer(outsidePan)
             old.removeGestureRecognizer(bandGuard)
             installedWindow = nil
+            restoreForeignPans()
         }
         guard let window else { return }
         if installedWindow !== window {
@@ -173,6 +176,46 @@ final class StoryViewersSheetView: UIView {
             installedWindow = window
         }
         subordinateSystemPans()
+        suspendForeignPans()
+    }
+
+    /// THE OWNER'S RULE, VERBATIM: "when sheet is open disable scroll down to close story."
+    ///
+    /// `require(toFail:)` was tried first and DID NOT HOLD on the device (build 466: dragging the
+    /// open sheet rode the whole cover down into Apple's zoom dismissal — his screenshot). Whatever
+    /// recognizer drives that dismissal either never matched the "_UI" name test or never honoured
+    /// the requirement, and there is no way to know which from here. So no more asking it to wait:
+    /// while this sheet is IN A WINDOW, every foreign pan recognizer up the chain is switched OFF
+    /// and remembered, and switched back on the moment the sheet leaves.
+    ///
+    /// Why this is safe where the requirement was not: a pan that is DISABLED when a touch begins
+    /// never receives that touch at all, and enabling it later does not deliver the touch
+    /// retroactively — so it cannot take over mid-gesture the way a merely-waiting recognizer can
+    /// the instant its requirement dies. SwiftUI's own recognizers ("SwiftUI…") are left strictly
+    /// alone: the carousel's swipe and every other content gesture multiplex through them.
+    ///
+    /// Re-run on every drag start as well as on mount, because system recognizers can be created
+    /// lazily — a pan that did not exist when the sheet mounted must still be caught.
+    private func suspendForeignPans() {
+        var node: UIView? = superview
+        while let cur = node {
+            for g in cur.gestureRecognizers ?? [] {
+                guard let p = g as? UIPanGestureRecognizer,
+                      p !== pan, p !== outsidePan, p !== bandGuard,
+                      !suspendedPans.contains(where: { $0 === p }) else { continue }
+                guard !NSStringFromClass(type(of: p)).hasPrefix("SwiftUI") else { continue }
+                if p.isEnabled {
+                    p.isEnabled = false
+                    suspendedPans.append(p)
+                }
+            }
+            node = cur.superview
+        }
+    }
+
+    private func restoreForeignPans() {
+        for p in suspendedPans { p.isEnabled = true }
+        suspendedPans.removeAll()
     }
 
     /// Every system "_UI…" pan up the chain (Apple's zoom-transition interactive dismiss lives
@@ -307,6 +350,7 @@ final class StoryViewersSheetView: UIView {
         switch g.state {
         case .began:
             onDragActive?(true)   // finger beats spring: the host cancels any in-flight settle
+            suspendForeignPans()  // catch any lazily-created system pan before it can ride along
             dragStart = progress
             panBaselineY = translation
             dragOwnsSheet = shouldSheetTakeDrag(velocity: velocity)
@@ -342,6 +386,7 @@ final class StoryViewersSheetView: UIView {
         switch g.state {
         case .began:
             onDragActive?(true)
+            suspendForeignPans()  // same lazily-created-pan guard as the sheet pan's
             outsideDragStart = progress
             outsideBaselineY = ty
         case .changed:
