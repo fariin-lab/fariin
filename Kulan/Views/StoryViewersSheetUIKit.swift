@@ -675,12 +675,25 @@ struct StoryViewerRowContent: View {
         HStack(spacing: 12) {
             AvatarView(name: viewer.name, photoUrl: viewer.photoUrl, size: 46)
                 .overlay(alignment: .bottomTrailing) {
+                    // HIS REFERENCE DESIGN (2026-08-05 image): a soft rose disc riding the
+                    // avatar's bottom-right corner with a WHITE heart glyph — bigger than the old
+                    // 19pt emoji-in-red-ring, no border, just a soft shadow lifting it off the
+                    // photo. A liked story draws the heart; any other reaction emoji sits on the
+                    // same disc so the row reads as one design.
                     if let r = viewer.reaction, !r.isEmpty {
-                        Text(r).font(.system(size: 11))
-                            .frame(width: 19, height: 19)
-                            .background(Circle().fill(Color(.systemRed)))
-                            .overlay(Circle().stroke(Color(white: 0.10), lineWidth: 2))
-                            .offset(x: 3, y: 3)
+                        ZStack {
+                            Circle().fill(Color(red: 1.0, green: 0.36, blue: 0.47))
+                            if r == "❤️" {
+                                Image(systemName: "heart.fill")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.white)
+                            } else {
+                                Text(r).font(.system(size: 11))
+                            }
+                        }
+                        .frame(width: 22, height: 22)
+                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        .offset(x: 5, y: 4)
                     }
                 }
             VStack(alignment: .leading, spacing: 2) {
