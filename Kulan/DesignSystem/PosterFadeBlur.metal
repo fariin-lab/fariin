@@ -55,10 +55,13 @@ inline half4 posterSample(SwiftUI::Layer layer, float2 pos, float4 bounds) {
                                       float vertical) {
     const float span = max(bounds[3] - startY, 1.0);
     const float t = clamp((pos.y - startY) / span, 0.0, 1.0);
-    // SQUARED, not linear. A linear ramp starts blurring immediately and the top of the fade reads
-    // as slightly soft rather than sharp; squaring keeps the picture crisp for longer and then goes
-    // quickly, which is what makes the join disappear instead of the whole photo looking hazy.
-    const half r = half(radius) * half(t * t);
+    // CUBED, not linear and no longer squared. A linear ramp starts blurring immediately; squared
+    // held the crispness a while but still put a visible smear right where the name sits, and on a
+    // dark-bottomed photo that smear's ONSET read as a soft-edged dark band (the edge he circled).
+    // Cubing keeps the picture essentially sharp through the name region and spends the whole blur
+    // in the lower stretch — where the page-colour veil is already thick enough to cover it, so
+    // the dissolve is never seen arriving.
+    const half r = half(radius) * half(t * t * t);
 
     if (r < 1.0h) {
         return layer.sample(pos);

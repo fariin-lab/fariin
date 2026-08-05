@@ -442,20 +442,31 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         // the photo instead means the bottom row of pixels IS the page: there is no boundary left to
         // find, because the two are the same colour before they meet.
         //
-        // The stops are eased, not evenly spaced. An even ramp announces itself at both ends; this
-        // one starts almost imperceptibly and finishes quickly, which is the shape his reference
-        // images use to melt a picture into white.
+        // THE CURVE IS SMOOTHERSTEP NOW, SAMPLED, NOT HAND-PLACED STOPS. The old five stops ended
+        // with a straight 0.82→1.0 segment whose slope was still nonzero AT the photo's bottom edge
+        // — a ramp that stops dead is exactly what the eye catches, and on a dark photo against the
+        // light page that was the hard cut he circled. Smootherstep's derivative is ZERO at both
+        // ends: the veil starts imperceptibly, does its work in the middle, and has already gone
+        // flat before the photo runs out (full page colour at 97% of the run, so the last stretch
+        // is pure page and the photo's boundary crosses nothing). Twelve samples keep SwiftUI's
+        // between-stop linear interpolation below anything a screen can show.
+        //
+        // No scrim and no darkening anywhere in this: the veil is the page's own colour, so a dark
+        // photo is gently LIFTED toward the page and a pale one barely changes — both ends of his
+        // "must work with light and dark photos" for free, in both colour schemes.
         .overlay(
             LinearGradient(stops: {
                 let s = PosterGeometry.blurStart(width: photoSide)
-                let run = max(0.0001, 1 - s)
-                return [
-                    .init(color: fadeInto.opacity(0),    location: s),
-                    .init(color: fadeInto.opacity(0.10), location: s + run * 0.34),
-                    .init(color: fadeInto.opacity(0.42), location: s + run * 0.62),
-                    .init(color: fadeInto.opacity(0.82), location: s + run * 0.84),
-                    .init(color: fadeInto,               location: 1),
-                ]
+                let end = s + max(0.0001, 1 - s) * 0.97
+                var stops: [Gradient.Stop] = []
+                for i in 0...12 {
+                    let t = Double(i) / 12.0
+                    let eased = t * t * t * (t * (t * 6 - 15) + 10)   // smootherstep: 6t⁵−15t⁴+10t³
+                    stops.append(.init(color: fadeInto.opacity(eased),
+                                       location: s + (end - s) * CGFloat(t)))
+                }
+                stops.append(.init(color: fadeInto, location: 1))
+                return stops
             }(), startPoint: .top, endPoint: .bottom)
         )
         // Insurance only: by here the pixels are already the page colour, so this can never show as
