@@ -237,17 +237,30 @@ final class ProfileStore {
     /// `maxSide` is generous now (was a 512 square): the same file is the small circle in a chat list
     /// AND a full-width header, and 512 across a whole screen is visibly soft.
     static func squareJPEG(_ data: Data, maxSide: CGFloat = 1280, quality: CGFloat = 0.85) -> Data {
-        guard let img = UIImage(data: data), let cg = img.cgImage else { return data }
+        guard let img = UIImage(data: data) else { return data }
+        return squareJPEG(img, maxSide: maxSide, quality: quality) ?? data
+    }
+
+    /// The same downscale, but STARTING FROM THE IMAGE, which is the point of it existing.
+    ///
+    /// Save used to encode the picked photo to a full-resolution JPEG, hand that over, and have this
+    /// decode it again just to throw most of it away. On a modern phone camera that is a 12MP encode
+    /// and a 12MP decode per crop, twice over for the circle and the poster, all of it on the main
+    /// thread while a spinner turns — and every byte of it discarded at 1280. That is most of the
+    /// "saving is taking more time" the owner reported. Nothing is encoded now until it is the size
+    /// it will actually be uploaded at.
+    static func squareJPEG(_ image: UIImage, maxSide: CGFloat = 1280, quality: CGFloat = 0.85) -> Data? {
+        guard let cg = image.cgImage else { return image.jpegData(compressionQuality: quality) }
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
-        guard w > 0, h > 0 else { return data }
+        guard w > 0, h > 0 else { return image.jpegData(compressionQuality: quality) }
         let scale = min(1, maxSide / max(w, h))
-        guard scale < 1 else { return data }   // already small enough — do not re-encode for nothing
+        let src = UIImage(cgImage: cg, scale: 1, orientation: image.imageOrientation)
+        guard scale < 1 else { return src.jpegData(compressionQuality: quality) }
         let size = CGSize(width: (w * scale).rounded(), height: (h * scale).rounded())
-        let src = UIImage(cgImage: cg, scale: 1, orientation: img.imageOrientation)
         let out = UIGraphicsImageRenderer(size: size).image { _ in
             src.draw(in: CGRect(origin: .zero, size: size))
         }
-        return out.jpegData(compressionQuality: quality) ?? data
+        return out.jpegData(compressionQuality: quality)
     }
 
     /// The TALL header framing, stored beside the avatar rather than instead of it.
@@ -284,10 +297,29 @@ final class ProfileStore {
     /// 2026-08-03), but a refusal there must degrade to "that group falls back on the user doc",
     /// never fail the save — and one refused group in a shared batch would have killed the 1:1
     /// writes with it.
-    func uploadProfileImages(circle rawCircle: Data, poster rawPoster: Data?) async throws {
+    /// SAVE RETURNS AS SOON AS YOUR PROFILE IS ACTUALLY CHANGED, not when every last copy of it has
+    /// been rewritten.
+    ///
+    /// The owner reported Save taking too long a second time, and the shape of it was: encode both
+    /// crops at full resolution on the main thread, decode them again to downscale, upload, write the
+    /// user document, then QUERY EVERY CONVERSATION, batch-write the one-to-ones, write each group
+    /// ONE AT A TIME, and re-fetch the profile — with the sheet held open on a spinner through all
+    /// of it.
+    ///
+    /// Only the first half of that is your profile changing. The conversation `photos` map is a
+    /// denormalised copy, kept so a chat list can draw the right avatar on its first frame before the
+    /// user document arrives; nobody is looking at it in the second Save takes, and the disk cache is
+    /// already seeded with the new picture before any URL is published. So the sweep and the re-fetch
+    /// were moved off the path you wait on. If the sweep fails, the user document is still right and
+    /// every screen still resolves the correct photo, one round trip later instead of none.
+    func uploadProfileImages(circle: UIImage, poster: UIImage?) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let circleData = Self.squareJPEG(rawCircle)
-        let posterData = rawPoster.map { Self.squareJPEG($0) }
+        // Off the main actor: this is the resize and the only JPEG encode either crop gets.
+        let encoded = await Task.detached(priority: .userInitiated) { () -> (Data?, Data?) in
+            (Self.squareJPEG(circle), poster.flatMap { Self.squareJPEG($0) })
+        }.value
+        guard let circleData = encoded.0 else { return }
+        let posterData = encoded.1
 
         let circleURL: String
         var posterURL: String?
@@ -312,20 +344,39 @@ final class ProfileStore {
         if let posterURL { userFields["posterUrl"] = posterURL }
         try await db.collection("users").document(uid).setData(userFields, merge: true)
 
+        // EVERYTHING BELOW HAPPENS BEHIND THE DISMISS. See the note on this function for why it is
+        // safe: the user document above is the source of truth and it has already landed.
         var convFields: [String: Any] = ["photos.\(uid)": circleURL]
         if let posterURL { convFields["posters.\(uid)"] = posterURL }
-        let snap = try await db.collection("conversations")
-            .whereField("users", arrayContains: uid).getDocuments()
-        let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
-        let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
-        if !oneToOnes.isEmpty {
-            let batch = db.batch()
-            for d in oneToOnes { batch.updateData(convFields, forDocument: d.reference) }
-            try await batch.commit()
+        let fields = convFields
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let snap = try await self.db.collection("conversations")
+                    .whereField("users", arrayContains: uid).getDocuments()
+                let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
+                let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
+                if !oneToOnes.isEmpty {
+                    let batch = self.db.batch()
+                    for d in oneToOnes { batch.updateData(fields, forDocument: d.reference) }
+                    try await batch.commit()
+                }
+                // Concurrently, not one after another. A member of fifteen groups was waiting for
+                // fifteen sequential round trips; they do not depend on each other.
+                await withTaskGroup(of: Void.self) { g in
+                    for d in groups {
+                        g.addTask { try? await d.reference.updateData(fields) }
+                    }
+                }
+            } catch {
+                // A failed sweep costs a stale denormalised copy, not a wrong profile. Every screen
+                // still resolves the real photo from the user document.
+            }
+            // On the main actor explicitly. This used to be reached from a caller that was already
+            // there; now it is not, and `me` is observed by SwiftUI.
+            let fresh = await self.fetch(uid)
+            await MainActor.run { self.me = fresh }
         }
-        for d in groups { try? await d.reference.updateData(convFields) }
-
-        me = await fetch(uid)
     }
 
     /// Notification preferences the PUSH SERVER reads per recipient (onNewMessage):

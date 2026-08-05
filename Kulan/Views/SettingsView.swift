@@ -1409,14 +1409,17 @@ struct EditProfileView: View {
             do { try await profile.removePhoto(); pendingRemove = false; return true }
             catch { self.error = "Could not remove photo: \(error.localizedDescription)"; return false }
         }
-        guard let img = pendingPhoto, let data = img.jpegData(compressionQuality: 0.92) else { return true }
+        guard let img = pendingPhoto else { return true }
         do {
-            // ONE pass: both crops upload in parallel, one user-doc write, one conversation
-            // sweep. This used to be uploadPhoto then uploadPoster in sequence — two uploads,
-            // three conversation sweeps, three profile re-fetches — which is the "Save takes too
-            // long" the owner reported.
-            try await profile.uploadProfileImages(circle: data,
-                                                  poster: pendingPoster?.jpegData(compressionQuality: 0.92))
+            // THE IMAGES GO OVER, NOT JPEGs OF THEM. This used to encode both crops at FULL camera
+            // resolution here, on the main thread, purely so `uploadProfileImages` could decode them
+            // again and throw most of it away at 1280 — a 12MP encode and a 12MP decode per crop
+            // while the spinner turned, every byte of it discarded. The resize is the only encode
+            // either crop gets now, and it runs off the main actor.
+            //
+            // The rest of why Save was slow is in `uploadProfileImages`: it waited on a sweep of
+            // every conversation before it would let the sheet close.
+            try await profile.uploadProfileImages(circle: img, poster: pendingPoster)
             pendingPhoto = nil
             pendingPoster = nil
             return true
