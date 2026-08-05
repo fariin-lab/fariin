@@ -800,6 +800,10 @@ struct StoryViewer: View {
     // story steps aside; it takes the centre back once the swipe settles (identical pixels
     // at both hand-off moments = invisible swaps, and the swipe stays as smooth as ever).
     @State private var carouselInteracting = false
+    /// The sheet's sideways page-drag, live per frame (fraction of one width, signed). While it is
+    /// non-zero the carousel draws the centre copy and slides the row with the panel, so the card's
+    /// picture follows the finger instead of switching when the swipe commits.
+    @State private var sheetPageDrag: CGFloat = 0
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
@@ -1103,8 +1107,10 @@ struct StoryViewer: View {
             // display-link spring, so the story tracks both without an animation of its own.
             driveMorph(p)
         }
-        // The carousel row took over, or gave the centre back. See StoryCardMorph.setHidden.
-        .onChange(of: carouselInteracting) { _, on in StoryCardMorph.shared.setHidden(on) }
+        // The carousel row took over, or gave the centre back — by a finger on the row OR by the
+        // sheet being thrown sideways (both slide cards through the slot, both need the copy).
+        // See StoryCardMorph.setHidden.
+        .onChange(of: carouselInteracting || sheetPageDrag != 0) { _, on in StoryCardMorph.shared.setHidden(on) }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
@@ -1428,6 +1434,13 @@ struct StoryViewer: View {
             return
         }
         if morphUnavailable { morphUnavailable = false }
+        // BELOW THE CAROUSEL'S PLATEAU THE LIVE CARD MUST BE VISIBLE, whatever the row's scroller
+        // thinks. The hide (`setHidden(true)`) belongs to the copy-swap, and the copy fades out
+        // WITH the carousel under p≈0.9 — so a collapse drag that had also tickled the row's pan,
+        // or a hide stuck by a cancelled swipe, left alpha-0 under a vanished copy: his black
+        // window. Idempotent and cheap, and legit swipes only exist above the 0.95 band gate, so
+        // this cannot fight the designed exchange.
+        if p < 0.9 { StoryCardMorph.shared.setHidden(false) }
         let slot = cardSlot
         let scr = UIScreen.main.bounds
         // Same staging the morph card used: the frame shrinks across 0.08 → 0.9. The first hair of
@@ -1476,8 +1489,9 @@ struct StoryViewer: View {
                               // while the row slides past), so for the length of the swipe the
                               // carousel draws its own centre card and the real story hides
                               // underneath. Same size, same place, so the exchange is invisible.
-                              hideActiveContent: !carouselInteracting,
-                              onInteracting: { carouselInteracting = $0 })
+                              hideActiveContent: !(carouselInteracting || sheetPageDrag != 0),
+                              onInteracting: { carouselInteracting = $0 },
+                              pageDrag: sheetPageDrag)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
@@ -1521,9 +1535,19 @@ struct StoryViewer: View {
                               // the card jumps via the existing onChange choreography.
                               let live = StoriesRepository.shared.mine?.stories ?? myStories
                               guard let i = live.firstIndex(where: { $0.id == sheetStoryId }),
-                                    live.indices.contains(i + d) else { return }
-                              sheetStoryId = live[i + d].id
-                          })
+                                    live.indices.contains(i + d) else {
+                                  withAnimation(.easeOut(duration: 0.28)) { sheetPageDrag = 0 }
+                                  return
+                              }
+                              // The drag zeroes IN THE SAME TRANSACTION as the id flip, on the
+                              // panel's own 0.28s return curve — the row glides its remaining
+                              // distance while the new sheet slides in, one motion.
+                              withAnimation(.easeOut(duration: 0.28)) {
+                                  sheetStoryId = live[i + d].id
+                                  sheetPageDrag = 0
+                              }
+                          },
+                          onPageDrag: { f in sheetPageDrag = f })
             .ignoresSafeArea()
     }
 
@@ -2039,6 +2063,10 @@ struct MyStoriesCarousel: View {
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
     var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
     var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
+    /// The sheet's sideways page-drag, as a fraction of the screen (see onPageDrag). Slides the
+    /// whole row in step with the sliding panel, so the picture in the slot follows the finger
+    /// instead of switching at commit.
+    var pageDrag: CGFloat = 0
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
     // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
@@ -2070,7 +2098,7 @@ struct MyStoriesCarousel: View {
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
-         onInteracting: @escaping (Bool) -> Void = { _ in }) {
+         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: CGFloat = 0) {
         self.stories = stories
         self._activeId = activeId
         self.slotW = slotW
@@ -2080,6 +2108,7 @@ struct MyStoriesCarousel: View {
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
         self.onInteracting = onInteracting
+        self.pageDrag = pageDrag
         self._scroll = State(initialValue: CGFloat(stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0))
     }
 
@@ -2113,8 +2142,11 @@ struct MyStoriesCarousel: View {
                     ForEach(Array(stories.enumerated()), id: \.element.id) { pair in
                         let i = pair.offset
                         let s = pair.element
-                        // combinedFraction = (index offset) + scroll fraction.
-                        let cf = CGFloat(i) - scroll
+                        // combinedFraction = (index offset) + scroll fraction. `pageDrag` biases the
+                        // whole row while the SHEET is being thrown sideways: finger left → drag
+                        // fraction negative → effective scroll grows → the NEXT card slides toward
+                        // the centre, in step with the panel under the same finger.
+                        let cf = CGFloat(i) - (scroll - pageDrag)
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist

@@ -68,6 +68,11 @@ final class StoryViewersSheetView: UIView {
     /// The host switches `sheetStoryId`; everything else (list reload, carousel recentre, the
     /// frozen story jumping underneath) already follows that one value.
     var onPage: ((Int) -> Void)?
+    /// LIVE fraction of the sideways page drag (fraction of one screen width, rubber-banded past
+    /// the ends). The host slides the carousel row by it so the picture in the card slot tracks
+    /// the finger DURING the swipe (owner: "do not wait until the swipe ends before changing the
+    /// image"). Reported every .changed frame; zeroed on release, commit or not.
+    var onPageDrag: ((CGFloat) -> Void)?
     /// Whether a neighbour exists on each side — no neighbour means the drag rubber-bands.
     var hasPrev = false
     var hasNext = false
@@ -451,6 +456,8 @@ final class StoryViewersSheetView: UIView {
             let tx = rawX - pageBaselineX
             let allowed = tx < 0 ? hasNext : hasPrev
             panel.transform = CGAffineTransform(translationX: allowed ? tx : tx * 0.25, y: 0)
+            // The row above rides the same number the panel rides, every frame.
+            onPageDrag?((allowed ? tx : tx * 0.25) / max(bounds.width, 1))
         case .ended, .cancelled:
             onDragActive?(false)
             let tx = rawX - pageBaselineX
@@ -465,12 +472,16 @@ final class StoryViewersSheetView: UIView {
                     panel.transform = CGAffineTransform(translationX: dir * (w + 20), y: 0)
                 } completion: { _ in
                     self.onPage?(dir < 0 ? 1 : -1)
+                    // Zeroed IN THE SAME BEAT as the id flip: the host animates both, so the row
+                    // glides its remaining distance while the panel returns from the far edge.
+                    self.onPageDrag?(0)
                     panel.transform = CGAffineTransform(translationX: -dir * (w + 20), y: 0)
                     UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
                         panel.transform = .identity
                     }
                 }
             } else {
+                onPageDrag?(0)
                 UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
                                initialSpringVelocity: 0, options: []) {
                     panel.transform = .identity
@@ -732,6 +743,7 @@ struct StoryViewersSheet: UIViewRepresentable {
     var onRelease: (CGFloat, CGFloat, CGFloat) -> Void = { _, _, _ in }
     var onDragActive: (Bool) -> Void = { _ in }
     var onPage: (Int) -> Void = { _ in }
+    var onPageDrag: (CGFloat) -> Void = { _ in }
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
@@ -747,6 +759,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         v.onRelease = onRelease
         v.onDragActive = onDragActive
         v.onPage = onPage
+        v.onPageDrag = onPageDrag
         v.carouselBand = carouselBand
         v.hasPrev = hasPrev
         v.hasNext = hasNext

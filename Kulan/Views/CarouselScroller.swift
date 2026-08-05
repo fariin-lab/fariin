@@ -154,6 +154,16 @@ final class CarouselScrollerView: UIView {
             // A side card: glide to it on the scroller's own animation — native curve, and
             // didScroll keeps reporting so the cards ride along.
             let target = max(0, min(CGFloat(c.parent.count - 1), c.parent.scroll.rounded() + CGFloat(steps)))
+            // A NO-OP TARGET NEVER TOUCHES STATE. Tapping past the ends clamps to where the row
+            // already is, and `setContentOffset(animated:)` with an unchanged offset performs no
+            // animation and never calls scrollViewDidEndScrollingAnimation — so settle() never ran,
+            // `animating` and the host's `carouselInteracting` stuck TRUE, and the LIVE story card
+            // stayed alpha-0 behind the copy. The first sheet scroll then faded the copy out and
+            // he was looking at pure black where his story was.
+            guard abs(target * c.parent.fullDist - scroller.contentOffset.x) > 0.5 else {
+                c.parent.onTap(steps)
+                return
+            }
             animating = true
             c.parent.onInteracting(true)
             scroller.setContentOffset(CGPoint(x: target * c.parent.fullDist, y: 0), animated: true)
