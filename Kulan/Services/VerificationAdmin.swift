@@ -332,9 +332,13 @@ enum VerificationAdmin {
                 || (!v.verifiedName.isEmpty && v.verifiedName != profile.name)
         }
 
+        /// Through `ProfileStore.indexed`, so the console's rows can draw the SAME `VerifiedMark`
+        /// every other screen draws instead of hand-rolling a second tick. A console that renders
+        /// the badge its own way is a console that can disagree with the app about who is verified,
+        /// which is the one thing it exists to be certain about.
         init(peer: PeerRef, data: [String: Any]) {
             self.peer = peer
-            self.profile = UserProfile(id: peer.id, data: data)
+            self.profile = ProfileStore.indexed(UserProfile(id: peer.id, data: data))
         }
     }
 }

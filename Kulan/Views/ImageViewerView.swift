@@ -529,7 +529,10 @@ struct ImageViewerView: View {
             glassButton("chevron.left") { closeViewer() }
             Spacer()
             VStack(spacing: 1) {
-                Text(senderName).font(.subheadline.weight(.semibold))
+                HStack(spacing: 4) {
+                    Text(senderName).font(.subheadline.weight(.semibold))
+                    VerifiedMark(uid: message.authorId, size: 12)
+                }
                 Text(dateLine).font(.caption2)
             }
             .foregroundStyle(.primary)

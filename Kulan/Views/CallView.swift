@@ -274,8 +274,13 @@ struct CallView: View {
             Spacer()
             // Big bold name over a smaller status (18pt read as a toolbar label).
             VStack(spacing: 3) {
-                Text(call.otherName).font(.system(size: 26, weight: .bold)).foregroundStyle(.white).lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                // The mark matters here as much as anywhere: an incoming call from a stranger is the
+                // one screen where somebody decides whether to trust a name in under three seconds.
+                HStack(spacing: 6) {
+                    Text(call.otherName).font(.system(size: 26, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    VerifiedMark(uid: call.otherUid, size: 20)
+                }
                 // THEIR mute, shown in place of the duration. Muting was never signalled at all, so the
                 // other person just heard silence and could not tell it apart from a broken connection.
                 if call.remoteMuted, call.state == .active {
@@ -800,6 +805,7 @@ struct MiniCallBar: View {
             Text(call.otherName)
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
+            VerifiedMark(uid: call.otherUid, size: 12)
             Text(statusText)
                 .font(.system(size: 13))
                 .monospacedDigit()

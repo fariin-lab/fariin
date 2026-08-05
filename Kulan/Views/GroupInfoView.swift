@@ -686,7 +686,11 @@ struct GroupMemberSheet: View {
                         // sheet showed a member's photo and bio to every fellow group member even
                         // when they had set those to "No One" / "My Friends".
                         AvatarView(name: member.name, photoUrl: gatedMemberPhoto, size: 88)
-                        Text(member.name).font(.title2.weight(.bold))
+                        HStack(spacing: 6) {
+                            Text(member.name).font(.title2.weight(.bold))
+                            // A member card is a profile, so the mark explains itself here too.
+                            VerifiedMark(uid: member.id, size: 17, explains: true)
+                        }
                         if let h = profile?.handle, !h.isEmpty {
                             Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
                         }

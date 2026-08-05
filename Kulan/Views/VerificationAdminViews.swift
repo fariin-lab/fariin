@@ -111,12 +111,9 @@ private struct VerificationResultRow: View {
                     Text(found.name.isEmpty ? "Unnamed" : found.name)
                         .font(.system(size: 16, weight: .medium))
                         .lineLimit(1)
-                    if found.verification?.showsBadge == true {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white, Color(hex: 0x3DA1FD))
-                            .symbolRenderingMode(.palette)
-                    }
+                    // The same view the rest of the app draws. A console with its own drawing of the
+                    // badge is a console that can disagree with the app about who is verified.
+                    VerifiedMark(peer: found.peer, size: 13)
                 }
                 Text(found.handle.isEmpty ? found.peer.id : "@\(found.handle)")
                     .font(.system(size: 13))

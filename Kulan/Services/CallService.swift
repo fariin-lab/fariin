@@ -190,7 +190,9 @@ final class CallService: NSObject {
     var remoteVideoTrack: RTCVideoTrack?
     private var videoCapturer: RTCCameraVideoCapturer?
     private(set) var callId: String?
-    private var otherUid: String = ""
+    /// Readable so the call screen can draw a verified mark beside the name. Still only writable in
+    /// here: who is on the other end of a call is decided by the signalling, never by a view.
+    private(set) var otherUid: String = ""
     private var isCaller = false
 
     // Reconnection / lifecycle timers.
