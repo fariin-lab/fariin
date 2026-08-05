@@ -64,6 +64,9 @@ struct StoryDetailView: View {
     @State private var hostPause = HostPauseBox()  // @State keeps the SAME box across re-renders
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
     @State private var isFolding: Bool = false   // true while this page is mid-cube-fold (pause timer)
+    /// The video is waiting on bytes. Holds the progress bar; cleared automatically when the player
+    /// reports it is playing again. See `.storyBuffering`.
+    @State private var isBuffering: Bool = false
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
 
     private var messageViewPosition: CGFloat {
@@ -225,6 +228,14 @@ struct StoryDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyChromeHidden"))) { note in
             let hidden = (note.object as? Bool) ?? false
             if hidden != chromeHidden { chromeHidden = hidden }
+        }
+        // The player says whether it is waiting on bytes; the progress bar holds while it is. Only
+        // the page that is actually current listens, or a neighbour's stall would freeze the story
+        // you are watching.
+        .onReceive(NotificationCenter.default.publisher(for: .storyBuffering)) { note in
+            guard viewModel.currentStoryUser == model.id else { return }
+            let buffering = (note.object as? Bool) ?? false
+            if buffering != isBuffering { isBuffering = buffering }
         }
         .onChange(of: viewModel.currentStoryUser) { newValue in
             NotificationCenter.default.post(name: .stopVideo, object: nil)
@@ -580,8 +591,12 @@ private extension StoryDetailView {
             if cur.id != lastSeenItem { lastSeenItem = cur.id; onItemSeen?(cur.id) }
         }
         // Pause sources: emoji-fly animation (isTimerRunning), hold-to-pause (isPaused),
-        // and composing a reply (keyboard open) — any of them freezes the segment + progress.
-        guard !isTimerRunning, !isPaused, !hostPause.paused, !isFolding, !isDismissing, !keyboardManager.isKeyboardOpen else { return }
+        // composing a reply (keyboard open) — and now BUFFERING, because a segment that keeps
+        // counting while the video is waiting on bytes will hand the screen to the next story before
+        // this one has shown a frame. That is the progress desynchronisation: the bar was measuring
+        // time, not playback. It resumes by itself the moment the player reports it is playing.
+        guard !isTimerRunning, !isPaused, !hostPause.paused, !isFolding, !isDismissing,
+              !isBuffering, !keyboardManager.isKeyboardOpen else { return }
         
         let index = getCurrentIndex()
         let story = getStory(with: index)

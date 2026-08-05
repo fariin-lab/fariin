@@ -79,7 +79,13 @@ public enum StoryPrefetcher {
     private static func warmVideo(_ urlString: String?) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard claim(urlString) else { return }
-        videoCache.loadVideo(from: url) { _ in release(urlString) }
+        videoCache.loadVideo(from: url) { result in
+            release(urlString)
+            // ON DISK IS ONLY HALF OF IT. Building the asset, parsing the container, loading the
+            // tracks and filling the render pipeline all still happen when you ARRIVE unless they are
+            // done in advance, and all of it is visible as a wait. See StoryItemPreloader.
+            if case .success(let file) = result { StoryItemPreloader.warm(file) }
+        }
     }
 
     private static func warmImage(_ urlString: String?) {

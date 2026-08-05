@@ -38,6 +38,17 @@ final class PlayerView: UIView {
     var posterImage: UIImage?
     /// The poster this view was told about, so a late fetch can be dropped if the story moved on.
     private var posterURL: String?
+    /// Whether we have already told the host it is buffering, so the notification is posted on the
+    /// EDGE rather than on every KVO tick — `timeControlStatus` fires often.
+    private var didReportBuffering = false
+
+    /// Tell the story's progress bar to hold, or to carry on. One notification, posted only when the
+    /// answer actually changes.
+    private func setBuffering(_ buffering: Bool) {
+        guard didReportBuffering != buffering else { return }
+        didReportBuffering = buffering
+        NotificationCenter.default.post(name: .storyBuffering, object: buffering)
+    }
 
     // MARK: - Initializers
     override init(frame: CGRect) {
@@ -143,16 +154,27 @@ private extension PlayerView {
         // switch. The default (.soloAmbient) muted every story video on a silenced phone.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         self.player?.replaceCurrentItem(with: nil)
-        self.player?.replaceCurrentItem(with: .init(url: url))
+        // AN ITEM PREPARED WHILE YOU WERE WATCHING THE STORY BEFORE, if there is one. It has already
+        // had its tracks loaded and its first frames decoded, so it starts on the frame rather than
+        // on a beat of nothing. See StoryItemPreloader.
+        self.player?.replaceCurrentItem(with: StoryItemPreloader.take(url) ?? .init(url: url))
 
-        observation = player?.observe(\.timeControlStatus, options: .new) { [weak self] player, change in
+        observation = player?.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] player, change in
             guard let self else { return }
-            if player.timeControlStatus == .playing {
+            switch player.timeControlStatus {
+            case .playing:
                 self.removeActivityIndicatory()
+                self.setBuffering(false)
                 self.state = .started
                 self.mediaState?(self.state, self.duration)
-            } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            case .waitingToPlayAtSpecifiedRate:
+                // GENUINELY WAITING ON BYTES, so the progress bar must wait too. Without this the
+                // segment kept counting through a stall and the story moved on while the video was
+                // still trying to start — the progress desynchronisation.
                 self.addActivityIndicatory()
+                self.setBuffering(true)
+            default:
+                self.setBuffering(false)
             }
         }
 
@@ -165,7 +187,18 @@ private extension PlayerView {
             DispatchQueue.main.async { self?.handleFailedItem() }
         }
 
-        self.player?.automaticallyWaitsToMinimizeStalling = false
+        // LET AVFOUNDATION WAIT. This was forced to `false`, which tells the player to start the
+        // instant it is asked whether or not a single frame is buffered — so on anything less than a
+        // good connection a story began by stuttering, which is precisely the complaint. The default
+        // behaviour is to hold until it can play through, and holding for a moment on a picture beats
+        // starting on a stutter.
+        self.player?.automaticallyWaitsToMinimizeStalling = true
+        // AND DECODE THE FIRST FRAMES BEFORE SHOWING ANYTHING. `preroll` fills the render pipeline so
+        // the first thing on screen is a frame rather than the black the layer starts as.
+        self.player?.preroll(atRate: 1) { [weak self] _ in
+            guard let self, self.url == url || self.cachedFileInUse == url else { return }
+            self.removeActivityIndicatory()
+        }
         self.getVideoLength(videoURL: url)
         self.playerLayer.player = self.player
         self.playerLayer.videoGravity = .resizeAspectFill

@@ -20,4 +20,8 @@ extension NSNotification.Name {
     // remove it from the database.
     static let deleteCurrentStoryItem = Notification.Name("deleteCurrentStoryItem")
     static let storyItemDeleted = Notification.Name("storyItemDeleted")
+    /// The video is waiting on bytes (`object: Bool`). The progress bar holds while this is true, so
+    /// a stalled clip cannot have its segment counted out from under it — the desynchronisation where
+    /// a story moved on while the video was still trying to start.
+    static let storyBuffering = Notification.Name("storyBuffering")
 }
