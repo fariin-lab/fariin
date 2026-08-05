@@ -269,4 +269,19 @@ final class StorySoloHostVC: UIViewController {
         // no picture of the story anywhere — see StoryCardMorph.
         StoryCardMorph.shared.attach(cardContainer)
     }
+
+    /// Same rule as StoryPagerVC: the at-rest black lives inside the cover, so a zoom-dismiss
+    /// would shrink the strip above the card into a black header on the story. The instant a real
+    /// dismissal starts, the black steps aside and only the card (opaque by construction) pulls
+    /// away; a cancelled drag restores it via viewWillAppear. A dismissal cannot start while the
+    /// viewers sheet is up — its window pans subordinate Apple's — so this can never undercut the
+    /// sheet's black canvas.
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed { view.backgroundColor = .clear }
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        view.backgroundColor = .black
+    }
 }

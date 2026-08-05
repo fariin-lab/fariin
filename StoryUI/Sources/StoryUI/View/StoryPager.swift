@@ -37,7 +37,7 @@ struct StoryPager: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
-        let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
+        let pager = StoryPagerVC(transitionStyle: .scroll, navigationOrientation: .horizontal)
         pager.dataSource = context.coordinator
         pager.delegate = context.coordinator
         pager.view.backgroundColor = .black   // solid card; slides as one unit during dismiss
@@ -479,6 +479,33 @@ struct StoryPager: UIViewControllerRepresentable {
         // "_UI…" exclusion protected the CUSTOM card pan from double-driving; that pan is
         // inert now, and excluding the system pan would kill the native close outright.)
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+/// The pager, with one job of its own: DROP THE BLACK THE MOMENT A REAL DISMISSAL STARTS.
+///
+/// `view.backgroundColor` is black at rest so the strips above and below the 9:16 card read as the
+/// screen's own black. But that black lives INSIDE the cover, so Apple's zoom-dismiss shrank it
+/// along with everything else and the strip above the card arrived as a black header sitting on
+/// the story — the band he circled. `3bd471d` fixed this for the library's own down-pan (its
+/// .began clears the backgrounds), but the zoom presentations never run that pan: their dismissal
+/// is Apple's, and nothing on that path ever cleared the black. This is that path's clear.
+///
+/// `viewWillDisappear` + `isBeingDismissed` is the exact signal: it fires the instant a dismissal
+/// transition starts — the interactive drag, the X close, the auto-close — and for none of the
+/// things that must NOT go clear (page swaps never disappear the pager; backgrounding is not
+/// `isBeingDismissed`). A cancelled drag runs `viewWillAppear` again, which restores the black.
+/// The card itself stays opaque throughout — it paints its own black inside its own rounded rect
+/// (StoryDetailView) — so what pulls away is the picture and nothing else, which is what the
+/// Snapchat reference he sent actually is.
+final class StoryPagerVC: UIPageViewController {
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed { view.backgroundColor = .clear }
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        view.backgroundColor = .black
     }
 }
 
