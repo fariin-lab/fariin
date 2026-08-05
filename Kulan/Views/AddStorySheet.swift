@@ -126,6 +126,13 @@ struct StoryLibraryPicker: View {
             // permission prompt for a screen that is not showing the library yet.
             .task { store.load(); store.loadAlbums() }
         }
+        // ALWAYS DARK, like every story surface (owner's standing rule, and his 2026-08-05
+        // screenshot: on a light-mode phone this picker came up with a WHITE header over dark
+        // photos). `.environment`, not `.preferredColorScheme` — KulanApp pins the scheme outside
+        // RootView, so an inner preferredColorScheme is dead code; the environment value is what
+        // the chrome and controls actually read. On the picker itself so every presentation — the
+        // camera's library button and both editors' + — is dark without each caller remembering.
+        .environment(\.colorScheme, .dark)
     }
 
     // MARK: - Photos tab
