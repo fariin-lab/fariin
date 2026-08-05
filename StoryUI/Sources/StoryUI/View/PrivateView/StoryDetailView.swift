@@ -548,7 +548,11 @@ private extension StoryDetailView {
         // And the fold may fire ONLY during a live horizontal page swipe. Apple's zoom-dismiss
         // (the native close) moves every page's global minX while it shrinks the cover — the
         // cube folding along with it was the true source of the fast-flick "explosions".
-        if let s = StoryPager.horizontalScroll, !(s.isTracking || s.isDragging || s.isDecelerating) {
+        // NIL MEANS FLAT TOO: the solo host (my own story) never has a horizontal scroll, and the
+        // friends pager has none for the first beat after mount — in both cases nothing is being
+        // page-swiped, so nothing may fold. The old `if let` fell through on nil and computed an
+        // angle, which let the OPEN hero fold the page before the pager had bound its scroll.
+        guard let s = StoryPager.horizontalScroll, s.isTracking || s.isDragging || s.isDecelerating else {
             return .zero
         }
         // StoryUI library's cube (tiskender2/StoryUI): angle = 45° × (minX / width). Combined with the

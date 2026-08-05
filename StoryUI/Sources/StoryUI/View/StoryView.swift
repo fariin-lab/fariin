@@ -69,36 +69,65 @@ public struct StoryView: View {
         self.swipeUpEnabled = swipeUpEnabled
     }
     
+    /// My own story is always a SINGLE bucket, and it is the only place the viewers-sheet morph
+    /// runs — so it gets the solo host, which has no UIPageViewController and no UIScrollView for
+    /// the morph to fight (Telegram's shape: one plain container, transformed live). Friends keep
+    /// the pager for user-to-user cube paging.
+    private var isSoloMine: Bool { stories.count == 1 && (stories.first?.isMine ?? false) }
+
     public var body: some View {
         if isPresented {
-            // UIKit pager owns left/right (flat slide) AND the swipe-down dismiss. The card moves in pure
-            // UIKit (the pan sets the view transform directly = native smooth), so no SwiftUI offset here.
-            // The down pan uses require(toFail:) on the pager scroll, so slide and dismiss never overlap.
-            StoryPager(
-                viewModel: viewModel,
-                isPresented: $isPresented,
-                userClosure: userClosure,
-                onProfile: onProfile,
-                onItemSeen: onItemSeen,
-                showMore: showMore,
-                onDragChanged: { dy in onDrag?(dy) },   // fade the host overlays as the card slides
-                // Swipe-commit close: the card has ALREADY slid off in UIKit, so remove the cover with
-                // NO dismissal animation. Letting the host's zoom-back transition play here re-laid-out
-                // the still-mounted story content into the shrinking cover frame — image and reply bar
-                // exploded across a stretched black card for ~0.3s on every fast-flick close. The hero
-                // zoom-back stays for the X button / auto-close (they dismiss via other paths).
-                onCommit: {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) { isPresented = false }
-                },
-                onCancel: { onDrag?(0) },               // sprang back; restore overlays
-                onSwipeUp: { onSwipeUp?() },            // up-swipe → host opens the views sheet
-                onSwipeUpChanged: { up in onSwipeUpChanged?(up) },
-                onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
-                dismissEnabled: dismissEnabled,
-                swipeUpEnabled: swipeUpEnabled
-            )
+            Group {
+                if isSoloMine {
+                    StorySoloPager(
+                        viewModel: viewModel,
+                        isPresented: $isPresented,
+                        userClosure: userClosure,
+                        onProfile: onProfile,
+                        onItemSeen: onItemSeen,
+                        showMore: showMore,
+                        onDragChanged: { dy in onDrag?(dy) },
+                        onCommit: {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { isPresented = false }
+                        },
+                        onCancel: { onDrag?(0) },
+                        onSwipeUpChanged: { up in onSwipeUpChanged?(up) },
+                        onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
+                        dismissEnabled: dismissEnabled
+                    )
+                } else {
+                    // UIKit pager owns left/right (flat slide) AND the swipe-down dismiss. The card moves in pure
+                    // UIKit (the pan sets the view transform directly = native smooth), so no SwiftUI offset here.
+                    // The down pan uses require(toFail:) on the pager scroll, so slide and dismiss never overlap.
+                    StoryPager(
+                        viewModel: viewModel,
+                        isPresented: $isPresented,
+                        userClosure: userClosure,
+                        onProfile: onProfile,
+                        onItemSeen: onItemSeen,
+                        showMore: showMore,
+                        onDragChanged: { dy in onDrag?(dy) },   // fade the host overlays as the card slides
+                        // Swipe-commit close: the card has ALREADY slid off in UIKit, so remove the cover with
+                        // NO dismissal animation. Letting the host's zoom-back transition play here re-laid-out
+                        // the still-mounted story content into the shrinking cover frame — image and reply bar
+                        // exploded across a stretched black card for ~0.3s on every fast-flick close. The hero
+                        // zoom-back stays for the X button / auto-close (they dismiss via other paths).
+                        onCommit: {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) { isPresented = false }
+                        },
+                        onCancel: { onDrag?(0) },               // sprang back; restore overlays
+                        onSwipeUp: { onSwipeUp?() },            // up-swipe → host opens the views sheet
+                        onSwipeUpChanged: { up in onSwipeUpChanged?(up) },
+                        onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
+                        dismissEnabled: dismissEnabled,
+                        swipeUpEnabled: swipeUpEnabled
+                    )
+                }
+            }
             .ignoresSafeArea()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: viewModel.currentStoryUser) { new in onUserChanged?(new) }   // mark each viewed bucket

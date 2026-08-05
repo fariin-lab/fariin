@@ -731,35 +731,14 @@ struct StoryViewer: View {
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
-    @State private var closeDragStart: CGFloat? = nil // progress at grab for the backdrop collapse drag
-    // SINGLE-OWNER drag arbiter: `viewersProgress` may be written by three drag handlers (sheet
-    // header, sheet list, backdrop collapse) each with its OWN grab anchor. When iOS cancels a drag
-    // mid-flight (no onEnded!) its anchor went stale, and a later touch could engage TWO handlers
-    // whose anchors disagree — they alternated writes EVERY FRAME (frame-measured: the whole layout
-    // ping-ponged ~90pt between two states = the violent sheet "vibrating / two sheets fighting").
-    // The arbiter lets exactly ONE handler write at a time; a claim after >0.25s of silence is
-    // FRESH and forces re-anchoring at the CURRENT progress, healing stale anchors for free.
-    // A class held in @State: mutating it never invalidates the view (no re-render mid-gesture).
-    final class SheetDragArbiter {
-        enum Claim { case fresh, continuing }
-        private var owner: String?
-        private var lastEvent = Date.distantPast
-        var onFreshClaim: (() -> Void)?   // StoryViewer hooks this to cancel a running snap animation
-        func claim(_ id: String) -> Claim? {
-            let now = Date()
-            defer { lastEvent = now }
-            if owner == id {
-                if now.timeIntervalSince(lastEvent) > 0.25 { onFreshClaim?(); return .fresh }
-                return .continuing
-            }
-            if owner == nil || now.timeIntervalSince(lastEvent) > 0.25 { owner = id; onFreshClaim?(); return .fresh }
-            return nil
-        }
-        func release(_ id: String) { if owner == id { owner = nil } }
-        // A finger is actively driving progress (events within the fresh-claim window).
-        var ownedRecently: Bool { owner != nil && Date().timeIntervalSince(lastEvent) < 0.25 }
-    }
-    @State private var sheetDragArbiter = SheetDragArbiter()
+    // THE ARBITER IS GONE, because the race it refereed is gone. It existed for three SwiftUI
+    // `DragGesture`s writing one progress with three stale-able anchors. Every drag is a UIKit pan
+    // inside StoryViewersSheetView now, location-partitioned so ONE recognizer owns any given
+    // touch, and UIKit delivers .cancelled reliably — there is nothing left to arbitrate. The
+    // sheet reports "a finger owns progress" through this box instead (a class in @State: writing
+    // it never invalidates the view, so no re-render mid-gesture).
+    final class FingerBox { var down = false }
+    @State private var sheetFinger = FingerBox()
     @State private var progressWatchdog: Task<Void, Never>?   // parked-sheet self-heal (see onChange below)
 
     // Drives `viewersProgress` frame-by-frame with a display-link spring instead of
@@ -776,10 +755,15 @@ struct StoryViewer: View {
         private var write: ((CGFloat) -> Void)?
         private var completion: (() -> Void)?
 
-        func animate(from: CGFloat, to: CGFloat,
+        /// `velocity` is the finger's release velocity in progress-units/sec (+ = opening), handed
+        /// straight to the spring so a flick continues at the speed it was thrown instead of
+        /// restarting from rest. (Telegram animates with a fixed 0.4s ease-out and hides the
+        /// discontinuity with additive animations; a spring fed the real velocity is the same feel
+        /// with a scalar we own.)
+        func animate(from: CGFloat, to: CGFloat, velocity initialVelocity: CGFloat = 0,
                      write: @escaping (CGFloat) -> Void, completion: (() -> Void)? = nil) {
             cancel()
-            current = from; target = to; velocity = 0
+            current = from; target = to; velocity = initialVelocity
             self.write = write; self.completion = completion
             let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
             l.add(to: .main, forMode: .common)
@@ -800,7 +784,9 @@ struct StoryViewer: View {
                 done?()
                 return
             }
-            write?(current)
+            // A real release velocity can carry the spring a hair past its target for a frame;
+            // progress is a 0…1 fraction everywhere downstream, so never publish outside it.
+            write?(max(0, min(1, current)))
         }
     }
     @State private var sheetAnimator = SheetProgressAnimator()
@@ -955,15 +941,7 @@ struct StoryViewer: View {
             // behind it — that limitation is what pushed the old design to render story cards
             // INSIDE the sheet. Both layers share `viewersProgress`, so the drag and the release
             // spring stay perfectly in sync.
-            if showViewers {
-                // UIKIT NOW (owner's original request, the half I had left). Same `viewersProgress`
-                // in and out, so the live story's morph is driven by exactly the number the finger
-                // is writing — see StoryViewersSheetUIKit for what the move actually bought.
-                StoryViewersSheet(activeStoryId: sheetStoryId,
-                                  progress: $viewersProgress,
-                                  onClose: closeViewers)
-                    .ignoresSafeArea()
-            }
+            if showViewers { viewersSheetLayer }
         }
     }
 
@@ -1088,8 +1066,7 @@ struct StoryViewer: View {
         .onChange(of: isUploadingItem) { _, up in
             NotificationCenter.default.post(name: .init(up ? "pauseStory" : "resumeStory"), object: nil)
         }
-        // A fresh drag claim takes over from any in-flight snap animation (finger beats spring).
-        .onAppear { sheetDragArbiter.onFreshClaim = { sheetAnimator.cancel() } }
+        // (The arbiter's finger-beats-spring hook lives in the sheet's onDragActive now.)
         // Safety net: the sheet unmounting must NEVER leave a stray progress value behind
         // (a tiny leftover hid the owner footer with no sheet in sight — user screenshot).
         // THE SNAPSHOT MACHINERY IS GONE FROM HERE, and it had already stopped doing anything.
@@ -1353,13 +1330,14 @@ struct StoryViewer: View {
                     return
                 }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
-                // Build 216's exact release rule (the feel the user wants): fling weight 0.3,
-                // open past 0.4 — a modest upward pull commits, a small nudge settles back.
-                let projected = viewersProgress + (velocity / sheetH) * 0.3
-                if projected > 0.4 {
-                    sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
+                // Telegram's open rule, in points (viewListDismissPanGesture .ended): commit past
+                // 200pt of pull, or past 100pt with 100pt/s of speed behind it. The finger's
+                // velocity rides into the spring, so a flick's sheet arrives at flick speed.
+                if translation > 200 || (translation > 100 && velocity > 100) {
+                    sheetAnimator.animate(from: viewersProgress, to: 1, velocity: velocity / sheetH,
+                                          write: { viewersProgress = $0 })
                 } else {
-                    closeViewers()
+                    closeViewers(velocity: velocity / sheetH)
                 }
             },
             dismissEnabled: ownSwipeDismiss,   // zoom presentations: Apple's dismiss ONLY (user's final call);
@@ -1505,52 +1483,65 @@ struct StoryViewer: View {
                 .allowsHitTesting(carIn > 0.5)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .contentShape(Rectangle())
-        .onTapGesture { closeViewers() }   // tap the dark area around the cards → back to full screen
-        // Dragging DOWN on the carousel/story area COLLAPSES the sheet (the active story grows back to
-        // full screen) — it must NOT dismiss the whole viewer to the chat list. Horizontal drags belong
-        // to the carousel (guarded out here), so this coexists with the cover-flow swipe.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 12)
-                .onChanged { v in
-                    guard abs(v.translation.height) > abs(v.translation.width), v.translation.height > 0 else { return }
-                    // ONE writer at a time (see SheetDragArbiter). A fresh claim re-anchors at the
-                    // CURRENT progress, so a stale anchor from a cancelled drag can never jump/fight.
-                    guard let claim = sheetDragArbiter.claim("backdrop") else { return }
-                    let h = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
-                    if claim == .fresh || closeDragStart == nil {
-                        closeDragStart = viewersProgress + v.translation.height / h   // anchor so current touch maps to current progress
-                    }
-                    var next = max(0, min(1, (closeDragStart ?? 1) - v.translation.height / h))
-                    // Same stale-anchor teleport guard as the sheet drag: a cancelled stroke's
-                    // leftover anchor must never let the next stroke's first event jump the story.
-                    if abs(next - viewersProgress) > 0.12 {
-                        closeDragStart = viewersProgress + v.translation.height / h
-                        next = viewersProgress
-                    }
-                    viewersProgress = next
-                }
-                .onEnded { v in
-                    sheetDragArbiter.release("backdrop")
-                    guard let start = closeDragStart else { return }   // guarded-out drag (horizontal) → not ours
-                    closeDragStart = nil
-                    let h = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
-                    let projected = start - v.predictedEndTranslation.height / h
-                    // 0.8 (was 0.6): demanding nearly half the sheet's travel made ordinary drags
-                    // bounce back over and over ("scroll down to close is soo hard"). A deliberate
-                    // downward pull now commits; only a tiny nudge springs back.
-                    if projected < 0.8 { closeViewers() }   // collapse → story reopens full screen
-                    else { sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 }) }
-                }
-        )
+        // NO gestures here any more. Every touch above the sheet panel is routed by
+        // StoryViewersSheetView.hitTest now: the dark area's tap-to-collapse and the vertical
+        // drag that collapses the sheet (story card included) are ITS UIKit recognizers, and the
+        // only thing that reaches this SwiftUI layer is the carousel band while the sheet is
+        // fully open — the cover-flow swipe and the card taps. The old SwiftUI DragGesture here
+        // was one of the three writers the arbiter existed to referee.
         .ignoresSafeArea()
     }
+    /// The viewers sheet, UIKit (owner's original request). Same `viewersProgress` in and out, so
+    /// the live story's morph is driven by exactly the number the finger is writing. The sheet owns
+    /// EVERY touch above its panel except the carousel band it is told about; releases come back
+    /// through `settleViewers`, the one spring — see StoryViewersSheetUIKit's header for the
+    /// routing map.
+    private var viewersSheetLayer: some View {
+        StoryViewersSheet(activeStoryId: sheetStoryId,
+                          progress: $viewersProgress,
+                          carouselBand: carouselBandRect,
+                          onClose: { closeViewers() },
+                          onCollapseTap: { closeViewers() },
+                          onRelease: { p, start, v in settleViewers(progress: p, dragStart: start, velocityUp: v) },
+                          onDragActive: { down in
+                              sheetFinger.down = down
+                              if down { sheetAnimator.cancel() }   // finger beats spring
+                          })
+            .ignoresSafeArea()
+    }
+
+    /// The carousel row's rectangle on screen — the one strip of the sheet's territory that passes
+    /// through to SwiftUI while the sheet is open, so the cover-flow swipe and card taps keep
+    /// working. Derived from the same `cardSlot` the carousel lays out from, so they cannot drift.
+    private var carouselBandRect: CGRect {
+        let slot = cardSlot
+        return CGRect(x: 0, y: slot.top, width: UIScreen.main.bounds.width, height: slot.h)
+    }
+
+    /// THE ONE RELEASE RULE, for every finger that lets go of the sheet — the panel drag, the
+    /// story-card drag, and the list hand-off all end here. Telegram's thresholds, read from
+    /// `viewListDismissPanGesture` in StoryItemSetContainerComponent and converted to our progress
+    /// units (their rule is on translation in points, screen-height fractions): close on a
+    /// deliberate pull OR a modest flick; anything less springs back open. Their old counterpart
+    /// here demanded 80% of the sheet's travel, which is why "scroll down to close is soo hard".
+    private func settleViewers(progress p: CGFloat, dragStart: CGFloat, velocityUp: CGFloat) {
+        let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
+        let droppedPts = (dragStart - p) * sheetH          // + = dragged toward closed
+        let vDownPts = -velocityUp * sheetH                // + = moving toward closed, pt/s
+        // Telegram: close if the drag covered ≥30% of the screen, or ≥5% with ≥150pt/s of speed.
+        let screenH = UIScreen.main.bounds.height
+        if droppedPts >= screenH * 0.30 || (droppedPts >= screenH * 0.05 && vDownPts >= 150) {
+            closeViewers(velocity: velocityUp)
+        } else {
+            sheetAnimator.animate(from: p, to: 1, velocity: velocityUp, write: { viewersProgress = $0 })
+        }
+    }
+
     private func openViewers() {
         // Re-open allowed even while the previous close is still unmounting: animating progress back
         // to 1 cancels the close animator (and with it the unmount completion) — no more
         // "swipe up does nothing for 0.42s after closing".
         guard currentIsMine else { return }
-        closeDragStart = nil   // never let a cancelled drag leave a stale anchor
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
         NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)   // keep the exact pre-pull blur
         NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)   // chrome-only exit
@@ -1572,9 +1563,9 @@ struct StoryViewer: View {
             guard !Task.isCancelled, showViewers,
                   viewersProgress > 0.02, viewersProgress < 0.995,
                   // Never snap under a LIVE finger (audit M3): a held-still drag writes nothing
-                  // for 0.8s but is still owned; a cancelled drag's stale owner goes quiet and
-                  // the heal proceeds.
-                  !openDragging, closeDragStart == nil, !sheetDragArbiter.ownedRecently
+                  // for 0.8s but the sheet still reports the finger down; UIKit pans deliver
+                  // .cancelled reliably, so a dead finger always clears the flag.
+                  !openDragging, !sheetFinger.down
             else { return }
             if viewersProgress >= 0.5 {
                 sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
@@ -1584,9 +1575,12 @@ struct StoryViewer: View {
         }
     }
 
-    private func closeViewers() {
-        closeDragStart = nil   // never let a cancelled drag leave a stale anchor
-        sheetAnimator.animate(from: viewersProgress, to: 0, write: { viewersProgress = $0 }) {
+    /// Collapse the sheet: the story grows back to full screen and the viewer STAYS OPEN. This is
+    /// the only close path there is — every way out of the sheet (drag, tap, centre-card tap,
+    /// self-heal) funnels here, and none of them may dismiss the whole viewer. (Telegram's
+    /// closePressed does the same check in as many words: list open → hide the list only.)
+    private func closeViewers(velocity: CGFloat = 0) {
+        sheetAnimator.animate(from: viewersProgress, to: 0, velocity: velocity, write: { viewersProgress = $0 }) {
             // Reaching here means the close actually finished (a re-open cancels this animator).
             showViewers = false
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)   // chrome back

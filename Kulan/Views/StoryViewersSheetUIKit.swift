@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = .failed`
 
 // The story viewers sheet, in UIKit.
 //
@@ -14,12 +15,37 @@ import UIKit
 // UIKit does, and it is one method. `gestureRecognizer(_:shouldRecognizeSimultaneouslyWith:)` lets the
 // sheet's pan and the table's own pan run together, and the handler decides which of them owns the
 // movement on each event by asking one question: is the list at its top and is the finger going down.
-// That is the whole hand-off, and it is what makes the sheet and the list feel like one surface —
-// which is what he asked for and what the arbiter was imitating.
 //
-// WHAT IS STILL SWIFTUI, DELIBERATELY: the row's contents, through `UIHostingConfiguration`. The
-// scrolling and the gestures are the part that had to be native; the avatar, the reaction badge and
-// the tick are already right and re-drawing them in UIKit would only be a chance to make them differ.
+// TOUCH ROUTING (the 2026-08-05 rebuild — Telegram's model, read from their source):
+//
+// This view is full-screen, and `hitTest` partitions the screen into exactly three territories so
+// every touch has ONE owner:
+//   1. THE PANEL — the sheet machinery: its own pan (drag the sheet, hand off to the list), the
+//      tabs, the search, the table.
+//   2. THE CAROUSEL BAND (a rect the host publishes), only while the sheet is fully open — passed
+//      through to SwiftUI, where the carousel's own horizontal drag and card taps live.
+//   3. EVERYTHING ELSE ABOVE THE PANEL — ours: a tap collapses the sheet, and a pan on the WINDOW
+//      drags the story card + sheet as one connected surface (on the window because the carousel
+//      band hit-tests through this view, and a vertical drag on the shrunken card must collapse
+//      the sheet exactly like Telegram's; only the band's horizontal drags are refused, so the
+//      cover-flow keeps them).
+//
+// WHY THE WINDOW PANS EXIST AT ALL: Apple's zoom transition installs its own interactive-dismiss pan
+// up the presentation chain, and it sees every touch in the cover no matter who hit-tests it. That
+// pan tracking a sheet drag is why dragging the sheet down used to close the WHOLE story viewer.
+// While this view is in a window, every system "_UI…" pan up the chain is made to wait for ours
+// (`require(toFail:)`), and ours begin on every vertical drag — so the system dismiss can never
+// engage while the sheet exists, and is untouched the moment it unmounts. Telegram does the same
+// thing by policy: their outer gestures are refused entirely while the view list is open
+// (`allowsInteractiveGestures() == false` in StoryItemSetContainerComponent).
+//
+// RELEASE: no internal animator any more. Every finger-up reports (progress, where the drag started,
+// velocity) to the host, which owns the ONE spring that settles sheet + story morph + carousel on the
+// same per-frame value. The old `UIViewPropertyAnimator` settle animated the panel beautifully and
+// reported progress ONCE — the story snapped to its end state while the sheet glided, which is
+// exactly the disconnection the owner reported.
+//
+// WHAT IS STILL SWIFTUI, DELIBERATELY: the row's contents, through `UIHostingConfiguration`.
 final class StoryViewersSheetView: UIView {
 
     // MARK: Public surface
@@ -29,6 +55,17 @@ final class StoryViewersSheetView: UIView {
     var onProgress: ((CGFloat) -> Void)?
     var onClose: (() -> Void)?
     var onSendMessage: ((StoryViewerInfo) -> Void)?
+    /// Finger lifted: (progress now, progress when the drag began, velocity in progress-units/sec,
+    /// + = opening). The host decides open/close (Telegram's thresholds) and runs the one spring.
+    var onRelease: ((CGFloat, CGFloat, CGFloat) -> Void)?
+    /// A finger owns progress right now (any of our pans is live). The host cancels its spring on
+    /// true and holds its parked-sheet watchdog while it is true.
+    var onDragActive: ((Bool) -> Void)?
+    /// Tap on the dark area above the panel → collapse (NOT dismiss the viewer).
+    var onCollapseTap: (() -> Void)?
+    /// Where the my-stories carousel row sits (screen coords). Touches here pass through to SwiftUI
+    /// while the sheet is fully open, so the cover-flow swipe and card taps keep working.
+    var carouselBand: CGRect = .zero
 
     /// Height as a fraction of the screen. Matches `StoryViewersBottomSheet.heightFraction`, which the
     /// carousel still derives its slot from.
@@ -59,14 +96,35 @@ final class StoryViewersSheetView: UIView {
     /// The uids of my 1:1 chats, for the Friends tab. Read once per filter rather than per row.
     private var friendUids: Set<String> = []
 
+    // MARK: Gestures
+
     private lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+    private lazy var tapAbove = UITapGestureRecognizer(target: self, action: #selector(handleTapAbove(_:)))
+    /// The drag on the story card / dark area, attached to the WINDOW so it also sees the carousel
+    /// band (which hit-tests through to SwiftUI). NOT direction-locked: every drag above the panel
+    /// must be OURS (a horizontal one just moves nothing), because any drag we fail is a drag
+    /// Apple's interactive dismiss is free to take — the whole-viewer-closes bug through a side
+    /// door. The one exception is horizontal drags in the carousel band, refused in shouldBegin so
+    /// the cover-flow keeps them (bandGuard blocks the system pans there instead).
+    private lazy var outsidePan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
+    /// Begins on horizontal drags in the carousel band and does NOTHING except exist: the system
+    /// dismiss pans are subordinated to it, so a cover-flow swipe can never feed Apple's
+    /// interactive dismiss. `cancelsTouchesInView = false` keeps the SwiftUI carousel tracking.
+    private lazy var bandGuard = DirectionalSheetPan(axis: .horizontal, target: self, action: #selector(handleBandGuard(_:)))
+    private weak var installedWindow: UIWindow?
+
     /// Progress when the current drag began, so the finger maps 1:1 from wherever it grabbed.
     private var dragStart: CGFloat = 0
+    /// Translation already accumulated when the pan engaged (the recognizer begins ~10pt in);
+    /// subtracted so the first frame moves nothing — the engagement snap the owner once measured.
+    private var panBaselineY: CGFloat = 0
+    private var outsideDragStart: CGFloat = 0
+    private var outsideBaselineY: CGFloat = 0
     /// True once a drag has decided the SHEET owns it rather than the list.
     private var dragOwnsSheet = false
-    private var settle: UIViewPropertyAnimator?
 
     private var sheetHeight: CGFloat { bounds.height * Self.heightFraction }
+    private var panelTop: CGFloat { bounds.height - sheetHeight * progress }
 
     // MARK: Init
 
@@ -76,9 +134,69 @@ final class StoryViewersSheetView: UIView {
         buildHierarchy()
         pan.delegate = self
         addGestureRecognizer(pan)
+        tapAbove.delegate = self
+        addGestureRecognizer(tapAbove)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    // MARK: Touch routing
+
+    /// The three territories. See the header note.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard bounds.contains(point) else { return nil }
+        if point.y >= panelTop { return super.hitTest(point, with: event) }
+        // The carousel is only interactive once the sheet has settled open (it fades in over the
+        // last tenth of the pull) — mid-drag its band belongs to us like everything else.
+        if progress > 0.95, carouselBand.contains(point) { return nil }
+        return self
+    }
+
+    /// The window pans install when the sheet enters a window and leave with it. They live on the
+    /// window because the carousel band hit-tests through this view: a pan attached HERE would never
+    /// see a vertical drag that starts on the shrunken story card, and that drag is the single most
+    /// natural collapse gesture there is (it is how Telegram closes theirs).
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if let old = installedWindow, old !== window {
+            old.removeGestureRecognizer(outsidePan)
+            old.removeGestureRecognizer(bandGuard)
+            installedWindow = nil
+        }
+        guard let window else { return }
+        if installedWindow !== window {
+            outsidePan.delegate = self
+            bandGuard.delegate = self
+            bandGuard.cancelsTouchesInView = false
+            window.addGestureRecognizer(outsidePan)
+            window.addGestureRecognizer(bandGuard)
+            installedWindow = window
+        }
+        subordinateSystemPans()
+    }
+
+    /// Every system "_UI…" pan up the chain (Apple's zoom-transition interactive dismiss lives
+    /// there) must wait for OUR pans to fail while the sheet exists. Ours begin on every vertical
+    /// drag anywhere and on horizontal drags in the carousel band, so the system dismiss never
+    /// engages under the sheet — dragging the sheet down can no longer close the whole viewer.
+    /// Name is READ only, no private API is called; if iOS renames them this degrades to the old
+    /// behaviour rather than breaking. Requirements on recognizers that are later removed from the
+    /// window are inert (a detached recognizer is not analyzing any touch), so Apple's dismiss is
+    /// back to normal the moment the sheet unmounts.
+    private func subordinateSystemPans() {
+        var node: UIView? = superview
+        while let cur = node {
+            for g in cur.gestureRecognizers ?? [] {
+                guard g is UIPanGestureRecognizer, g !== outsidePan, g !== bandGuard else { continue }
+                if NSStringFromClass(type(of: g)).hasPrefix("_UI") {
+                    g.require(toFail: pan)
+                    g.require(toFail: outsidePan)
+                    g.require(toFail: bandGuard)
+                }
+            }
+            node = cur.superview   // ends at (and includes) the UIWindow
+        }
+    }
 
     private func buildHierarchy() {
         let panel = UIView()
@@ -180,37 +298,7 @@ final class StoryViewersSheetView: UIView {
         onProgress?(clamped)
     }
 
-    private func animate(to target: CGFloat, velocity: CGFloat) {
-        settle?.stopAnimation(true)
-        // Apple's own spring, with the finger's velocity handed straight to it — which is what makes a
-        // flick continue at the speed it was thrown instead of restarting from nothing. The SwiftUI
-        // version had to run its own display-link spring to get this.
-        let distance = max(1, abs(target - progress) * sheetHeight)
-        let initial = CGVector(dx: 0, dy: min(30, abs(velocity) / distance))
-        let timing = UISpringTimingParameters(mass: 1, stiffness: 260, damping: 28, initialVelocity: initial)
-        let a = UIViewPropertyAnimator(duration: 0, timingParameters: timing)
-        let from = progress
-        a.addAnimations { [weak self] in
-            guard let self else { return }
-            // A property animator interpolates its own `fractionComplete`, so stepping progress here
-            // gives the same curve to the sheet AND to whatever the host drives from `onProgress`.
-            self.progress = target
-            self.setNeedsLayout()
-            self.layoutIfNeeded()
-        }
-        a.addAnimations { [weak self] in
-            _ = from
-            self?.onProgress?(target)
-        }
-        a.addCompletion { [weak self] _ in
-            guard let self else { return }
-            if target <= 0.001 { self.onClose?() }
-        }
-        settle = a
-        a.startAnimation()
-    }
-
-    // MARK: Gesture
+    // MARK: Gesture handlers
 
     @objc private func handlePan(_ g: UIPanGestureRecognizer) {
         let translation = g.translation(in: self).y
@@ -218,8 +306,9 @@ final class StoryViewersSheetView: UIView {
 
         switch g.state {
         case .began:
-            settle?.stopAnimation(true)
+            onDragActive?(true)   // finger beats spring: the host cancels any in-flight settle
             dragStart = progress
+            panBaselineY = translation
             dragOwnsSheet = shouldSheetTakeDrag(velocity: velocity)
         case .changed:
             if !dragOwnsSheet {
@@ -230,40 +319,85 @@ final class StoryViewersSheetView: UIView {
                     dragOwnsSheet = true
                     dragStart = progress
                     g.setTranslation(.zero, in: self)
+                    panBaselineY = 0
                 }
                 return
             }
             table.contentOffset.y = 0          // pin it while the sheet owns the movement
-            setProgress(dragStart - g.translation(in: self).y / sheetHeight)
+            setProgress(dragStart - (translation - panBaselineY) / sheetHeight)
         case .ended, .cancelled:
+            onDragActive?(false)
             guard dragOwnsSheet else { return }
             dragOwnsSheet = false
-            // Where it would land if the finger kept going. Same projection UIKit uses for its own
-            // scroll views, so a flick behaves the way every other flick in iOS does.
-            let projected = progress - (velocity * 0.15) / sheetHeight
-            animate(to: projected >= 0.5 ? 1 : 0, velocity: velocity)
+            onRelease?(progress, dragStart, -velocity / sheetHeight)
         default:
             break
         }
-        _ = translation
     }
 
-    /// Never start on a horizontal drag: the carousel above owns those.
-    ///
-    /// IN THE CLASS BODY WITH `override`, not in the delegate extension. `UIView` already declares
-    /// `gestureRecognizerShouldBegin(_:)` itself, so putting it in an extension is an override — and
-    /// Swift does not allow overriding in an extension. That is the compile error this file failed
-    /// on first time: "overriding declaration requires an 'override' keyword", on a method that
-    /// cannot carry one where it was written.
-    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let p = gestureRecognizer as? UIPanGestureRecognizer, p === pan else {
-            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    /// The story-card / dark-area drag: the card and the sheet move as one connected surface, both
+    /// directions, exactly as if the finger were on the panel.
+    @objc private func handleOutsidePan(_ g: UIPanGestureRecognizer) {
+        let ty = g.translation(in: self).y
+        switch g.state {
+        case .began:
+            onDragActive?(true)
+            outsideDragStart = progress
+            outsideBaselineY = ty
+        case .changed:
+            setProgress(outsideDragStart - (ty - outsideBaselineY) / sheetHeight)
+        case .ended, .cancelled:
+            onDragActive?(false)
+            onRelease?(progress, outsideDragStart, -g.velocity(in: self).y / sheetHeight)
+        default: break
         }
-        let v = p.velocity(in: self)
-        return abs(v.y) >= abs(v.x)
     }
 
-    /// The one question the hand-off turns on.
+    /// Exists so the system dismiss pans have something to wait for over the carousel band. The
+    /// SwiftUI carousel keeps the touches (`cancelsTouchesInView = false`).
+    @objc private func handleBandGuard(_ g: UIPanGestureRecognizer) {}
+
+    @objc private func handleTapAbove(_ g: UITapGestureRecognizer) {
+        guard g.location(in: self).y < panelTop else { return }
+        onCollapseTap?()
+    }
+
+    /// Gates for all four recognizers. IN THE CLASS BODY WITH `override`, not in the delegate
+    /// extension: `UIView` already declares `gestureRecognizerShouldBegin(_:)` itself, so putting it
+    /// in an extension is an override — and Swift does not allow overriding in an extension. The
+    /// same method also serves as the DELEGATE gate for the two window pans (same selector).
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === pan {
+            // The sheet's own pan starts only in the panel; vertical drags only.
+            guard pan.location(in: self).y >= panelTop else { return false }
+            let v = pan.velocity(in: self)
+            return abs(v.y) >= abs(v.x)
+        }
+        if gestureRecognizer === outsidePan {
+            // Only while mounted with the sheet actually up, and only above the panel — the panel
+            // belongs to `pan`.
+            guard window != nil, progress > 0.02 else { return false }
+            let loc = outsidePan.location(in: self)
+            guard loc.y < panelTop else { return false }
+            // In the carousel band, horizontal drags belong to the cover-flow: refuse them and let
+            // bandGuard ride along with SwiftUI. Everywhere else, every direction is ours.
+            if progress > 0.95, carouselBand.contains(loc) {
+                let v = outsidePan.velocity(in: self)
+                return abs(v.y) >= abs(v.x)
+            }
+            return true
+        }
+        if gestureRecognizer === bandGuard {
+            guard window != nil, progress > 0.95 else { return false }
+            return carouselBand.contains(bandGuard.location(in: self))
+        }
+        if gestureRecognizer === tapAbove {
+            return tapAbove.location(in: self).y < panelTop
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+
+    /// The one question the list hand-off turns on.
     private func shouldSheetTakeDrag(velocity: CGFloat) -> Bool {
         if progress < 0.999 { return true }               // not fully open → the sheet is the thing moving
         if table.contentOffset.y > 0.5 { return false }   // list has somewhere to go → let it scroll
@@ -312,6 +446,45 @@ final class StoryViewersSheetView: UIView {
     }
 }
 
+/// Axis-locked pan for the sheet's window-level gestures. Judges the CUMULATIVE movement since
+/// touch-down and fails fast on the wrong axis, so a horizontal cover-flow swipe never loses its
+/// first frames to a vertical recognizer and vice versa. (Telegram's InteractiveTransitionGesture-
+/// Recognizer decides the same way: 2:1 dominance wins immediately, a distance deadline settles
+/// ambiguous diagonals.)
+final class DirectionalSheetPan: UIPanGestureRecognizer {
+    enum Axis { case vertical, horizontal }
+    let axis: Axis
+    private var startPoint: CGPoint?
+
+    init(axis: Axis, target: AnyObject, action: Selector) {
+        self.axis = axis
+        super.init(target: target, action: action)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        startPoint = touches.first?.location(in: view)
+    }
+
+    override func reset() {
+        super.reset()
+        startPoint = nil
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible, let touch = touches.first {
+            let loc = touch.location(in: view)
+            let start = startPoint ?? loc
+            let ax = abs(loc.x - start.x), ay = abs(loc.y - start.y)
+            if max(ax, ay) >= 8 {
+                if ay > ax * 1.2, axis == .horizontal { state = .failed; return }
+                if ax > ay * 1.2, axis == .vertical { state = .failed; return }
+            }
+        }
+        super.touchesMoved(touches, with: event)
+    }
+}
+
 // MARK: - Table
 
 extension StoryViewersSheetView: UITableViewDataSource, UITableViewDelegate {
@@ -346,7 +519,8 @@ extension StoryViewersSheetView: UIGestureRecognizerDelegate {
     /// THE ONE LINE THE SWIFTUI VERSION COULD NOT WRITE. The sheet's pan and the table's pan run
     /// together, and `handlePan` decides which of them the movement belongs to on each event. Without
     /// this the two recognisers cancel one another and you get the dead drag the arbiter existed to
-    /// paper over.
+    /// paper over. (The window pans are location-partitioned from `pan` in shouldBegin, so "always
+    /// yes" cannot put two of OUR writers on one touch.)
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         true
@@ -406,14 +580,18 @@ struct StoryViewerRowContent: View {
 /// Hosts `StoryViewersSheetView` and keeps it in step with the host's `progress`.
 ///
 /// The binding is TWO-WAY on purpose and that is the whole point of it: the finger writes progress
-/// from inside UIKit, and the host's own opens and closes (the swipe-up on the story, the tap on the
-/// dark area, the parked-sheet self-heal) write it from outside. One number, either direction, and
+/// from inside UIKit, and the host's own opens and closes (the swipe-up on the story, the settle
+/// spring, the parked-sheet self-heal) write it from outside. One number, either direction, and
 /// the live story's morph reads the same one — so the sheet and the card behind it cannot disagree
 /// about how far open the sheet is.
 struct StoryViewersSheet: UIViewRepresentable {
     let activeStoryId: String
     @Binding var progress: CGFloat
+    var carouselBand: CGRect = .zero
     var onClose: () -> Void
+    var onCollapseTap: () -> Void = {}
+    var onRelease: (CGFloat, CGFloat, CGFloat) -> Void = { _, _, _ in }
+    var onDragActive: (Bool) -> Void = { _ in }
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
@@ -425,6 +603,10 @@ struct StoryViewersSheet: UIViewRepresentable {
             context.coordinator.applying = false
         }
         v.onClose = onClose
+        v.onCollapseTap = onCollapseTap
+        v.onRelease = onRelease
+        v.onDragActive = onDragActive
+        v.carouselBand = carouselBand
         v.onSendMessage = { viewer in
             AppRouter.shared.pendingChatName = viewer.name
             AppRouter.shared.pendingChatPhoto = viewer.photoUrl
@@ -439,6 +621,7 @@ struct StoryViewersSheet: UIViewRepresentable {
 
     func updateUIView(_ v: StoryViewersSheetView, context: Context) {
         if !context.coordinator.applying { v.setProgress(progress) }
+        v.carouselBand = carouselBand
         context.coordinator.load(activeStoryId)
     }
 
