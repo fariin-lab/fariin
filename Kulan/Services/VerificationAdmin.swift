@@ -179,16 +179,33 @@ enum VerificationAdmin {
             "lastUpdated": now,
             "version": 1,
         ]
-        if let kind { mark["type"] = kind.rawValue } else { mark["type"] = FieldValue.delete() }
+        // THIS WHOLE MAP REPLACES THE OLD ONE. `updateData` with a map value does not merge into the
+        // nested fields, it overwrites the field — so anything not written here is GONE, and every
+        // value that must outlive a status change has to be carried forward explicitly below. (It is
+        // also why `FieldValue.delete()` has no place in here: a key that should not exist is a key
+        // simply left out, and a nested delete would be rejected by the SDK anyway.)
+        if let kind { mark["type"] = kind.rawValue }
+
         // The grant date is set once and never moved. A suspension and a restoration are events in a
         // badge's life, not a new badge, and overwriting the original date would erase how long an
         // account has actually been verified.
         mark["verifiedAt"] = before?.verifiedAt.map { $0.timeIntervalSince1970 * 1000 } ?? now
-        // WHAT WE ACTUALLY REVIEWED. Re-stamped on a grant and left alone afterwards, so the console
-        // can show which verified peers have renamed themselves since a human last looked at them.
+        // Likewise the admin who originally granted it. Who made THIS change is on the audit entry;
+        // this field answers the different question of who put the badge there in the first place.
+        if let priorGranter = before?.verifiedBy, !priorGranter.isEmpty {
+            mark["verifiedBy"] = priorGranter
+        }
+
+        // WHAT WE ACTUALLY REVIEWED. Stamped on a grant, and CARRIED FORWARD on every later change —
+        // not merely left unwritten, because unwritten means erased here. Dropping it on a
+        // suspension would quietly destroy the only record of which name a human actually approved,
+        // which is the one thing that makes a rename detectable afterwards.
         if action == .granted || before == nil {
             mark["verifiedName"] = peerName
             mark["verifiedHandle"] = peerHandle
+        } else {
+            mark["verifiedName"] = before?.verifiedName ?? ""
+            mark["verifiedHandle"] = before?.verifiedHandle ?? ""
         }
 
         let batch = db.batch()
@@ -222,13 +239,13 @@ enum VerificationAdmin {
         // Reflect it locally at once. The peer's own listener will deliver the same value moments
         // later; this is so the admin sees the badge change on the row they just acted on rather
         // than wondering whether it worked.
-        let applied = Verification(
-            kind: kind, status: status,
-            verifiedAt: before?.verifiedAt ?? Date(),
-            verifiedBy: adminUid, lastUpdated: Date(),
-            verifiedName: before?.verifiedName ?? peerName,
-            verifiedHandle: before?.verifiedHandle ?? peerHandle
-        )
+        //
+        // Parsed back out of the EXACT map that was just written, through the same reader every
+        // other screen uses. Rebuilding it field by field here would be a second set of rules that
+        // starts out looking identical and drifts, and a mirror that disagrees with what was stored
+        // is worse than no mirror: the admin sees one thing, the next reader sees another, and
+        // nothing on screen says which is real.
+        let applied = Verification(mark)
         VerificationIndex.record(peer, applied)
     }
 
