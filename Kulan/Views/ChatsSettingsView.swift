@@ -44,9 +44,18 @@ struct ChatsSettingsView: View {
         }
         .navigationTitle("Chats")
         .navigationBarTitleDisplayMode(.inline)
-        // An action sheet, not an alert: the message is long and the choice is one destructive
-        // button, which is the shape iOS uses for "this cannot be undone".
-        .confirmationDialog("Clear Chat History?", isPresented: $confirmClear, titleVisibility: .visible) {
+        // ALERT, NOT confirmationDialog, and this one matters more than most. On iOS 26 a
+        // confirmationDialog attached to a plain view renders as an anchored popover and DROPS the
+        // cancel button, because a popover expects to be dismissed by tapping outside. The owner
+        // photographed exactly that on the official chat's Block sheet: a floating bubble with one
+        // red button and no way out inside it.
+        //
+        // Here the one red button says "Delete Everything" and the copy says it cannot be undone. A
+        // confirmation for the most destructive action in the app must not be the one that loses its
+        // Cancel. The old comment argued for an action sheet on shape grounds, and the shape is fine
+        // in principle — it is what BottomActionSheet exists for — but a system dialog that silently
+        // drops Cancel is not the shape it claims to be.
+        .alert("Clear Chat History?", isPresented: $confirmClear) {
             Button("Delete Everything", role: .destructive) { Task { await clearEverything() } }
             Button("Cancel", role: .cancel) {}
         } message: {

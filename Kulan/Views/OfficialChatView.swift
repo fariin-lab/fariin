@@ -64,13 +64,18 @@ struct OfficialChatView: View {
             } message: {
                 Text(pendingLink?.absoluteString ?? "")
             }
-            .confirmationDialog("Block this chat?", isPresented: $confirmBlock, titleVisibility: .visible) {
+            // ALERT, NOT confirmationDialog. On iOS 26 a confirmationDialog renders as an anchored
+            // popover with a tail pointing at the toolbar, and it DROPS the cancel button, because a
+            // popover expects you to dismiss it by tapping outside. So the owner got a floating bubble
+            // over the header offering only "Block". MainShell already learned this and says so in a
+            // comment next to its own delete alert; I walked into the same trap building this screen.
+            .alert("Block this chat?", isPresented: $confirmBlock) {
                 Button("Block", role: .destructive) { store.setBlocked(true) }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You will stop getting updates from Fariin. Security alerts about your own account still come through. Nothing is lost and you can unblock it later.")
             }
-            .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
+            .alert("Clear this chat?", isPresented: $confirmClear) {
                 Button("Clear", role: .destructive) { store.clearHistory() }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -309,13 +314,13 @@ struct OfficialChatInfoView: View {
         }
         .navigationTitle("Chat Info")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
+        .alert("Clear this chat?", isPresented: $confirmClear) {
             Button("Clear", role: .destructive) { store.clearHistory() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removes these messages from this phone. New updates will still arrive.")
         }
-        .confirmationDialog("Block this chat?", isPresented: $confirmBlock, titleVisibility: .visible) {
+        .alert("Block this chat?", isPresented: $confirmBlock) {
             Button("Block", role: .destructive) { store.setBlocked(true); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: {
