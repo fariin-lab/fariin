@@ -410,11 +410,13 @@ final class OfficialChannelStore {
     /// The channel shows itself only once it has something to say. Signal does the same
     /// (`shouldThreadBeVisible = false` until the first note lands) and it is why a brand-new account
     /// does not open onto an empty official chat.
-    var isVisible: Bool { !visible.isEmpty && !state.blocked }
+    ///
+    /// `visible` already accounts for a block — see `recompute`, where a blocked channel keeps only
+    /// security alerts — so there is no separate blocked check here.
+    var isVisible: Bool { !visible.isEmpty }
 
     var unreadCount: Int {
-        guard !state.blocked else { return 0 }
-        return visible.filter { $0.sortAt.timeIntervalSince1970 * 1000 > state.lastReadAtMillis }.count
+        visible.filter { $0.sortAt.timeIntervalSince1970 * 1000 > state.lastReadAtMillis }.count
     }
 
     var latest: Announcement? { visible.last }
@@ -555,6 +557,17 @@ final class OfficialChannelStore {
         let next = byId.values
             .filter { $0.reaches(uid: uid, build: build, region: region) }
             .filter { $0.sortAt.timeIntervalSince1970 * 1000 > cleared }   // delete-for-me
+            // BLOCKING STOPS THE NEWS, NOT THE ALARM. Read from WhatsApp's own block sheet, which
+            // says so out loud: "You may still receive messages with important information about your
+            // account". Somebody who blocks this chat is saying they do not want to hear about new
+            // features. They are not saying they would rather not be told that their account was
+            // signed into from another country.
+            //
+            // Muting is the softer of the two and stops nothing; blocking is the hard one and stops
+            // everything except this. Without the carve-out, the Chat Info screen's promise that
+            // blocking "does not stop us telling you if something happens to your account" would be a
+            // sentence the app does not keep, which is worse than not offering the block at all.
+            .filter { !state.blocked || $0.kind == .security }
             .sorted { $0.sortAt == $1.sortAt ? $0.id < $1.id : $0.sortAt < $1.sortAt }
 
         hasLoaded = true

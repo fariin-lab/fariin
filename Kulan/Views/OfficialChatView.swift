@@ -24,6 +24,7 @@ struct OfficialChatView: View {
     @State private var pushedScreen: AnnouncementButton.Screen?
     @State private var shareInvite = false
     @State private var barHeight: CGFloat = 0
+    @State private var showInfo = false
 
     private var dark: Bool { scheme == .dark }
 
@@ -31,7 +32,12 @@ struct OfficialChatView: View {
         list
             .background { ChatWallpaperBackground(cid: OfficialChannel.cid).ignoresSafeArea() }
             .safeAreaInset(edge: .bottom, spacing: 0) { cannotReplyBar }
-            .background(NavTitleView(onTap: {}) { headerLabel })
+            // Tapping the header opens the info screen, the same as every other chat. It used to do
+            // nothing at all — I left the closure empty when this screen was built, so the one chat
+            // people are most likely to be suspicious of was the one that would not tell them
+            // anything about itself. Owner caught it.
+            .background(NavTitleView(onTap: { showInfo = true }) { headerLabel })
+            .navigationDestination(isPresented: $showInfo) { OfficialChatInfoView() }
             .toolbar(.hidden, for: .tabBar)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { officialToolbar }
@@ -62,7 +68,7 @@ struct OfficialChatView: View {
                 Button("Block", role: .destructive) { store.setBlocked(true) }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("You will stop getting updates from Fariin. You can unblock it later and nothing is lost.")
+                Text("You will stop getting updates from Fariin. Security alerts about your own account still come through. Nothing is lost and you can unblock it later.")
             }
             .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Clear", role: .destructive) { store.clearHistory() }
@@ -228,6 +234,94 @@ private struct ZoomTarget: Identifiable {
     let url: String
     var id: String { url }
     init(_ url: String) { self.url = url }
+}
+
+// MARK: - Chat info
+
+/// What you get when you tap the header, the same as tapping any other chat's header.
+///
+/// The one screen a suspicious person opens. So it is written for THEM: it says what this chat is,
+/// what it will never do, and gives the way out. Everything else on it is the ordinary per-chat
+/// state, in the ordinary places.
+struct OfficialChatInfoView: View {
+    private var store = OfficialChannelStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmBlock = false
+    @State private var confirmClear = false
+
+    var body: some View {
+        List {
+            Section {
+                VStack(spacing: 10) {
+                    OfficialAvatar(size: 96)
+                    HStack(spacing: 6) {
+                        Text(OfficialChannel.name).font(.title2.weight(.semibold))
+                        VerifiedTick(size: 20)
+                    }
+                    Text(OfficialChannel.subtitle).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .listRowBackground(Color.clear)
+            }
+
+            Section {
+                Text("This is where we tell you about new things, fixes and updates.")
+                // THE LINE THAT ACTUALLY PROTECTS SOMEBODY. Read from WhatsApp's official chat, which
+                // spends its welcome teaching you how to spot a fake rather than greeting you: "we'll
+                // never ask for your personal information".
+                //
+                // It matters more here than it does for them. The people this app is for are targeted
+                // with mobile-money and remittance scams, and somebody pretending to be Fariin support
+                // asking for a login code is the likeliest attack this app will ever face. A rule they
+                // can apply forever, against a scammer neither of us has seen yet, costs one sentence.
+                Text("We will never ask you for your password, your login code, or money. Nobody from Fariin will ever ask you for those, anywhere.")
+                    .fontWeight(.medium)
+            } header: {
+                Text("What this is")
+            }
+
+            Section {
+                Label {
+                    Text("There is no Fariin account. This chat is built into the app itself, so it cannot be copied. Anyone claiming to be Fariin is not.")
+                } icon: {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.white, Color(hex: 0x0A84FF))
+                }
+            } header: {
+                Text("Why you can trust this one")
+            }
+
+            Section {
+                Toggle("Notifications", isOn: Binding(
+                    get: { !store.state.muted },
+                    set: { store.setMuted(!$0) }))
+            } footer: {
+                Text("Off by default. We are here to tell you what is new, not to fill your phone.")
+            }
+
+            Section {
+                Button("Clear Chat", role: .destructive) { confirmClear = true }
+                Button("Block", role: .destructive) { confirmBlock = true }
+            } footer: {
+                Text("Blocking stops the updates. It does not stop us telling you if something happens to your account.")
+            }
+        }
+        .navigationTitle("Chat Info")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Clear this chat?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Clear", role: .destructive) { store.clearHistory() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes these messages from this phone. New updates will still arrive.")
+        }
+        .confirmationDialog("Block this chat?", isPresented: $confirmBlock, titleVisibility: .visible) {
+            Button("Block", role: .destructive) { store.setBlocked(true); dismiss() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You will stop getting updates from Fariin. Security alerts about your own account still come through. Nothing is lost and you can unblock it later.")
+        }
+    }
 }
 
 // MARK: - The channel's face
