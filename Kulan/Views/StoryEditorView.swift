@@ -49,6 +49,17 @@ struct StoryEditorView: View {
     @State private var trimOpenedStart: Double = 0   // what X puts back
     @State private var trimOpenedEnd: Double = 0
     @State private var trimThumbs: [UIImage] = []
+    // THE COMPOSER HAD NO PLAYER AT ALL, which is why the play mark did nothing and why trim was a
+    // filmstrip you dragged blind. A video item drew its poster and a decorative `play.fill`.
+    //
+    // One AVPlayer, built when a clip needs previewing and torn down when you leave it. It is not
+    // built up front: most posts are photos, and an idle AVPlayer per composer session is a decoder
+    // held open for nothing.
+    @State private var previewPlayer: AVPlayer?
+    @State private var previewPlaying = false
+    @State private var trimPlayhead: Double = 0
+    @State private var trimScrub: Double?
+    @State private var trimDragging = false
     @State private var cropRect: CGRect? = nil   // live crop as a rectangle — see DraftItem.cropRect
     // Our own pen palette, the same three controls ChatImageEditor drives PencilKit with. Defaults
     // match it too, so a pen is a pen wherever you pick one up in this app.
@@ -220,6 +231,8 @@ struct StoryEditorView: View {
             trimOverlay
                 .ignoresSafeArea(.keyboard)
         }
+        // Closing the composer must not leave a decoder and an audio session running behind it.
+        .onDisappear { stopPreview() }
         // ALWAYS DARK, whatever the phone is set to (owner: "all story buttons always use dark mode
         // no light mode"). A story is white text and glass over somebody's photo; in light mode the
         // materials go pale and the controls wash out, which he photographed on the pen screen.
@@ -292,6 +305,7 @@ struct StoryEditorView: View {
                         }
                     }
 
+                clipPreview(size: geo.size)
                 videoMark
 
                 // Text overlays — above the photo, below the drawing canvas + controls.
@@ -461,14 +475,69 @@ struct StoryEditorView: View {
     /// type-checker giving up, which is exactly what happened to the video editor's.
     @ViewBuilder private var videoMark: some View {
         if currentIsVideo, !isDrawing, editingID == nil {
-            Image(systemName: "play.fill")
-                .font(.system(size: 26))
-                .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 72, height: 72)
-                .background(.black.opacity(0.35), in: Circle())
-                .allowsHitTesting(false)
+            // A REAL BUTTON NOW. It was `allowsHitTesting(false)` — a picture of a play button on a
+            // screen with nothing to play, which is exactly what the owner reported. It hides while
+            // the clip is running so it does not sit over the video you asked to watch.
+            Button { togglePreview() } label: {
+                Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 72, height: 72)
+                    .background(.black.opacity(0.35), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .opacity(previewPlaying ? 0 : 1)
+            .animation(.easeInOut(duration: 0.18), value: previewPlaying)
+            .transition(.opacity)
+        }
+    }
+
+    /// The clip itself, over its poster, once there is something to play. Absent for a photo and
+    /// absent before the first press, so nothing is decoded until it is wanted.
+    @ViewBuilder private func clipPreview(size: CGSize) -> some View {
+        if currentIsVideo, let p = previewPlayer {
+            ClipPreviewLayer(player: p)
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(false)   // the play/pause button and the canvas keep their taps
                 .transition(.opacity)
         }
+    }
+
+    /// The player for the clip on screen, built on first need. Returns nil for a photo.
+    @discardableResult
+    private func ensurePreviewPlayer() -> AVPlayer? {
+        if let previewPlayer { return previewPlayer }
+        guard items.indices.contains(index), let url = items[index].videoURL else { return nil }
+        let p = AVPlayer(url: url)
+        p.actionAtItemEnd = .pause
+        previewPlayer = p
+        return p
+    }
+
+    private func togglePreview() {
+        guard items.indices.contains(index), let url = items[index].videoURL else { return }
+        if previewPlayer == nil {
+            let p = AVPlayer(url: url)
+            p.actionAtItemEnd = .pause
+            previewPlayer = p
+            // Back to the start when it finishes, so a second press replays rather than doing nothing.
+            NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
+                                                   object: p.currentItem, queue: .main) { _ in
+                p.seek(to: .zero)
+                previewPlaying = false
+            }
+        }
+        if previewPlaying { previewPlayer?.pause() } else { previewPlayer?.play() }
+        previewPlaying.toggle()
+    }
+
+    /// Leaving a clip, or the screen. An AVPlayer left running behind a photo keeps its audio session
+    /// and its decoder, which is the kind of thing that only shows up as a battery complaint.
+    private func stopPreview() {
+        previewPlayer?.pause()
+        previewPlayer = nil
+        previewPlaying = false
     }
 
     @ViewBuilder private var itemStrip: some View {
@@ -656,10 +725,13 @@ struct StoryEditorView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, max(windowSafeTop - 22, 10))
                 Spacer()
+                // REAL BINDINGS NOW, not `.constant`. Dragging a handle seeks the clip, so you can
+                // see the frame you are cutting on — which is the whole reason a trim screen has a
+                // picture above it. It was blind because the composer had no player; it has one.
                 VideoTrimStrip(duration: dur, thumbnails: trimThumbs,
                                trimStart: $trimStart, trimEnd: $trimEnd,
-                               playhead: .constant(0), scrubTime: .constant(nil),
-                               playing: .constant(false), draggingPlayhead: .constant(false))
+                               playhead: $trimPlayhead, scrubTime: $trimScrub,
+                               playing: $previewPlaying, draggingPlayhead: $trimDragging)
                     .frame(height: 56)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 28)
@@ -669,6 +741,14 @@ struct StoryEditorView: View {
             .background(Color.black.opacity(0.55).ignoresSafeArea())
             .transition(.opacity)
             .task(id: items[index].id) { await loadTrimThumbs() }
+            // The strip reports where the finger is; the clip goes there. `.zero` tolerance because a
+            // scrub that lands on "somewhere near" is a scrub you cannot trust to cut on.
+            .onChange(of: trimScrub) { _, t in
+                guard let t, let p = ensurePreviewPlayer() else { return }
+                p.pause(); previewPlaying = false
+                p.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                       toleranceBefore: .zero, toleranceAfter: .zero)
+            }
         }
     }
 
@@ -901,6 +981,9 @@ struct StoryEditorView: View {
 
     private func select(_ i: Int) {
         guard i != index, items.indices.contains(i) else { return }
+        // The player belongs to the clip you were on. Carrying it to the next item would leave a
+        // video playing under somebody else's photo, with its audio still going.
+        stopPreview()
         stashCurrent()
         index = i
         restoreCurrent()
@@ -1302,6 +1385,30 @@ struct TextEditorOverlay: View {
 }
 
 // Springy press feedback for the story-editor controls.
+/// An AVPlayerLayer sized to its view. Deliberately tiny: the composer needs to SEE the clip, and a
+/// full `AVPlayerViewController` would bring its own controls, its own gestures and its own idea of
+/// full screen to a canvas that already has three tools competing for the same touches.
+struct ClipPreviewLayer: UIViewRepresentable {
+    let player: AVPlayer
+
+    final class LayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+
+    func makeUIView(context: Context) -> LayerView {
+        let v = LayerView()
+        v.backgroundColor = .clear
+        v.playerLayer.videoGravity = .resizeAspect   // the poster underneath is aspect-fit too
+        v.playerLayer.player = player
+        return v
+    }
+
+    func updateUIView(_ v: LayerView, context: Context) {
+        if v.playerLayer.player !== player { v.playerLayer.player = player }
+    }
+}
+
 struct StoryPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
