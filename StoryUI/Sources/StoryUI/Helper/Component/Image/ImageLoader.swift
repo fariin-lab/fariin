@@ -34,6 +34,65 @@ enum StoryDiskCache {
     }
 }
 
+/// DECODED IMAGES, IN MEMORY, ABOVE THE DISK.
+///
+/// The "instant" disk path was not instant. `StoryDiskCache.image` does `Data(contentsOf:)` and then
+/// builds a UIImage, and `loadImageWithUrl` runs from `updateUIView` — so opening a story you had
+/// already seen meant reading a full-screen JPEG off the file system AND decoding it, on the main
+/// thread, while the story was appearing. It was called the fast path because it skipped the
+/// network, which is a different thing from being fast.
+///
+/// Worse, `UIImage(data:)` does not decode anything: it defers that until the image is first drawn,
+/// which lands on the main thread in the middle of the transition. So even the URLCache hit paid a
+/// decode at exactly the wrong moment.
+///
+/// This holds images that are already decoded and already display-ready (`preparingForDisplay`), so
+/// a hit is a dictionary lookup and a pointer. Everything below it — the file read, the decode, the
+/// preparation — happens off the main thread, once, and never again for that story this session.
+enum StoryMemoryCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        // ~14 full-screen decoded frames on a 3x phone. Decoded is roughly w*h*4, which is far
+        // bigger than the JPEG on disk, so this is counted in real bytes rather than in items.
+        c.totalCostLimit = 160 * 1024 * 1024
+        return c
+    }()
+
+    static func image(for url: URL) -> UIImage? { cache.object(forKey: url.absoluteString as NSString) }
+
+    static func store(_ img: UIImage, for url: URL) {
+        let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
+        cache.setObject(img, forKey: url.absoluteString as NSString, cost: cost)
+    }
+
+    /// A display-ready image for this url, from memory if we have one and from disk otherwise, with
+    /// every expensive part off the main thread. Returns nil when the bytes are not held anywhere.
+    static func decoded(for url: URL) async -> UIImage? {
+        if let hit = image(for: url) { return hit }
+        return await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            var raw: UIImage?
+            if let cached = URLCache.shared.cachedResponse(for: .init(url: url)) {
+                raw = UIImage(data: cached.data)
+            }
+            if raw == nil { raw = StoryDiskCache.image(url) }
+            guard let raw else { return nil }
+            let ready = raw.preparingForDisplay() ?? raw
+            await MainActor.run { store(ready, for: url) }
+            return ready
+        }.value
+    }
+
+    /// Decode bytes we have just downloaded, off the main thread, and remember the result.
+    static func prepare(_ data: Data, for url: URL) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let raw = UIImage(data: data) else { return nil }
+            let ready = raw.preparingForDisplay() ?? raw
+            await MainActor.run { store(ready, for: url) }
+            return ready
+        }.value
+    }
+}
+
 // `StoryCompositeCache` and `StorySnapshotFactory` lived here, and between them they photographed
 // every story's full-screen render — offscreen, on the MAIN THREAD, one `drawHierarchy` per story —
 // so the viewers-sheet cards could be built from native pixels instead of a blur re-rendered at card
@@ -88,6 +147,8 @@ final class ImageLoader: UIView {
     private var previewBlurEffect: UIVisualEffectView?
     // The frozen fill+blur composite while the viewers sheet scales the story (see freezeBlur).
     private var frozenBlur: UIImageView?
+    /// The download in flight for the story on screen, held so that moving on can cancel it.
+    private var loadTask: URLSessionDataTask?
 
     // MARK: - Initializers
     init() {
@@ -241,50 +302,66 @@ final class ImageLoader: UIView {
 
         guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
 
+        // THE PREVIOUS STORY'S DOWNLOAD IS NO LONGER WANTED. It was left running: move through four
+        // stories quickly and four full-size downloads competed for the connection, with the three
+        // you had already left ahead of the one you were waiting on. On a weak network that is the
+        // difference between a story appearing and a story spinning.
+        loadTask?.cancel()
+        loadTask = nil
+
         // stop video if it's playing before image request
         NotificationCenter.default.post(name: .stopVideo, object: nil)
 
-        // 1) Memory (URLCache) — instant.
-        if let cachedResponse = URLCache.shared.cachedResponse(for: .init(url: imageURL)),
-           let img = UIImage(data: cachedResponse.data) {
-            DispatchQueue.main.async { [weak self] in
-                self?.showShimmer(false)
-                self?.apply(img)
-                imageIsLoaded()
-            }
+        // 1) ALREADY DECODED AND READY. A dictionary lookup and a pointer — no file read, no decode,
+        //    and crucially no dispatch: the picture is on screen in this same turn, which is what
+        //    makes a re-opened story appear with no frame of anything else.
+        if let ready = StoryMemoryCache.image(for: imageURL) {
+            showShimmer(false)
+            apply(ready)
+            imageIsLoaded()
             return
         }
 
-        // 2) Disk — instant on revisit / relaunch (persistent, the big-apps behaviour).
-        if let disk = StoryDiskCache.image(imageURL) {
-            DispatchQueue.main.async { [weak self] in
-                self?.showShimmer(false)
-                self?.apply(disk)
+        // 2) URLCache or disk, with the read AND the decode off the main thread. This used to be two
+        //    synchronous branches right here, which is why "cached" still cost a stutter.
+        let wanted = imageURL
+        Task { [weak self] in
+            if let ready = await StoryMemoryCache.decoded(for: wanted) {
+                guard let self, self.imageURL == wanted else { return }
+                self.showShimmer(false)
+                self.apply(ready)
                 imageIsLoaded()
+                return
             }
-            return
+            guard let self, self.imageURL == wanted else { return }
+            self.loadFromNetwork(wanted, previewURL: previewURL, imageIsLoaded: imageIsLoaded)
         }
+    }
 
+    /// Nothing is held for this url, so it has to come down. Split out of `loadImageWithUrl` because
+    /// the cache lookup above it is asynchronous now and this is what happens when it misses.
+    private func loadFromNetwork(_ imageURL: URL, previewURL: String?, imageIsLoaded: @escaping () -> Void) {
         // 3) Network — the blurred poster while it downloads, and the shimmer only if we have not
         //    even got that yet.
         apply(nil)
         if !seedPreviewBlur(previewURL) { showShimmer(true) }
 
         let requestedURL = imageURL   // capture: if the view is reused mid-download, drop this stale result
-        URLSession.shared.dataTask(
+        // HELD, so moving on can cancel it. See the note at the top of `loadImageWithUrl`.
+        loadTask = URLSession.shared.dataTask(
             with: imageURL,
             completionHandler: { [weak self] (data, response, error) in
             guard let self else { return }
             if error != nil {
+                // A cancel arrives here too, and it is not a failure — the story simply moved on, and
+                // calling `imageIsLoaded` would advance a progress bar that no longer owns the screen.
+                if (error as? URLError)?.code == .cancelled { return }
                 print(error as Any)
                 DispatchQueue.main.async { self.showShimmer(false); imageIsLoaded() }
                 return
             }
 
-            guard let data,
-                  let response,
-                  let image = UIImage(data: data)
-            else {
+            guard let data, let response else {
                 DispatchQueue.main.async { self.showShimmer(false); imageIsLoaded() }
                 return
             }
@@ -292,13 +369,23 @@ final class ImageLoader: UIView {
             URLCache.shared.storeCachedResponse(.init(response: response, data: data), for: .init(url: imageURL))
             StoryDiskCache.store(data, for: imageURL)   // persist to disk → instant next time
 
-            DispatchQueue.main.async {
-                self.showShimmer(false)
-                guard self.imageURL == requestedURL else { imageIsLoaded(); return }   // reused → don't show stale photo
-                self.apply(image)
-                imageIsLoaded()
+            // DECODED OFF THE MAIN THREAD, and kept decoded. `UIImage(data:)` on its own defers the
+            // real work to the first draw, which lands on the main thread in the middle of the story
+            // appearing — the cost was simply moved to the worst possible moment rather than paid.
+            Task {
+                guard let ready = await StoryMemoryCache.prepare(data, for: imageURL) else {
+                    await MainActor.run { self.showShimmer(false); imageIsLoaded() }
+                    return
+                }
+                await MainActor.run {
+                    self.showShimmer(false)
+                    guard self.imageURL == requestedURL else { imageIsLoaded(); return }   // reused → don't show stale photo
+                    self.apply(ready)
+                    imageIsLoaded()
+                }
             }
-        }).resume()
+        })
+        loadTask?.resume()
     }
 
 }
