@@ -97,6 +97,7 @@ struct NewGroupView: View {
                             HStack(spacing: 12) {
                                 AvatarView(name: p.name, photoUrl: p.photo, size: 40)
                                 Text(p.name).foregroundStyle(.primary)
+                                VerifiedMark(uid: p.id, size: 13)
                                 Spacer()
                                 Image(systemName: selected[p.id] != nil ? "checkmark.circle.fill" : "circle")
                                     .foregroundStyle(selected[p.id] != nil ? Color.accentColor : .secondary)

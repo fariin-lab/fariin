@@ -715,7 +715,10 @@ private struct AnnouncementAudienceView: View {
                             HStack(spacing: 10) {
                                 AvatarView(name: person.name, photoUrl: person.photoUrl, size: 32)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(person.name).foregroundStyle(.primary)
+                                    HStack(spacing: 5) {
+                                        Text(person.name).foregroundStyle(.primary)
+                                        VerifiedMark(uid: person.id, size: 12)
+                                    }
                                     Text("@\(person.handle)").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -734,6 +737,7 @@ private struct AnnouncementAudienceView: View {
                             HStack(spacing: 10) {
                                 AvatarView(name: person.name, photoUrl: person.photoUrl, size: 32)
                                 Text(person.name)
+                                VerifiedMark(uid: person.id, size: 12)
                                 Spacer()
                                 Text("@\(person.handle)").font(.caption).foregroundStyle(.secondary)
                             }
@@ -979,7 +983,10 @@ private struct AddAdminView: View {
                             HStack(spacing: 10) {
                                 AvatarView(name: person.name, photoUrl: person.photoUrl, size: 32)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(person.name).foregroundStyle(.primary)
+                                    HStack(spacing: 5) {
+                                        Text(person.name).foregroundStyle(.primary)
+                                        VerifiedMark(uid: person.id, size: 12)
+                                    }
                                     Text("@\(person.handle)").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
