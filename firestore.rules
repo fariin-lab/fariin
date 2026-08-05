@@ -46,7 +46,34 @@ service cloud.firestore {
     // but you can only create/edit your OWN profile.
     match /users/{uid} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && request.auth.uid == uid;
+
+      // FIELDS THE OWNER OF THE DOCUMENT MAY NOT WRITE. Only the server (the claimUsername
+      // transaction, which runs with admin rights and bypasses these rules) or a moderator sets
+      // these.
+      //
+      // The ban half was a REAL HOLE and it was mine, introduced the same day the ban was: rules are
+      // cumulative, an OR, not a chain. The moderator rule below GRANTS a moderator the right to
+      // write these fields; it takes nothing away from the rule above it. So the plain
+      // "you may write your own document" rule still matched, and a banned account could simply set
+      // `banned: false` on itself. The ban lasted exactly as long as the banned person left it
+      // alone. Caught by Gemini reading these rules, not by me writing them.
+      //
+      // The username half was never exploited but is the same shape and worse: `claimUsername` is a
+      // server transaction precisely so two people cannot take one name, and a client writing
+      // `handleLower` straight onto its own document walked around the whole thing and could have
+      // taken any name already in use. The client has never written these fields — every one comes
+      // from the server — so refusing them costs nothing.
+      function serverOnlyUserFields() {
+        return ['banned', 'bannedAt', 'bannedBy', 'banReason',
+                'handle', 'handleLower', 'usernameHistory'];
+      }
+
+      allow create: if signedIn() && request.auth.uid == uid
+        && !request.resource.data.keys().hasAny(serverOnlyUserFields());
+      allow update: if signedIn() && request.auth.uid == uid
+        && !request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(serverOnlyUserFields());
+
       // A moderator may set the ban flag on ANY account, and may touch nothing else on it. The
       // hasOnly list is what keeps this from being a general "edit any profile" power: a moderator
       // cannot rename somebody, change their photo, or alter their privacy settings.
@@ -551,14 +578,11 @@ service cloud.firestore {
         && (request.auth.uid == resource.data.caller || request.auth.uid == resource.data.callee)
         && request.resource.data.caller == resource.data.caller
         && request.resource.data.callee == resource.data.callee;
-      // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
-      // by anyone (that is what "delete for me" and `clearedAt` are for) — so this can remove an
-      // unwanted request and nothing else.
-      allow delete: if signedIn()
-        && request.auth.uid in resource.data.users
-        && resource.data.get('type', '') != 'group'
-        && resource.data.get('startedBy', '') != ''
-        && resource.data.get('accepted', false) == false;
+      // NO delete. THIRD stray paste of the message-request decline rule, after the two removed from
+      // /users and story views on 2026-08-04. A call document has `caller` and `callee`, not `users`
+      // or `startedBy`, so it could only ever error. Nothing in the app deletes a call, so nothing
+      // was broken by it — but a rule that reads fields from a different collection is a trap for
+      // whoever reads it next. Also spotted by Gemini.
       match /{sub}/{candidate} {
         allow read, write: if signedIn()
           && (request.auth.uid == parties().caller || request.auth.uid == parties().callee);
