@@ -78,12 +78,51 @@ struct StoryDetailView: View {
         return messageViewPosition - Constant.MessageView.height - 16 - 12 - winInsets.bottom
     }
 
-    // Real device safe-area insets (the host no longer applies them — see StoryPageHostVC). Used to keep the
-    // progress bars below the notch and the reply bar above the home indicator while the PHOTO fills under both.
+    // Real device safe-area insets (the host no longer applies them — see StoryPageHostVC). Used to
+    // place the story card below the notch and the reply bar above the home indicator.
     private var winInsets: UIEdgeInsets {
         UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }.first { $0.isKeyWindow }?.safeAreaInsets
             ?? UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0)
+    }
+
+    /// THE STORY CARD'S HEIGHT, and this is Telegram's rule read out of their source rather than
+    /// guessed from a screenshot. `StoryItemSetContainerComponent.swift`:
+    ///
+    ///   :3942  itemSize   = (width, ceil(width * 1.77778))    // 9:16, always
+    ///   :3955  height     = min(itemSize.height, screenH - safeTop - bottomInset)
+    ///   :3973  frame.y    = safeTop                            // it BEGINS below the status bar
+    ///   :4031  cornerRadius = 12
+    ///
+    /// The owner's report was two things and this answers both. Our story ran the full height of the
+    /// screen, so a wide photo became a thin band adrift in a lot of black with the progress bars and
+    /// the header stranded above it — that is the sizing he circled. And because it started at y=0, a
+    /// tall photo could reach up under the clock. A card that begins at the safe-area top and is 9:16
+    /// unless the screen is too short for that makes both impossible by construction.
+    ///
+    /// On a 393x852 phone: 9:16 is 699, available is 852 - 59 - 94 = 699, so the card is exactly 9:16
+    /// and the reply bar takes the rest. On a shorter screen the card gives up height rather than
+    /// running under the reply bar.
+    /// `containerH` is the space THIS page actually has, not the screen. They differ: my own stories
+    /// are hosted in a stack that already gave 52pt away to the Views/Delete footer, so measuring
+    /// against `UIScreen` would build a card taller than the room it has and run it under that bar.
+    private func cardHeight(width: CGFloat, containerH: CGFloat, footerH: CGFloat) -> CGFloat {
+        let nineBySixteen = ceil(width * 1.77778)
+        let bottomInset = max(footerH, winInsets.bottom + 1)
+        let available = containerH - winInsets.top - bottomInset
+        return max(1, min(nineBySixteen, available))
+    }
+
+    /// Telegram's own card radius (`:4031`). Ours was 24 on the bottom corners only, and 0 on top,
+    /// because the card used to run off the top of the screen and there was no top corner to round.
+    private let cardRadius: CGFloat = 12
+
+    /// Hand the card's rectangle to `StoryCardMorph`, which shrinks the live story into the viewers
+    /// sheet and needs to know it is aiming at the card and not at this whole page.
+    private func publishCardRect(proxy: GeometryProxy, footerH: CGFloat) {
+        StoryCardMorph.shared.setCardMetrics(
+            top: winInsets.top,
+            height: cardHeight(width: proxy.size.width, containerH: proxy.size.height, footerH: footerH))
     }
 
     var body: some View {
@@ -94,37 +133,68 @@ struct StoryDetailView: View {
                 // Empty bucket (all items expired/removed) -> render nothing instead of indexing [-1] (crash).
                 if index < model.stories.count {
                     let story = model.stories[index]
-                    // Friend (reply-bar) stories render as a CARD: the photo ends above the reply-bar
-                    // footer with rounded bottom corners (matching my own story), and the black area
-                    // below holds the reply bar. Own/plain stories stay full-screen (the app draws
-                    // their own rounded card + Views/trash footer on top).
+                    // EVERY story is a card now, mine and other people's alike. It used to be that
+                    // only a friend's story ended above its reply bar and my own ran the full height
+                    // of the screen; the difference between the two is just `footerH` below, which is
+                    // how much room the bar underneath needs.
                     let isReplyBar = story.config.storyType != .plain()
                     let footerH: CGFloat = isReplyBar ? Constant.MessageView.height + 32 + winInsets.bottom : 0
-                    getStoryView(with: index, story: story)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.bottom, footerH)
-                        // Flatten the card (photo + UIKit blur backdrop) into ONE layer first: a bare
-                        // .clipShape does NOT clip the ImageLoader's UIVisualEffectView (its backdrop
-                        // composites separately and spills past the mask, so the bottom stayed square).
-                        // compositingGroup forces a single layer the round-corner mask can actually cut.
-                        .compositingGroup()
-                        .clipShape(BottomRoundedShape(radius: isReplyBar ? 24 : 0))   // match the own-story card (24)
-                        .overlay(
-                            tapStory()
-                                .offset(
-                                    y: story.config.storyType != .plain()
-                                    ? -Constant.MessageView.height : .zero
-                                )
-                        )
-                        // Overlay caption: overlaid on the media (never baked into the photo).
-                        .overlay(captionView(story.caption, plain: story.config.storyType == .plain()), alignment: .bottom)
-                        // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
-                        // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
-                        // pixel-stable when the viewers sheet opens, so the scrim can't linger under
-                        // a scrimless morph card (that brightness step read as a flash).
-                        .overlay(topScrim.opacity(chromeHidden ? 0 : 1)
+                    // THE CARD. Sized and placed by Telegram's rule (see `cardHeight`), pinned to the
+                    // safe-area top by the VStack below rather than centred in the screen.
+                    VStack(spacing: 0) {
+                        getStoryView(with: index, story: story)
+                            .frame(width: proxy.size.width,
+                                   height: cardHeight(width: proxy.size.width,
+                                                      containerH: proxy.size.height,
+                                                      footerH: footerH))
+                            // Flatten the card (photo + UIKit blur backdrop) into ONE layer first: a bare
+                            // .clipShape does NOT clip the ImageLoader's UIVisualEffectView (its backdrop
+                            // composites separately and spills past the mask, so the bottom stayed square).
+                            // compositingGroup forces a single layer the round-corner mask can actually cut.
+                            .compositingGroup()
+                            // All four corners now, not just the bottom two: the card has a visible top
+                            // edge for the first time, because it starts below the status bar.
+                            .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+                            .overlay(
+                                tapStory()
+                                    .offset(
+                                        y: story.config.storyType != .plain()
+                                        ? -Constant.MessageView.height : .zero
+                                    )
+                            )
+                            // Overlay caption: overlaid on the media (never baked into the photo).
+                            .overlay(captionView(story.caption, plain: story.config.storyType == .plain()), alignment: .bottom)
+                            // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
+                            // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
+                            // pixel-stable when the viewers sheet opens, so the scrim can't linger under
+                            // a scrimless morph card (that brightness step read as a flash).
+                            .overlay(topScrim.opacity(chromeHidden ? 0 : 1)
+                                        .animation(.linear(duration: 0.18), value: chromeHidden),
+                                     alignment: .top)
+                            // THE BARS AND THE HEADER LIVE INSIDE THE CARD, over the picture, which is
+                            // where Telegram puts them (`contentInsets.top = 54`). They used to be
+                            // overlaid on the SCREEN, so they sat on black above the story and read as
+                            // part of the phone rather than part of the story. This is what he circled.
+                            .overlay(
+                                getUserInfoAndProgressBar(with: index)
+                                    // Chrome-only fades: on a real hold, AND while the viewers sheet is
+                                    // engaged (host posts storyChromeHidden). ONLY these overlays
+                                    // animate — the story image itself must never fade, flash, or
+                                    // re-render (user spec).
+                                    .opacity((isHolding || chromeHidden) ? 0 : 1)
+                                    .animation(.linear(duration: 0.2), value: isHolding)
                                     .animation(.linear(duration: 0.18), value: chromeHidden),
-                                 alignment: .top)
+                                alignment: .top
+                            )
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, winInsets.top)
+                    // Tell the viewers-sheet morph WHERE the card is, because it is no longer the
+                    // whole view. Without this it would shrink the black margins into the slot along
+                    // with the story and centre on the wrong point. Every page computes the same
+                    // rectangle, so whichever one runs last is still right.
+                    .onAppear { publishCardRect(proxy: proxy, footerH: footerH) }
+                    .onChange(of: proxy.size) { _ in publishCardRect(proxy: proxy, footerH: footerH) }
                     // (Removed the always-on bottom photo scrim: the reply pill now sits on the solid
                     // black footer BELOW the card, not over the photo, so dimming the photo's bottom
                     // was pointless and just darkened captionless photos.)
@@ -134,16 +204,9 @@ struct StoryDetailView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .overlay(
-                getUserInfoAndProgressBar(with: index)
-                    // Chrome-only fades: on a real hold, AND while the viewers sheet is engaged
-                    // (host posts storyChromeHidden). ONLY these overlays animate — the story
-                    // image itself must never fade, flash, or re-render (user spec).
-                    .opacity((isHolding || chromeHidden) ? 0 : 1)
-                    .animation(.linear(duration: 0.2), value: isHolding)
-                    .animation(.linear(duration: 0.18), value: chromeHidden)
-                ,alignment: .top
-            )
+            // The chrome overlay that used to be HERE, on the whole screen, is on the card now — see
+            // the note beside it. Leaving a copy at this level would draw the bars twice, once inside
+            // the story and once on the black above it.
             .rotation3DEffect(
                 getAngle(proxy: proxy),
                 axis: (x: 0, y: 1, z: 0),
@@ -325,7 +388,11 @@ private extension StoryDetailView {
                 }
             }
             .padding(.horizontal)
-            .padding(.top, winInsets.top + 8)   // keep the progress bars below the notch (host no longer insets)
+            // 8 FROM THE CARD'S TOP, not from the screen's. This used to add `winInsets.top` because
+            // the chrome was overlaid on the whole screen and had to clear the notch itself. The card
+            // already begins below the notch, so keeping that here would push the bars 67pt down
+            // INSIDE the story. Telegram's sit about 7 below their card's top edge.
+            .padding(.top, 8)
             .padding(.bottom, 8)
             UserView(
                 image: image,

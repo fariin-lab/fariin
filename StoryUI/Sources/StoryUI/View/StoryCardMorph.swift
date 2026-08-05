@@ -41,6 +41,34 @@ public final class StoryCardMorph {
     private weak var card: UIView?
     private var maskLayer: CAShapeLayer?
 
+    /// Where the STORY CARD sits inside the registered view: how far down it starts, and how tall it
+    /// is. The view is a page-wide strip; the card is 9:16 and pinned to the safe-area top inside it
+    /// (Telegram's rule, see `StoryDetailView.cardHeight`). Shrinking the whole VIEW would carry the
+    /// black above and below the card into the slot and centre on the wrong point.
+    ///
+    /// TOP AND HEIGHT, NOT A RECTANGLE, because the view is the pager's own scroll view: its
+    /// `bounds` origin is the content offset and moves as you swipe between people. An absolute rect
+    /// would be right on the first page and wrong on every other one. These are resolved against
+    /// `bounds` at the moment they are used.
+    private var cardTop: CGFloat = 0
+    private var cardHeight: CGFloat = 0
+
+    public func setCardMetrics(top: CGFloat, height: CGFloat) {
+        // Ignore a card that has not been laid out yet rather than storing a degenerate one and
+        // dividing by it on the next frame of a drag.
+        guard height > 1 else { return }
+        cardTop = max(0, top)
+        cardHeight = height
+    }
+
+    /// The card in the registered view's CURRENT coordinates, or the whole view if nobody has
+    /// published metrics yet.
+    private func contentRect(in view: UIView) -> CGRect {
+        guard cardHeight > 1, cardTop + cardHeight <= view.bounds.height + 1 else { return view.bounds }
+        return CGRect(x: view.bounds.minX, y: view.bounds.minY + cardTop,
+                      width: view.bounds.width, height: cardHeight)
+    }
+
     /// True once a pager has registered a card. The host degrades to "no zoom" rather than to a
     /// crash if one was never registered.
     public var isAvailable: Bool { card != nil }
@@ -69,8 +97,9 @@ public final class StoryCardMorph {
         guard !StoryPager.dismissActive, let card, let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         guard f > 0.001 else { reset(); return }
-        let restW = card.bounds.width, restH = card.bounds.height
-        guard restW > 1, restH > 1 else { return }
+        let content = contentRect(in: card)
+        let restW = content.width, restH = content.height
+        guard restW > 1, restH > 1, card.bounds.width > 1 else { return }
 
         // The card scales uniformly by WIDTH. The slot is deliberately shorter than the story's own
         // aspect (the owner signed off a card 12% shorter than aspect-true, twice), so a uniform
@@ -80,15 +109,24 @@ public final class StoryCardMorph {
         let visibleH = restH + (targetSize.height - restH) * f
         let scale = max(0.0001, visibleW / restW)
 
-        // `transform` translates the centre within the SUPERVIEW's space, and `center` IS that
-        // resting position — it is not affected by `transform`, so it can be read fresh every frame
-        // and is always the truth even if a layout pass lands mid-drag. Only the target has to be
-        // converted in. Caching the resting point instead would let the two drift apart the one time
-        // it mattered, and a stored copy of a number you can just ask for is how this file's
+        // The transform scales about the VIEW's centre, but what has to land in the slot is the
+        // CARD's centre, and the card sits high in the view rather than in the middle of it. This
+        // vector is the difference, and it scales along with everything else, so it has to come back
+        // out of the translation or the story would arrive in the slot offset by it.
+        let offset = CGPoint(x: content.midX - card.bounds.midX, y: content.midY - card.bounds.midY)
+
+        // `center` is the view's resting position in its superview and is not affected by
+        // `transform`, so it can be read fresh every frame and is always the truth even if a layout
+        // pass lands mid-drag. A cached copy of a number you can just ask for is how this file's
         // predecessors went wrong.
         let targetLocal = superview.convert(targetCenter, from: nil)
-        let dx = (targetLocal.x - card.center.x) * f
-        let dy = (targetLocal.y - card.center.y) * f
+        let restCenter = CGPoint(x: card.center.x + offset.x, y: card.center.y + offset.y)
+        // Where the card's centre has to be this frame...
+        let wantX = restCenter.x + (targetLocal.x - restCenter.x) * f
+        let wantY = restCenter.y + (targetLocal.y - restCenter.y) * f
+        // ...minus where the scale alone will already have put it. At f = 0 this is exactly zero.
+        let dx = wantX - card.center.x - offset.x * scale
+        let dy = wantY - card.center.y - offset.y * scale
 
         // CATransaction: a CAShapeLayer path change is an implicitly ANIMATED property, so without
         // this the mask chases the transform by a quarter second and the crop visibly lags the card
@@ -96,10 +134,14 @@ public final class StoryCardMorph {
         // both live inside the same disabled-actions block.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // The crop, in the card's own untransformed coordinates: full width always, and whatever
-        // height renders as `visibleH` once the scale is applied.
-        applyMask(height: min(restH, visibleH / scale),
-                  cornerRadius: cornerRadius * f / scale, cardW: restW, cardH: restH)
+        // The crop, in the view's own untransformed coordinates: the card's width, and whatever
+        // height renders as `visibleH` once the scale is applied, centred on the CARD. This is also
+        // what hides the black above and below the card once the sheet is open.
+        applyMask(rect: CGRect(x: content.minX,
+                               y: content.midY - min(restH, visibleH / scale) / 2,
+                               width: restW,
+                               height: min(restH, visibleH / scale)),
+                  cornerRadius: cornerRadius * f / scale)
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
         CATransaction.commit()
     }
@@ -135,7 +177,10 @@ public final class StoryCardMorph {
         CATransaction.commit()
     }
 
-    private func applyMask(height: CGFloat, cornerRadius: CGFloat, cardW: CGFloat, cardH: CGFloat) {
+    /// `rect` is already centred on the card by the caller: the crop takes equal bites off its top
+    /// and bottom, which keeps the subject of the photo where the eye left it. A top-anchored crop is
+    /// the same mistake the reverted scaleEffect versions made in a different form.
+    private func applyMask(rect: CGRect, cornerRadius: CGFloat) {
         guard let card else { return }
         let layer: CAShapeLayer
         if let maskLayer, card.layer.mask === maskLayer {
@@ -145,10 +190,6 @@ public final class StoryCardMorph {
             maskLayer = layer
             card.layer.mask = layer
         }
-        // Centred vertically: the crop takes equal bites off the top and the bottom, which keeps the
-        // subject of the photo where the eye left it. A top-anchored crop is the same mistake the
-        // reverted scaleEffect versions made in a different form.
-        let rect = CGRect(x: 0, y: (cardH - height) / 2, width: cardW, height: height)
         layer.path = UIBezierPath(roundedRect: rect, cornerRadius: max(0, cornerRadius)).cgPath
     }
 }
