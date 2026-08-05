@@ -236,6 +236,18 @@ struct StoryVideoEditorView: View {
         }
         // + adds more clips. Videos only: this is the video editor, and a picture dropped in here
         // would have nothing to play it.
+        // STILL VIDEO-ONLY, and that is a known gap rather than a decision.
+        //
+        // Start a post with a photo and the + offers both; start it with a video and this screen
+        // offers only videos, which is what he reported. Widening the filter here is one word, and
+        // it would be a lie: the handler below only accepts PickedMovie, and this screen's model is
+        // a list of `Clip`s, each of which IS a video (url, duration, trimStart/trimEnd). A picked
+        // image would fall through the `guard` and vanish with no error, which is worse than a
+        // restriction you can see.
+        //
+        // The real repair is that starting with a video should hand off to StoryEditorView, the
+        // multi-item composer that already carries photos and videos side by side, rather than this
+        // screen growing a second media type. That is a piece of work, not a filter change.
         .photosPicker(isPresented: $showAddPicker, selection: $addPick,
                       maxSelectionCount: 10, matching: .videos)
         .onChange(of: addPick) { _, picks in

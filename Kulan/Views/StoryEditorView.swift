@@ -211,6 +211,17 @@ struct StoryEditorView: View {
         // keyboard. Nothing here computes a keyboard height any more.
         ZStack {
             canvasLayer
+                // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
+                // same top anchor, same 10pt nudge, same 0.3 curve. Tapping the scissors on a video
+                // inside a MULTI-ITEM post used to drop a flat panel on top of an untouched canvas,
+                // so one post had two different trim screens depending on how it was started. It is
+                // one screen now, and this is the half that was missing.
+                //
+                // Shrinking toward the TOP is the whole trick: every pixel the card gives up appears
+                // at the bottom, which is exactly where the filmstrip arrives.
+                .scaleEffect(showTrim ? 0.9 : 1, anchor: .top)
+                .offset(y: showTrim ? 10 : 0)
+                .animation(.easeInOut(duration: 0.3), value: showTrim)
             // Bottom bar. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
             if isDrawing {
@@ -220,7 +231,11 @@ struct StoryEditorView: View {
                     // the screen the canvas is measured against, and the canvas has to stay exactly
                     // where it is or the line lands somewhere other than the finger.
                     .opacity(strokeInFlight ? 0 : 1)
-            } else {
+            } else if !showTrim {
+                // GONE DURING A TRIM, not merely faded. The trim screen owns the bottom — the
+                // filmstrip lands where this bar was — and leaving the caption field, the thumbnail
+                // strip and the tool row underneath it is what made the multi-item trim read as a
+                // panel dropped on top of the composer rather than its own screen.
                 VStack { Spacer(); bottomBar }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
             }
