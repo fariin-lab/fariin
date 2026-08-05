@@ -57,6 +57,11 @@ struct StoryVideoEditorView: View {
         var muted = false
         var drawing = PKDrawing()
         var overlays: [TextOverlay] = []
+        /// The pinch. Per-clip like every other edit — it used to be one screen-wide value, so
+        /// zooming clip 1 silently showed clip 2 zoomed as well — and, worse, it never reached the
+        /// export at all: the posted clip was the original framing. `burnIn(for:)` turns it into
+        /// the crop rectangle now.
+        var zoom: CGFloat = 1
     }
 
     @State private var clips: [Clip] = []
@@ -133,6 +138,7 @@ struct StoryVideoEditorView: View {
             d.trimEnd = c.trimEnd
             d.drawing = c.drawing
             d.overlays = c.overlays
+            d.zoom = c.zoom   // the pinch survives the hand-off, like every other edit
             return d
         }
         // Opened straight from the camera or a single pick, before `load()` has built clips[0]:
@@ -145,6 +151,7 @@ struct StoryVideoEditorView: View {
             d.trimEnd = trimEnd
             d.drawing = drawing
             d.overlays = overlays
+            d.zoom = zoom
             seed.append(d)
         }
         seed.append(StoryEditorView.DraftItem(image: ui))
@@ -159,6 +166,7 @@ struct StoryVideoEditorView: View {
         clips[index].trimStart = trimStart
         clips[index].trimEnd = trimEnd
         clips[index].muted = muted
+        clips[index].zoom = zoom
     }
 
     /// The mirror image: put a clip's edits back on the tools, and put the clip on the player.
@@ -173,6 +181,8 @@ struct StoryVideoEditorView: View {
         duration = c.duration
         thumbnail = c.poster
         thumbnailData = c.posterData
+        zoom = c.zoom
+        baseZoom = max(1, c.zoom)
         selectedID = nil; editingID = nil; isDrawing = false; strokeInFlight = false
         player.isMuted = muted
         // BOTH LINES MATTER. Dropping the looper stops it re-queueing, but the items it has ALREADY
@@ -311,7 +321,14 @@ struct StoryVideoEditorView: View {
         .sheet(isPresented: $showAddPicker) {
             StoryLibraryPicker(
                 onImage: { ui in beginHandOff(adding: ui) },
-                onVideo: { url in Task { await appendClip(url) } })
+                // A VIDEO pick closes the picker and lands back HERE with the new clip selected
+                // and playing (owner 2026-08-05: "the app should return directly to the Story
+                // Editor... not back to the Photo Picker"). It used to stay open — picking an
+                // image visibly opened the composer over it, picking a video visibly did nothing.
+                onVideo: { url in
+                    showAddPicker = false
+                    Task { await appendClip(url) }
+                })
             .fullScreenCover(item: $handOff) { post in
                 StoryEditorView(source: post.items.first?.image ?? UIImage(),
                                 onPosted: { onPosted(); dismiss() },
@@ -943,7 +960,11 @@ struct StoryVideoEditorView: View {
     /// uses, so text placed on a clip lands where text placed on a picture lands.
     @MainActor private func burnIn(for c: Clip) -> StoryBurnIn? {
         let hasArt = !c.drawing.bounds.isEmpty || !c.overlays.isEmpty
-        guard hasArt else { return nil }
+        // THE PINCH REACHES THE EXPORT NOW. A zoomed clip looked reframed on this screen and then
+        // uploaded at its original framing — the owner's "displays the original, unedited frame"
+        // report. Zoom becomes the transcoder's crop rectangle below.
+        let reframed = c.zoom > 1.001
+        guard hasArt || reframed else { return nil }
         let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
 
         var art: UIImage?
@@ -967,9 +988,41 @@ struct StoryVideoEditorView: View {
             renderer.isOpaque = false          // black here would hide the whole video behind it
             art = renderer.uiImage
         }
-        // cropRect is always nil now that the video editor has no cropper. The parameter stays
-        // because VideoTranscoder still supports a crop and that capability is not ours to delete.
-        return StoryBurnIn(overlay: art, cropRect: nil,
+        // The pinch's crop. The zoom is centred (this screen's pinch has no pan), so the kept
+        // piece is the centred fraction of the clip that still fits the card at that zoom: fit the
+        // clip into the CARD it plays in on screen (the canvas minus the 8pt top and the 44pt
+        // band — videoCanvasLayer's own numbers), see how much of it the card can show at zoom z,
+        // and take that same centred slice out of the clip's aspect-fit footprint in the export
+        // canvas. Bands outside the picture are cropped away, so the viewer letterboxes a reframed
+        // clip with its live blur exactly like an untouched one.
+        var crop: CGRect?
+        if reframed, let ps = c.poster?.size, ps.width > 0, ps.height > 0 {
+            let card = CGSize(width: size.width, height: max(1, size.height - 8 - 44))
+            let fitS = min(card.width / ps.width, card.height / ps.height)
+            let fx = min(1, card.width / (ps.width * fitS * c.zoom))
+            let fy = min(1, card.height / (ps.height * fitS * c.zoom))
+            let canvasAspect = size.width / size.height
+            let clipAspect = ps.width / ps.height
+            // The clip's aspect-fit footprint inside the export canvas, normalised.
+            let f0 = clipAspect >= canvasAspect
+                ? CGSize(width: 1, height: (size.width / clipAspect) / size.height)
+                : CGSize(width: (size.height * clipAspect) / size.width, height: 1)
+            crop = CGRect(x: (1 - f0.width * fx) / 2, y: (1 - f0.height * fy) / 2,
+                          width: f0.width * fx, height: f0.height * fy)
+            // Text and pen were drawn over the ZOOMED clip; the export paints them onto the
+            // unzoomed canvas and then magnifies the kept rectangle. Re-projected into that
+            // rectangle, they come back out where and as big as this screen showed them.
+            if let a = art, let cr = crop {
+                let target = CGRect(x: cr.minX * size.width, y: cr.minY * size.height,
+                                    width: cr.width * size.width, height: cr.height * size.height)
+                let fmt = UIGraphicsImageRendererFormat()
+                fmt.scale = a.scale; fmt.opaque = false
+                art = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+                    a.draw(in: target)
+                }
+            }
+        }
+        return StoryBurnIn(overlay: art, cropRect: crop,
                            canvasAspect: size.height > 0 ? size.width / size.height : nil)
     }
 

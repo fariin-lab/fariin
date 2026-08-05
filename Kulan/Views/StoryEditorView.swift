@@ -91,11 +91,12 @@ struct StoryEditorView: View {
     }
     @State private var posting = false
     @State private var postError = false
-    /// The resting bottom bar's measured height. The canvas ends this far above the screen bottom
-    /// so the tool capsule and NEXT can never sit on the photo; the fallback covers the first
-    /// frame, before the bar has reported (caption 40 + gap 12 + tools ~48 + paddings + indicator).
-    @State private var bottomBarH: CGFloat = 0
-    private var canvasClearance: CGFloat { bottomBarH > 1 ? bottomBarH + 6 : 132 }
+    /// The black band under the card where the tool capsule and NEXT live. A CONSTANT, not a
+    /// measured height: the card's frame used to be inset by the bottom bar's measured size, and
+    /// anything that changed the bar (focusing the caption, opening Aa — both raise the keyboard)
+    /// re-measured the canvas and visibly shrank the photo. His rule: the preview NEVER resizes.
+    /// Geometry that cannot move is geometry derived from nothing that moves.
+    static let toolZoneHeight: CGFloat = 58
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
     @FocusState private var captionFocused: Bool
@@ -258,31 +259,20 @@ struct StoryEditorView: View {
         // arrived and shoved it UP. Two state changes, two moments, neither animated with the
         // keyboard. Nothing here computes a keyboard height any more.
         ZStack {
-            // The stage floor. The canvas is inset above the bottom bar now, so something must own
-            // the pixels behind the bar at every moment — the canvas's own black stops at its inset.
             Color.black.ignoresSafeArea()
             canvasLayer
-                // THE CANVAS ENDS ABOVE THE BOTTOM BAR (owner 2026-08-05, his circles: the tool
-                // capsule and NEXT were sitting ON the photo). The canvas used to be the whole
-                // screen, so a tall photo filled it and the controls floated over the picture.
-                // Inset by the bar's own measured height, the photo, the pen, the text overlays
-                // and the flatten all live in the same shortened space — WYSIWYG holds — and a
-                // tall photo now reads as the boxed card over its wash, controls on black below.
-                // The inset uses the RESTING bar height only, so swapping to the pen bar or
-                // raising the keyboard never resizes the canvas mid-stroke.
-                .padding(.bottom, canvasClearance)
-                // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
-                // same top anchor, same 10pt nudge, same 0.3 curve. Tapping the scissors on a video
-                // inside a MULTI-ITEM post used to drop a flat panel on top of an untouched canvas,
-                // so one post had two different trim screens depending on how it was started. It is
-                // one screen now, and this is the half that was missing.
+                // THE CARD'S FRAME IS FIXED (owner: "the Story preview must never shrink, resize,
+                // or change its scale"). It was inset by the bottom bar's MEASURED height, and the
+                // keyboard reached the canvas through that wrapper — focusing the caption or
+                // opening Aa visibly shrank the photo. The card now ends `toolZoneHeight` above
+                // the screen bottom, a constant, and the canvas ignores the keyboard outright.
                 //
-                // Shrinking toward the TOP is the whole trick: every pixel the card gives up appears
-                // at the bottom, which is exactly where the filmstrip arrives.
+                // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
+                // same top anchor, same 10pt nudge, same 0.3 curve.
                 .scaleEffect(showTrim ? 0.9 : 1, anchor: .top)
                 .offset(y: showTrim ? 10 : 0)
                 .animation(.easeInOut(duration: 0.3), value: showTrim)
-            // Bottom bar. While DRAWING, our pen bar takes the bottom instead; it stays pinned
+            // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
             if isDrawing {
                 VStack { Spacer(); penBar.padding(.bottom, 8) }
@@ -292,23 +282,25 @@ struct StoryEditorView: View {
                     // where it is or the line lands somewhere other than the finger.
                     .opacity(strokeInFlight ? 0 : 1)
             } else if !showTrim {
-                // GONE DURING A TRIM, not merely faded. The trim screen owns the bottom — the
-                // filmstrip lands where this bar was — and leaving the caption field, the thumbnail
-                // strip and the tool row underneath it is what made the multi-item trim read as a
-                // panel dropped on top of the composer rather than its own screen.
-                VStack {
-                    Spacer()
-                    bottomBar
-                        // The canvas insets itself above this bar — see canvasClearance. RESTING
-                        // height only: focused, the bar rides the keyboard, and a canvas that
-                        // re-staged with it would move under a half-typed caption.
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                            if !captionFocused, h > 1, abs(h - bottomBarH) > 1 { bottomBarH = h }
-                        }
-                }
-                .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
+                // TWO SEPARATE LAYERS, because they answer to different masters. The tool row is
+                // pinned to the screen bottom and never moves for the keyboard; the caption pill
+                // sits ON the card (the reference layout) and rides the keyboard when focused.
+                // GONE DURING A TRIM, not merely faded — the filmstrip lands where they were.
+                toolRowLayer
+                captionLayer
             }
-            // Above the bar, and keyboard-proof: neither cropping nor trimming has a keyboard, and
+            // Aa's editor is a SIBLING of the canvas, not an overlay inside it: it needs the
+            // keyboard avoidance the canvas must never have. Its own dim backdrop covers the
+            // screen; the card underneath does not move a pixel.
+            if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
+                TextEditorOverlay(
+                    draft: $overlays[idx],
+                    onCancel: { trimEmpty(id); editingID = nil },
+                    onDone: { trimEmpty(id); editingID = nil }
+                )
+                .zIndex(30)
+            }
+            // Above the bars, and keyboard-proof: neither cropping nor trimming has a keyboard, and
             // both must cover everything under them.
             cropOverlay
                 .ignoresSafeArea(.keyboard)
@@ -331,137 +323,24 @@ struct StoryEditorView: View {
 
     private var canvasLayer: some View {
         GeometryReader { geo in
+            // THE CARD IS THE STORY FRAME (owner: "use the real Story frame… the editor accurately
+            // matches the final Story layout"). Full width, from just under the status bar down to
+            // the tool band — a CONSTANT of screen geometry, so nothing that appears or disappears
+            // around it (keyboard, bars, Aa) can ever resize the preview. Everything WYSIWYG —
+            // the photo, the pen, the text, the flatten — lives in the CARD's coordinate space
+            // now, not the whole screen's, which is what makes the posted frame the seen frame.
+            let cardTop: CGFloat = 8
+            let cardH = max(1, geo.size.height - cardTop - Self.toolZoneHeight)
+            let card = CGSize(width: geo.size.width, height: cardH)
             ZStack {
                 Color.black.ignoresSafeArea()
-                // Story canvas CARD (user reference, "image 2"): a FULL-WIDTH rounded canvas
-                // between the status area and the bottom controls, filled with a heavily muted,
-                // near-solid wash of the photo (big blur + desaturation + dark veil — NOT the
-                // earlier vivid full-screen blur, which was rejected). Black frames it above
-                // and below. Editor-only look; the posted image is untouched.
-                // User-tuned (round 3): the STATUS BAR is visible in the editor (reference look),
-                // so the card starts just below it; bottom leaves clear room for the controls.
-                let cardTop: CGFloat = 8
-                let cardBottomGap: CGFloat = 44
-                let cardH = geo.size.height - cardTop - cardBottomGap
-                let boxed = !imageFillsCanvas(geo.size)
-                if boxed, cardH > 0 {
-                    Image(uiImage: edited).resizable().scaledToFill()
-                        .frame(width: geo.size.width, height: cardH)
-                        .blur(radius: 90, opaque: true)
-                        .saturation(0.4)
-                        .overlay(Color.black.opacity(0.4))
-                        .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
-                        .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                        .allowsHitTesting(false)
-                }
-                // Photo: SQUARE-EDGED, full canvas width, lying on the card (the floating
-                // rounded-thumbnail look was rejected). Zoom/pan applied DIRECTLY to a
-                // UIImageView's transform in UIKit (no SwiftUI @State write per touch ->
-                // zero re-render mid-pinch -> butter smooth, anchored between the fingers).
-                // The final scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
-                ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
-                                  maxScale: 4, interactive: !isDrawing && editingID == nil,
-                                  onTap: { captionFocused = false; selectedID = nil },
-                                  onSwipe: { step in
-                                      // ZOOMED IN = a horizontal drag is panning the PICTURE, never
-                                      // a page turn (owner 2026-08-05: "if I make zoom, block swipe
-                                      // — if I want to swipe I can click thumbnail"). The thumbnails
-                                      // remain the way to switch while zoomed.
-                                      guard photoZoom <= 1.01 else { return }
-                                      // The strip and the swipe are the same move, so they go through
-                                      // the same door: select() parks this picture's edits and brings
-                                      // the next one's back. Ends of the post simply do not move.
-                                      guard items.count > 1, !isDrawing, editingID == nil,
-                                            draggingID == nil else { return }
-                                      let next = index + step
-                                      guard items.indices.contains(next) else { return }
-                                      captionFocused = false
-                                      withAnimation(.snappy(duration: 0.22)) { select(next) }
-                                  })
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
-                    // Zoomed/panned photo stays STRICTLY inside the card (user's final spec:
-                    // "when I zoom, the image should not go outside the frame"). A MASK only —
-                    // the pinch mechanics, pan limits, and the posted photo are untouched.
-                    .mask {
-                        if boxed, cardH > 0 {
-                            Rectangle().fill(.black)
-                                .frame(width: geo.size.width, height: cardH)
-                                .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
-                                .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
-                        } else {
-                            Rectangle().fill(.black)
-                        }
-                    }
-
-                clipPreview(size: geo.size)
-                videoMark
-
-                // Text overlays — above the photo, below the drawing canvas + controls.
-                ForEach($overlays) { $o in
-                    TextOverlayView(
-                        overlay: $o,
-                        isSelected: selectedID == o.id,
-                        canvasSize: canvasSize,
-                        interactive: !isDrawing && editingID == nil,
-                        onTap: { selectedID = o.id; editingID = o.id },
-                        onDragChange: { live in
-                            draggingID = o.id
-                            let hot = isOverTrash(live)
-                            if hot != trashHot { trashHot = hot; if hot { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
-                        },
-                        onDragEnd: { live in
-                            if isOverTrash(live) { overlays.removeAll { $0.id == o.id }; selectedID = nil }
-                            draggingID = nil; trashHot = false; guideV = false; guideH = false
-                        },
-                        onSnap: { v, h in
-                            if v && !guideV { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                            if h && !guideH { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                            guideV = v; guideH = h
-                        }
-                    )
-                    .opacity(editingID == o.id ? 0 : 1)   // hide the one being edited (it lives in the editor)
-                }
-
-                if isDrawing {
-                    // Must live in the SAME space (geo) as the photo + overlays + the flatten capture rect,
-                    // otherwise strokes bake shifted down by the top inset and the bottom band is clipped.
-                    //
-                    // OUR PEN, NOT APPLE'S PALETTE (owner 2026-08-03: "use my owner pen"). PencilKit still
-                    // draws the strokes — it is the drawing engine, not a look — but its tool picker is off
-                    // and the ink comes from our own bar, exactly as ChatImageEditor has always done it.
-                    DrawingCanvas(drawing: $drawing, isActive: true,
-                                  penColor: penHue == 0 ? .white
-                                                        : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
-                                  showsToolPicker: false,
-                                  inkType: isHighlighter ? .marker : .pen,
-                                  penWidth: penWidth,
-                                  onStroke: { drawing in
-                                      withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
-                                  })
-                        .frame(width: geo.size.width, height: geo.size.height)
-                } else if !drawing.bounds.isEmpty {
-                    // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
-                    // the canvas only existed in edit mode). Render the saved strokes as a static image, same
-                    // space + on top, so it persists and matches the flattened export exactly.
-                    Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: geo.size), scale: UIScreen.main.scale))
-                        .resizable()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .allowsHitTesting(false)
-                }
-
-                // Center alignment guides + trash zone (only while dragging an overlay).
-                if draggingID != nil {
-                    if guideV { Rectangle().fill(.yellow.opacity(0.9)).frame(width: 1).frame(maxHeight: .infinity).position(x: geo.size.width / 2, y: geo.size.height / 2) }
-                    if guideH { Rectangle().fill(.yellow.opacity(0.9)).frame(height: 1).frame(maxWidth: .infinity).position(x: geo.size.width / 2, y: geo.size.height / 2) }
-                    Image(systemName: "trash.fill")
-                        .font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 56, height: 56)
-                        .background(trashHot ? Color.red : .black.opacity(0.5), in: Circle())
-                        .scaleEffect(trashHot ? 1.25 : 1)
-                        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: trashHot)
-                        .position(trashCenter)
-                }
+                cardContent(card: card)
+                    .frame(width: card.width, height: card.height)
+                    // The card ALWAYS has the rounded story shape (reference). Display-only:
+                    // the flatten renders the same space unrounded, and the viewer rounds its
+                    // own card exactly like this.
+                    .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
+                    .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
 
                 // Top controls — stay put when the keyboard opens (don't ride up with it).
                 VStack {
@@ -490,13 +369,11 @@ struct StoryEditorView: View {
                 .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
-                // The bottom bar and the crop overlay used to sit HERE, inside the canvas. They are
-                // siblings of it now, in `body`, which is what lets the keyboard move one without
-                // touching the other.
+                // The bottom bars and the crop overlay are siblings of the canvas, in `body`,
+                // which is what lets the keyboard move one without touching the other.
             }
-            .coordinateSpace(name: "canvas")
             .onAppear {
-                canvasSize = geo.size
+                canvasSize = card
                 if items.isEmpty {
                     if seedItems.isEmpty {
                         items = [DraftItem(image: source)]
@@ -512,17 +389,10 @@ struct StoryEditorView: View {
                 }
                 recomputeEdited()
             }
-            .onChange(of: geo.size) { _, s in canvasSize = s }
-            .onChange(of: filterIndex) { _, _ in recomputeEdited() }
-            .overlay {
-                if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
-                    TextEditorOverlay(
-                        draft: $overlays[idx],
-                        onCancel: { trimEmpty(id); editingID = nil },
-                        onDone: { trimEmpty(id); editingID = nil }
-                    )
-                }
+            .onChange(of: geo.size) { _, s in
+                canvasSize = CGSize(width: s.width, height: max(1, s.height - cardTop - Self.toolZoneHeight))
             }
+            .onChange(of: filterIndex) { _, _ in recomputeEdited() }
         }
         // THE CANVAS never resizes for the keyboard, and that part was always right: automatic
         // avoidance squished it (user bug 1) and desynced the compact send button's visual frame from
@@ -538,7 +408,14 @@ struct StoryEditorView: View {
         .sheet(isPresented: $showAddPicker) {
             StoryLibraryPicker(
                 onImage: { ui in appendPicked(image: ui) },
-                onVideo: { url in Task { await appendPicked(video: url) } })
+                // A VIDEO pick closes the picker and lands you back on the editor with the clip
+                // selected (owner 2026-08-05: "the app should return directly to the Story Editor
+                // with all the selected videos, not back to the Photo Picker"). Images keep the
+                // stay-open multi-pick — that half he called working.
+                onVideo: { url in
+                    showAddPicker = false
+                    Task { await appendPicked(video: url) }
+                })
         }
         .sheet(item: $pendingShare) { s in
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
@@ -547,6 +424,122 @@ struct StoryEditorView: View {
                             onPosted: { onPosted(); dismiss() })
         }
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// Everything ON the card, built in the CARD's own coordinate space — the same space the
+    /// flatten renders, the pen bakes against and the text overlays position in. One space for the
+    /// seen and the posted picture is the whole WYSIWYG contract of this screen.
+    @ViewBuilder private func cardContent(card: CGSize) -> some View {
+        let boxed = !imageFillsCanvas(card)
+        ZStack {
+            Color.black
+            // The wash behind a photo that does not fill the card: a heavily muted, near-solid
+            // blur of itself (big blur + desaturation + dark veil — the vivid full-screen blur
+            // was rejected). Editor-only look; the posted image is untouched.
+            if boxed {
+                Image(uiImage: edited).resizable().scaledToFill()
+                    .frame(width: card.width, height: card.height)
+                    .blur(radius: 90, opaque: true)
+                    .saturation(0.4)
+                    .overlay(Color.black.opacity(0.4))
+                    .allowsHitTesting(false)
+            }
+            // Photo: full card width, aspect-fit on the wash. Zoom/pan applied DIRECTLY to a
+            // UIImageView's transform in UIKit (no SwiftUI @State write per touch -> zero
+            // re-render mid-pinch -> butter smooth, anchored between the fingers). The final
+            // scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
+            // The UIKit container clips to its own bounds, so a zoomed photo never leaves the card.
+            ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
+                              maxScale: 4, interactive: !isDrawing && editingID == nil,
+                              onTap: { captionFocused = false; selectedID = nil },
+                              onSwipe: { step in
+                                  // ZOOMED IN = a horizontal drag is panning the PICTURE, never
+                                  // a page turn (owner 2026-08-05: "if I make zoom, block swipe
+                                  // — if I want to swipe I can click thumbnail"). The thumbnails
+                                  // remain the way to switch while zoomed.
+                                  guard photoZoom <= 1.01 else { return }
+                                  // The strip and the swipe are the same move, so they go through
+                                  // the same door: select() parks this picture's edits and brings
+                                  // the next one's back. Ends of the post simply do not move.
+                                  guard items.count > 1, !isDrawing, editingID == nil,
+                                        draggingID == nil else { return }
+                                  let next = index + step
+                                  guard items.indices.contains(next) else { return }
+                                  captionFocused = false
+                                  withAnimation(.snappy(duration: 0.22)) { select(next) }
+                              })
+                .frame(width: card.width, height: card.height)
+
+            clipPreview(size: card)
+            videoMark
+
+            // Text overlays — above the photo, below the drawing canvas + controls.
+            ForEach($overlays) { $o in
+                TextOverlayView(
+                    overlay: $o,
+                    isSelected: selectedID == o.id,
+                    canvasSize: canvasSize,
+                    interactive: !isDrawing && editingID == nil,
+                    onTap: { selectedID = o.id; editingID = o.id },
+                    onDragChange: { live in
+                        draggingID = o.id
+                        let hot = isOverTrash(live)
+                        if hot != trashHot { trashHot = hot; if hot { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
+                    },
+                    onDragEnd: { live in
+                        if isOverTrash(live) { overlays.removeAll { $0.id == o.id }; selectedID = nil }
+                        draggingID = nil; trashHot = false; guideV = false; guideH = false
+                    },
+                    onSnap: { v, h in
+                        if v && !guideV { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                        if h && !guideH { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                        guideV = v; guideH = h
+                    }
+                )
+                .opacity(editingID == o.id ? 0 : 1)   // hide the one being edited (it lives in the editor)
+            }
+
+            if isDrawing {
+                // Must live in the SAME space (the card) as the photo + overlays + the flatten
+                // capture rect, otherwise strokes bake shifted and the bottom band is clipped.
+                //
+                // OUR PEN, NOT APPLE'S PALETTE (owner 2026-08-03: "use my owner pen"). PencilKit still
+                // draws the strokes — it is the drawing engine, not a look — but its tool picker is off
+                // and the ink comes from our own bar, exactly as ChatImageEditor has always done it.
+                DrawingCanvas(drawing: $drawing, isActive: true,
+                              penColor: penHue == 0 ? .white
+                                                    : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
+                              showsToolPicker: false,
+                              inkType: isHighlighter ? .marker : .pen,
+                              penWidth: penWidth,
+                              onStroke: { drawing in
+                                  withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
+                              })
+                    .frame(width: card.width, height: card.height)
+            } else if !drawing.bounds.isEmpty {
+                // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
+                // the canvas only existed in edit mode). Render the saved strokes as a static image, same
+                // space + on top, so it persists and matches the flattened export exactly.
+                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: card), scale: UIScreen.main.scale))
+                    .resizable()
+                    .frame(width: card.width, height: card.height)
+                    .allowsHitTesting(false)
+            }
+
+            // Center alignment guides + trash zone (only while dragging an overlay).
+            if draggingID != nil {
+                if guideV { Rectangle().fill(.yellow.opacity(0.9)).frame(width: 1).frame(maxHeight: .infinity).position(x: card.width / 2, y: card.height / 2) }
+                if guideH { Rectangle().fill(.yellow.opacity(0.9)).frame(height: 1).frame(maxWidth: .infinity).position(x: card.width / 2, y: card.height / 2) }
+                Image(systemName: "trash.fill")
+                    .font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(trashHot ? Color.red : .black.opacity(0.5), in: Circle())
+                    .scaleEffect(trashHot ? 1.25 : 1)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: trashHot)
+                    .position(trashCenter)
+            }
+        }
+        .coordinateSpace(name: "canvas")
     }
 
     /// The items in this post, bottom right above the caption bar, exactly as he drew them: the one
@@ -587,6 +580,12 @@ struct StoryEditorView: View {
         if currentIsVideo, let p = previewPlayer {
             ClipPreviewLayer(player: p)
                 .frame(width: size.width, height: size.height)
+                // THE MOVING PICTURE SITS EXACTLY WHERE THE POSTER SITS. The poster carries the
+                // pinch's transform in UIKit; without the same one here, pressing play on a
+                // zoomed clip visibly snapped back to 1x — a preview of a framing that was not
+                // the one being posted. Same scale-then-offset order as the poster's transform.
+                .scaleEffect(photoZoom)
+                .offset(photoOffset)
                 .allowsHitTesting(false)   // the play/pause button and the canvas keep their taps
                 .transition(.opacity)
         }
@@ -690,95 +689,116 @@ struct StoryEditorView: View {
         .accessibilityLabel("Add more photos or videos")
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 12) {   // user spec: 12px between the caption bar and the tool row
+    /// The caption pill (and the thumbnail strip above it), floating ON the card near its bottom
+    /// edge — the reference layout ("move the caption bar to the same position shown in the second
+    /// reference image"). Its own layer so it can ride the keyboard while the canvas, which ignores
+    /// the keyboard, never moves a pixel.
+    private var captionLayer: some View {
+        VStack(spacing: 12) {
+            Spacer()
             if !captionFocused { itemStrip }
             // Caption bar — dark pill. While typing, Send sits beside it so you can post without
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
             HStack(alignment: .bottom, spacing: 10) {
-                HStack(spacing: 6) {
-                    addMoreButton
-                    // Grows with the text (up to 5 lines) instead of staying a single truncated line.
-                    TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
-                        .foregroundStyle(.white).focused($captionFocused)
-                        // ...and the text itself carries a hairline shadow so it reads on white.
-                        .shadow(color: .black.opacity(0.45), radius: 1.5)
-                        .lineLimit(1...5)
-                        // The text carries its own breathing room instead of the bar padding it. One
-                        // line is then 34 tall, under the 40 the + pins, so the resting bar is exactly
-                        // 40 and a long caption still grows from there.
-                        .padding(.vertical, 6)
-                        .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
-                }
-                // EXACTLY 40 AT REST (owner spec). It was 50: the + is a 32pt square and the bar
-                // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
-                // the content was already taller than the floor it was being held to. The + now
-                // measures 40 itself, which sets the height and keeps a full-height touch target.
-                .padding(.leading, 6).padding(.trailing, 18).frame(minHeight: 40)
-                // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
-                // glass"). Plain glass was here once and came back off: on a bright photo it went pale
-                // and the white placeholder disappeared into it, which he photographed. `tint` is
-                // Apple's own glass tint, so this is still real glass and not a dark pill pretending —
-                // it just carries enough of its own darkness that white text always has something to
-                // sit on. The text keeps its hairline shadow for the same reason.
-                // Rounder, on his word (2026-08-04). Not a Capsule: this bar GROWS to five lines
-                // when the caption is long, and a capsule's ends become huge lozenges as it does.
-                // 26 reads as a pill at resting height and still looks deliberate when it is tall.
-                .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous),
-                             tint: .black.opacity(0.28))
-                // Light photos made the white caption text invisible (user screenshot: white-on-
-                // white). A soft bar shadow lifts the pill off bright backgrounds...
-                .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
-
+                captionBar
                 // While typing, a SMALL round send button (not the wide NEXT pill) so the caption
                 // field keeps most of the width.
                 if captionFocused { compactSendButton }
             }
-            .padding(.bottom, 10)   // user: caption bar sat too low — lift it for breathing room
-
-            // Tool row hides while typing a caption (only the caption field stays, above the keyboard).
-            if !captionFocused {
-                HStack(spacing: 14) {
-                    // THE TOOLS BELONG TO THE ITEM YOU ARE LOOKING AT, not to the screen.
-                    //
-                    // Owner: with a photo on thumbnail 1 and a video on thumbnail 2, tapping the
-                    // video still brought up the photo's controls. Crop is the one that was actually
-                    // wrong to offer, and he already ruled on it himself when he had the video editor
-                    // built: "NO CROP here — that is a photo tool". A clip gets what a clip has
-                    // instead: its sound, and its length.
-                    //
-                    // Aa and the pen stay for both, because they already work on a video — they
-                    // travel to the export and are composited into the frames there (see
-                    // `videoBurnIn`). Removing them would take away something that works.
-                    HStack(spacing: 22) {
-                        capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on either
-                        if currentIsVideo {
-                            capsuleTool(items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                                        active: items[index].muted) {
-                                items[index].muted.toggle()
-                            }
-                            capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
-                        } else {
-                            capsuleTool("crop", active: croppedSource != nil) {
-                                withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
-                            }
-                        }
-                        capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
-                        // NO EXTRA TOOL beyond these. It used to carry a second "add another
-                        // picture", kept on the reasoning that two doors to one action beat two doors
-                        // to two different ones. He has now seen both and called it: "remove the
-                        // bottom Upload Story button because it is a duplicate. Keep the one in the
-                        // caption bar exactly as it is."
-                    }
-                    .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
-                    .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
-
-                    Spacer()
-                    sendButton
-                }
-            }
         }
         .padding(.horizontal, 16)
+        // At rest the pill sits INSIDE the card: the card ends `toolZoneHeight` above the screen
+        // bottom, so the pill needs that plus its inset from the card's bottom edge. Focused, the
+        // keyboard is the floor and a small gap is enough.
+        .padding(.bottom, captionFocused ? 8 : Self.toolZoneHeight + 14)
+        .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // trash owns the bottom while dragging text
+    }
+
+    /// Aa / crop-or-clip tools + NEXT, on the black band UNDER the card. Pinned: the keyboard never
+    /// moves it (it hides while typing instead), so nothing here can push on the canvas.
+    private var toolRowLayer: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 14) {
+                // THE TOOLS BELONG TO THE ITEM YOU ARE LOOKING AT, not to the screen.
+                //
+                // Owner: with a photo on thumbnail 1 and a video on thumbnail 2, tapping the
+                // video still brought up the photo's controls. Crop is the one that was actually
+                // wrong to offer, and he already ruled on it himself when he had the video editor
+                // built: "NO CROP here — that is a photo tool". A clip gets what a clip has
+                // instead: its sound, and its length.
+                //
+                // Aa and the pen stay for both, because they already work on a video — they
+                // travel to the export and are composited into the frames there (see
+                // `videoBurnIn`). Removing them would take away something that works.
+                HStack(spacing: 22) {
+                    capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on either
+                    if currentIsVideo {
+                        capsuleTool(items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                    active: items[index].muted) {
+                            items[index].muted.toggle()
+                        }
+                        capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
+                    } else {
+                        capsuleTool("crop", active: croppedSource != nil) {
+                            withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
+                        }
+                    }
+                    capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
+                    // NO EXTRA TOOL beyond these. It used to carry a second "add another
+                    // picture", kept on the reasoning that two doors to one action beat two doors
+                    // to two different ones. He has now seen both and called it: "remove the
+                    // bottom Upload Story button because it is a duplicate. Keep the one in the
+                    // caption bar exactly as it is."
+                }
+                .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
+                .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
+
+                Spacer()
+                sendButton
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .opacity(!captionFocused && draggingID == nil && editingID == nil ? 1 : 0)
+    }
+
+    /// The caption field in its glass pill, exactly as it was inside the old bottom bar.
+    private var captionBar: some View {
+        HStack(spacing: 6) {
+            addMoreButton
+            // Grows with the text (up to 5 lines) instead of staying a single truncated line.
+            TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
+                .foregroundStyle(.white).focused($captionFocused)
+                // ...and the text itself carries a hairline shadow so it reads on white.
+                .shadow(color: .black.opacity(0.45), radius: 1.5)
+                .lineLimit(1...5)
+                // The text carries its own breathing room instead of the bar padding it. One
+                // line is then 34 tall, under the 40 the + pins, so the resting bar is exactly
+                // 40 and a long caption still grows from there.
+                .padding(.vertical, 6)
+                .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
+        }
+        // EXACTLY 40 AT REST (owner spec). It was 50: the + is a 32pt square and the bar
+        // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
+        // the content was already taller than the floor it was being held to. The + now
+        // measures 40 itself, which sets the height and keeps a full-height touch target.
+        .padding(.leading, 6).padding(.trailing, 18).frame(minHeight: 40)
+        // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
+        // glass"). Plain glass was here once and came back off: on a bright photo it went pale
+        // and the white placeholder disappeared into it, which he photographed. `tint` is
+        // Apple's own glass tint, so this is still real glass and not a dark pill pretending —
+        // it just carries enough of its own darkness that white text always has something to
+        // sit on. The text keeps its hairline shadow for the same reason.
+        // Rounder, on his word (2026-08-04). Not a Capsule: this bar GROWS to five lines
+        // when the caption is long, and a capsule's ends become huge lozenges as it does.
+        // 26 reads as a pill at resting height and still looks deliberate when it is tall.
+        .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous),
+                     tint: .black.opacity(0.28))
+        // Light photos made the white caption text invisible (user screenshot: white-on-
+        // white). A soft bar shadow lifts the pill off bright backgrounds...
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
     }
 
     /// TRIM, for a video item in a multi-item post. Reuses `VideoTrimStrip`, which is the same strip
@@ -1150,9 +1170,15 @@ struct StoryEditorView: View {
     /// does NOT draw is the picture itself — the frames are the picture, and painting the poster in
     /// would freeze the first frame over the whole video.
     @MainActor private func videoBurnIn() async -> StoryBurnIn? {
-        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty
-        guard hasArt || cropRect != nil else { return nil }
         let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        // THE PINCH IS THE VIDEO'S CROP TOOL. A zoomed/panned clip LOOKED reframed in here and
+        // then uploaded with its original framing — photoZoom/photoOffset were never read on this
+        // path, only the photo flatten's. That was the owner's report word for word: "the Story
+        // displays the original, unedited frame." The zoom becomes the transcoder's crop rectangle
+        // below, which is the mechanism it has always had for exactly this.
+        let reframed = photoZoom > 1.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
+        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty
+        guard hasArt || cropRect != nil || reframed else { return nil }
 
         var art: UIImage?
         if hasArt {
@@ -1175,7 +1201,46 @@ struct StoryEditorView: View {
             renderer.isOpaque = false          // black here would hide the whole video behind it
             art = renderer.uiImage
         }
-        return StoryBurnIn(overlay: art, cropRect: cropRect,
+
+        var crop = cropRect   // legacy path: the tool that could set this is no longer offered on video
+        if reframed {
+            // The same maths the photo flatten uses, ending in the transcoder's terms. The export
+            // canvas is geometrically similar to this card (same aspect travels below) and fits the
+            // clip exactly as scaledToFit does, so the poster's fitted rect here IS the clip's
+            // fitted rect there, normalised. The kept piece is the editor viewport, intersected
+            // with the clip's own zoomed footprint — the black bands outside the picture are
+            // cropped away, the same call the photo flatten already makes, so the viewer letterboxes
+            // a reframed clip with its live blur exactly like an untouched one.
+            let z = max(1, photoZoom)
+            let fit = photoFitSize(in: size)
+            let fitRect = CGRect(x: (size.width - fit.width) / 2, y: (size.height - fit.height) / 2,
+                                 width: fit.width, height: fit.height)
+            let vRect = CGRect(x: size.width / 2 + photoOffset.width - fit.width * z / 2,
+                               y: size.height / 2 + photoOffset.height - fit.height * z / 2,
+                               width: fit.width * z, height: fit.height * z)
+            let visible = vRect.intersection(CGRect(origin: .zero, size: size))
+            if visible.width > 1, visible.height > 1 {
+                // The viewport, mapped back onto the UNZOOMED clip inside the canvas.
+                let inCanvas = CGRect(x: fitRect.minX + (visible.minX - vRect.minX) / z,
+                                      y: fitRect.minY + (visible.minY - vRect.minY) / z,
+                                      width: visible.width / z, height: visible.height / z)
+                crop = CGRect(x: inCanvas.minX / size.width, y: inCanvas.minY / size.height,
+                              width: inCanvas.width / size.width, height: inCanvas.height / size.height)
+                // Text and pen were drawn over the ZOOMED clip, but the export paints them onto the
+                // unzoomed canvas and then magnifies the kept rectangle. Re-project the art into
+                // that rectangle so it comes back out exactly where — and exactly as big as — the
+                // editor showed it. Without this, a caption on a zoomed clip drifted and doubled in
+                // size on upload.
+                if let a = art {
+                    let fmt = UIGraphicsImageRendererFormat()
+                    fmt.scale = a.scale; fmt.opaque = false
+                    art = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+                        a.draw(in: inCanvas)
+                    }
+                }
+            }
+        }
+        return StoryBurnIn(overlay: art, cropRect: crop,
                            canvasAspect: size.height > 0 ? size.width / size.height : nil)
     }
 
