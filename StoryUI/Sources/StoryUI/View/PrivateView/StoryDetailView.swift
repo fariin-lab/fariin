@@ -460,8 +460,11 @@ private extension StoryDetailView {
     func captionView(_ text: String, plain: Bool = false) -> some View {
         if !text.isEmpty {
             ZStack(alignment: .bottomLeading) {
+                // Backs the CAPTION only. It used to be 210 because the reply bar floated over the
+                // media and needed darkening too; the bar sits below the card now, so a fade that
+                // tall just dimmed a third of the picture for nothing.
                 LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 210)   // backs both the caption AND the floating reply bar
+                    .frame(height: 130)
                     .allowsHitTesting(false)
                 // Our own design (clean, story-style): bottom-LEFT, no hard line, over the soft fade.
                 Text(text)
@@ -471,11 +474,15 @@ private extension StoryDetailView {
                     .multilineTextAlignment(.leading)
                     .lineLimit(captionExpanded ? 12 : 3)   // cap expansion so a long caption can't overrun the header
                     .padding(.horizontal, 16)
-                    // The caption overlay sits on the FULL-SCREEN padded frame (SwiftUI `.padding`
-                    // includes the padding in the view's bounds, so `.bottom` aligns to the SCREEN
-                    // bottom, not the card bottom). So lift the caption by the full reply-footer
-                    // height + a gap — otherwise it slid behind the reply pill (regression).
-                    .padding(.bottom, Constant.MessageView.height + 32 + winInsets.bottom + (plain ? 40 : 16))
+                    // A GAP FROM THE CARD'S BOTTOM EDGE, and nothing else.
+                    //
+                    // This used to add the whole reply-footer height and the home-indicator inset on
+                    // top, because the media ran to the bottom of the SCREEN and the reply pill
+                    // floated over it, so the caption had to be lifted clear of a bar that was inside
+                    // its own frame. The card ends above the reply bar now — `cardHeight` subtracts
+                    // exactly that footer — so the old lift pushed the caption a further ~130pt up
+                    // and left it stranded in the middle of the picture, which is what he circled.
+                    .padding(.bottom, plain ? 28 : 16)
                     .contentShape(Rectangle())
                     .onTapGesture {   // tap expands/collapses; consumes the tap so it doesn't advance the story
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { captionExpanded.toggle() }
