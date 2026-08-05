@@ -16,12 +16,8 @@ import AVFoundation
 struct AddStorySheet: View {
     var onPosted: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var store = PhotoGridStore()
-    @State private var tab = 0                 // 0 = Photos, 1 = Albums
-    @State private var openAlbum: AlbumInfo?
     @State private var editorImage: EditorImage?
     @State private var editorVideo: EditorVideo?
-    @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
     /// THE EDITOR FOR SOMETHING PICKED IN THE LIBRARY, presented FROM the library sheet rather than
     /// from this root — which is the whole of the fix below, and why these are separate from
     /// `editorImage` / `editorVideo`. Two covers cannot be bound to one item while both the root and
@@ -30,9 +26,6 @@ struct AddStorySheet: View {
     @State private var libraryEditorVideo: EditorVideo?
     @State private var shareTextStory: StoryShareData?     // finished text story → the audience sheet
     @State private var showLibrary = false
-    @State private var tooLongVideo = false   // pick over the 10-minute ceiling
-
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
     var body: some View {
         StoryCameraView(
@@ -53,16 +46,60 @@ struct AddStorySheet: View {
         .fullScreenCover(item: $editorVideo) { item in
             StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
         }
-        .sheet(isPresented: $showLibrary) { libraryPage }
+        // THE PICKER DOES NOT CLOSE WHEN YOU PICK (owner 2026-08-04: "the media picker should not
+        // close automatically after I select a photo… only close it when I tap the close button").
+        //
+        // It used to close itself, hold the picture in a `pending` slot, and open the editor from the
+        // ROOT once the sheet had finished dismissing — because a cover asked for while the sheet
+        // above it is still going down silently never appears. Closing the editor then had to raise
+        // the picker all over again, from the bottom, as a brand new presentation. That is the slide
+        // out and slide back in he is seeing, twice per picture.
+        //
+        // Presenting the editor from INSIDE the sheet removes the whole problem rather than timing
+        // around it: the picker stays exactly where it is, the editor covers it, and closing the
+        // editor reveals the picker still sitting there with its scroll position intact.
+        .sheet(isPresented: $showLibrary) {
+            StoryLibraryPicker(
+                onImage: { ui in libraryEditorImage = EditorImage(ui) },
+                onVideo: { url in libraryEditorVideo = EditorVideo(url) })
+            .fullScreenCover(item: $libraryEditorImage) { item in
+                StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
+            }
+            .fullScreenCover(item: $libraryEditorVideo) { item in
+                StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
+            }
+        }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
         .sheet(item: $shareTextStory) { s in
             ShareStorySheet(image: s.data, onPosted: { onPosted(); dismiss() })
         }
     }
 
-    // MARK: - The library, behind the camera's bottom-left button
+    struct EditorImage: Identifiable { let id = UUID(); let image: UIImage; init(_ i: UIImage) { image = i } }
+    struct EditorVideo: Identifiable { let id = UUID(); let url: URL; init(_ u: URL) { url = u } }
 
-    private var libraryPage: some View {
+}
+
+// MARK: - The app's own media picker
+
+/// The Photos/Albums grid behind the story camera's library button — ONE component now, because the
+/// composers' + must open THIS and never Apple's PhotosPicker (owner 2026-08-05: "Never fall back to
+/// Apple's Photo Picker"). It always offers BOTH photos and videos, whatever the post already holds,
+/// and it does not close itself when you pick (owner rule): the host decides what a pick does, and
+/// the X is the only thing that closes it.
+struct StoryLibraryPicker: View {
+    var onImage: (UIImage) -> Void
+    var onVideo: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var store = PhotoGridStore()
+    @State private var tab = 0                 // 0 = Photos, 1 = Albums
+    @State private var openAlbum: AlbumInfo?
+    @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
+    @State private var tooLongVideo = false   // pick over the 10-minute ceiling
+
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
+
+    var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("", selection: $tab) {
@@ -76,7 +113,7 @@ struct AddStorySheet: View {
             }
             .navigationTitle("Add to Story")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button { showLibrary = false } label: { Image(systemName: "xmark") } } }
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
             .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
@@ -88,25 +125,6 @@ struct AddStorySheet: View {
             // Asked for HERE, not on the camera: opening the camera should not raise a photo-library
             // permission prompt for a screen that is not showing the library yet.
             .task { store.load(); store.loadAlbums() }
-        }
-        // THE PICKER DOES NOT CLOSE WHEN YOU PICK (owner 2026-08-04: "the media picker should not
-        // close automatically after I select a photo… only close it when I tap the close button").
-        //
-        // It used to close itself, hold the picture in a `pending` slot, and open the editor from the
-        // ROOT once the sheet had finished dismissing — because a cover asked for while the sheet
-        // above it is still going down silently never appears. Closing the editor then had to raise
-        // the picker all over again, from the bottom, as a brand new presentation. That is the slide
-        // out and slide back in he is seeing, twice per picture.
-        //
-        // Presenting the editor from INSIDE the sheet removes the whole problem rather than timing
-        // around it: the picker stays exactly where it is, the editor covers it, and closing the
-        // editor reveals the picker still sitting there with its scroll position intact. The pending
-        // slots, the came-from-the-library flag and the reopen function are all gone with it.
-        .fullScreenCover(item: $libraryEditorImage) { item in
-            StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
-        }
-        .fullScreenCover(item: $libraryEditorVideo) { item in
-            StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
         }
     }
 
@@ -173,8 +191,10 @@ struct AddStorySheet: View {
                         .padding(4)
                 }
             }
-            // Straight into the editor, over the top of this grid, which stays where it is. The
-            // resolve happens HERE with its spinner, because an iCloud video can take a moment.
+            // The pick is handed to the HOST, and the grid stays where it is. In the create flow the
+            // host raises an editor over this sheet; in the editors' add-more flow the host appends
+            // the item and you can keep tapping. The resolve happens HERE with its spinner, because
+            // an iCloud video can take a moment.
             .onTapGesture {
                 if asset.mediaType == .video {
                     guard !loadingVideo else { return }
@@ -189,11 +209,11 @@ struct AddStorySheet: View {
                     Task {
                         let url = await store.videoURL(asset)
                         loadingVideo = false
-                        if let url { libraryEditorVideo = EditorVideo(url) }
+                        if let url { onVideo(url) }
                     }
                 } else {
                     Task {
-                        if let ui = await store.fullImage(asset) { libraryEditorImage = EditorImage(ui) }
+                        if let ui = await store.fullImage(asset) { onImage(ui) }
                     }
                 }
             }
@@ -203,10 +223,6 @@ struct AddStorySheet: View {
         let t = Int(s.rounded())
         return String(format: "%d:%02d", t / 60, t % 60)
     }
-
-    struct EditorImage: Identifiable { let id = UUID(); let image: UIImage; init(_ i: UIImage) { image = i } }
-    struct EditorVideo: Identifiable { let id = UUID(); let url: URL; init(_ u: URL) { url = u } }
-
 }
 
 // A grid thumbnail that loads its PHAsset image once (guarded against PhotoKit's double callback).

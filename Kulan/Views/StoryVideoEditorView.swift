@@ -81,10 +81,75 @@ struct StoryVideoEditorView: View {
     @State private var trimOpenedStart: Double = 0   // what X puts back
     @State private var trimOpenedEnd: Double = 0
     @State private var showAddPicker = false
-    @State private var addPick: [PhotosPickerItem] = []
     @State private var canvasSize: CGSize = .zero
+    /// The post, packed for StoryEditorView, when a picture joins a video-first post. See the
+    /// picker sheet below for why the composer takes over at that moment.
+    @State private var handOff: HandOffPost?
+
+    struct HandOffPost: Identifiable {
+        let id = UUID()
+        let items: [StoryEditorView.DraftItem]
+        let caption: String
+    }
 
     private var currentURL: URL { clips.indices.contains(index) ? clips[index].url : url }
+
+    /// One more video from OUR picker joins the strip — the same work the old PhotosPicker handler
+    /// did, minus the transferable dance (the grid resolves the asset and hands a file URL).
+    private func appendClip(_ url: URL) async {
+        var c = Clip(url: url)
+        let asset = AVURLAsset(url: url)
+        c.duration = (try? await asset.load(.duration))?.seconds ?? 0
+        c.trimEnd = c.duration
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1600, height: 1600)
+        if let cg = try? await gen.image(at: CMTime(seconds: min(0.1, c.duration / 2), preferredTimescale: 600)).image {
+            let img = UIImage(cgImage: cg)
+            c.poster = img
+            c.posterData = img.jpegData(compressionQuality: 0.72)
+        }
+        await MainActor.run {
+            stashCurrent()
+            clips.append(c)
+            index = max(0, clips.count - 1)
+            restoreCurrent()
+        }
+    }
+
+    /// A picture joined the post: pack EVERYTHING for the composer. Each clip travels with its own
+    /// trim, mute, drawing and text (DraftItem holds all four beside the file, same as Clip does),
+    /// the caption rides along, and the new picture lands at the end, selected. Nothing here is
+    /// mutated — if the composer is X-closed without posting, this screen is still exactly as it
+    /// was, clips intact, under the picker.
+    @MainActor private func beginHandOff(adding ui: UIImage) {
+        stashCurrent()
+        player.pause(); playing = false
+        var seed: [StoryEditorView.DraftItem] = clips.map { c in
+            var d = StoryEditorView.DraftItem(image: c.poster ?? UIImage(),
+                                              videoURL: c.url, duration: c.duration)
+            d.muted = c.muted
+            d.trimStart = c.trimStart
+            d.trimEnd = c.trimEnd
+            d.drawing = c.drawing
+            d.overlays = c.overlays
+            return d
+        }
+        // Opened straight from the camera or a single pick, before `load()` has built clips[0]:
+        // the live top-level state IS the one clip. Pack it the same way.
+        if seed.isEmpty {
+            var d = StoryEditorView.DraftItem(image: thumbnail ?? UIImage(),
+                                              videoURL: url, duration: duration)
+            d.muted = muted
+            d.trimStart = trimStart
+            d.trimEnd = trimEnd
+            d.drawing = drawing
+            d.overlays = overlays
+            seed.append(d)
+        }
+        seed.append(StoryEditorView.DraftItem(image: ui))
+        handOff = HandOffPost(items: seed, caption: caption)
+    }
 
     /// Park the live tools back onto the clip they belong to.
     @MainActor private func stashCurrent() {
@@ -234,47 +299,24 @@ struct StoryVideoEditorView: View {
             player.seek(to: CMTime(seconds: t, preferredTimescale: 600),
                         toleranceBefore: .zero, toleranceAfter: .zero)
         }
-        // + adds more clips. Videos only: this is the video editor, and a picture dropped in here
-        // would have nothing to play it.
-        // STILL VIDEO-ONLY, and that is a known gap rather than a decision.
-        //
-        // Start a post with a photo and the + offers both; start it with a video and this screen
-        // offers only videos, which is what he reported. Widening the filter here is one word, and
-        // it would be a lie: the handler below only accepts PickedMovie, and this screen's model is
-        // a list of `Clip`s, each of which IS a video (url, duration, trimStart/trimEnd). A picked
-        // image would fall through the `guard` and vanish with no error, which is worse than a
-        // restriction you can see.
-        //
-        // The real repair is that starting with a video should hand off to StoryEditorView, the
-        // multi-item composer that already carries photos and videos side by side, rather than this
-        // screen growing a second media type. That is a piece of work, not a filter change.
-        .photosPicker(isPresented: $showAddPicker, selection: $addPick,
-                      maxSelectionCount: 10, matching: .videos)
-        .onChange(of: addPick) { _, picks in
-            guard !picks.isEmpty else { return }
-            Task {
-                for pick in picks {
-                    guard let movie = try? await pick.loadTransferable(type: PickedMovie.self) else { continue }
-                    var c = Clip(url: movie.url)
-                    let asset = AVURLAsset(url: movie.url)
-                    c.duration = (try? await asset.load(.duration))?.seconds ?? 0
-                    c.trimEnd = c.duration
-                    let gen = AVAssetImageGenerator(asset: asset)
-                    gen.appliesPreferredTrackTransform = true
-                    gen.maximumSize = CGSize(width: 1600, height: 1600)
-                    if let cg = try? await gen.image(at: CMTime(seconds: min(0.1, c.duration / 2), preferredTimescale: 600)).image {
-                        let img = UIImage(cgImage: cg)
-                        c.poster = img
-                        c.posterData = img.jpegData(compressionQuality: 0.72)
-                    }
-                    await MainActor.run { clips.append(c) }
-                }
-                await MainActor.run {
-                    addPick = []
-                    stashCurrent()
-                    index = max(0, clips.count - 1)
-                    restoreCurrent()
-                }
+        // + opens OUR library picker, and it offers BOTH types, always (owner 2026-08-05: "The
+        // media type should never be restricted by the previously selected item"). Another video
+        // joins the clip strip exactly as before. A PICTURE cannot live here — this screen's model
+        // is a list of `Clip`s, each of which IS a video — so a picture is the moment the whole
+        // post moves to StoryEditorView, the multi-item composer that carries photos and videos
+        // side by side. That is the "real repair" the old comment here promised: the composer is
+        // presented from INSIDE the picker sheet (a cover asked for while a sheet is dismissing
+        // silently never appears — AddStorySheet learned that the hard way), seeded with every
+        // clip's trim, mute, drawing and text, plus the caption, plus the new picture.
+        .sheet(isPresented: $showAddPicker) {
+            StoryLibraryPicker(
+                onImage: { ui in beginHandOff(adding: ui) },
+                onVideo: { url in Task { await appendClip(url) } })
+            .fullScreenCover(item: $handOff) { post in
+                StoryEditorView(source: post.items.first?.image ?? UIImage(),
+                                onPosted: { onPosted(); dismiss() },
+                                seedItems: post.items,
+                                seedCaption: post.caption)
             }
         }
         .toolbar(.hidden, for: .navigationBar)

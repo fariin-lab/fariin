@@ -32,6 +32,12 @@ final class KeyboardWatcher: ObservableObject {
 struct StoryEditorView: View {
     let source: UIImage
     var onPosted: () -> Void = {}
+    /// A WHOLE POST ARRIVING FROM THE VIDEO EDITOR. When a picture joins a video-first post, that
+    /// screen cannot hold it (its model is a list of clips, each of which IS a video), so it hands
+    /// everything here — each clip with its trim, mute, drawing and text, then the new picture.
+    /// Empty means the normal single-photo start via `source`.
+    var seedItems: [DraftItem] = []
+    var seedCaption: String = ""
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
@@ -166,8 +172,33 @@ struct StoryEditorView: View {
     /// device-verified, and the risk of that is not worth being able to un-crop something you left.
     @State private var items: [DraftItem] = []
     @State private var index = 0
-    @State private var addPick: [PhotosPickerItem] = []
     @State private var showAddPicker = false
+
+    /// Everything a pick from OUR library grid needs to become an item. The same work the old
+    /// PhotosPicker handler did, minus the transferable dance — the grid resolves the asset itself
+    /// and hands over a UIImage or a file URL.
+    @MainActor private func appendPicked(image ui: UIImage) {
+        stashCurrent()
+        items.append(DraftItem(image: ui))
+        index = max(0, items.count - 1)
+        recomputeEdited()
+    }
+
+    private func appendPicked(video url: URL) async {
+        let asset = AVURLAsset(url: url)
+        let dur = (try? await asset.load(.duration).seconds) ?? 0
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1200, height: 1200)
+        let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
+        guard let cg = try? await gen.image(at: t).image else { return }
+        await MainActor.run {
+            stashCurrent()
+            items.append(DraftItem(image: UIImage(cgImage: cg), videoURL: url, duration: dur))
+            index = max(0, items.count - 1)
+            recomputeEdited()
+        }
+    }
 
     private var current: UIImage { items.indices.contains(index) ? items[index].image : source }
     private var currentIsVideo: Bool { items.indices.contains(index) && items[index].isVideo }
@@ -418,7 +449,23 @@ struct StoryEditorView: View {
                 // touching the other.
             }
             .coordinateSpace(name: "canvas")
-            .onAppear { canvasSize = geo.size; if items.isEmpty { items = [DraftItem(image: source)] }; recomputeEdited() }
+            .onAppear {
+                canvasSize = geo.size
+                if items.isEmpty {
+                    if seedItems.isEmpty {
+                        items = [DraftItem(image: source)]
+                    } else {
+                        // A hand-off from the video editor: the whole post arrives, the just-picked
+                        // picture last — that is the one you continue on. restoreCurrent puts the
+                        // arriving item's own state on the tools (a fresh picture: clean tools).
+                        items = seedItems
+                        index = max(0, items.count - 1)
+                        caption = seedCaption
+                        restoreCurrent()
+                    }
+                }
+                recomputeEdited()
+            }
             .onChange(of: geo.size) { _, s in canvasSize = s }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
             .overlay {
@@ -439,33 +486,13 @@ struct StoryEditorView: View {
         .ignoresSafeArea(.keyboard)
         .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
-        // Images AND videos, because the + offers both. A picked video joins the post with its own
-        // poster frame; its frames are not editable here, which is why the stash leaves them alone.
-        .photosPicker(isPresented: $showAddPicker, selection: $addPick, maxSelectionCount: 9,
-                      matching: .any(of: [.images, .videos]))
-        .onChange(of: addPick) { _, picks in
-            guard !picks.isEmpty else { return }
-            Task {
-                stashCurrent()
-                for p in picks {
-                    if let movie = try? await p.loadTransferable(type: PickedMovie.self) {
-                        let asset = AVURLAsset(url: movie.url)
-                        let dur = (try? await asset.load(.duration).seconds) ?? 0
-                        let gen = AVAssetImageGenerator(asset: asset)
-                        gen.appliesPreferredTrackTransform = true
-                        gen.maximumSize = CGSize(width: 1200, height: 1200)
-                        let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
-                        if let cg = try? await gen.image(at: t).image {
-                            await MainActor.run {
-                                items.append(DraftItem(image: UIImage(cgImage: cg), videoURL: movie.url, duration: dur))
-                            }
-                        }
-                    } else if let d = try? await p.loadTransferable(type: Data.self), let ui = UIImage(data: d) {
-                        await MainActor.run { items.append(DraftItem(image: ui)) }
-                    }
-                }
-                await MainActor.run { addPick = []; index = max(0, items.count - 1); recomputeEdited() }
-            }
+        // OUR OWN PICKER, images AND videos, always (owner 2026-08-05: "The + button should always
+        // open our custom media picker… Never fall back to Apple's Photo Picker"). It stays open
+        // while you tap — each pick lands in the strip behind it — and the X brings you back.
+        .sheet(isPresented: $showAddPicker) {
+            StoryLibraryPicker(
+                onImage: { ui in appendPicked(image: ui) },
+                onVideo: { url in Task { await appendPicked(video: url) } })
         }
         .sheet(item: $pendingShare) { s in
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
