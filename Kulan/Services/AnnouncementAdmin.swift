@@ -31,6 +31,12 @@ enum AdminPermission: String, CaseIterable, Identifiable {
     /// screens for it inside the app would put them in every user's copy. The permission lives here
     /// because this is where the owner hands permissions out.
     case moderate
+    /// Grant, change, suspend and withdraw verification. Held apart from `moderate` on purpose:
+    /// moderation is about accounts behaving badly, verification is about vouching for who somebody
+    /// is, and the person trusted to remove a story is not automatically the person trusted to put
+    /// the app's name behind a stranger's identity. It is also the capability the rules check before
+    /// letting anything write a `verification` map, so it is the whole of the write access.
+    case verify
 
     var id: String { rawValue }
     var label: String {
@@ -43,6 +49,7 @@ enum AdminPermission: String, CaseIterable, Identifiable {
         case .targetChosen:  return "Send to chosen people"
         case .security:      return "Send security alerts"
         case .moderate:      return "Review reports"
+        case .verify:        return "Verify accounts"
         }
     }
     var detail: String {
@@ -55,6 +62,7 @@ enum AdminPermission: String, CaseIterable, Identifiable {
         case .targetChosen:  return "Pick individual people by username."
         case .security:      return "Send the alerts that break through the mute."
         case .moderate:      return "Handle abuse reports at fariin.com/console: remove a story, ban an account."
+        case .verify:        return "Give, change or withdraw a verified badge."
         }
     }
     /// What a brand-new admin gets. Deliberately not everything: an admin who can send is useful on

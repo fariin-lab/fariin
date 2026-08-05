@@ -222,6 +222,26 @@ service cloud.firestore {
       allow delete: if adminIsOwner() && resource.data.get('role', '') == 'admin';
     }
 
+    // VERIFICATION CASE FILES. The private half of a verification, keyed by the same peer key the
+    // mark uses — "user:abc123" today, "group:xyz789" when groups arrive.
+    //
+    // WHY THE RECORD IS SPLIT IN TWO. The verdict lives on the peer document, because every client
+    // needs it to draw a name and it must cost nothing to read. Everything AROUND the verdict — what
+    // documents we saw, what the reviewer thought, which admin approved it — lives here, where no
+    // user can read it. Storing them together would mean either publishing the case file or paying
+    // for a second read on every name drawn, and both are the wrong trade.
+    //
+    // Not even the verified person may read their own. Reviewer notes describe a judgement about
+    // somebody, and are for the people making the next judgement.
+    match /verifications/{peerKey} {
+      allow read: if adminCan('verify');
+      allow create, update: if adminCan('verify')
+        && request.resource.data.get('updatedBy', '') == request.auth.uid;
+      // NO delete. Withdrawing a verification is a status change, never an erasure — a peer that was
+      // verified and no longer is has a history, and that history is the useful part.
+      allow delete: if false;
+    }
+
     // VERIFICATION AUDIT. Every grant, change, suspension and removal, with who did it, when, what it
     // was before, what it became, and why.
     //
