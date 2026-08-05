@@ -662,10 +662,25 @@ private struct StoryFriendCard: View, Equatable {
             ZStack(alignment: .bottomLeading) {
                 coverView
                     .frame(width: cardW, height: cardH)
-                AvatarView(name: name, photoUrl: avatar, size: 32)
-                    .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
-                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
-                    .padding(8)
+                // WHOSE STORY THIS IS. The lift showed a photo and a ring and no name, so a long
+                // press on the chat list told you less than the card you were pressing — the name
+                // sits under the card normally, and the preview leaves the card behind. The archived
+                // row's lift names the person and that is the one he wants.
+                //
+                // Over the picture rather than under it, because a preview is the card itself
+                // enlarged and must not grow a caption the card never had. Scrim so a bright cover
+                // cannot swallow the text.
+                HStack(spacing: 8) {
+                    AvatarView(name: name, photoUrl: avatar, size: 32)
+                        .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
+                        .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                    Text(name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                }
+                .padding(8)
             }
             .frame(width: cardW, height: cardH)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
