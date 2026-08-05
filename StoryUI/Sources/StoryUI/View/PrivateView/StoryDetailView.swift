@@ -640,6 +640,11 @@ private extension StoryDetailView {
         if keyboardManager.isKeyboardOpen { keyboardManager.dismiss(); return }   // tap closes keyboard, resumes
         configureTapScreen()
         guard !isTapDisabled else { return }
+        // A POISONED PROGRESS IS RECOVERED HERE, not trapped on. Same reason as `getCurrentIndex`:
+        // `Int(_:)` kills the process on infinity or NaN. Found by auditing the 463 crash rather than
+        // by another report — these three sites had the identical hazard and only the layout one had
+        // actually fired.
+        if !timerProgress.isFinite { timerProgress = 0 }
         if Int(timerProgress) + 1 >= model.stories.count {
             //next user — on the LAST item, advance immediately (was `(p+1) > count` which, when timerProgress
             // sat on an exact integer after a tap, filled all bars instead of advancing until the next tick)
@@ -656,6 +661,7 @@ private extension StoryDetailView {
         if keyboardManager.isKeyboardOpen { keyboardManager.dismiss(); return }   // tap closes keyboard, resumes
         configureTapScreen()
         guard !isTapDisabled else { return }
+        if !timerProgress.isFinite { timerProgress = 0 }   // see tapNextStory
         if (timerProgress - 1) < 0 {
             guard !isAdvancing else { return }
             isAdvancing = true

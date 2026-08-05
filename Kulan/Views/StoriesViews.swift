@@ -2033,7 +2033,9 @@ struct MyStoriesCarousel: View {
     /// The card the carousel considers centred. Derived, never stored: with `scroll` continuous
     /// there is exactly one answer and it cannot drift from what is on screen.
     private var index: Int {
-        max(0, min(max(0, stories.count - 1), Int(scroll.rounded())))
+        // `Int(_:)` traps on infinity and NaN rather than clamping. `scroll` is written by a
+        // division, and this is read on every layout pass — see the 463 crash for what that costs.
+        scroll.isFinite ? max(0, min(max(0, stories.count - 1), Int(scroll.rounded()))) : 0
     }
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
@@ -2072,9 +2074,14 @@ struct MyStoriesCarousel: View {
     // scale. Each card's x + scale come straight from the combinedFraction math.
     private var itemSpacing: CGFloat { 12 }
     private var sideW: CGFloat { max(1, slotW - 54) }                          // sideVisibleItemWidth
-    private var fullDist: CGFloat { slotW * 0.5 + itemSpacing + sideW * 0.5 }  // fullItemScrollDistance
-    private var halfDist: CGFloat { sideW * 0.5 + itemSpacing + sideW * 0.5 }  // halfItemScrollDistance
-    private var sideRelScale: CGFloat { sideW / slotW }                        // sideVisibleItemScale (relative)
+    /// FLOORED, because `scroll` is computed by dividing by this and `scroll` is then fed to `Int()`.
+    /// A zero or negative divisor gives infinity or NaN, and `Int(_:)` on either is a runtime trap,
+    /// not a wrong number — the same shape as the crash in build 463. `slotW` is derived from the
+    /// screen minus the sheet, so a short screen or a taller sheet could in principle drive it
+    /// negative; a floor costs nothing and removes the question.
+    private var fullDist: CGFloat { max(1, slotW * 0.5 + itemSpacing + sideW * 0.5) }
+    private var halfDist: CGFloat { max(1, sideW * 0.5 + itemSpacing + sideW * 0.5) }
+    private var sideRelScale: CGFloat { slotW > 0 ? sideW / slotW : 1 }        // sideVisibleItemScale (relative)
 
     var body: some View {
         let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
@@ -2142,13 +2149,18 @@ struct MyStoriesCarousel: View {
                         // card-steps so a quick flick GLIDES across as many cards as the fling would
                         // carry (capped so it never flies off), and a gentle pull past ~40% advances one.
                         let predicted = v.predictedEndTranslation.width
-                        let hardSteps = Int((predicted / fullDist).rounded())          // velocity-driven
+                        // Both `Int(_:)` calls below are on values that came out of a division or out
+                        // of a gesture, and `Int(_:)` traps rather than clamps. Guarded for the same
+                        // reason as `index` above.
+                        let projected = predicted / fullDist
+                        let hardSteps = projected.isFinite ? Int(projected.rounded()) : 0
                         let softStep = abs(v.translation.width) > fullDist * 0.4        // gentle-drag commit
                             ? (v.translation.width < 0 ? -1 : 1) : 0
                         var steps = abs(hardSteps) >= 1 ? hardSteps : softStep
                         steps = max(-6, min(6, steps))                                  // never fly off
                         // Drag/flick RIGHT (+) reveals the PREVIOUS card → the position decreases.
-                        let ni = max(0, min(n - 1, Int((scrollAtDragStart).rounded()) - steps))
+                        let base = scrollAtDragStart.isFinite ? Int(scrollAtDragStart.rounded()) : 0
+                        let ni = max(0, min(n - 1, base - steps))
                         // ONE animation on ONE number, so every card's x AND scale are interpolated by
                         // the same curve for the whole glide — which is the whole point: the scaling
                         // can no longer stutter, because it is the same value that is moving.
