@@ -64,6 +64,9 @@ struct StoryPager: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ uiViewController: UIPageViewController, coordinator: Coordinator) {
         coordinator.cubeLink?.invalidate()
         coordinator.cubeLink = nil
+        // The card is going away. Leaving a stale transform on a recycled view would open the next
+        // story already shrunken, and the reference is weak but the MASK is not: detach clears both.
+        StoryCardMorph.shared.detach()
     }
 
     // The cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the
@@ -183,6 +186,9 @@ struct StoryPager: UIViewControllerRepresentable {
             let scroll = pager.view.subviews.compactMap { $0 as? UIScrollView }.first
             internalScroll = scroll
             StoryPager.horizontalScroll = scroll   // getAngle gates the cube on ITS live activity
+            // The SAME view the dismiss pan transforms is the one the viewers sheet shrinks. There is
+            // no second card and no picture of the story anywhere: see StoryCardMorph.
+            StoryCardMorph.shared.attach(scroll)
             // When the host owns the swipe (own story: app-level SwiftUI dismiss), the pager's internal
             // scroll pan has nothing to navigate to (single bucket) and only CONTENDS with the host drag
             // for the same touch — that horizontal scroll/bounce fighting the vertical drag is the

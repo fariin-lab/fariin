@@ -1058,28 +1058,26 @@ struct StoryViewer: View {
         .onAppear { sheetDragArbiter.onFreshClaim = { sheetAnimator.cancel() } }
         // Safety net: the sheet unmounting must NEVER leave a stray progress value behind
         // (a tiny leftover hid the owner footer with no sheet in sight — user screenshot).
+        // THE SNAPSHOT MACHINERY IS GONE FROM HERE, and it had already stopped doing anything.
+        //
+        // This used to photograph every story offscreen the instant the sheet opened: one
+        // full-screen `drawHierarchy(afterScreenUpdates: true)` per story on the MAIN THREAD,
+        // staggered 0.12s apart, right through the opening spring. The only reader of what it
+        // produced was `SnapshotCardContent`, and `21f3209` left that view unused, so since then it
+        // has been a screen render per story per pull feeding a cache nobody looked at — a strong
+        // candidate for the hitch the owner reported while the sheet comes up.
+        //
+        // Nothing replaces it. The card behind the sheet is the live story now, so there is nothing
+        // left to photograph.
         .onChange(of: showViewers) { _, on in
-            if on {
-                // Photograph every story's full-screen render offscreen (app-switcher pattern)
-                // so each card shows NATIVE pixels the moment it appears. Same media height as
-                // the live viewer (audit M1) and STAGGERED — parallel material renders during
-                // the opening spring caused hitching.
-                let mediaH = morphContentH
-                for (i, s) in (StoriesRepository.shared.mine?.stories ?? myStories).enumerated() {
-                    if s.isVideo && s.id == currentStoryId {
-                        // Video: photograph the CURRENT playing frame (the active PlayerView answers)
-                        // so the morph card matches where the video is, not its first-frame poster.
-                        NotificationCenter.default.post(name: .init("captureStoryFrame"), object: s.previewUrl)
-                    } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.12) {
-                            StorySnapshotFactory.warm(urlString: s.previewUrl, contentHeight: mediaH)
-                        }
-                    }
-                }
-            } else {
-                sheetAnimator.cancel(); viewersProgress = 0
-                NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
-            }
+            guard !on else { return }
+            sheetAnimator.cancel(); viewersProgress = 0
+            carouselInteracting = false
+            // Full-screen, square, unmasked, visible. The sheet can be torn down from several paths
+            // (close, dismiss, teardown) and a card left mid-transform would open the NEXT story
+            // already shrunken.
+            StoryCardMorph.shared.reset()
+            NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
         }
         // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
         // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a
@@ -1087,11 +1085,20 @@ struct StoryViewer: View {
         // the open spring kills the animator via the arbiter's fresh-claim hook. Every write
         // re-arms this; if progress then sits mid-air untouched for 0.8s — no finger writes,
         // no animator ticks — snap to the nearest rest state.
-        .onChange(of: viewersProgress) { _, p in rearmProgressWatchdog(p) }
+        .onChange(of: viewersProgress) { _, p in
+            rearmProgressWatchdog(p)
+            // The live story is driven from the SAME number as the sheet, on the same tick. During
+            // the drag that number is written by the finger and during the release by the
+            // display-link spring, so the story tracks both without an animation of its own.
+            driveMorph(p)
+        }
+        // The carousel row took over, or gave the centre back. See StoryCardMorph.setHidden.
+        .onChange(of: carouselInteracting) { _, on in StoryCardMorph.shared.setHidden(on) }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
             sheetAnimator.cancel()
+            StoryCardMorph.shared.reset()   // never hand a transformed card to the next viewer
             NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
             NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
@@ -1198,38 +1205,17 @@ struct StoryViewer: View {
         // NO app-level drag gesture on the story anymore. BOTH directions are the library's native
         // UIKit pans: swipe-DOWN → dismiss (smooth, same as friends), swipe-UP → onSwipeUp → openViewers.
         // An app gesture here fought the library's swipe-down pan and broke the dismiss.
-        // NEVER transformed (the library has an internal 3D cube for user-to-user swipes; scaling
-        // it warped the card). While the sheet is up, the flat 2D morph card + carousel in
-        // `viewersBackdrop` replace it visually. Keep a hair of opacity + hit-testing DURING an open
-        // drag so the gesture keeps tracking the finger even after the story has visually faded.
-        // THE REAL STORY IS THE MORPH (user's final call — no duplicate card, ever): the
-        // original story layer itself scales from full screen into the carousel's centre
-        // slot, driven by the drag. Same pixels the whole way — nothing can mismatch.
-        // PERFORMANCE: mid-drag the story moves by scale+offset ONLY (pure GPU transforms).
-        // Re-clipping the live-material story with a changing radius EVERY finger frame was
-        // the "follows then stutters" jank — corners now apply only once the card has
-        // SETTLED into the slot (p ≥ 0.97, static), matching the carousel cards' 24pt.
-        // FINGER-TRACKED NATIVE ZOOM (user request): the story's scale + position interpolate 1:1
-        // with viewersProgress — the SAME value that drives the sheet — so the image, the sheet,
-        // and the finger all move together in real time (no fixed-duration animation, no "sheet
-        // first then image" delay). There is deliberately NO .animation here: during the drag the
-        // image tracks the finger directly; on release the sheet's own spring animates
-        // viewersProgress and the image rides that spring home (the native-feeling settle).
-        // Minimal: a clean lerp between full-screen (frac 0) and the card slot (frac 1).
-        // The zoom (ported verbatim from the reference container): the story content
-        // is scaled about its OWN CENTRE and its CENTRE is moved to the card slot — NOT anchored to
-        // the top with a separate offset and a trimming clip. The reference:
-        //   currentContentScale = contentMinScale * fraction + 1.0 * (1 - fraction)
-        //   transform = CATransform3DMakeScale(scale, scale, 1)   // about the layer centre
-        //   setPosition(contentContainerView, contentFrame.centre) // move the centre
-        //   cornerRadius = 12.0 / scale
-        // Centre-anchored scaling makes the top edge move INWARD (down) as it shrinks, so it can
-        // never break out upward — that top-anchor was the shared root cause of both prior versions.
-        // BUILD 213: the live story is NOT transformed at all — it simply FADES OUT over the first
-        // 8% of the pull (a hair kept alive during an open drag so the gesture keeps tracking),
-        // and the morph card in viewersBackdrop takes over the visual zoom. No scaleEffect / offset
-        // / trimming clip on the live story = no top break-out, no snap.
-        .opacity(max(openDragging ? 0.02 : 0, 1 - Double(min(viewersProgress / 0.08, 1))))
+        // THE STORY DOES NOT FADE ANY MORE, and there is deliberately no SwiftUI modifier here that
+        // moves or scales it. It shrinks into the card slot as a UIKit transform on the pager's own
+        // card, applied by `driveMorph` through `StoryCardMorph` — the same view, the same way, that
+        // the swipe-down dismiss has always transformed.
+        //
+        // Read the two reverted attempts before changing this. `c938ad8` scaled the live story with
+        // `.scaleEffect(anchor:)` and `da0bc72` tore it out again: "every version scaled the LIVE
+        // story with scaleEffect ... = the top break-out". A SwiftUI scale re-lays-out the hosted
+        // representable and re-insets it against the safe area, which is how the top edge escaped. A
+        // UIView transform changes no bounds and runs no layout pass, so that failure cannot recur —
+        // but a `.scaleEffect` added back here would bring it straight back.
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -1359,189 +1345,107 @@ struct StoryViewer: View {
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.max() ?? 0
     }
 
-    // The REAL story's morph into the carousel slot — geometry MUST mirror viewersBackdrop's
-    // slot math exactly, so the shrunk story lands pixel-on the (hidden) centre card.
-    // UNIFORM scale (aspect-true — the slot has the story's real shape, so the story lands
-    // on it exactly; no stretch means hand-offs can never change the picture's size/shape).
-    // (Fixed-aspect cards retired for good — the core rule: the card is the zoom's
-    // endpoint, the story's own shape. Any fixed card shape forces trimming or a settle
-    // mismatch; both were user-rejected.)
-
-    private var morphGeometry: (sizeP: CGFloat, scaleX: CGFloat, scaleY: CGFloat, offsetY: CGFloat, topCut: CGFloat, botCut: CGFloat) {
-        let p = viewersProgress
-        let scr = UIScreen.main.bounds
-        let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
-        let avail = scr.height - sheetH - topInset
-        let countArea: CGFloat = 40
-        let slotH = (avail - countArea) * 0.94
-        let blockTop = topInset + (avail - countArea - slotH) / 2
-        // 1:1 WITH THE FINGER (user: one small jump mid-swipe, both ways): the shrink used to
-        // run only across p 0.08→0.9, so the photo sat FULL until 8% pulled (start dead zone),
-        // then jumped into motion — and on close it finished at 0.08 and waited (settle jump).
-        // Now it tracks the sheet from the FIRST pixel (0 → 0.9), so it grows/shrinks in
-        // lockstep with the drag, no dead zone at either end. Upper bound kept at 0.9 so the
-        // carousel hand-off is untouched.
-        let sizeP = max(0, min(1, p / 0.9))
-        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // Core rule: pure uniform zoom of the whole story, centre-anchored, zero cuts.
-        // The landing scale (slotH/contentH) makes the story exactly the card's size — the
-        // settle swap is pixel-identical, so the image can never jump.
-        let s1 = slotH / max(contentH, 1)
-        let s = 1 - (1 - s1) * sizeP
-        let restCentre = contentH / 2
-        let targetCentre = blockTop + slotH / 2
-        let centre = restCentre + (targetCentre - restCentre) * sizeP
-        return (sizeP, s, s, centre - restCentre * s, 0, 0)
-    }
-    private var morphScale: CGFloat { morphGeometry.scaleY }
-    private var morphOffsetY: CGFloat { morphGeometry.offsetY }
-
-    // FINGER-TRACKED NATIVE ZOOM. `storyZoomFrac` is viewersProgress clamped 0…1 — the fraction of
-    // the way from full-screen to the card. The story reads it directly (no animation), so it
-    // tracks the finger exactly like the sheet; on release the sheet's spring drives viewersProgress
-    // and the story rides it home. The endpoint mirrors the carousel slot exactly (scale =
-    // slotH/contentH, offset = blockTop) so the story lands on the card's size/position.
-    private var storyZoomFrac: CGFloat { max(0, min(1, viewersProgress)) }   // = the content scale fraction
-    // Zoom parameters. scale = contentMinScale·frac + 1·(1-frac); anchorY = the media's
-    // own centre as a fraction of the full-screen layer (so the scale pivots on the content
-    // centre); centreShift = how far to move that centre to land on the card slot's centre.
-    private var tgZoom: (scale: CGFloat, anchorY: CGFloat, centerShift: CGFloat) {
-        let scr = UIScreen.main.bounds
-        let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
-        let avail = scr.height - sheetH - topInset
-        let countArea: CGFloat = 40
-        let slotH = (avail - countArea) * 0.94
-        let blockTop = topInset + (avail - countArea - slotH) / 2
-        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        let minScale = slotH / max(contentH, 1)                       // contentMinScale
-        let s = minScale * storyZoomFrac + 1.0 * (1 - storyZoomFrac)  // the standard formula
-        let mediaCenterRest = contentH / 2                           // content centre at rest
-        let mediaCenterTarget = blockTop + slotH / 2                 // slot centre
-        return (s, mediaCenterRest / scr.height,
-                (mediaCenterTarget - mediaCenterRest) * storyZoomFrac)
-    }
-    // The story CONTENT's height (photo card without the footer) — the clip must end HERE,
-    // not at the layer's true bottom (which extends into the faded footer area below the
-    // photo: rounding down there left the VISIBLE bottom corners square, user report).
-    private var morphContentH: CGFloat {
-        UIScreen.main.bounds.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-    }
-    // Radius in UNSCALED space so it reads ~24pt constant on screen; 0 at rest (no-op).
-    private var morphClipRadius: CGFloat {
-        let g = morphGeometry
-        return g.sizeP <= 0.001 ? 0 : 24 / max(g.scaleY, 0.2) * g.sizeP
+    /// THE CARD SLOT, worked out in ONE place.
+    ///
+    /// Three things have to agree on this rectangle to the pixel: the carousel that lays the cards
+    /// out, the live story that shrinks into the centre one, and the sheet whose height defines the
+    /// free space above them. It used to be written out three times — `morphGeometry`, `tgZoom` and
+    /// inline in `viewersBackdrop` — and two of those three had gone stale AND unused, left behind
+    /// when `da0bc72` reverted the scaleEffect zoom. Duplicated geometry that has to agree is
+    /// exactly what produced the picture-jumping-inside-its-frame bug in `402ec4d`.
+    private struct CardSlot {
+        let w: CGFloat          // card width
+        let h: CGFloat          // card height, deliberately shorter than aspect-true (see below)
+        let miniH: CGFloat      // full mini-screen composite height; the card shows a `h` window of it
+        let top: CGFloat        // the card block's top edge on screen
+        var centerY: CGFloat { top + h / 2 }
     }
 
-    // The layer behind the viewers sheet. Strictly 2D (no rotations anywhere):
-    // - while DRAGGING (0 < p < 1): ONE flat card of the current photo interpolates
-    //   full-screen ⇄ the carousel's centre slot (uniform scale + radius + translate).
-    // - once OPEN (p ≈ 1): crossfades into the swipeable carousel of ALL my stories.
-    @ViewBuilder private var viewersBackdrop: some View {
-        let p = viewersProgress
+    private var cardSlot: CardSlot {
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
         let avail = scr.height - sheetH - topInset          // free area above the open sheet
         // Card block = the centred card + the big count row (~40) below it, centred vertically in
-        // the free space with the status bar cleared. Smaller than before (was avail*0.72, which
-        // made the cards touch the top and the side cards overflow the screen edge). The narrower
-        // slot also makes the neighbours sit clearly off-centre so their scale-down actually reads.
+        // the free space with the status bar cleared. The narrow slot is what makes the neighbours
+        // sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        // slotHRef = the aspect-true reference height; it DEFINES the width so W stays exactly as
-        // before. slotH = a modestly SHORTER card (user: "each one is too long — only touch H, and
-        // don't cut too much"). Because slotW is tied to the taller reference, the card keeps its
-        // width and just loses a little height; the story is CENTER-CROPPED to fill it (the cards
-        // render in fill mode below), so there are no side blur bars.
         let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"): 12% shorter than
-        // aspect-true. slotW comes from the aspect-true reference so the WIDTH is unchanged; only the
-        // height is cut. A shorter card is WIDER than the screen aspect, which would make a near-
-        // full-screen image narrower than the card → fitBlur would add SIDE blur bars. The fix is
-        // NOT a taller card but deciding fill-vs-blur against the CARD's own aspect (cardFillThreshold
-        // = slotH/slotW below): any image at least as tall as the card FILLS (no side bars), only
-        // clearly wide/square images keep top/bottom blur — so 249's size AND no side bars.
+        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"). `slotHRef` is the
+        // aspect-true reference and it DEFINES the width, so the card keeps its width and only loses
+        // height; the story is centre-cropped into what is left.
         let slotHRef = (avail - countArea) * 0.94
-        let slotW = slotHRef * (scr.width / max(contentH, 1))
-        let slotH = slotHRef * 0.88
-        let miniH = slotW * (scr.height / scr.width)
-        let cropY: CGFloat = 0
-        let blockTop = topInset + (avail - countArea - slotH) / 2
-        // BUILD 213 staging (image + blur morph card that FRAME-INTERPOLATES full-screen → slot):
-        //  • morphVis: the morph card fades IN OPAQUE 0→0.05 (over the fading story), holds, fades
-        //    OUT 0.95→1 into the live carousel centre card.
-        //  • sizeP: the card's FRAME shrinks 0.08→0.9 (StoryImage(fitBlur:) re-renders image+blur
-        //    cleanly at every size — no scaleEffect, so nothing can break out or snap).
-        //  • carIn: neighbours + counts fade in 0.9→1 behind the opaque morph card.
+        let w = slotHRef * (scr.width / max(contentH, 1))
+        let h = slotHRef * 0.88
+        return CardSlot(w: w, h: h, miniH: w * (scr.height / scr.width),
+                        top: topInset + (avail - countArea - h) / 2)
+    }
+
+    /// Put the LIVE story where the drag says it should be. This is the whole of the frozen-frame
+    /// fix.
+    ///
+    /// There is no picture of the story any more. The real view shrinks into the slot with its
+    /// player paused where it stands, so a video you are 21 seconds into shows second 21 — it is
+    /// still the same layer drawing it, and nothing is swapped for anything at any point. See
+    /// `StoryCardMorph` for why this is a UIKit transform and not the SwiftUI `.scaleEffect` that
+    /// was reverted twice.
+    ///
+    /// The rectangle handed over is the SAME frame interpolation the deleted morph card used, so the
+    /// motion the owner already signed off is unchanged; only the pixels inside it are real now.
+    private func driveMorph(_ p: CGFloat) {
+        guard showViewers else { StoryCardMorph.shared.reset(); return }
+        let slot = cardSlot
+        let scr = UIScreen.main.bounds
+        // Same staging the morph card used: the frame shrinks across 0.08 → 0.9. The first hair of
+        // the pull stays full size so a stray touch shrinks nothing visible, and the last tenth is
+        // left for the carousel to fade in behind a card that has already stopped moving.
         let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
-        // Carousel is fully opaque by p=0.97 (see morphVis) so the morph→carousel hand-off is a clean
-        // swap between two IDENTICAL live-material cards, never a fractional-opacity crossfade.
+        StoryCardMorph.shared.apply(fraction: sizeP,
+                                    targetSize: CGSize(width: slot.w, height: slot.h),
+                                    targetCenter: CGPoint(x: scr.width / 2, y: slot.centerY),
+                                    cornerRadius: 24)
+    }
+
+    // The layer behind the viewers sheet: the carousel of ALL my stories, and NOTHING in its centre
+    // slot, because the live story is put there by `driveMorph`. The neighbours and the count row
+    // fade in over the last tenth of the pull, behind a centre that has already stopped moving.
+    @ViewBuilder private var viewersBackdrop: some View {
+        let p = viewersProgress
+        // ONE source for the slot (see `cardSlot`). The fill-vs-blur decision the neighbour cards
+        // make against `slotH / slotW` still lives in `card(_:)`; only the numbers moved.
+        let slot = cardSlot
+        let slotW = slot.w
+        let slotH = slot.h
+        let miniH = slot.miniH
+        let cropY: CGFloat = 0
+        let blockTop = slot.top
+        // STAGING. `carIn` fades the neighbours and the count row in over the last tenth of the
+        // pull, behind a centre card that has already stopped moving.
+        //
+        // THERE IS NO MORPH CARD ANY MORE, and that is the whole of the frozen-frame fix. The centre
+        // of this carousel is the REAL story, put there by `driveMorph` as a UIKit transform, so a
+        // video shows the frame it is actually on because it is still the same layer drawing it.
+        // The carousel's own centre card keeps its frame and its tap target but draws no pixels, so
+        // there is exactly ONE picture in that slot at every moment and nothing to hand over at
+        // p=0.97 — that seam, where two renderers disagreed about framing, was `402ec4d`'s bug.
         let carIn = max(0, min(1, (p - 0.9) / 0.07))
-        // The morph card is now LIVE material (bakedBars:false) so its blur is IDENTICAL to the
-        // full-screen story's — the baked copy read lighter/weaker (user: "blur weakens when I scroll
-        // up, keep the original blur"). A live UIVisualEffectView drops its blur at FRACTIONAL
-        // opacity, so morphVis is strictly BINARY (0 or 1) — never a crossfade: it pops opaque at
-        // p>0.001 (pixel-identical to the story, invisible) and HARD-hides at p≥0.97 once the carousel
-        // (also live, same size) is fully opaque behind it. No fractional opacity anywhere = no flash.
-        let morphVis = (p > 0.001 && p < 0.97) ? 1.0 : 0.0
         // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
-        let morphURL = (currentStory ?? liveMyStories.first { $0.id == sheetStoryId }).map { $0.previewUrl }
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
                               slotW: slotW, slotH: slotH, miniH: miniH, cropY: cropY,
-                              onActiveTap: { closeViewers() })
+                              onActiveTap: { closeViewers() },
+                              // The live story occupies the centre slot, so the carousel draws no
+                              // pixels there — EXCEPT while the row is being swiped. The story
+                              // cannot follow a card that is mid-flight (it sits at the slot centre
+                              // while the row slides past), so for the length of the swipe the
+                              // carousel draws its own centre card and the real story hides
+                              // underneath. Same size, same place, so the exchange is invisible.
+                              hideActiveContent: !carouselInteracting,
+                              onInteracting: { carouselInteracting = $0 })
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
-            if morphVis > 0.001, let url = morphURL {
-                // The morph card FRAME-lerps full-screen → slot. fitBlur KEEPS the story exactly as it
-                // looks full-screen (user rule): a story WITH blur bars keeps its image AND its blur;
-                // a full-bleed story just fills (no blur added). bakedBars = static blur for the
-                // crossfade (a live material breaks at fractional opacity).
-                let startH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
-                let mW = lerp(scr.width, slotW, sizeP)
-                let mH = lerp(startH, slotH, sizeP)
-                // Fill/blur decided against the morph's CURRENT frame aspect (screen-shaped at the
-                // start of the pull → card-shaped at the end), so at pull-start the morph matches the
-                // full-screen story (letterboxed = keeps its blur) and by the card it fills (no side
-                // bars). A fixed card threshold would make a letterboxed story FILL from the first
-                // pixel — its blur bars would vanish as you drag, reading as "the blur disappears".
-                // THE FRAME THE VIDEO IS ACTUALLY ON, if one was captured (owner 2026-08-04: watch a
-                // 30s story to 21s, swipe up, and the card behind the sheet showed second zero).
-                //
-                // `StoryImage(url:)` loads the story's POSTER, which for a video is its first frame —
-                // correct for a photo, wrong for a video you are 21 seconds into. The player
-                // photographs its current frame into StoryCompositeCache as the pull begins; this
-                // prefers that when it exists and falls back to the poster when it does not, so a
-                // photo story and a video still at zero behave exactly as before.
-                // THE MORPH CARD AND THE CAROUSEL CARD MUST BE THE SAME VIEW ON THE SAME PICTURE.
-                // That invariant is written down at `card(_:)` below — "exactly what the morph card
-                // shows, so the morph→carousel hand-off at full-open is seamless" — and it is the
-                // whole reason this hand-off can be a hard swap instead of a crossfade.
-                //
-                // `402ec4d` broke it. To show the frame a video is actually on, it gave the morph a
-                // second renderer (a bare `scaledToFill`) on a second picture (the full-screen
-                // composite snapshot). Both halves diverge from the carousel card: the composite is
-                // SCREEN-shaped, so filling this shorter card crops its top and bottom away and
-                // zooms, while the carousel one hair of drag later aspect-fits the POSTER over live
-                // blur. Crossing p=0.97 swapped one framing for the other — a picture jumping inside
-                // a frame that never moved, which is exactly what he reported, and it is a shipped
-                // regression, not an old bug resurfacing.
-                //
-                // Back to one view on one picture. THE COST, and it is his call to spend it: a video
-                // you are 21 seconds into shows its FIRST frame on the card behind the sheet again,
-                // which is the report `402ec4d` was answering. Fixing that properly means giving the
-                // carousel's active card the same live frame, and that changes the resting look of a
-                // card he has already signed off on twice — so it is not something to slip in here.
-                StoryImage(url: url, fitBlur: true, bakedBars: false, cardFillThreshold: mH / mW)
-                    .frame(width: mW, height: mH)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .padding(.top, blockTop * sizeP)
-                    .frame(maxWidth: .infinity)
-                    .opacity(Double(morphVis))
-                    .allowsHitTesting(false)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .contentShape(Rectangle())
@@ -1584,8 +1488,6 @@ struct StoryViewer: View {
         )
         .ignoresSafeArea()
     }
-    private func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
-
     private func openViewers() {
         // Re-open allowed even while the previous close is still unmounting: animating progress back
         // to 1 cancels the close animator (and with it the unmount completion) — no more
@@ -1603,16 +1505,6 @@ struct StoryViewer: View {
             sheetAnimator.animate(from: viewersProgress, to: 1, write: { viewersProgress = $0 })
         }
     }
-    // Reference-exact (user's final call): the centre is the REAL story scaled as ONE living
-    // unit — through the drag AND at rest. No stand-in card renderer, no trimming, no
-    // re-framing. (The settle stand-in existed to mask geometry mismatches now fixed at the
-    // root: aspect-true zoom endpoint == card size, factory frames at contentH, freeze
-    // overlays cropped 1:1.) The story steps aside ONLY while the carousel is actively
-    // swiping; its backdrop is FROZEN pixels (storyFreezeBlur), so scaling never re-blurs.
-    private var storyLayerSteppedAside: Bool {
-        carouselInteracting && viewersProgress > 0.9
-    }
-    private var hideCarouselCentreContent: Bool { !carouselInteracting }
 
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
@@ -1999,33 +1891,10 @@ struct SeenBySheet: View {
 // ONLY the rounded photos — no captions, no avatars, no progress bars. Side cards carry a small
 // eye+heart count inside their bottom edge; the CENTRED card shows its count BIG underneath.
 // Swiping (or tapping a side card) re-centres a story and re-targets the viewers list below.
-// One story card's pixels: the NATIVE snapshot of its full-screen render (photo + real
-// material bars, photographed by StorySnapshotFactory — the app-switcher pattern). Until the
-// offscreen render lands (first frames only), a plain photo crop stands in, then swaps.
-private struct SnapshotCardContent: View {
-    let url: String
-    let slotW: CGFloat
-    let miniH: CGFloat
-    @State private var snap: UIImage?
-    var body: some View {
-        Group {
-            if let snap {
-                Image(uiImage: snap).resizable()
-                    .frame(width: slotW, height: miniH)
-            } else {
-                // Fit composite stand-in — the same framing the snapshot will have, so the
-                // swap-in is invisible (a fill-crop stand-in visibly popped, audit finding 5).
-                StoryImage(url: url, fitBlur: true)
-                    .frame(width: slotW, height: miniH)
-            }
-        }
-        .onAppear { snap = StoryCompositeCache.image(for: url) }
-        .onReceive(NotificationCenter.default.publisher(for: .init("storySnapshotReady"))) { n in
-            guard (n.object as? String) == url else { return }
-            snap = StoryCompositeCache.image(for: url)   // later (corrected) captures replace earlier ones
-        }
-    }
-}
+// `SnapshotCardContent` lived here. It rendered a card from `StoryCompositeCache`, and `21f3209`
+// removed its last call site without removing it, so it has been dead code with a live feeder ever
+// since. The feeder is gone too now (see the note on `.onChange(of: showViewers)`), and the CENTRE
+// card is the real story, so nothing needs a photograph of a story any more.
 
 // Story-style upload indicator: a thin ring with the cancel X inside it (one control).
 // Tapping it cancels the upload. The ring spins (we track an uploading flag, not a % — the reference

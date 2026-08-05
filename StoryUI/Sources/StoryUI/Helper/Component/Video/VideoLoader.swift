@@ -208,39 +208,11 @@ private extension PlayerView {
             name: .replaceCurrentItem,
             object: nil
         )
-        // Host asks (on story swipe-up) for the CURRENT video frame so the morph card shows where
-        // the video actually is, not its first-frame poster. object = the story's previewUrl key.
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(captureCurrentFrameObserver(_:)),
-            name: Notification.Name("captureStoryFrame"),
-            object: nil
-        )
-    }
-
-    // Grab the frame at the current playback time and cache it under the story's previewUrl, so
-    // StorySnapshotCache-backed cards show it. Only the ACTIVE, advanced video responds (others are
-    // stopped/at zero). Fails silently → the card keeps its poster fallback.
-    @objc func captureCurrentFrameObserver(_ note: Notification) {
-        // `.started` STAYS. Pausing does not change this state — `pauseVideo()` never writes it — so a
-        // paused-for-the-sheet player still answers, which is exactly what we want. Widening it to
-        // `.ready`/`.restart` would let a NON-active loader answer and store its own frame under the
-        // active story's url, which is a wrong picture rather than a missing one.
-        guard let urlStr = note.object as? String,
-              state == .started,
-              let item = player?.currentItem else { return }
-        let time = item.currentTime()
-        guard time.seconds > 0.05 else { return }   // still on frame 0 → the poster is already correct
-        let gen = AVAssetImageGenerator(asset: item.asset)
-        gen.appliesPreferredTrackTransform = true
-        gen.maximumSize = CGSize(width: 1080, height: 1920)
-        gen.requestedTimeToleranceBefore = CMTime(seconds: 0.25, preferredTimescale: 600)
-        gen.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
-        gen.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cg, _, result, _ in
-            guard result == .succeeded, let cg else { return }
-            let img = UIImage(cgImage: cg)
-            DispatchQueue.main.async { StoryCompositeCache.store(img, for: urlStr) }
-        }
+        // A `captureStoryFrame` observer lived here. It decoded the frame at the current playback
+        // time into `StoryCompositeCache` so the card behind the viewers sheet could show where the
+        // video actually was. Nothing decodes anything now: the card behind the sheet IS this
+        // player's own layer, paused in place, so the frame it is on is already on screen. See
+        // StoryCardMorph.
     }
 
     @objc

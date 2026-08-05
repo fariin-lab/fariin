@@ -34,76 +34,15 @@ enum StoryDiskCache {
     }
 }
 
-// The story exactly as it renders FULL SCREEN — photo + its real material bars, one image.
-// Captured whenever a fit story is displayed; the host app's viewers-sheet cards render THIS
-// (the original blur, guaranteed) instead of re-building fill+material at card size, which
-// reads as a different, darker blur (heavier relative blur + dimming at small sizes).
-public enum StoryCompositeCache {
-    private static let cache: NSCache<NSString, UIImage> = {
-        let c = NSCache<NSString, UIImage>()
-        c.totalCostLimit = 180 * 1024 * 1024   // screen-sized composites are ~12MB each @3x
-        return c
-    }()
-    public static func image(for url: String) -> UIImage? { cache.object(forKey: url as NSString) }
-    static func store(_ img: UIImage, for url: String) {
-        let cost = Int(img.size.width * img.size.height * img.scale * img.scale * 4)
-        cache.setObject(img, forKey: url as NSString, cost: cost)
-        // Cards showing the placeholder re-check the cache on this signal.
-        NotificationCenter.default.post(name: Notification.Name("storySnapshotReady"), object: url)
-    }
-}
-
-// Renders a story's full-screen composite (photo + native material bars) EXACTLY as the viewer
-// renders it — offscreen, behind the app's content — and photographs it into the cache. This is
-// the iOS app-switcher pattern: the system never scales a live blur; it snapshots the rendered
-// result and scales the picture. Cards built from these snapshots are pixel-native by definition.
-@MainActor
-public enum StorySnapshotFactory {
-    private static var inFlight = Set<String>()
-
-    // contentHeight: the height the LIVE viewer gives the media (screen minus the owner-footer
-    // strip). The offscreen render must match it exactly or the photo centres ~20pt differently
-    // than the morphing real story and the card jumps at hand-off (audit M1).
-    public static func warm(urlString: String, contentHeight: CGFloat) {
-        guard !urlString.isEmpty,
-              StoryCompositeCache.image(for: urlString) == nil,
-              !inFlight.contains(urlString),
-              let scene = UIApplication.shared.connectedScenes
-                  .compactMap({ $0 as? UIWindowScene })
-                  .first(where: { $0.activationState == .foregroundActive }),
-              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
-        else { return }
-        inFlight.insert(urlString)
-        let loader = ImageLoader()
-        // Mirror the LIVE media frame exactly: the own-story media view is contentHeight tall
-        // (screen minus the Views/Delete footer strip — audit-verified from the mineOnly
-        // VStack layout), NOT full screen. Rendering at the wrong height centred fit-photos
-        // ~43pt differently and the centre card's photo JUMPED at every hand-off.
-        let mediaFrame = CGRect(x: 0, y: 0, width: window.bounds.width,
-                                height: min(contentHeight, window.bounds.height))
-        loader.frame = mediaFrame
-        window.insertSubview(loader, at: 0)   // behind the root view — never user-visible
-        loader.loadImageWithUrl(urlString) {
-            // One committed frame so the material composites, then photograph.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                let bounds = window.bounds
-                var rendered = false
-                let img = UIGraphicsImageRenderer(bounds: bounds).image { ctx in
-                    UIColor.black.setFill()
-                    ctx.fill(bounds)
-                    rendered = loader.drawHierarchy(in: mediaFrame, afterScreenUpdates: true)
-                }
-                loader.removeFromSuperview()
-                inFlight.remove(urlString)
-                // Only cache real renders: a failed drawHierarchy leaves the black canvas, and a
-                // loader that never got its image has nothing to show (audit M2).
-                if rendered, loader.imageView.image != nil {
-                    StoryCompositeCache.store(img, for: urlString)
-                }
-            }
-        }
-    }
-}
+// `StoryCompositeCache` and `StorySnapshotFactory` lived here, and between them they photographed
+// every story's full-screen render — offscreen, on the MAIN THREAD, one `drawHierarchy` per story —
+// so the viewers-sheet cards could be built from native pixels instead of a blur re-rendered at card
+// size.
+//
+// Every reader of that cache is gone. `21f3209` removed the last one (`SnapshotCardContent`) without
+// removing the machinery, so from then until now it was a screen render per story per pull feeding
+// nobody. The card behind the sheet is the live story itself now (see StoryCardMorph), so there is
+// nothing left to photograph and nothing left to keep in step with the real thing.
 
 // Shimmering skeleton placeholder (instead of a spinner) while an image is fetched — feels faster.
 final class ShimmerView: UIView {
@@ -195,7 +134,6 @@ final class ImageLoader: UIView {
         backgroundImageView.image = image
         decideContentMode()        // fixed for this image; never recomputed on layout/drag
         if image != nil {
-            scheduleCompositeCapture()
             installFreezeIfReady()   // sheet engaged + fresh image (carousel jump) → frozen backdrop now
         }
     }
@@ -377,52 +315,11 @@ extension ImageLoader {
         return img
     }
 
-    // The container's blur samples only its own fill subview, so drawing the hierarchy captures
-    // the material composite correctly. Feeds StoryCompositeCache so the viewers-sheet CARDS can
-    // render the ORIGINAL blur for this story. (The pull-up FREEZE uses rasterizeBlurBackdrop
-    // instead — blur only, no baked photo.)
-    private func rasterizeComposite() -> UIImage? {
-        guard bounds.width > 0, window != nil,
-              imageView.image != nil,
-              imageView.contentMode == .scaleAspectFit   // full-bleed stories have no bars
-        else { return nil }
-        let shimmerWasHidden = shimmer.isHidden
-        shimmer.isHidden = true
-        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
-            drawHierarchy(in: bounds, afterScreenUpdates: false)
-        }
-        shimmer.isHidden = shimmerWasHidden
-        // The CACHE entry is SCREEN-SPACE: the story exactly as the full screen shows it, drawn
-        // at this view's true on-screen position into a screen-sized black canvas. The host's
-        // card windows are computed in screen coordinates, and the media view may be inset from
-        // the screen edges — caching only the media bounds shifted the photo inside the card
-        // (the "image jumping up" hand-off). Skip while mid-page-slide (x offset) or scaled.
-        let origin = convert(CGPoint.zero, to: nil)
-        if let url = imageURL?.absoluteString,
-           abs(origin.x) < 1, abs(origin.y) < 2, transform == .identity {
-            let screen = window?.bounds ?? UIScreen.main.bounds
-            let full = UIGraphicsImageRenderer(bounds: screen).image { ctx in
-                UIColor.black.setFill()
-                ctx.fill(screen)
-                img.draw(in: CGRect(origin: origin, size: bounds.size))
-            }
-            StoryCompositeCache.store(full, for: url)
-        }
-        return img
-    }
-
-    // Capture the full-screen composite shortly after a fit image is shown (view settled,
-    // material rendered). Cheap, once per story per session (cache hit skips it).
-    private func scheduleCompositeCapture() {
-        guard imageView.contentMode == .scaleAspectFit,
-              let url = imageURL?.absoluteString,
-              StoryCompositeCache.image(for: url) == nil else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, let current = self.imageURL?.absoluteString, current == url,
-                  StoryCompositeCache.image(for: url) == nil else { return }
-            _ = self.rasterizeComposite()
-        }
-    }
+    // `rasterizeComposite` and `scheduleCompositeCapture` lived here. Every fit story that appeared
+    // scheduled a full-screen `drawHierarchy` 0.15s later to fill `StoryCompositeCache`. Nothing has
+    // read that cache since `21f3209`, and the cards it fed are gone, so the render went with them.
+    // `rasterizeBlurBackdrop` (the pull-up FREEZE, blur only) is a different function and is
+    // untouched.
 
     @objc private func unfreezeBlur() {
         Self.freezeWanted = false
