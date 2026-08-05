@@ -103,10 +103,12 @@ struct SettingsView: View {
                     // 2026-07-29, after seeing both). Two rows leading to the same page reads as a
                     // duplicate, which is what it was.
                     NavigationLink { ChatsSettingsView() } label: {
-                        // OUR OWN CHAT MARK, the one the Chats tab already wears, instead of Apple's
-                        // two-bubble symbol. Every other row on this page that has a drawing of ours
-                        // uses it; this one was still borrowing.
-                        SettingsRowLabel("Chats", "ic_chat")
+                        // ITS OWN OUTLINED DRAWING, not the tab bar's. `ic_chat` is a SOLID bubble
+                        // because a tab bar icon has to read at 24pt against a selected pill; dropped
+                        // into this list it was a black blob beside Account, Devices, Notifications
+                        // and Privacy, which are all outlines. Same family, different weight — and a
+                        // settings row wants the outline.
+                        SettingsRowLabel("Chats", "ic_settings_chats")
                     }
                     NavigationLink { StorySettingsView() } label: {
                         SettingsRowLabel("Stories", "ic_stories")
