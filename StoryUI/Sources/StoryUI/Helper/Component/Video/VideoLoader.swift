@@ -50,6 +50,54 @@ final class PlayerView: UIView {
         NotificationCenter.default.post(name: .storyBuffering, object: buffering)
     }
 
+    /// The clip's own pixel size, once the item has reported it. Kept so the fit/fill decision can
+    /// be re-taken whenever the VIEW's size changes, not only when the video's does.
+    private var presentedSize: CGSize = .zero
+
+    /// EVERY PIECE OF VIDEO GEOMETRY, GLUED TO THE REAL BOUNDS. The layer's frame was assigned
+    /// once, at init, from a view created at UIScreen size — and CALayer sublayers do not
+    /// autoresize, so when the story shrank into the 9:16 card (`8e224d9`) the AVPlayerLayer
+    /// silently stayed a full screen tall. A letterboxed clip then centred itself in that
+    /// invisible 852pt layer, not in the card: ~76pt of black above the video and the bottom
+    /// cropped off — his "video frame drops downward" screenshot, as steady state. Photos never
+    /// did this because ImageLoader has always re-pinned its subviews in layoutSubviews; this is
+    /// the video's missing half of that.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // a resize correction must not animate
+        contentView.frame = bounds
+        playerLayer.frame = bounds
+        CATransaction.commit()
+        viewWithTag(999)?.frame = bounds        // the loading veil rides along
+        applyGravity()
+    }
+
+    /// Fill vs fit, decided against the CARD the video actually lives in — it was decided against
+    /// UIScreen (aspect 2.17), so every ordinary 9:16 clip (aspect 1.78) was demoted to letterbox
+    /// inside a 16:9 card it fits exactly. And it was applied on an async hop when
+    /// `presentationSize` arrived, AFTER the first painted frame — the first paint showed one
+    /// scale and a beat later the other: his "zoomed out for a brief moment, then it suddenly
+    /// zooms in". Synchronous when the size is already known (a preloaded item knows it at
+    /// attach), so the first frame is born at its final scale.
+    private func applyGravity() {
+        guard presentedSize.width > 0, presentedSize.height > 0,
+              bounds.width > 0, bounds.height > 0 else { return }
+        let fills = presentedSize.height / presentedSize.width >= bounds.height / bounds.width - 0.02
+        let want: AVLayerVideoGravity = fills ? .resizeAspectFill : .resizeAspect
+        guard playerLayer.videoGravity != want else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.videoGravity = want
+        CATransaction.commit()
+    }
+
+    /// The observer's landing point: remember the clip's size, re-take the decision.
+    fileprivate func notePresentationSize(_ s: CGSize) {
+        presentedSize = s
+        applyGravity()
+    }
+
     // MARK: - Initializers
     override init(frame: CGRect) {
         self.cacheManager = CacheManager()
@@ -224,14 +272,15 @@ private extension PlayerView {
         self.playerLayer.videoGravity = .resizeAspectFill
         // Fill vs fit decided by aspect, like photos (ImageLoader.decideContentMode): a landscape/
         // wide video hard-cropped by an unconditional fill lost most of its frame — FIT those
-        // (black bars), keep tall videos edge-to-edge. presentationSize is 0 until the item is
-        // ready, so observe it once and default to fill.
+        // (black bars), keep tall videos edge-to-edge. The decision itself lives in
+        // `applyGravity`, measured against the view's own bounds (the card), NOT UIScreen, and is
+        // applied synchronously when the size is already known — a preloaded item answers on the
+        // `.initial` delivery, so the first painted frame is already at its final scale.
         sizeObservation = player?.currentItem?.observe(\.presentationSize, options: [.new, .initial]) { [weak self] item, _ in
             let s = item.presentationSize
             guard let self, s.width > 0, s.height > 0 else { return }
-            let screen = UIScreen.main.bounds
-            let fills = s.height / s.width >= screen.height / screen.width - 0.02
-            DispatchQueue.main.async { self.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect }
+            if Thread.isMainThread { self.notePresentationSize(s) }
+            else { DispatchQueue.main.async { self.notePresentationSize(s) } }
         }
         self.playerLayer.backgroundColor = UIColor.black.cgColor
         playerLayer.removeFromSuperlayer()
@@ -353,10 +402,13 @@ private extension PlayerView {
     /// but it turns over the picture instead of over nothing. Black is only the fallback for a clip
     /// whose poster we have not got.
     /// The poster as a frozen dark blur: aspect-fill at 1/8 scale (the upscale's interpolation is
-    /// the blur) with the dark veil baked in. One draw, at load time, never re-sampled.
-    static func frozenVeil(of poster: UIImage) -> UIImage {
-        let small = CGSize(width: max(8, UIScreen.main.bounds.width / 8),
-                           height: max(8, UIScreen.main.bounds.height / 8))
+    /// the blur) with the dark veil baked in. One draw, at load time, never re-sampled. The small
+    /// canvas carries the aspect of the RECT IT WILL COVER — it was UIScreen's, so on the 9:16
+    /// card the veil's poster painted at screen-fill zoom, a different scale from the video that
+    /// replaced it, which is half of the first-paint jump.
+    static func frozenVeil(of poster: UIImage, covering: CGSize) -> UIImage {
+        let small = CGSize(width: max(8, covering.width / 8),
+                           height: max(8, covering.height / 8))
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = 1
         return UIGraphicsImageRenderer(size: small, format: fmt).image { ctx in
@@ -370,9 +422,12 @@ private extension PlayerView {
 
     func addActivityIndicatory() {
         removeActivityIndicatory()
-        let w = UIScreen.main.bounds.width
-        let h = UIScreen.main.bounds.height
+        // THE VIEW'S OWN SIZE, not UIScreen's — the veil must cover exactly the card the video
+        // will paint in, or the two show the same picture at two different scales.
+        let w = bounds.width > 1 ? bounds.width : UIScreen.main.bounds.width
+        let h = bounds.height > 1 ? bounds.height : UIScreen.main.bounds.height
         let view = UIView(frame: CGRect(x: 0, y: 0, width: w, height: h))
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.backgroundColor = .black
         view.tag = 999
         if let poster = posterImage {
@@ -385,7 +440,7 @@ private extension PlayerView {
             // now born frozen: the poster downscaled hard (a downscale is a blur — the profile
             // poster's wash trick) and darkened once, drawn as an ordinary image that transforms
             // like every other pixel on the card.
-            let iv = UIImageView(image: Self.frozenVeil(of: poster))
+            let iv = UIImageView(image: Self.frozenVeil(of: poster, covering: view.bounds.size))
             iv.frame = view.bounds
             iv.contentMode = .scaleAspectFill
             iv.clipsToBounds = true
@@ -403,16 +458,12 @@ private extension PlayerView {
 
     func setupPlayer() {
         self.addSubview(contentView)
-        contentView.frame.size.width = self.frame.size.width
-        contentView.frame.size.height = self.frame.size.height
-        self.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            contentView.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 0),
-            contentView.rightAnchor.constraint(equalTo: self.rightAnchor, constant: 0),
-            contentView.bottomAnchor.constraint(equalTo: self.safeAreaLayoutGuide.bottomAnchor, constant: 0),
-            contentView.topAnchor.constraint(equalTo: self.topAnchor, constant: 0),
-        ])
-        playerLayer.frame = contentView.frame
+        // layoutSubviews owns this geometry now (see its note) — the one-shot frame here only
+        // covers the beat before the first layout pass. The old Auto Layout pins are gone: they
+        // fought contentView's autoresizing constraints (its TAMIC was never turned off), and
+        // their safe-area bottom was a full-screen assumption the 9:16 card broke.
+        contentView.frame = bounds
+        playerLayer.frame = bounds
     }
 
     func removeActivityIndicatory() {

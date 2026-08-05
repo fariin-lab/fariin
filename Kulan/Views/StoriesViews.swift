@@ -900,10 +900,14 @@ struct StoryViewer: View {
                         // Video runs its REAL length (the player refines it from the loaded asset);
                         // photos keep the 5s standard.
                         duration: s.isVideo && s.duration > 0.5 ? s.duration : 5,
-                        // My own story in the MINE-ONLY viewer: WE draw the caption pinned above the
-                        // footer (below), so suppress the library's here. In a mixed feed (no footer,
-                        // no custom caption) keep the library's caption or it would show nowhere.
-                        caption: (g.isMine && mineOnly) ? "" : s.caption,
+                        // ONE caption system: the library's, card-anchored. The host used to draw
+                        // its own for the mine-only viewer, pinned 14pt above the PAGE bottom —
+                        // written when the story filled the page (948a838), stranded when the story
+                        // became a 9:16 card: it floated on the black gap ~35pt below the card,
+                        // his "caption is incorrectly positioned too low". The library's captionView
+                        // sits above the card's bottom edge (21c78c5), the same place friends'
+                        // captions sit and the same place the editor's caption pill shows it.
+                        caption: s.caption,
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             storyType: g.isMine
@@ -1185,22 +1189,11 @@ struct StoryViewer: View {
                 // is ONLY applied here — clipping a FRIEND's full-bleed story broke the library's
                 // swipe-down-to-dismiss (the pan translates the card, but the clip pinned it to its
                 // frame so it couldn't visibly move → "scroll down to close doesn't work").
+                // The caption overlay that hung HERE is gone: it anchored to the PAGE bottom and
+                // was stranded ~35pt under the card when the story shrank to 9:16 — see the
+                // caption note at the model builder. The library's card-anchored captionView
+                // draws my caption now, exactly as it draws a friend's.
                 storyContent
-                    .overlay(alignment: .bottom) {
-                        if let c = currentStory?.caption, !c.isEmpty {
-                            Text(c)
-                                .font(.body).foregroundStyle(.white)
-                                .lineLimit(4)   // don't let a long caption climb over the whole photo (caption cap)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16).padding(.top, 26).padding(.bottom, 14)
-                                .background(LinearGradient(colors: [.clear, .black.opacity(0.45)],
-                                                           startPoint: .top, endPoint: .bottom))
-                                .opacity((dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
-                                .animation(.easeOut(duration: 0.15), value: dragDown > 6)
-                                .animation(.easeOut(duration: 0.15), value: showViewers && viewersProgress > 0.05)
-                                .allowsHitTesting(false)
-                        }
-                    }
                     // NO app-level CLIP (the clip pinned the card and broke the native dismiss) — the
                     // card's corners are rounded in UIKit inside the library now. But KEEP a solid black
                     // background: the cover is see-through (.clear) for the swipe-down, so without this
