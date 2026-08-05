@@ -40,6 +40,15 @@ struct StoryEditorView: View {
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
+    // Trim's working state for the video item on screen, mirrored back into the item on Done. It
+    // lives here rather than in a pushed screen because trimming is a mode of this editor, the same
+    // call he made on the video editor.
+    @State private var showTrim = false
+    @State private var trimStart: Double = 0
+    @State private var trimEnd: Double = 0
+    @State private var trimOpenedStart: Double = 0   // what X puts back
+    @State private var trimOpenedEnd: Double = 0
+    @State private var trimThumbs: [UIImage] = []
     @State private var cropRect: CGRect? = nil   // live crop as a rectangle — see DraftItem.cropRect
     // Our own pen palette, the same three controls ChatImageEditor drives PencilKit with. Defaults
     // match it too, so a pen is a pen wherever you pick one up in this app.
@@ -117,6 +126,25 @@ struct StoryEditorView: View {
         var overlays: [TextOverlay] = []
         var zoom: CGFloat = 1
         var offset: CGSize = .zero
+
+        // VIDEO-ONLY, and they are the whole of the owner's report that a video thumbnail brought up
+        // the photo tools. A clip has two things a picture does not: a soundtrack you may not want,
+        // and a length you may want less of. `StoryVideoPayload` has carried both since the video
+        // editor was built; this screen simply never offered them or filled them in.
+        //
+        // `trimEnd == 0` means "not trimmed" rather than "zero length", so an untouched clip needs no
+        // knowledge of its own duration to be correct.
+        var muted = false
+        var trimStart: Double = 0
+        var trimEnd: Double = 0
+        var isTrimmed: Bool { trimStart > 0.05 || (trimEnd > 0 && trimEnd < duration - 0.05) }
+        /// The range to keep, in seconds, or nil for the whole clip — the shape the payload wants.
+        var trimRange: ClosedRange<Double>? {
+            guard isTrimmed else { return nil }
+            let end = trimEnd > 0 ? trimEnd : duration
+            guard end > trimStart else { return nil }
+            return trimStart...end
+        }
     }
 
     /// Everything in this post, in order, with `index` pointing at the one on the canvas.
@@ -185,8 +213,11 @@ struct StoryEditorView: View {
                 VStack { Spacer(); bottomBar }
                     .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
             }
-            // Above the bar, and keyboard-proof: cropping has no keyboard and must cover everything.
+            // Above the bar, and keyboard-proof: neither cropping nor trimming has a keyboard, and
+            // both must cover everything under them.
             cropOverlay
+                .ignoresSafeArea(.keyboard)
+            trimOverlay
                 .ignoresSafeArea(.keyboard)
         }
         // ALWAYS DARK, whatever the phone is set to (owner: "all story buttons always use dark mode
@@ -410,7 +441,7 @@ struct StoryEditorView: View {
         .sheet(item: $pendingShare) { s in
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
             // flows get the same compact fitted sheet.
-            ShareStorySheet(image: s.data, caption: s.caption, extras: pendingExtras,
+            ShareStorySheet(image: s.data, caption: s.caption, video: s.video, extras: pendingExtras,
                             onPosted: { onPosted(); dismiss() })
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -551,18 +582,36 @@ struct StoryEditorView: View {
             // Tool row hides while typing a caption (only the caption field stays, above the keyboard).
             if !captionFocused {
                 HStack(spacing: 14) {
-                    // Aa / crop / draw grouped in ONE dark capsule (target design), not separate circles.
+                    // THE TOOLS BELONG TO THE ITEM YOU ARE LOOKING AT, not to the screen.
+                    //
+                    // Owner: with a photo on thumbnail 1 and a video on thumbnail 2, tapping the
+                    // video still brought up the photo's controls. Crop is the one that was actually
+                    // wrong to offer, and he already ruled on it himself when he had the video editor
+                    // built: "NO CROP here — that is a photo tool". A clip gets what a clip has
+                    // instead: its sound, and its length.
+                    //
+                    // Aa and the pen stay for both, because they already work on a video — they
+                    // travel to the export and are composited into the frames there (see
+                    // `videoBurnIn`). Removing them would take away something that works.
                     HStack(spacing: 22) {
-                        capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on the photo
-                        capsuleTool("crop", active: croppedSource != nil) {
-                            withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
+                        capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on either
+                        if currentIsVideo {
+                            capsuleTool(items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                        active: items[index].muted) {
+                                items[index].muted.toggle()
+                            }
+                            capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
+                        } else {
+                            capsuleTool("crop", active: croppedSource != nil) {
+                                withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
+                            }
                         }
                         capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
-                        // NO FOURTH TOOL. It used to be a second "add another picture", kept on the
-                        // reasoning that two doors to one action beat two doors to two different
-                        // ones. He has now seen both and called it: "remove the bottom Upload Story
-                        // button because it is a duplicate. Keep the one in the caption bar exactly
-                        // as it is." Same call he made on the video editor an hour earlier.
+                        // NO EXTRA TOOL beyond these. It used to carry a second "add another
+                        // picture", kept on the reasoning that two doors to one action beat two doors
+                        // to two different ones. He has now seen both and called it: "remove the
+                        // bottom Upload Story button because it is a duplicate. Keep the one in the
+                        // caption bar exactly as it is."
                     }
                     .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
                     .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
@@ -573,6 +622,93 @@ struct StoryEditorView: View {
             }
         }
         .padding(.horizontal, 16)
+    }
+
+    /// TRIM, for a video item in a multi-item post. Reuses `VideoTrimStrip`, which is the same strip
+    /// the video editor and VideoApprovalView drive — his standing instruction was "do not build a
+    /// new trim system", and there is nothing here a second one would do better.
+    ///
+    /// It does not preview frames while you drag, because this screen has no player: a video item
+    /// shows its poster with a play mark. The filmstrip and the handles are real, and the cut is
+    /// applied once at post time by the same export path the video editor uses. If he wants the live
+    /// scrub as well, that means an AVPlayer on this screen, which is a bigger piece and is worth
+    /// asking about rather than assuming.
+    @ViewBuilder private var trimOverlay: some View {
+        if showTrim, items.indices.contains(index), items[index].isVideo {
+            let dur = max(0.1, items[index].duration)
+            VStack {
+                HStack {
+                    // X puts the handles back where they were; Done keeps them. Neither may leave
+                    // half a cut behind, which is the rule the video editor's trim already follows.
+                    Button { closeTrim(keep: false) } label: {
+                        Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white).frame(width: 44, height: 44)
+                            .contentShape(Circle()).liquidGlass(Circle())
+                    }
+                    Spacer()
+                    Button { closeTrim(keep: true) } label: {
+                        Image(systemName: "checkmark").font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white).frame(width: 44, height: 44)
+                            .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                            .contentShape(Circle())
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, max(windowSafeTop - 22, 10))
+                Spacer()
+                VideoTrimStrip(duration: dur, thumbnails: trimThumbs,
+                               trimStart: $trimStart, trimEnd: $trimEnd,
+                               playhead: .constant(0), scrubTime: .constant(nil),
+                               playing: .constant(false), draggingPlayhead: .constant(false))
+                    .frame(height: 56)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 28)
+                    // Reserve the slot rather than let a late filmstrip shove the layout up.
+                    .opacity(trimThumbs.isEmpty ? 0 : 1)
+            }
+            .background(Color.black.opacity(0.55).ignoresSafeArea())
+            .transition(.opacity)
+            .task(id: items[index].id) { await loadTrimThumbs() }
+        }
+    }
+
+    private func openTrim() {
+        guard items.indices.contains(index), items[index].isVideo else { return }
+        trimStart = items[index].trimStart
+        trimEnd = items[index].trimEnd > 0 ? items[index].trimEnd : items[index].duration
+        trimOpenedStart = trimStart
+        trimOpenedEnd = trimEnd
+        withAnimation(.easeInOut(duration: 0.28)) { showTrim = true }
+    }
+
+    private func closeTrim(keep: Bool) {
+        if keep, items.indices.contains(index) {
+            items[index].trimStart = trimStart
+            items[index].trimEnd = trimEnd
+        } else {
+            trimStart = trimOpenedStart; trimEnd = trimOpenedEnd
+        }
+        trimThumbs = []
+        withAnimation(.easeInOut(duration: 0.28)) { showTrim = false }
+    }
+
+    /// Ten frames across the clip — the same filmstrip recipe the video editor's trim uses.
+    private func loadTrimThumbs() async {
+        guard items.indices.contains(index), let u = items[index].videoURL else { return }
+        let dur = max(0.1, items[index].duration)
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: u))
+        gen.appliesPreferredTrackTransform = true
+        gen.requestedTimeToleranceBefore = .zero
+        gen.requestedTimeToleranceAfter = .positiveInfinity
+        gen.maximumSize = CGSize(width: 160, height: 160)
+        let count = 10
+        var imgs: [UIImage] = []
+        for i in 0..<count {
+            let t = CMTime(seconds: dur * Double(i) / Double(count - 1), preferredTimescale: 600)
+            if let cg = try? await gen.image(at: t).image { imgs.append(UIImage(cgImage: cg)) }
+        }
+        let done = imgs
+        await MainActor.run { trimThumbs = done }
     }
 
     /// Crop, presented INLINE with a cross-fade — the chat editor's own `cropOverlay`, move for move
@@ -788,7 +924,7 @@ struct StoryEditorView: View {
         // being able to un-crop after switching costs: the work moves from "on the way out of an
         // item" to "once, when you actually post". `flatten` composes from the tool state rather
         // than from what is on screen, so restoring an item is enough to render it correctly.
-        var rendered: [(data: Data, video: URL?, burn: StoryBurnIn?)] = []
+        var rendered: [(data: Data, video: URL?, burn: StoryBurnIn?, muted: Bool, trim: ClosedRange<Double>?)] = []
         for i in items.indices {
             index = i
             restoreCurrent()
@@ -798,10 +934,11 @@ struct StoryEditorView: View {
                 // offering them. They cannot be flattened into a picture, so they travel as far as the
                 // export and are composited into the frames there — see VideoTranscoder.burnIn.
                 let burn = await videoBurnIn()
-                rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u, burn))
+                rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u, burn,
+                                 items[i].muted, items[i].trimRange))
                 continue
             }
-            rendered.append((await flatten(), nil, nil))
+            rendered.append((await flatten(), nil, nil, false, nil))
         }
         index = keep
         restoreCurrent()
@@ -813,14 +950,24 @@ struct StoryEditorView: View {
         var extras: [StoryExtra] = []
         for r in rendered.dropFirst() {
             if let u = r.video {
-                extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data, burn: r.burn)))
+                extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data,
+                                                                 muted: r.muted, trim: r.trim, burn: r.burn)))
             } else {
                 extras.append(StoryExtra(photo: r.data))
             }
         }
+        // THE FIRST ITEM'S CLIP IS NO LONGER THROWN AWAY. `StoryShareData` carried only `data`, which
+        // for a video is its poster, so a post whose first item was a video posted a still of it.
+        // Reachable today: pick a photo, add a video, delete the photo with the X on the strip.
+        let leadVideo = rendered.first.flatMap { r -> StoryVideoPayload? in
+            guard let u = r.video else { return nil }
+            return StoryVideoPayload(url: u, thumbnail: r.data, muted: r.muted, trim: r.trim, burn: r.burn)
+        }
         // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —
         // baking it clipped the text when the image was cropped to fit.
-        pendingShare = StoryShareData(data: data, caption: caption.trimmingCharacters(in: .whitespacesAndNewlines))
+        pendingShare = StoryShareData(data: data,
+                                      caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
+                                      video: leadVideo)
         pendingExtras = extras
     }
 

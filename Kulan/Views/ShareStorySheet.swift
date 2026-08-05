@@ -2,7 +2,16 @@ import SwiftUI
 import UIKit
 
 // Flattened story image awaiting the audience sheet (used by both the photo editor + text composer).
-struct StoryShareData: Identifiable { let id = UUID(); let data: Data; var caption: String = "" }
+/// `video` is the FIRST item when that item is a clip. It used to be missing, and the multi-item
+/// editor had nowhere to put one: it handed the sheet only `data`, which for a video is its poster.
+/// So a post whose first item was a video silently posted a still of it. Reachable by picking a
+/// photo, adding a video, then deleting the photo — the X on the thumbnail strip does exactly that.
+struct StoryShareData: Identifiable {
+    let id = UUID()
+    let data: Data
+    var caption: String = ""
+    var video: StoryVideoPayload? = nil
+}
 
 /// One more item posted behind the first, in the order the user arranged them. The audience sheet is
 /// answered ONCE and every item inherits that answer — being asked who can see it seven times for one
