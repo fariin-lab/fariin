@@ -6368,7 +6368,14 @@ struct MessageBubble: View, Equatable {
             // WHILE SENDING: this tile's own ring, filling with this tile's own bytes (keys are
             // "clientId#index", written by sendAlbum/sendMixedAlbum), an X to cancel exactly this
             // item, and a dim once it is cancelled. One indicator per image was the owner's spec.
-            if message.sendState == .sending, extra == 0, let key = albumItemKey(i) {
+            //
+            // NOT ONCE THIS ITEM IS DONE. `sendState` is per-MESSAGE — it stays `.sending` until
+            // the whole batch commits — so a finished tile kept its overlay while siblings
+            // uploaded, and with its bytes gone from UploadProgress the ring degraded to a
+            // forever-spinner (his screenshot). `doneItems` is per-item truth: the overlay drops
+            // the instant THIS transfer lands and the tile shows its plain preview.
+            if message.sendState == .sending, extra == 0, let key = albumItemKey(i),
+               !mediaSend.isItemDone(key) {
                 if mediaSend.isItemCancelled(key) {
                     ZStack {
                         Color.black.opacity(0.55)
@@ -6379,26 +6386,25 @@ struct MessageBubble: View, Equatable {
                 } else {
                     ZStack {
                         Color.black.opacity(0.18)
-                        UploadingRing(clientId: key)
+                        // The X lives INSIDE the ring now (owner 2026-08-05: "the X should be
+                        // placed inside the upload loading indicator"), WhatsApp's arrangement:
+                        // one centred control that is both the progress and the cancel. The disc
+                        // is the tap target. NOT a Button — a Button's press gesture claims
+                        // touches inside a hosted cell and has locked chat scrolling before.
+                        ZStack {
+                            UploadingRing(clientId: key)
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 46, height: 46)
+                        .contentShape(Circle())
+                        .onTapGesture { mediaSend.cancelItem(key) }
                     }
                 }
             }
             if extra > 0 {
                 ZStack { Color.black.opacity(0.5); Text("+\(extra)").font(.title.weight(.bold)).foregroundStyle(.white) }
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            // The per-tile cancel. NOT a Button — a Button's press gesture claims touches inside a
-            // hosted cell and has locked chat scrolling before (see the file's voice-note controls).
-            if message.sendState == .sending, extra == 0,
-               let key = albumItemKey(i), !mediaSend.isItemCancelled(key) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 22))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, .black.opacity(0.55))
-                    .padding(6)
-                    .contentShape(Rectangle())
-                    .onTapGesture { mediaSend.cancelItem(key) }
             }
         }
         .contentShape(Rectangle())

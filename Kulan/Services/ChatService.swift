@@ -883,7 +883,10 @@ enum ChatService {
             let url: String
             do {
                 url = try await up.value
-                if let itemKey { await MediaSend.shared.finishItem(itemKey) }
+                if let itemKey {
+                    await MediaSend.shared.finishItem(itemKey)
+                    await MediaSend.shared.markItemDone(itemKey)   // this tile's ring comes off NOW
+                }
             } catch {
                 // THIS tile's X: skip the item, the album goes on without it. Any other failure
                 // (or a whole-message Cancel, which cancels item tasks too) fails the send.
@@ -994,6 +997,10 @@ enum ChatService {
                 do {
                     let url = try await up.value
                     if let itemKey { await MediaSend.shared.finishItem(itemKey) }
+                    // Done = the KEYED transfer only. A video item uploads its poster first through
+                    // this same func with keyed=false — marking that would kill the ring before the
+                    // clip, the part the ring is FOR, had sent its first byte.
+                    if keyed, let itemKey { await MediaSend.shared.markItemDone(itemKey) }
                     if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
                     return url
                 } catch {

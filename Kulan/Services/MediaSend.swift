@@ -27,6 +27,13 @@ final class MediaSend: ObservableObject {
     private var itemTasks: [String: Task<String, Error>] = [:]
     private var cancelledSends: Set<String> = []
     @Published private(set) var cancelledItems: Set<String> = []
+    /// Items whose MAIN transfer has landed. The tiles read this to drop their ring the moment
+    /// their own upload is done — the message stays `.sending` until the whole batch commits, and
+    /// per-message state was all a tile had, so a finished photo kept spinning while its
+    /// neighbours uploaded (owner's screenshot, 2026-08-05). Worse than spinning: its BYTES were
+    /// gone from UploadProgress the moment it finished, so the ring fell back to the indeterminate
+    /// spinner and looked stuck on purpose.
+    @Published private(set) var doneItems: Set<String> = []
 
     /// Pure string math — callable from the send loops without hopping to the main actor.
     nonisolated static func itemKey(_ clientId: String, _ index: Int) -> String { "\(clientId)#\(index)" }
@@ -57,12 +64,20 @@ final class MediaSend: ObservableObject {
         if cancelledItems.contains(where: { $0.hasPrefix(prefix) }) {
             cancelledItems = cancelledItems.filter { !$0.hasPrefix(prefix) }
         }
+        if doneItems.contains(where: { $0.hasPrefix(prefix) }) {
+            doneItems = doneItems.filter { !$0.hasPrefix(prefix) }
+        }
     }
 
     // MARK: one album item
 
     func registerItem(_ key: String, _ task: Task<String, Error>) { itemTasks[key] = task }
     func finishItem(_ key: String) { itemTasks[key] = nil }
+
+    /// The item's MAIN transfer succeeded (a video's poster does not count — the clip is what the
+    /// ring was filling with). The send loops call this at the one moment it becomes true.
+    func markItemDone(_ key: String) { doneItems.insert(key) }
+    func isItemDone(_ key: String) -> Bool { doneItems.contains(key) }
 
     func cancelItem(_ key: String) {
         cancelledItems.insert(key)
