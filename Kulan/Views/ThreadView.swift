@@ -3056,7 +3056,15 @@ struct ThreadView: View {
         do {
             try await ChatService.sendMixedAlbum(cid: cid, items: sendItems, caption: caption,
                                                  clientId: clientId, group: isGroup ? groupMembers : nil)
-        } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+        } catch {
+            // Same reasoning as sendVideo's catch: a failure that names no cause cannot be acted on
+            // by the sender or fixed by anybody.
+            print("sendMixedAlbum failed:", error)
+            await MainActor.run {
+                repo.markFailed(clientId: clientId)
+                sendError = "Couldn't send. \(error.localizedDescription)"
+            }
+        }
     }
 
     private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
@@ -3581,7 +3589,19 @@ struct ThreadView: View {
                                             duration: prepared.duration, width: prepared.width, height: prepared.height,
                                             caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil)
             try? FileManager.default.removeItem(at: retryURL)   // delivered → retry payload no longer needed
-        } catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+        } catch {
+            // SAY WHY. This used to swallow the error and leave the bubble reading "Not delivered"
+            // with no reason anywhere — which is a dead end for the person sending (they cannot tell
+            // whether to retry, wait for signal, or give up) and a dead end for anyone trying to fix
+            // it, since the one fact that would identify the cause was thrown away at the moment it
+            // was known. An 18s clip failing while a 7s clip in the same chat minutes later
+            // succeeded is exactly the case this silence made impossible to diagnose.
+            print("sendVideo failed:", error)
+            await MainActor.run {
+                repo.markFailed(clientId: clientId)
+                sendError = "Couldn't send the video. \(error.localizedDescription)"
+            }
+        }
     }
 
     // When I've blocked this contact, the composer is replaced by an unblock bar —
