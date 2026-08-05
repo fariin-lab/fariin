@@ -91,6 +91,11 @@ struct StoryEditorView: View {
     }
     @State private var posting = false
     @State private var postError = false
+    /// The resting bottom bar's measured height. The canvas ends this far above the screen bottom
+    /// so the tool capsule and NEXT can never sit on the photo; the fallback covers the first
+    /// frame, before the bar has reported (caption 40 + gap 12 + tools ~48 + paddings + indicator).
+    @State private var bottomBarH: CGFloat = 0
+    private var canvasClearance: CGFloat { bottomBarH > 1 ? bottomBarH + 6 : 132 }
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
     @FocusState private var captionFocused: Bool
@@ -241,7 +246,19 @@ struct StoryEditorView: View {
         // arrived and shoved it UP. Two state changes, two moments, neither animated with the
         // keyboard. Nothing here computes a keyboard height any more.
         ZStack {
+            // The stage floor. The canvas is inset above the bottom bar now, so something must own
+            // the pixels behind the bar at every moment — the canvas's own black stops at its inset.
+            Color.black.ignoresSafeArea()
             canvasLayer
+                // THE CANVAS ENDS ABOVE THE BOTTOM BAR (owner 2026-08-05, his circles: the tool
+                // capsule and NEXT were sitting ON the photo). The canvas used to be the whole
+                // screen, so a tall photo filled it and the controls floated over the picture.
+                // Inset by the bar's own measured height, the photo, the pen, the text overlays
+                // and the flatten all live in the same shortened space — WYSIWYG holds — and a
+                // tall photo now reads as the boxed card over its wash, controls on black below.
+                // The inset uses the RESTING bar height only, so swapping to the pen bar or
+                // raising the keyboard never resizes the canvas mid-stroke.
+                .padding(.bottom, canvasClearance)
                 // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
                 // same top anchor, same 10pt nudge, same 0.3 curve. Tapping the scissors on a video
                 // inside a MULTI-ITEM post used to drop a flat panel on top of an untouched canvas,
@@ -267,8 +284,17 @@ struct StoryEditorView: View {
                 // filmstrip lands where this bar was — and leaving the caption field, the thumbnail
                 // strip and the tool row underneath it is what made the multi-item trim read as a
                 // panel dropped on top of the composer rather than its own screen.
-                VStack { Spacer(); bottomBar }
-                    .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
+                VStack {
+                    Spacer()
+                    bottomBar
+                        // The canvas insets itself above this bar — see canvasClearance. RESTING
+                        // height only: focused, the bar rides the keyboard, and a canvas that
+                        // re-staged with it would move under a half-typed caption.
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                            if !captionFocused, h > 1, abs(h - bottomBarH) > 1 { bottomBarH = h }
+                        }
+                }
+                .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
             }
             // Above the bar, and keyboard-proof: neither cropping nor trimming has a keyboard, and
             // both must cover everything under them.
@@ -325,6 +351,11 @@ struct StoryEditorView: View {
                                   maxScale: 4, interactive: !isDrawing && editingID == nil,
                                   onTap: { captionFocused = false; selectedID = nil },
                                   onSwipe: { step in
+                                      // ZOOMED IN = a horizontal drag is panning the PICTURE, never
+                                      // a page turn (owner 2026-08-05: "if I make zoom, block swipe
+                                      // — if I want to swipe I can click thumbnail"). The thumbnails
+                                      // remain the way to switch while zoomed.
+                                      guard photoZoom <= 1.01 else { return }
                                       // The strip and the swipe are the same move, so they go through
                                       // the same door: select() parks this picture's edits and brings
                                       // the next one's back. Ends of the post simply do not move.
