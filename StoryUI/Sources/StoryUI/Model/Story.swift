@@ -10,6 +10,14 @@ import Foundation
 public struct Story: Identifiable, Hashable {
     public var id: String
     public var mediaURL: String
+    /// The small poster the story row and the card strip already show, which for a video is its
+    /// cover. Optional because the library must keep working without one.
+    ///
+    /// It is here so the viewer has SOMETHING TRUE to draw while the real media downloads. WhatsApp,
+    /// Telegram and Instagram all show a blurred version of the picture you are waiting for; none of
+    /// them show a grey block, because a grey block tells you nothing and reads as broken. This is a
+    /// few KB and is usually already on disk from the story row, so it lands more or less at once.
+    public var previewURL: String?
     public var date: String
     public var isReady: Bool = false
     public var isLiked: Bool = false
@@ -20,6 +28,7 @@ public struct Story: Identifiable, Hashable {
 
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
+                previewURL: String? = nil,
                 date: String,
                 isLiked: Bool = false,
                 isSeen: Bool = false,
@@ -29,6 +38,7 @@ public struct Story: Identifiable, Hashable {
 
         self.id = id
         self.mediaURL = mediaURL
+        self.previewURL = previewURL
         self.date = date
         self.duration = duration
         self.config = config

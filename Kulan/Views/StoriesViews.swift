@@ -860,6 +860,9 @@ struct StoryViewer: View {
                     StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,
+                        // The poster the story row already drew, so the viewer has something true to
+                        // show blurred while the full-size media arrives instead of a grey block.
+                        previewURL: s.previewUrl,
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
                         // Where the viewer opens (firstUnseenIndex = first item with isSeen == false,

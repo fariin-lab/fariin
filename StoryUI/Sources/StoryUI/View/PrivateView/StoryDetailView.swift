@@ -317,6 +317,7 @@ private extension StoryDetailView {
             // uses the library's UIKit dismiss now, so the corners must live here, not in an app-level
             // clip (an app clip pinned the card and broke the smooth dismiss).
             ImageView(imageURL: story.mediaURL,
+                      previewURL: story.previewURL,
                       bottomCornerRadius: (story.config.storyType != .plain() || model.isMine) ? 24 : 0) {
                 start(index: index)
             }

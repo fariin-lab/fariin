@@ -82,6 +82,10 @@ final class ImageLoader: UIView {
     private let backgroundImageView = UIImageView()
     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
     private let shimmer = ShimmerView()
+    // The story's own poster behind glass, shown while the full-size media downloads (see
+    // showPreviewBlur). Built lazily: a story that is already cached never needs one.
+    private var previewBlur: UIImageView?
+    private var previewBlurEffect: UIVisualEffectView?
     // The frozen fill+blur composite while the viewers sheet scales the story (see freezeBlur).
     private var frozenBlur: UIImageView?
 
@@ -101,6 +105,8 @@ final class ImageLoader: UIView {
         blurView.frame = bounds
         imageView.frame = bounds
         shimmer.frame = bounds
+        previewBlur?.frame = bounds
+        previewBlurEffect?.frame = bounds
         frozenBlur?.frame = bounds
         applyCornerMask()
         // NB: the fit/fill decision is NOT recomputed here — it's fixed once per image in apply(),
@@ -141,9 +147,74 @@ final class ImageLoader: UIView {
     private func showShimmer(_ show: Bool) {
         shimmer.isHidden = !show
         if show { bringSubviewToFront(shimmer) }
+        if !show { hidePreviewBlur() }
     }
 
-    func loadImageWithUrl(_ url: String?, imageIsLoaded: @escaping () -> Void) {
+    /// THE LOADING STATE IS THE PICTURE, BLURRED, not a grey block.
+    ///
+    /// Owner: "Whatsapp and Telegram and Other apps story never use grey skeleton loading, they use
+    /// image blur or video blur." He is right about all three, and the reason is that a grey block
+    /// says nothing while a blurred frame says "this is what is coming, it is nearly here". Ours is
+    /// the story's own poster, which is a few KB and is normally already on disk because the story
+    /// row drew it, so it lands at once and the full-size download happens behind it.
+    ///
+    /// The shimmer stays as the last resort, for a story whose poster we have not got either.
+    /// Something moving beats a dead grey rectangle when there is genuinely nothing to show yet.
+    private func showPreviewBlur(_ image: UIImage) {
+        let view: UIImageView
+        if let previewBlur { view = previewBlur } else {
+            let v = UIImageView()
+            v.contentMode = .scaleAspectFill
+            v.clipsToBounds = true
+            previewBlur = v
+            addSubview(v)
+            let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+            v.addSubview(blur)
+            previewBlurEffect = blur
+            view = v
+        }
+        view.image = image
+        view.frame = bounds
+        previewBlurEffect?.frame = view.bounds
+        view.isHidden = false
+        bringSubviewToFront(view)
+        // The shimmer is redundant once there is a real picture behind the glass, and running both
+        // gives a moving grey band over a still photo, which reads as a glitch rather than as loading.
+        shimmer.isHidden = true
+    }
+
+    private func hidePreviewBlur() {
+        previewBlur?.isHidden = true
+    }
+
+    /// Draw the blurred poster NOW if we already hold one, so the story never opens on grey. Called
+    /// before the network request goes out.
+    private func seedPreviewBlur(_ previewURL: String?) -> Bool {
+        guard let previewURL, let url = URL(string: previewURL) else { return false }
+        if let cached = URLCache.shared.cachedResponse(for: .init(url: url)),
+           let img = UIImage(data: cached.data) {
+            showPreviewBlur(img); return true
+        }
+        if let disk = StoryDiskCache.image(url) {
+            showPreviewBlur(disk); return true
+        }
+        // Not held yet: fetch it on its own. It is small, so it usually beats the full media home by
+        // a wide margin, and if it does not the shimmer is already up and nothing changes.
+        let forStory = imageURL   // this view is reused between stories; a late poster must not paint over the next one
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self, let data, let img = UIImage(data: data) else { return }
+            StoryDiskCache.store(data, for: url)
+            DispatchQueue.main.async {
+                // Still the same story, and the real thing has still not landed. Without the second
+                // check this would drop a blurred poster on top of the sharp photo that beat it home.
+                guard self.imageURL == forStory, self.imageView.image == nil else { return }
+                self.showPreviewBlur(img)
+            }
+        }.resume()
+        return false
+    }
+
+    func loadImageWithUrl(_ url: String?, previewURL: String? = nil, imageIsLoaded: @escaping () -> Void) {
 
         guard let validatedUrl = url else {
             print("url error")
@@ -164,6 +235,9 @@ final class ImageLoader: UIView {
         frozenBlur?.removeFromSuperview()
         frozenBlur = nil
         blurView.isHidden = false
+        // Same reasoning for the loading poster: story A's blurred cover must never be the first
+        // thing you see of story B.
+        hidePreviewBlur()
 
         guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
 
@@ -191,9 +265,10 @@ final class ImageLoader: UIView {
             return
         }
 
-        // 3) Network — show the shimmer skeleton (not a spinner) while it downloads.
+        // 3) Network — the blurred poster while it downloads, and the shimmer only if we have not
+        //    even got that yet.
         apply(nil)
-        showShimmer(true)
+        if !seedPreviewBlur(previewURL) { showShimmer(true) }
 
         let requestedURL = imageURL   // capture: if the view is reused mid-download, drop this stale result
         URLSession.shared.dataTask(
