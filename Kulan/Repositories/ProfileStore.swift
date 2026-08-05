@@ -94,7 +94,13 @@ final class ProfileStore {
     /// fills itself from work the app already does — building a conversation, opening a profile,
     /// listing a group's members. One hook, rather than a remember-to-call-it at each site.
     /// See [ProfilePhotoIndex] for why the header cannot ask the network this question.
-    private static func indexed(_ p: UserProfile) -> UserProfile {
+    ///
+    /// Not private, because "every read" turned out not to be true: user SEARCH builds its profiles
+    /// straight from the query in ChatService and never came through here. That was invisible while
+    /// the indexes only fed a photo, and stopped being invisible the moment a verified badge
+    /// depended on one — search is the single place impersonation is actually attempted, and it was
+    /// the one list that could never draw a mark.
+    static func indexed(_ p: UserProfile) -> UserProfile {
         ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl, privacy: p.privacy)
         // The same one hook feeds the call-privacy answer, so pressing the call button has something
         // to read on the frame it is pressed. See CallPrivacyIndex.

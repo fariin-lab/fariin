@@ -2112,7 +2112,8 @@ enum ChatService {
             // rule because Firestore rules are not filters - a data-dependent read rule would make
             // this whole query fail instead of skipping the row.
             if u.isAwaitingDeletion { return nil }
-            return u.id == uid ? nil : u   // never "find" yourself
+            guard u.id != uid else { return nil }   // never "find" yourself
+            return ProfileStore.indexed(u)          // warms photo / call-privacy / verification
         } catch {
             print("findByHandle failed:", error)
             return nil
@@ -2131,7 +2132,10 @@ enum ChatService {
             return snap.documents.compactMap { d -> UserProfile? in
                 let u = UserProfile(id: d.documentID, data: d.data())
                 if u.isAwaitingDeletion { return nil }   // hidden during its grace period
-                return u.id == uid ? nil : u
+                guard u.id != uid else { return nil }
+                // Through the one hook, so a search result can draw a verified mark. Without this the
+                // list that most needs the badge is the only list that never has it.
+                return ProfileStore.indexed(u)
             }
         } catch {
             print("searchUsers failed:", error)
