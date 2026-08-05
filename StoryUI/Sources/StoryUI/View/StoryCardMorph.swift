@@ -231,6 +231,18 @@ public final class StoryCardMorph {
             maskLayer = layer
             card.layer.mask = layer
         }
+        // THE MASK'S OWN GEOMETRY, stated rather than left at CoreAnimation's default.
+        //
+        // A fresh CAShapeLayer has frame .zero. Its path is then resolved against a coordinate
+        // origin that is NOT the masked layer's bounds origin — and the masked layer here is the
+        // pager's internal scroll view, whose `bounds.origin` IS the content offset and moves by a
+        // full page width every time you swipe to another person. So the path was drawn relative to
+        // one origin while the card it was meant to cut sat at another, and the reveal landed
+        // somewhere other than the story. Which page you were on decided where.
+        //
+        // That is the picture-in-the-wrong-place-with-black-around-it in his screenshots, and it is
+        // also why the same code looked fine on the first person and broke on the next.
+        layer.frame = card.bounds
         layer.path = UIBezierPath(roundedRect: rect, cornerRadius: max(0, cornerRadius)).cgPath
     }
 }
