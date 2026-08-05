@@ -1493,8 +1493,13 @@ struct ThreadView: View {
                 onReply: { m in beginReply(to: m) },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
                 onCancelSending: { m in
-                    // Discard the pending optimistic send (media still uploading — not on the server yet).
-                    if let clientId = m.clientId { repo.removePending(clientId: clientId) }
+                    // Discard the pending optimistic send — and CANCEL the upload behind it. Only
+                    // hiding the bubble was the "images appear anyway a minute later" bug: nothing
+                    // held the send Task, so it ran to the end and committed. See MediaSend.
+                    if let clientId = m.clientId {
+                        MediaSend.shared.cancel(clientId)
+                        repo.removePending(clientId: clientId)
+                    }
                 },
                 onTapContact: { uid, name, photo in
                     // "message" on a shared-contact card → open (or create) the chat with that user.
@@ -1983,7 +1988,11 @@ struct ThreadView: View {
                 })
             }
             out.append(CMAction(title: "Cancel Sending", icon: "xmark.circle", destructive: true) {
-                if let clientId = m.clientId { repo.removePending(clientId: clientId) }
+                // Cancel the UPLOAD too, not just the bubble — see onCancelSending / MediaSend.
+                if let clientId = m.clientId {
+                    MediaSend.shared.cancel(clientId)
+                    repo.removePending(clientId: clientId)
+                }
             })
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
@@ -2937,6 +2946,7 @@ struct ThreadView: View {
         if m.sendState != nil {
             if let clientId = m.clientId {
                 SendQueue.remove(clientId: clientId)
+                MediaSend.shared.cancel(clientId)   // a media upload mid-flight dies with the bubble
                 repo.removePending(clientId: clientId)
             }
             return
@@ -2994,10 +3004,12 @@ struct ThreadView: View {
         } else if m.isAlbum, !m.localAlbum.isEmpty {
             repo.addPending(Message(localAlbum: m.localAlbum, caption: m.text,
                                     authorId: me, clientId: clientId, sendState: .sending))
+            let album = m.localAlbum, text = m.text
             Task {
-                do { try await ChatService.sendAlbum(cid: cid, images: m.localAlbum, caption: m.text,
-                                                     clientId: clientId, group: isGroup ? groupMembers : nil) }
-                catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+                await runRegisteredSend(clientId) {
+                    try await ChatService.sendAlbum(cid: cid, images: album, caption: text,
+                                                    clientId: clientId, group: isGroup ? groupMembers : nil)
+                }
             }
         } else if m.isFile, let path = m.localMediaURL,
                   let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
@@ -3059,8 +3071,37 @@ struct ThreadView: View {
             repo.addPending(Message(localAlbum: previews, caption: caption, authorId: me,
                                     clientId: clientId, sendState: .sending))
         }
-        do { try await ChatService.sendAlbum(cid: cid, images: datas, caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil) }
-        catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+        await runRegisteredSend(clientId) {
+            try await ChatService.sendAlbum(cid: cid, images: datas, caption: caption,
+                                            clientId: clientId, group: isGroup ? groupMembers : nil)
+        }
+    }
+
+    /// Run a media send with its Task REGISTERED, so Cancel Sending can reach in and stop it, and
+    /// with the cancelled outcome told apart from a real failure: a cancelled bubble is removed
+    /// quietly (the user asked for that), a failed one is marked so Tap-to-retry appears.
+    /// `onFailure` runs only for REAL failures, after the mark — for paths that also surface a
+    /// message (the mixed-group send names its error).
+    private func runRegisteredSend(_ clientId: String,
+                                   onFailure: (@MainActor (Error) -> Void)? = nil,
+                                   _ body: @escaping () async throws -> Void) async {
+        let task: Task<Void, Error> = Task { try await body() }
+        await MainActor.run { MediaSend.shared.register(clientId, task) }
+        do {
+            try await task.value
+            await MainActor.run { MediaSend.shared.finish(clientId) }
+        } catch {
+            await MainActor.run {
+                let cancelled = MediaSend.shared.wasCancelled(clientId) || error is CancellationError
+                MediaSend.shared.finish(clientId)
+                if cancelled {
+                    repo.removePending(clientId: clientId)   // every-tile-X'd path; Cancel already removed it
+                } else {
+                    repo.markFailed(clientId: clientId)
+                    onFailure?(error)
+                }
+            }
+        }
     }
 
     // Send a MIXED media group (photos + videos in order) as ONE album message. A single lone item
@@ -3138,17 +3179,16 @@ struct ThreadView: View {
             }
         }
         guard !sendItems.isEmpty else { await MainActor.run { repo.markFailed(clientId: clientId) }; return }
-        do {
-            try await ChatService.sendMixedAlbum(cid: cid, items: sendItems, caption: caption,
-                                                 clientId: clientId, group: isGroup ? groupMembers : nil)
-        } catch {
-            // Same reasoning as sendVideo's catch: a failure that names no cause cannot be acted on
-            // by the sender or fixed by anybody.
+        let items = sendItems
+        // Same reasoning as sendVideo's catch: a failure that names no cause cannot be acted on
+        // by the sender or fixed by anybody. A CANCEL is not a failure — the helper removes the
+        // bubble quietly and never reaches the failure hook.
+        await runRegisteredSend(clientId, onFailure: { error in
             print("sendMixedAlbum failed:", error)
-            await MainActor.run {
-                repo.markFailed(clientId: clientId)
-                sendError = "Couldn't send. \(error.localizedDescription)"
-            }
+            sendError = "Couldn't send. \(error.localizedDescription)"
+        }) {
+            try await ChatService.sendMixedAlbum(cid: cid, items: items, caption: caption,
+                                                 clientId: clientId, group: isGroup ? groupMembers : nil)
         }
     }
 
@@ -4867,6 +4907,17 @@ struct MessageBubble: View, Equatable {
     var onConfirmLink: (URL) -> Void = { _ in }
     var onUserNotFound: () -> Void = {}
     var isGroup: Bool = false   // drives per-sender name labels above others' bubbles in groups
+
+    /// Watched so an album tile dims the instant its X is tapped. An ObservedObject invalidates
+    /// regardless of the Equatable gate above, which is wanted here — cancelling is rare and the
+    /// bubble must react to it.
+    @ObservedObject private var mediaSend = MediaSend.shared
+
+    /// This album item's upload key ("clientId#index") while the message is still sending.
+    private func albumItemKey(_ i: Int) -> String? {
+        guard let clientId = message.clientId else { return nil }
+        return MediaSend.itemKey(clientId, i)
+    }
     var onTapReactions: () -> Void = {}
     var onTapSender: (String) -> Void = { _ in }
     var onOpenFile: (Message) -> Void = { _ in }
@@ -5820,15 +5871,10 @@ struct MessageBubble: View, Equatable {
             }
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-            .overlay {
-                if message.sendState == .sending {
-                    ZStack {
-                        Color.black.opacity(0.18)
-                        UploadingRing(clientId: message.rowId)
-                    }
-                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
-                }
-            }
+            // THE WHOLE-BUBBLE UPLOAD RING IS GONE (the agreed per-item spec): every sending tile
+            // now carries its own ring, its own bytes and its own X — see `albumTile`. One ring
+            // centred on the bubble could not say which image was slow, could not cancel one of
+            // them, and its centre fought the play badge's (the build-458 smear).
             .overlay(alignment: .bottomTrailing) {
                 // No caption → the time floats on the grid, like a bare photo bubble.
                 if message.text.isEmpty {
@@ -6299,15 +6345,9 @@ struct MessageBubble: View, Equatable {
         .overlay {
             // Video item → a play glyph + duration badge over its poster.
             //
-            // NOT WHILE THE ALBUM IS STILL UPLOADING. The upload ring is drawn over the whole bubble
-            // and is centred on the BUBBLE; this badge is centred on its own TILE. Two different
-            // centres, so during a send they appeared side by side, overlapping, and read as one
-            // broken smear of two half-circles (owner screenshot, build 458). The single-video
-            // bubble has always had this right — `if sending { ring } else { play }` — and the album
-            // grid simply never got the same rule.
-            //
-            // A play badge means "this is ready, tap it". During an upload that is not true yet, so
-            // hiding it is also the more honest state, not just the tidier one.
+            // NOT WHILE THE ALBUM IS STILL UPLOADING — the tile shows ITS OWN upload ring then (the
+            // agreed per-item spec; the whole-bubble ring whose centre fought this badge's is gone).
+            // A play badge means "this is ready, tap it", which is not true mid-upload anyway.
             if albumItemIsVideo(i), extra == 0, message.sendState != .sending {
                 ZStack {
                     Image(systemName: "play.circle.fill")
@@ -6325,8 +6365,40 @@ struct MessageBubble: View, Equatable {
                     }
                 }
             }
+            // WHILE SENDING: this tile's own ring, filling with this tile's own bytes (keys are
+            // "clientId#index", written by sendAlbum/sendMixedAlbum), an X to cancel exactly this
+            // item, and a dim once it is cancelled. One indicator per image was the owner's spec.
+            if message.sendState == .sending, extra == 0, let key = albumItemKey(i) {
+                if mediaSend.isItemCancelled(key) {
+                    ZStack {
+                        Color.black.opacity(0.55)
+                        Image(systemName: "xmark")
+                            .font(.system(size: min(w, h) * 0.2, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                } else {
+                    ZStack {
+                        Color.black.opacity(0.18)
+                        UploadingRing(clientId: key)
+                    }
+                }
+            }
             if extra > 0 {
                 ZStack { Color.black.opacity(0.5); Text("+\(extra)").font(.title.weight(.bold)).foregroundStyle(.white) }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // The per-tile cancel. NOT a Button — a Button's press gesture claims touches inside a
+            // hosted cell and has locked chat scrolling before (see the file's voice-note controls).
+            if message.sendState == .sending, extra == 0,
+               let key = albumItemKey(i), !mediaSend.isItemCancelled(key) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 22))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.55))
+                    .padding(6)
+                    .contentShape(Rectangle())
+                    .onTapGesture { mediaSend.cancelItem(key) }
             }
         }
         .contentShape(Rectangle())

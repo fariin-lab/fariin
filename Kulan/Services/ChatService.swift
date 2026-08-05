@@ -859,9 +859,16 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document()
 
-        // Upload + seal every photo (natural aspect kept for the grid).
+        // Upload + seal every photo (natural aspect kept for the grid). Each item uploads under its
+        // own progress key ("clientId#i") — this was the ONE send path that never passed a
+        // progressId, which is why an album's ring only ever spun — and in its own child task, so
+        // the X on one tile can abort exactly that upload while the rest of the album keeps going.
         var items: [[String: Any]] = []
         for (i, raw) in images.enumerated() {
+            // A whole-message Cancel cancels the OUTER task; between items this is where it lands.
+            try Task.checkCancellation()
+            let itemKey = clientId.map { MediaSend.itemKey($0, i) }
+            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
             let data = sendJPEG(raw)
             let cipher: Data, meta: EncMeta
             if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members) }
@@ -870,11 +877,27 @@ enum ChatService {
                 let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
                 try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
             }
-            let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID)-\(i).enc")
+            let path = "chat/\(cid)/\(msgRef.documentID)-\(i).enc"
+            let up: Task<String, Error> = Task { try await uploadEncrypted(cipher, to: path, progressId: itemKey) }
+            if let itemKey { await MediaSend.shared.registerItem(itemKey, up) }
+            let url: String
+            do {
+                url = try await up.value
+                if let itemKey { await MediaSend.shared.finishItem(itemKey) }
+            } catch {
+                // THIS tile's X: skip the item, the album goes on without it. Any other failure
+                // (or a whole-message Cancel, which cancels item tasks too) fails the send.
+                if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
+                throw error
+            }
+            // The X can land in the instant the upload completes — honour it even then.
+            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
             if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }   // instant reconcile
             let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
             items.append(["imageUrl": url, "enc": meta.asDict, "width": Double(sz.width), "height": Double(sz.height)])
         }
+        // Every tile was X'd → there is no album left to send.
+        guard !items.isEmpty else { throw CancellationError() }
 
         // Caption sealed like a text body (one body for the album).
         var captionCipher = ""
@@ -899,9 +922,12 @@ enum ChatService {
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
         }
         if let clientId { msg["clientId"] = clientId }
+        // The LAST moment Cancel can win. Without this, a Cancel that lands while the caption is
+        // being sealed still commits, and the album he cancelled appears a minute later anyway.
+        try Task.checkCancellation()
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
-            "lastMessage": "📷 \(images.count) Photos", "lastSender": uid,
+            "lastMessage": "📷 \(items.count) Photos", "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
         // Refresh the chat-list thumbnail (photo parity with sendImage) — without this the list
@@ -947,32 +973,53 @@ enum ChatService {
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
             return r
         }
-        func upload(_ cipher: Data, _ suffix: String) async throws -> String {
-            try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID)-\(suffix).enc")
-        }
 
+        // Per-item progress keys and per-item cancellable uploads, exactly as sendAlbum does them —
+        // see the note there. A video item's poster is quick and unkeyed; the clip itself carries
+        // the item's progress key, so the tile's ring fills with the part that takes the time.
         var out: [[String: Any]] = []
         var videoCount = 0, photoCount = 0
         for (i, item) in items.enumerated() {
+            try Task.checkCancellation()
+            let itemKey = clientId.map { MediaSend.itemKey($0, i) }
+            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
+            /// One upload as a child task filed under this item's key, so the tile's X can abort
+            /// exactly this transfer. Returns nil when the item was X'd (skip it); rethrows all else.
+            func uploadItem(_ cipher: Data, _ suffix: String, keyed: Bool) async throws -> String? {
+                let up: Task<String, Error> = Task {
+                    try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID)-\(suffix).enc",
+                                              progressId: keyed ? itemKey : nil)
+                }
+                if let itemKey { await MediaSend.shared.registerItem(itemKey, up) }
+                do {
+                    let url = try await up.value
+                    if let itemKey { await MediaSend.shared.finishItem(itemKey) }
+                    if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                    return url
+                } catch {
+                    if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                    throw error
+                }
+            }
             switch item {
             case .image(let raw):
-                photoCount += 1
                 let data = sendJPEG(raw)
                 let (cipher, meta) = try await seal(data)
-                let url = try await upload(cipher, "\(i)")
+                guard let url = try await uploadItem(cipher, "\(i)", keyed: true) else { continue }
+                photoCount += 1
                 if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }
                 let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
                 out.append(["kind": "image", "imageUrl": url, "enc": meta.asDict,
                             "width": Double(sz.width), "height": Double(sz.height)])
             case .video(let mp4, let thumb, let duration, let w, let h):
-                videoCount += 1
                 // Poster thumbnail (shown in the grid) + the encrypted video clip.
                 let thumbJpeg = downscaledJPEG(thumb)
                 let (thumbCipher, thumbMeta) = try await seal(thumbJpeg)
-                let thumbUrl = try await upload(thumbCipher, "\(i)-thumb")
+                guard let thumbUrl = try await uploadItem(thumbCipher, "\(i)-thumb", keyed: false) else { continue }
                 if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
                 let (vidCipher, vidMeta) = try await seal(mp4)
-                let vidUrl = try await upload(vidCipher, "\(i)-video")
+                guard let vidUrl = try await uploadItem(vidCipher, "\(i)-video", keyed: true) else { continue }
+                videoCount += 1
                 // KEEP THE SENDER'S OWN COPY, like sendVideo does (audit). The mailman model has the
                 // recipient DELETE the server object once they've watched it, which is only safe
                 // because the sender kept a local copy — sendVideo stores one, this path did not, so
@@ -985,6 +1032,8 @@ enum ChatService {
                             "width": w, "height": h])
             }
         }
+        // Every tile was X'd → there is no album left to send.
+        guard !out.isEmpty else { throw CancellationError() }
 
         var captionCipher = ""
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1015,10 +1064,12 @@ enum ChatService {
         }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }
+        // The LAST moment Cancel can win — same line, same reason as sendAlbum's.
+        try Task.checkCancellation()
         batch.setData(msg, forDocument: msgRef)
-        // Chat-list preview: describe the mix.
+        // Chat-list preview: describe the mix (counts reflect what actually shipped, X'd tiles out).
         let preview: String = {
-            if videoCount > 0 && photoCount > 0 { return "🎬 \(items.count) Media" }
+            if videoCount > 0 && photoCount > 0 { return "🎬 \(out.count) Media" }
             if videoCount > 0 { return "🎥 \(videoCount) Video\(videoCount > 1 ? "s" : "")" }
             return "📷 \(photoCount) Photos"
         }()
