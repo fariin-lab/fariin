@@ -1675,14 +1675,20 @@ struct StoryViewer: View {
 
         let text = typed ?? emoji ?? (isLiked ? "❤️" : "")
         guard !text.isEmpty else { return }
+        // A REACTION LIVES IN THE VIEWERS SHEET ONLY (owner 2026-08-05): the heart and the
+        // react-bar emojis record on the story's "Seen by" row and never become a chat message.
+        // They used to ALSO land in the conversation as a text bubble with a status quote, which
+        // is exactly what he ordered removed. Only a TYPED reply enters the chat.
+        let isReaction = typed == nil && (emoji != nil || isLiked)
+        if isReaction {
+            Task { await StoriesService.shared.setStoryReaction(s, emoji: text) }   // shows in "Seen by"
+            flashSentToast("Reacted")
+            return
+        }
         let cid = [me, s.authorUid].sorted().joined(separator: "_")
         // Attach the status reference so the reply shows as a "Status" quote (thumbnail) in chat.
         let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.previewUrl)
-        let isReaction = typed == nil && (emoji != nil || isLiked)
-        Task {
-            try? await ChatService.sendText(cid: cid, text: text, replyTo: ref)
-            if isReaction { await StoriesService.shared.setStoryReaction(s, emoji: text) }   // shows in "Seen by"
-        }
+        Task { try? await ChatService.sendText(cid: cid, text: text, replyTo: ref) }
         flashSentToast()   // optimistic "Sent" confirmation
     }
 
