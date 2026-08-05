@@ -50,7 +50,12 @@ struct DisappearingMessagesView: View {
                     }
                     .buttonStyle(.plain)
                 } header: {
-                    Text("When enabled, new messages sent and received in this chat will disappear after they have been seen.")
+                    // NOT "after they have been seen", which is what this said and is not what the
+                    // code does. `ThreadRepository.sweepExpired` and `rebuild` both measure from
+                    // `createdAt`, so the clock starts when a message is SENT and runs whether
+                    // anybody opened the chat or not. Telling people it waits for a read would have
+                    // them expect a message to sit there safely until it was seen.
+                    Text("New messages in this chat disappear once the chosen time has passed since they were sent, whether or not they have been read.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .textCase(nil)   // keep normal case (not the uppercased section-header style)
                         .padding(.bottom, 6)

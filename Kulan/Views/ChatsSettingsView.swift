@@ -29,7 +29,11 @@ struct ChatsSettingsView: View {
             } header: {
                 Text("New Chats from Unknown Users")
             } footer: {
-                Text("Automatically archive and mute new private chats, groups, and channels from people who are not in your contacts.")
+                // NAMED THREE THINGS THIS APP DOES NOT HAVE. `Flags.groupsEnabled` is false, there
+                // are no channels at all, and there is no contact list to be in or out of — the
+                // sweep's actual test is whether YOU have ever replied (see UnknownChatArchiver).
+                // Copy carried over from a reference app describes that app, not this one.
+                Text("When someone you have never replied to starts a chat, it goes straight to Archived and stays muted. You still get the message.")
             }
 
             Section {

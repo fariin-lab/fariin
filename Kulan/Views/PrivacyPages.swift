@@ -200,7 +200,7 @@ struct AppLockPage: View {
                     }
                 }
             } footer: {
-                Text("Require Face ID or your passcode to unlock Fariin.")
+                Text("Require Face ID, Touch ID or your passcode to unlock Fariin.")
             }
             Section {
                 // Shown ON and locked while App Lock is on, because App Lock now switches it on

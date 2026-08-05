@@ -798,7 +798,11 @@ struct PrivacySettingsView: View {
             Section {
                 NavigationLink { AppLockPage() } label: { Text("App Lock") }
             } footer: {
-                Text("Require Face ID to unlock Fariin.")
+                // Face ID is not the whole answer and this page and the App Lock page disagreed
+                // about it. `RootView` evaluates `.deviceOwnerAuthentication`, which accepts Face
+                // ID, Touch ID OR the passcode — and on a Touch ID phone the old line named a
+                // sensor that device does not have. Both pages say the same thing now.
+                Text("Require Face ID, Touch ID or your passcode to unlock Fariin.")
             }
 
             // HIDDEN, not removed (owner, 2026-08-02: "Dont delete just hide… i need Modern Header
@@ -899,7 +903,12 @@ struct AboutView: View {
             } header: {
                 Text("About")
             } footer: {
-                Text("End-to-end encrypted. Made for Somalia.")
+                // THE SAME OVERCLAIM THE WEBSITE ALREADY HAD CORRECTED. Messages and calls are end
+                // to end encrypted; stories are NOT yet (see the 2026-08-05 privacy sweep — removing
+                // the public audience unblocked it, but it is not built). fariin.com's meta
+                // description was fixed for exactly this on `fariin-web 6101adf`, and this line was
+                // left saying the broader thing. It should not outrun the app twice.
+                Text("Messages and calls are end-to-end encrypted. Made for Somalia.")
             }
         }
         .navigationTitle("Help & About")
