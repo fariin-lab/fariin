@@ -5,6 +5,7 @@ import AVFoundation
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
+import StoryUI   // StoryVideoSeed — the uploader warms the viewer's video cache
 
 // One story (photo or video). Rules-protected (v1, not E2EE); media is a plain file in Storage.
 struct Story: Identifiable, Hashable, Codable {
