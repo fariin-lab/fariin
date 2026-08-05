@@ -14,8 +14,23 @@ enum Limits {
     static let pinnedChats = 3
     static let forwardChatsAtOnce = 5
     static let mediaPerMessage = 32   // raised for parity with standard messengers (user request; was 30)
-    static let fileUploadBytes = 2 * 1024 * 1024 * 1024            // 2 GB
-    static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB after 720p transcode
+    // ALL FOUR OF THESE NOW MATCH THE STORAGE RULES, and every one of them used to lie.
+    //
+    // The app accepted a file, spent time compressing it, uploaded the whole thing, and only THEN
+    // the server refused it — with "User does not have permission", which mentions nothing about
+    // size and sends you looking at auth. The owner hit it on an 18 second video and it took the
+    // error message being printed at all (added the same day) to find the cause.
+    //
+    // The gaps were not small: files were allowed at EIGHTY TIMES what the server would take.
+    //   file   2 GB  -> 25 MB     video  64 MB -> 25 MB
+    //   story  100 MB -> 25 MB    photo  20 MB ->  8 MB
+    // The story rule was also raised 10 -> 25 MB on the other side, because a 90 second story video
+    // at 540p is about 17 MB and could never have fitted.
+    //
+    // If one of these changes, change storage.rules with it. A limit the client believes and the
+    // server does not is worse than either number alone.
+    static let fileUploadBytes = 25 * 1024 * 1024                  // 25 MB — storage.rules chat/
+    static let videoMessageBytes = 25 * 1024 * 1024                // 25 MB — storage.rules chat/
     static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
     static let deleteForEveryoneSeconds: TimeInterval = 48 * 3600 // 48 h
@@ -24,7 +39,7 @@ enum Limits {
     // Stories
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
-    static let storyUploadBytes = 100 * 1024 * 1024              // 100 MB
+    static let storyUploadBytes = 25 * 1024 * 1024               // 25 MB — storage.rules stories/
     /// How long ONE story can be. 90s is WhatsApp Status's number and the owner's spec (2026-08-04).
     /// A longer pick is no longer truncated to this — it is SPLIT into consecutive segments, each its
     /// own story, so nothing the user chose is thrown away.
@@ -44,7 +59,7 @@ enum Limits {
     static let usernameMinChars = 3
     static let usernameMaxChars = 30
     static let bioChars = 140
-    static let profilePhotoBytes = 20 * 1024 * 1024             // 20 MB
+    static let profilePhotoBytes = 8 * 1024 * 1024              // 8 MB — storage.rules profiles/
     static let usernameChangesPer30Days = 2
 
     // Anti-spam (rate limits enforced in Cloud Functions)
