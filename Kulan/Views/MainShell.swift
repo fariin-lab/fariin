@@ -594,6 +594,17 @@ struct ChatsView: View {
     private var officialChannel = OfficialChannelStore.shared   // @Observable: the one synthetic row in the list
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
+    /// FALSE UNTIL THE LIST HAS FINISHED ARRIVING, and it gates the reorder animation.
+    ///
+    /// The rows animate when a chat bumps to the top, which is right. On a cold launch it was also
+    /// animating the list COMING INTO EXISTENCE: the cached chats land, the first server snapshot
+    /// reorders them, and the official channel arrives separately from its own store, so `visible`
+    /// changed three times in about a second and every row sprang toward a new position on each
+    /// change. Mid-flight that draws rows on top of one another — the owner caught Fariin sitting
+    /// across x test, half faded, on first open.
+    ///
+    /// An arrival is not a rearrangement. Nothing should animate until the list is a list.
+    @State private var listSettled = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
     @State private var path = NavigationPath()
     // NO "CURRENTLY OPEN CHAT" HIGHLIGHT. There was one here, and it is gone on the owner's word
@@ -1191,7 +1202,24 @@ struct ChatsView: View {
                     // When a new message bumps a chat to the top, the rows
                     // slide to their new order instead of popping. Scoped to the order/
                     // membership only, so it won't animate unrelated content changes.
-                    .animation(.spring(response: 0.38, dampingFraction: 0.86), value: visible.map(\.id))
+                    // Nil until the list has settled, so a cold launch PAINTS its rows instead of
+                    // flying them in from nowhere on top of each other. See `listSettled`.
+                    .animation(listSettled ? .spring(response: 0.38, dampingFraction: 0.86) : nil,
+                               value: visible.map(\.id))
+                    // A GRACE PERIOD FROM WHEN THE LIST FIRST EXISTS, not from `hasLoaded`.
+                    //
+                    // Keying it to `hasLoaded` looks right and is not: on a cold launch the skeleton
+                    // holds this branch until `hasLoaded` is ALREADY true, so the List first appears
+                    // on the far side of that flip and would unlock animation on its very first
+                    // frame. The official channel then lands from its own store a moment later and
+                    // flies in alone — the exact row he photographed sitting across another one.
+                    //
+                    // Timing from first appearance covers every path: skeleton-then-list,
+                    // cached-chats-render-instantly, and empty-then-populated alike.
+                    .onAppear {
+                        guard !listSettled else { return }   // warm return: already a list, animate now
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { listSettled = true }
+                    }
                     .environment(\.editMode, .constant(selecting ? .active : .inactive))
                     // Rows start below the stories row; as the list scrolls, the row above is
                     // offset by the same amount, so both move as ONE scroll surface.
