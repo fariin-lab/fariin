@@ -154,6 +154,10 @@ struct StorySoloPager: UIViewControllerRepresentable {
             guard let host else { return }
             switch g.state {
             case .began:
+                // Clear on the FINGER, not on Apple's callback — the zoom gesture shrinks the
+                // cover during the drag, before viewWillDisappear ever fires. Same fix as the
+                // pager's watcher; see the note there.
+                host.view.backgroundColor = .clear
                 NotificationCenter.default.post(name: .pauseStory, object: nil)
             case .ended:
                 let ty = g.translation(in: host.view).y
@@ -162,9 +166,11 @@ struct StorySoloPager: UIViewControllerRepresentable {
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
                 } else {
+                    host.view.backgroundColor = .black
                     NotificationCenter.default.post(name: .resumeStory, object: nil)
                 }
             case .cancelled, .failed:
+                host.view.backgroundColor = .black
                 NotificationCenter.default.post(name: .resumeStory, object: nil)
             default: break
             }

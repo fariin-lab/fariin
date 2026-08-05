@@ -318,6 +318,13 @@ struct StoryPager: UIViewControllerRepresentable {
             guard let pager else { return }
             switch g.state {
             case .began:
+                // THE BLACK STEPS ASIDE ON THE FINGER, NOT ON APPLE'S CALLBACK. viewWillDisappear
+                // (the build-466 attempt) fires when a dismissal formally STARTS — but the zoom
+                // gesture shrinks the cover DURING the drag, before any dismissal exists, so the
+                // strip above the card rode along black for the whole drag and only went clear at
+                // commit, which nobody sees. His screenshot twice. This pan begins on every
+                // downward drag, which is exactly the moment the see-through look must start.
+                pager.view.backgroundColor = .clear
                 NotificationCenter.default.post(name: .pauseStory, object: nil)
             case .ended:
                 let ty = g.translation(in: pager.view).y
@@ -327,10 +334,13 @@ struct StoryPager: UIViewControllerRepresentable {
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
                 } else {
                     // Released gently: the system gesture decides commit/cancel on its own;
-                    // resume so a cancelled drag never leaves the story frozen.
+                    // resume so a cancelled drag never leaves the story frozen. If it cancels, the
+                    // cover springs back to full screen — solid black behind the card again.
+                    pager.view.backgroundColor = .black
                     NotificationCenter.default.post(name: .resumeStory, object: nil)
                 }
             case .cancelled, .failed:
+                pager.view.backgroundColor = .black
                 NotificationCenter.default.post(name: .resumeStory, object: nil)
             default: break
             }
