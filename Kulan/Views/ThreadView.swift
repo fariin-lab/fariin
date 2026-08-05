@@ -1944,7 +1944,11 @@ struct ThreadView: View {
         if delivered {
             out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
         }
-        if delivered && !m.isCall && !m.viewOnce {
+        // NOT a tombstone. `bulkForwardStart` has always filtered deleted messages out of a multi-select
+        // forward, but this single-message path never did — so long-pressing a "You deleted this
+        // message" placeholder offered Forward, and taking it delivered an EMPTY message to somebody
+        // else's chat. The bulk path failing silently was the lesser of the two bugs.
+        if delivered && !m.isCall && !m.viewOnce && !m.deleted {
             out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
@@ -2270,6 +2274,13 @@ struct ThreadView: View {
             if anyRefused { await MainActor.run { showJumpToast("Some messages couldn't be deleted") } }
         }
         exitSelection()
+    }
+
+    /// Is there anything in the selection the Forward button could actually act on? Deliberately the
+    /// SAME predicate `bulkForwardStart` filters by — if the two ever drift, the button goes back to
+    /// being tappable while doing nothing, which is the bug this exists to prevent.
+    private var selectionHasForwardable: Bool {
+        repo.items.contains { selectedIds.contains($0.id) && !$0.isCall && !$0.isSystem && !$0.deleted }
     }
 
     private func bulkForwardStart() {
@@ -3635,7 +3646,12 @@ struct ThreadView: View {
                     .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())   // whole circle is the tap target, not just the icon
             }
-            .buttonStyle(.plain).disabled(selectedIds.isEmpty)
+            // Greys out when there is nothing in the selection that CAN be forwarded, not merely when
+            // the selection is empty. `bulkForwardStart` drops tombstones, calls and system rows, so
+            // selecting only those left a live-looking button that did nothing at all when tapped —
+            // the owner found it by selecting a single "You deleted this message" placeholder. A
+            // button that is tappable and inert is worse than one that is plainly off.
+            .buttonStyle(.plain).disabled(!selectionHasForwardable)
         }
         .padding(.horizontal, 20).padding(.bottom, 4)
     }
