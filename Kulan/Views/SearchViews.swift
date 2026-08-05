@@ -416,6 +416,7 @@ struct InChatSearchView: View {
                             if isGroup {
                                 Text(nameFor(m.authorId)).font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(.tint).lineLimit(1)
+                                VerifiedMark(uid: m.authorId, size: 11)
                             }
                             Spacer(minLength: 8)
                             Text(m.date.formatted(date: .abbreviated, time: .shortened))
@@ -500,6 +501,7 @@ struct ContactsSearchView: View {
                     HStack(spacing: 12) {
                         AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 46)
                         Text(conv.name(for: me)).font(.system(size: 16, weight: .medium))
+                        if !conv.isGroup { VerifiedMark(uid: conv.otherUid(me), size: 13) }
                         Spacer()
                         Image(systemName: "phone.fill").foregroundStyle(.tint)
                     }

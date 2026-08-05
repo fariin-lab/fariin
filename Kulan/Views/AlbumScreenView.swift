@@ -53,7 +53,10 @@ struct AlbumScreenView: View {
                 ToolbarItem(placement: .principal) {
                     // Name over "N Photos", the way the reference stacks them.
                     VStack(spacing: 1) {
-                        Text(senderName).font(.headline)
+                        HStack(spacing: 4) {
+                            Text(senderName).font(.headline)
+                            VerifiedMark(uid: message.authorId, size: 13)
+                        }
                         Text(countLabel).font(.caption).foregroundStyle(.secondary)
                     }
                 }

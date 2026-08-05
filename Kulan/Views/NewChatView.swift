@@ -68,7 +68,8 @@ struct NewChatView: View {
                                               handle: user.handle,
                                               photo: PrivacyPrefs.allows(user.privacy, "photo",
                                                                           contactOfMine: PrivacyPrefs.isContact(user.id))
-                                                     ? user.photoUrl : nil)
+                                                     ? user.photoUrl : nil,
+                                              uid: user.id)
                                 }
                             }
                             if results.isEmpty {
@@ -89,7 +90,9 @@ struct NewChatView: View {
                                     Button {
                                         onOpen(ChatTarget(id: conv.id, name: conv.name(for: me), photo: conv.photoUrl(for: me)))
                                     } label: {
-                                        personRow(name: conv.name(for: me), handle: nil, photo: conv.photoUrl(for: me))
+                                        personRow(name: conv.name(for: me), handle: nil,
+                                                  photo: conv.photoUrl(for: me),
+                                                  uid: conv.isGroup ? nil : conv.otherUid(me))
                                     }
                                 }
                             }
@@ -160,12 +163,17 @@ struct NewChatView: View {
         }
     }
 
+    /// `uid` is here so the row can draw a verified mark. It is optional rather than required because
+    /// the second call site is a conversation, where a group has no single account behind it.
     @ViewBuilder
-    private func personRow(name: String, handle: String?, photo: String?) -> some View {
+    private func personRow(name: String, handle: String?, photo: String?, uid: String?) -> some View {
         HStack(spacing: 12) {
             AvatarView(name: name, photoUrl: photo, size: 44)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name).font(.body.weight(.medium)).foregroundStyle(.primary)
+                HStack(spacing: 5) {
+                    Text(name).font(.body.weight(.medium)).foregroundStyle(.primary)
+                    if let uid { VerifiedMark(uid: uid, size: 13) }
+                }
                 if let handle, !handle.isEmpty {
                     Text("@\(handle)").font(.footnote).foregroundStyle(.secondary)
                 }

@@ -817,7 +817,10 @@ private struct AdminTeamView: View {
                         if record.isOwner {
                             HStack {
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(record.name.isEmpty ? "Owner" : record.name)
+                                    HStack(spacing: 5) {
+                                        Text(record.name.isEmpty ? "Owner" : record.name)
+                                        VerifiedMark(uid: record.id, size: 13)
+                                    }
                                     Text("@\(record.handle)").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -828,7 +831,10 @@ private struct AdminTeamView: View {
                                 AdminPermissionsView(record: record, onChanged: reload)
                             } label: {
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(record.name.isEmpty ? "Admin" : record.name)
+                                    HStack(spacing: 5) {
+                                        Text(record.name.isEmpty ? "Admin" : record.name)
+                                        VerifiedMark(uid: record.id, size: 13)
+                                    }
                                     Text(permissionSummary(record)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
