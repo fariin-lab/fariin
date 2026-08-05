@@ -52,7 +52,18 @@ struct RootView: View {
             }
 
             // Screen security: blank the app preview in the app switcher.
-            if screenSecurity && scenePhase != .active && !locked {
+            //
+            // APP LOCK IMPLIES THIS. It used to be gated on `screenSecurity` alone, which meant
+            // somebody could turn on App Lock, believe the app was shut behind Face ID, and still
+            // have their last open chat sitting in the multitasking switcher for anyone who picked
+            // up the phone. The lock asks for a face; the switcher shows the conversation without
+            // asking for anything. A protection that a swipe walks around is not a protection, and
+            // the person who turned App Lock on is exactly the person who would never guess they
+            // needed a second switch as well.
+            //
+            // The separate toggle still stands on its own, for hiding the preview WITHOUT wanting
+            // Face ID every time you come back.
+            if (screenSecurity || lockEnabled) && scenePhase != .active && !locked {
                 Theme.bg(scheme == .dark).ignoresSafeArea()
                     .overlay(Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.secondary))
             }

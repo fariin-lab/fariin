@@ -203,9 +203,16 @@ struct AppLockPage: View {
                 Text("Require Face ID or your passcode to unlock Fariin.")
             }
             Section {
-                Toggle("Screen Security", isOn: $screenSecurity).tint(.green)
+                // Shown ON and locked while App Lock is on, because App Lock now switches it on
+                // regardless (see RootView). A toggle reading OFF for something that is in fact
+                // happening is a worse lie than the hole it replaced.
+                Toggle("Screen Security", isOn: appLock ? .constant(true) : $screenSecurity)
+                    .tint(.green)
+                    .disabled(appLock)
             } footer: {
-                Text("Hides the app preview in the multitasking switcher.")
+                Text(appLock
+                     ? "Hides the app preview in the multitasking switcher. App Lock always does this, otherwise your last chat would still be visible there without Face ID."
+                     : "Hides the app preview in the multitasking switcher.")
             }
         }
         .navigationTitle("App Lock")
