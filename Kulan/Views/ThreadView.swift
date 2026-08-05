@@ -1777,7 +1777,19 @@ struct ThreadView: View {
                 // before and after, no reactions, no album), so the row never reconfigured and the
                 // photo stayed on screen until a neighbour change repainted it — which read as the
                 // delete landing on the PREVIOUS message instead of the one just picked.
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)"
+                //
+                // AND THE UNREAD DIVIDER, for the third instance of that exact mistake. `firstUnreadId`
+                // was in the cache KEY above, so changing it rebuilt this whole dictionary — but every
+                // row computed the SAME string it had before, because nothing else about the message
+                // changed. The list reconfigures a row only when its signature differs, so the row that
+                // gained a 33pt "Unread Messages" header was never re-measured and the rows after it
+                // were laid out over the top of it. That is the overlapping the owner photographed:
+                // bubbles and images stacked on each other around the divider.
+                //
+                // Being in the key is not the same as being in the value. The key decides WHETHER to
+                // recompute; only the value can say WHICH row changed.
+                let unread = m.id == firstUnreadId ? "U1" : "U0"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)|\(unread)"
             }
             sigCache.key = key
             sigCache.base = out
