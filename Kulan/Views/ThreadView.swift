@@ -3756,16 +3756,36 @@ struct ThreadView: View {
         .padding(.horizontal, 20).padding(.bottom, 4)
     }
 
+    /// ONE SHAPE FOR EVERY BAR THAT STANDS IN FOR THE COMPOSER.
+    ///
+    /// Owner: "dont use that Border design, use Apple design, follow apple and liquid glass… all
+    /// redesign". Every one of these used `.background(.bar)`, a full-width system strip pinned to
+    /// the bottom edge with a hairline along its top — the outlined slab he circled. It is the one
+    /// thing on this screen that did not look like the rest of the app: the composer floats over the
+    /// conversation as glass, the selection bar is a glass capsule, and then these arrived as a flat
+    /// bordered panel.
+    ///
+    /// They are glass now, in the composer's own shape and its own inset, so swapping between typing
+    /// and any of these states changes the words and nothing else about the furniture.
+    private func composerNotice<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+    }
+
     private var blockedBar: some View {
-        VStack(spacing: 6) {
-            Text("You blocked \(title)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-            Button("Unblock") { Task { await ChatService.setBlocked(cid, false) } }
-                .font(.subheadline.weight(.semibold))
-                .tint(.red)
+        composerNotice {
+            VStack(spacing: 6) {
+                Text("You blocked \(title)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                Button("Unblock") { Task { await ChatService.setBlocked(cid, false) } }
+                    .font(.subheadline.weight(.semibold))
+                    .tint(.red)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(.bar)
     }
 
     // A group I'm no longer in (removed by an admin, or left on another device): the conv is
@@ -3777,11 +3797,10 @@ struct ThreadView: View {
     }
 
     private var removedBar: some View {
-        Text("You're no longer a member of this group")
-            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(.bar)
+        composerNotice {
+            Text("You're no longer a member of this group")
+                .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+        }
     }
 
     // Announcement mode: a non-admin member can't send (enforced server-side too).
@@ -3791,11 +3810,10 @@ struct ThreadView: View {
     }
 
     private var announcementBar: some View {
-        Label("Only admins can send messages", systemImage: "megaphone")
-            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(.bar)
+        composerNotice {
+            Label("Only admins can send messages", systemImage: "megaphone")
+                .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+        }
     }
 
     // A member an admin has restricted (reference-style timed mute) can't send until it expires.
@@ -3805,11 +3823,10 @@ struct ThreadView: View {
     }
 
     private var restrictedBar: some View {
-        Label("You're muted in this group", systemImage: "speaker.slash")
-            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(.bar)
+        composerNotice {
+            Label("You're muted in this group", systemImage: "speaker.slash")
+                .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+        }
     }
 
     // Do we already share this chat (either side has sent something)? If so, messaging
@@ -3833,56 +3850,56 @@ struct ThreadView: View {
     /// THEIR request, waiting for me. Accept or Delete, in the conversation itself — his spec was
     /// explicit that there is no separate requests inbox to go and find.
     private var requestBar: some View {
-        VStack(spacing: 10) {
-            // ONE LINE, his reference's wording. Who is asking, and their picture, are now the card
-            // at the top of the conversation — saying the name again down here, plus a sentence
-            // explaining what two labelled buttons already say, was three lines to answer yes or no.
-            Text("Accept message request from \(title)?")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            HStack(spacing: 10) {
-                Button {
-                    Task { try? await MessageRequests.decline(cid); dismiss() }
-                } label: {
-                    Text("Delete").font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity).frame(height: 44)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                .liquidGlass(Capsule(), interactive: true)
+        composerNotice {
+            VStack(spacing: 10) {
+                // ONE LINE, his reference's wording. Who is asking, and their picture, are now the card
+                // at the top of the conversation — saying the name again down here, plus a sentence
+                // explaining what two labelled buttons already say, was three lines to answer yes or no.
+                Text("Accept message request from \(title)?")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 10) {
+                    Button {
+                        Task { try? await MessageRequests.decline(cid); dismiss() }
+                    } label: {
+                        Text("Delete").font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .liquidGlass(Capsule(), interactive: true)
 
-                Button {
-                    Task { try? await MessageRequests.accept(cid) }
-                } label: {
-                    Text("Accept").font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity).frame(height: 44)
+                    Button {
+                        Task { try? await MessageRequests.accept(cid) }
+                    } label: {
+                        Text("Accept").font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    // TINTED GLASS, not a flat accent fill. Beside a glass Delete, a solid capsule
+                    // read as a different material from a different app — and in light mode it
+                    // photographed as a hard black slab. Apple's own tint keeps it clearly the
+                    // primary action while both buttons stay the same substance.
+                    .liquidGlass(Capsule(), interactive: true, tint: Color.accentColor)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(Color.accentColor, in: Capsule())
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
     }
 
     /// MY request, unanswered. One message is the whole allowance, so there is nothing to type into —
     /// a live composer here would only let someone write a second message and watch it fail.
     private var awaitingReplyBar: some View {
-        VStack(spacing: 3) {
-            Label("Message request sent", systemImage: "paperplane")
-                .font(.subheadline.weight(.semibold))
-            Text("You can send another message once \(title) replies.")
-                .font(.caption).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        composerNotice {
+            VStack(spacing: 3) {
+                Label("Message request sent", systemImage: "paperplane")
+                    .font(.subheadline.weight(.semibold))
+                Text("You can send another message once \(title) replies.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.bar)
     }
 
     // The other person's Messages privacy (Settings > Privacy > Messages). "My Contacts" /
@@ -3896,15 +3913,18 @@ struct ThreadView: View {
     }
 
     private var cannotMessageBar: some View {
-        VStack(spacing: 3) {
-            Label("You can't message \(title)", systemImage: "lock.fill")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-            Text("They only accept messages from their contacts.")
-                .font(.caption).foregroundStyle(.secondary)
+        composerNotice {
+            VStack(spacing: 3) {
+                Label("You can't message \(title)", systemImage: "lock.fill")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                // "Their contacts" named something this app does not have, the same mistake the
+                // Settings audit found in the auto-archive footer. The audience this reads is
+                // Everyone or My Friends, and only the second one lands you here.
+                Text("They only accept messages from their friends.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(.bar)
     }
 
     // The reply preview now nests INSIDE the input capsule (see inputRow).

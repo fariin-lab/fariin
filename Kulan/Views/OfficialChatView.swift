@@ -200,13 +200,19 @@ struct OfficialChatView: View {
     /// in our own words. It is NOT a disabled text field — a greyed-out box invites tapping, and the
     /// point is that there is nothing to tap.
     private var cannotReplyBar: some View {
+        // GLASS, IN THE COMPOSER'S SHAPE, matching every other bar that stands in for the composer
+        // (see `ThreadView.composerNotice`). It was a full-width system strip with a hard Divider
+        // ruled across the top, which is the bordered slab the owner circled: the one piece of this
+        // screen that did not look like the rest of the app.
         Text(OfficialChannel.cannotReply)
             .font(.footnote)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
             .padding(.vertical, 14)
-            .background(.bar)
-            .overlay(alignment: .top) { Divider() }
+            .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
             .background(GeometryReader { g in
                 Color.clear.preference(key: OfficialBarHeightKey.self, value: g.size.height)
             })
