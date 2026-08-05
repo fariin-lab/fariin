@@ -889,6 +889,15 @@ enum ChatService {
             "type": "album", "album": items, "text": captionCipher,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
+        // The album's FIRST tile, blurred, for the same reason a photo and now a video carry one:
+        // without it the grid falls through to the grey shimmer while its bytes arrive. One hash for
+        // the message, matching the model, which holds a single `blurhash` per message.
+        if let firstData = images.first, let ui = UIImage(data: firstData), let hash = BlurHash.encode(ui) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, hash))
+            if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
+        }
         if let clientId { msg["clientId"] = clientId }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
@@ -989,6 +998,21 @@ enum ChatService {
             "type": "album", "album": out, "text": captionCipher,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
+        // The album's FIRST tile, blurred, for the same reason a photo and now a video carry one:
+        // without it the grid falls through to the grey shimmer while its bytes arrive. One hash for
+        // the message, matching the model, which holds a single `blurhash` per message.
+        let firstTile: Data? = items.first.flatMap { item in
+            switch item {
+            case .image(let d): return d
+            case .video(_, let thumbnail, _, _, _): return thumbnail
+            }
+        }
+        if let firstTile, let ui = UIImage(data: firstTile), let hash = BlurHash.encode(ui) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, hash))
+            if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
+        }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)
@@ -1143,6 +1167,19 @@ enum ChatService {
             "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs,
         ]
+        // A BLURRED SKETCH OF THE POSTER, the same one a photo has carried since it was added.
+        //
+        // Only `sendImage` ever computed one, so a received VIDEO had nothing to draw and fell all
+        // the way through to the grey shimmer — which is the placeholder the owner photographed and
+        // asked to be rid of. It is ~28 characters, it is sealed like the caption, and the poster it
+        // is made from is already in hand here, so it costs one encode and no extra bytes worth
+        // counting.
+        if let poster = UIImage(data: thumbnail), let hash = BlurHash.encode(poster) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, hash))
+            if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
+        }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }
         batch.setData(msg, forDocument: msgRef)

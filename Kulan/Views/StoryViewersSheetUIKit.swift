@@ -248,6 +248,21 @@ final class StoryViewersSheetView: UIView {
         _ = translation
     }
 
+    /// Never start on a horizontal drag: the carousel above owns those.
+    ///
+    /// IN THE CLASS BODY WITH `override`, not in the delegate extension. `UIView` already declares
+    /// `gestureRecognizerShouldBegin(_:)` itself, so putting it in an extension is an override — and
+    /// Swift does not allow overriding in an extension. That is the compile error this file failed
+    /// on first time: "overriding declaration requires an 'override' keyword", on a method that
+    /// cannot carry one where it was written.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let p = gestureRecognizer as? UIPanGestureRecognizer, p === pan else {
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+        let v = p.velocity(in: self)
+        return abs(v.y) >= abs(v.x)
+    }
+
     /// The one question the hand-off turns on.
     private func shouldSheetTakeDrag(velocity: CGFloat) -> Bool {
         if progress < 0.999 { return true }               // not fully open → the sheet is the thing moving
@@ -337,12 +352,6 @@ extension StoryViewersSheetView: UIGestureRecognizerDelegate {
         true
     }
 
-    /// Never start on a horizontal drag: the carousel above owns those.
-    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        guard let p = g as? UIPanGestureRecognizer else { return true }
-        let v = p.velocity(in: self)
-        return abs(v.y) >= abs(v.x)
-    }
 }
 
 // MARK: - Row contents

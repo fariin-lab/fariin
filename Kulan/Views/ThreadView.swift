@@ -5723,7 +5723,12 @@ struct MessageBubble: View, Equatable {
                         if let data = message.localImageData, let ui = UIImage(data: data) {
                             Image(uiImage: ui).resizable().scaledToFill()          // optimistic local thumbnail
                         } else if let url = message.thumbUrl {
-                            SecureImageView(imageUrl: url, enc: message.thumbEnc, cid: cid)
+                            // The blurred poster while the thumbnail downloads, exactly as a photo
+                            // bubble has done since BlurHash was added. It was never passed here, so
+                            // a received video showed the grey shimmer even though the hash now
+                            // travels with the message — see `sendVideo`.
+                            SecureImageView(imageUrl: url, enc: message.thumbEnc, cid: cid,
+                                            placeholderHash: message.blurhash)
                         } else {
                             Rectangle().fill(Color.gray.opacity(0.18))
                         }
@@ -6172,7 +6177,11 @@ struct MessageBubble: View, Equatable {
             Image(uiImage: ui).resizable().scaledToFill()
         } else if message.album.indices.contains(i) {
             let it = message.album[i]
-            SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)
+            // The message carries ONE blur hash, taken from the first tile, so only the first tile
+            // can honestly use it. Giving every tile the first one's blur would show people a sketch
+            // of the wrong photo, which is worse than a plain hold.
+            SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid,
+                            placeholderHash: i == 0 ? message.blurhash : nil)
         } else {
             Rectangle().fill(Color.gray.opacity(0.18))
         }
@@ -6267,7 +6276,9 @@ struct MessageBubble: View, Equatable {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else if message.album.indices.contains(i) {
                 let it = message.album[i]
-                SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid)   // photo, or video poster
+                // First tile only — see the note in `albumImage`.
+                SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid,
+                                placeholderHash: i == 0 ? message.blurhash : nil)   // photo, or video poster
             } else {
                 Rectangle().fill(Color.gray.opacity(0.18))
             }
