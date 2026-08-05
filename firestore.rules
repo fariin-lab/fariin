@@ -290,6 +290,32 @@ service cloud.firestore {
       function isRequestPending() {
         return resource.data.get('startedBy', '') != '' && resource.data.get('accepted', false) == false;
       }
+
+      // A PER-USER MAP MAY ONLY CHANGE THE CALLER'S OWN KEY.
+      //
+      // The conversation document is shared, but several of its fields are maps keyed by uid holding
+      // each member's PRIVATE state: who they blocked, what they muted, what they cleared, when they
+      // last read. The 1:1 branch below allowed "any field", which meant the other member could
+      // rewrite all of it. The sharpest case: somebody you BLOCKED could set `blockedBy[you] = false`
+      // and unblock themselves, because blocking is enforced by the reader's client reading that map.
+      // They could also wipe your copy of the chat (`clearedAt`), forge your read receipt
+      // (`lastRead`), or un-mute themselves in your notifications.
+      //
+      // `unreadCount` is deliberately NOT on this list: the sender increments the RECIPIENT'S badge,
+      // so it is the one map that legitimately crosses. Every other one is written by its owner only
+      // — checked against every call site in ChatService before this rule was written.
+      //
+      // `.get(f, {})` on both sides so an absent map is an empty map rather than an error, and an
+      // untouched field diffs to nothing, which `hasOnly` accepts.
+      function ownKeyOnly(f) {
+        return request.resource.data.get(f, {}).diff(resource.data.get(f, {}))
+                 .affectedKeys().hasOnly([request.auth.uid]);
+      }
+      function privateMapsUntouched() {
+        return ownKeyOnly('blockedBy') && ownKeyOnly('blockedAt') && ownKeyOnly('blockClearedAt')
+            && ownKeyOnly('clearedAt') && ownKeyOnly('mutedBy') && ownKeyOnly('pinnedBy')
+            && ownKeyOnly('archivedBy') && ownKeyOnly('pinOrder') && ownKeyOnly('lastRead');
+      }
       // The other party of a 1:1 being created.
       function otherMember() {
         return request.resource.data.users[0] == request.auth.uid
@@ -384,6 +410,8 @@ service cloud.firestore {
                  && request.resource.data.get('accepted', true) == false)
             && (resource.data.get('startedBy', '') == ''
                 || request.resource.data.get('startedBy', '') == resource.data.startedBy)
+            // The other member cannot rewrite YOUR block, mute, clear or read state. See above.
+            && privateMapsUntouched()
           )
           // Group ADMIN may change anything (membership, title, admins) — but a NON-owner admin
           // must keep the owner (createdBy) in BOTH admins and users. Only the owner can remove
