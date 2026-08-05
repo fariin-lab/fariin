@@ -39,7 +39,9 @@ struct MainShell: View {
         return (chatsRepo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 }).filter {
             !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                 && (Flags.groupsEnabled || !$0.isGroup)   // audit: a hidden legacy group badged a list that refused to show it
-                && $0.unread(me) > 0
+                // `hasUnreadMark`, not a count: a chat you marked unread yourself still badges the
+                // tab, it just does not claim a number. See Conversation.unread.
+                && $0.hasUnreadMark(me)
         }.count
     }
 
@@ -696,7 +698,7 @@ struct ChatsView: View {
         let ids = repo.conversations
             .filter { !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                       && (Flags.groupsEnabled || !$0.isGroup)   // the clause the badge has; see above
-                      && $0.unread(me) > 0 }
+                      && $0.hasUnreadMark(me) }   // clears a manual mark too — that is what "read all" means
             .map(\.id)
         Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
     }
@@ -864,14 +866,14 @@ struct ChatsView: View {
             // either way, an unread, a pin, or a draft you typed. Groups always list — creating
             // one is deliberate.
             .filter { c in
-                c.isGroup || !c.lastMessageCipher.isEmpty || c.unread(me) > 0 || c.isPinned(me)
+                c.isGroup || !c.lastMessageCipher.isEmpty || c.hasUnreadMark(me) || c.isPinned(me)
                     || !Drafts.shared.text(c.id).isEmpty
             }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
                 // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
                 // chat appeared under Unread with no badge and a zero tab count).
-                case 1: return !c.isBlockedByMe(me) && c.unread(me) > 0
+                case 1: return !c.isBlockedByMe(me) && c.hasUnreadMark(me)
                 case 2: return c.isGroup
                 default: return true
                 }
@@ -2024,6 +2026,15 @@ struct ChatRow: View, Equatable {
                             .padding(.horizontal, 5)
                             .frame(minWidth: 19, minHeight: 19)   // 19×19 min badge
                             .background(Theme.accent(dark)).clipShape(Capsule())
+                    } else if conv.manuallyUnread(me) {
+                        // A PLAIN DOT, no number. You marking a chat unread is a note to yourself;
+                        // writing "1" on it claims somebody sent you something, which is what the
+                        // owner reported — he read the chat to the end and the list then told him it
+                        // held one unread message. Same circle, same colour, nothing written in it.
+                        Circle()
+                            .fill(Theme.accent(dark))
+                            .frame(width: 12, height: 12)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
             }

@@ -607,7 +607,14 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func displayPhoto(_ me: String) -> String? { isGroup ? avatarUrl : photoUrl(for: me) }
     /// Group header subtitle, e.g. "7 members".
     var memberCountLabel: String { "\(users.count) member\(users.count == 1 ? "" : "s")" }
-    func unread(_ me: String) -> Int { unreadCount[me] ?? 0 }
+    /// HOW MANY messages are waiting. Never negative: a negative value is the manual "mark as unread"
+    /// flag, which means a dot and no number — see `ChatService.markUnread`.
+    func unread(_ me: String) -> Int { max(0, unreadCount[me] ?? 0) }
+    /// You marked this chat unread yourself. A reminder, not a claim that somebody sent you something,
+    /// so the list shows a plain dot rather than "1".
+    func manuallyUnread(_ me: String) -> Bool { (unreadCount[me] ?? 0) < 0 }
+    /// Anything at all to show in the list's badge slot, of either kind.
+    func hasUnreadMark(_ me: String) -> Bool { unread(me) > 0 || manuallyUnread(me) }
     func isMuted(_ me: String, now: Double) -> Bool { (mutedBy[me] ?? 0) > now }
     func isBlockedByMe(_ me: String) -> Bool { blockedBy[me] ?? false }
     func blockedAtMillis(_ me: String) -> Double { blockedAt[me] ?? 0 }
@@ -632,9 +639,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func lastIsMine(_ me: String) -> Bool { !lastSender.isEmpty && lastSender == me }
     /// The other person has read my last message once their unread count hits 0.
     /// In a group, "read" = every other member's unread count is 0.
+    /// `<= 0`, not `== 0`: somebody who marks YOUR chat unread on their side writes a negative flag,
+    /// and they have still read your message — taking your second tick away because they wanted a
+    /// reminder would be a lie about them.
     func lastReadByOther(_ me: String) -> Bool {
-        if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) == 0 } }
-        return (unreadCount[otherUid(me)] ?? 0) == 0
+        if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 } }
+        return (unreadCount[otherUid(me)] ?? 0) <= 0
     }
     /// A reaction newer than the last message → the chat list previews it ("Reacted 🙏").
     /// Hidden for silently-blocked reactors, and for reactions older than a delete-for-me.

@@ -103,7 +103,10 @@ struct SettingsView: View {
                     // 2026-07-29, after seeing both). Two rows leading to the same page reads as a
                     // duplicate, which is what it was.
                     NavigationLink { ChatsSettingsView() } label: {
-                        SettingsRowLabel("Chats", system: "bubble.left.and.bubble.right")
+                        // OUR OWN CHAT MARK, the one the Chats tab already wears, instead of Apple's
+                        // two-bubble symbol. Every other row on this page that has a drawing of ours
+                        // uses it; this one was still borrowing.
+                        SettingsRowLabel("Chats", "ic_chat")
                     }
                     NavigationLink { StorySettingsView() } label: {
                         SettingsRowLabel("Stories", "ic_stories")

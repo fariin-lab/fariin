@@ -1860,11 +1860,20 @@ enum ChatService {
             .updateData(["unreadCount.\(uid)": 0])
     }
 
-    /// Manually flag a chat as unread — shows a badge until reopened.
+    /// Manually flag a chat as unread — shows a plain DOT until reopened, never a number.
+    ///
+    /// It used to write `1`, and a `1` is a count: the chat list drew "1 unread message" for a
+    /// conversation you had just read to the end. Marking something unread is a reminder to yourself,
+    /// not a claim that somebody sent you something.
+    ///
+    /// MINUS ONE IS THE FLAG, rather than a new field, and deliberately: `conversations` is field-
+    /// whitelisted in the rules, so a new key would need a rules deploy to be writable at all, and
+    /// this needs none. Everything that reads a count already treats "how many" as `max(0, …)` (see
+    /// `Conversation.unread`), so the number this shows is zero and the dot comes from the sign.
     static func markUnread(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markUnread(); return }
         try? await db.collection("conversations").document(cid)
-            .updateData(["unreadCount.\(uid)": 1])
+            .updateData(["unreadCount.\(uid)": -1])
     }
 
     /// Mark this conversation read up to now (drives the other person's read receipts).

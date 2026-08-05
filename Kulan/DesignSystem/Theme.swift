@@ -169,7 +169,20 @@ struct MenuIcon: View {
     /// our icons are the same size as each other as well as the same size as the system's.
     static let standard: CGFloat = 22
 
-    init(_ name: String, size: CGFloat = MenuIcon.standard) {
+    /// ROUND FOUR, AND THE ANSWER IS THAT INK IS NOT WEIGHT (owner, on Archive, Add Story and Change
+    /// Wallpaper: "make it small, not too much small. It should be slightly reduced in size").
+    ///
+    /// Round three normalised every icon to the same amount of INK, which is why they now measure
+    /// the same. But our drawings are solid, closed shapes and an SF Symbol is a thin outline, and
+    /// the same square of ink carries far more weight filled than stroked — so ours still read as
+    /// bigger even though they are not. Two points off closes it without making them small.
+    ///
+    /// Applied to OUR artwork only. The system's symbols stay at `standard`, because the complaint
+    /// has never once been that a symbol looked too big, and shrinking those is what started this.
+    static let custom: CGFloat = 20
+
+    /// Our own artwork. Defaults to `custom`, two points under a symbol's box — see the note there.
+    init(_ name: String, size: CGFloat = MenuIcon.custom) {
         self.name = name
         self.size = size
     }
