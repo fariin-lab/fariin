@@ -799,6 +799,9 @@ struct StoryViewer: View {
     // story steps aside; it takes the centre back once the swipe settles (identical pixels
     // at both hand-off moments = invisible swaps, and the swipe stays as smooth as ever).
     @State private var carouselInteracting = false
+    /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
+    /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
+    @State private var morphUnavailable = false
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
     private var myStories: [Story] { groups.first { $0.isMine }?.stories ?? [] }
@@ -1232,6 +1235,12 @@ struct StoryViewer: View {
         // representable and re-insets it against the safe area, which is how the top edge escaped. A
         // UIView transform changes no bounds and runs no layout pass, so that failure cannot recur —
         // but a `.scaleEffect` added back here would bring it straight back.
+        //
+        // THE FADE IS BACK ONLY AS A SAFETY NET, never as the normal path. It applies when, and only
+        // when, the morph has no card to move — see `driveMorph`. Opacity is not a transform and
+        // cannot re-inset anything, so it does not reopen the break-out this file spent two reverts
+        // escaping.
+        .opacity(morphUnavailable && viewersProgress > 0.08 ? 0 : 1)
         // NO app-level swipe-down transform anymore. The card is dismissed by the library's native UIKit
         // pan (moves the view directly = friend-smooth), so the app never offsets/scales the pager.
         .allowsHitTesting(viewersProgress == 0 || openDragging)
@@ -1413,6 +1422,19 @@ struct StoryViewer: View {
     /// motion the owner already signed off is unchanged; only the pixels inside it are real now.
     private func driveMorph(_ p: CGFloat) {
         guard showViewers else { StoryCardMorph.shared.reset(); return }
+        // IF THERE IS NO CARD TO MOVE, HIDE THE STORY INSTEAD OF LEAVING IT FULL SIZE.
+        //
+        // Twice now a broken binding has produced the same screenshot: the sheet slides up over a
+        // story sitting at full size, because `apply` guards on a nil card and returns. Both times
+        // the cause was different and both times the SYMPTOM was this, because the design had no
+        // answer for "the morph is not available". It has one now — the same fade the viewer used
+        // before the morph existed. A story that fades is a worse animation; a story that ignores
+        // the sheet entirely is a broken screen, and the difference matters more than the polish.
+        guard StoryCardMorph.shared.isAvailable else {
+            morphUnavailable = true
+            return
+        }
+        if morphUnavailable { morphUnavailable = false }
         let slot = cardSlot
         let scr = UIScreen.main.bounds
         // Same staging the morph card used: the frame shrinks across 0.08 → 0.9. The first hair of

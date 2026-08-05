@@ -66,7 +66,11 @@ struct StoryPager: UIViewControllerRepresentable {
         coordinator.cubeLink = nil
         // The card is going away. Leaving a stale transform on a recycled view would open the next
         // story already shrunken, and the reference is weak but the MASK is not: detach clears both.
-        StoryCardMorph.shared.detach()
+        //
+        // ITS OWN scroll view is passed, not a bare call: SwiftUI dismantles this one AFTER building
+        // its replacement, so an unconditional detach here cleared the NEW viewer's binding. See
+        // StoryCardMorph.detach.
+        StoryCardMorph.shared.detach(coordinator.internalScroll)
     }
 
     // The cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the

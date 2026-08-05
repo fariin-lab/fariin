@@ -77,7 +77,19 @@ public final class StoryCardMorph {
         card = view
     }
 
-    public func detach() {
+    /// ONLY IF IT IS STILL THE CARD THIS CALLER ATTACHED.
+    ///
+    /// SwiftUI builds a replacement representable BEFORE it dismantles the one it is replacing, so a
+    /// teardown routinely runs after the next viewer has already attached its own card. An
+    /// unconditional `card = nil` here therefore wiped a LIVE viewer's card, and every later `apply`
+    /// returned at its `guard let card` — the story simply never moved while the sheet came up over
+    /// it, with nothing logged and nothing visibly broken until you pulled the sheet.
+    ///
+    /// Passing the view that is going away turns that into a no-op, which is what it always should
+    /// have been: a dead pager has no business clearing a live one's binding.
+    public func detach(_ view: UIView?) {
+        guard let view else { return }
+        guard card === view else { return }
         reset()
         card = nil
     }
