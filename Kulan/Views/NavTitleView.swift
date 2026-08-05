@@ -18,15 +18,28 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
 
     func makeUIView(context: Context) -> UIView {
-        let marker = UIView()
+        let marker = NavTitleMarkerView()
         marker.isUserInteractionEnabled = false
         marker.isHidden = true
+        // THE MARKER REPORTS ITS OWN ARRIVAL. The two attempts in updateUIView are both guesses
+        // about WHEN the view lands in the hierarchy, and on a push both can run before it has —
+        // install() then returns at its owningViewController guard, silently. A busy screen
+        // (ThreadView) re-evaluates within a frame and self-heals; a QUIET one does not. The
+        // official chat is exactly that: its name and avatar are compile-time constants and its
+        // store is usually already loaded, so nothing re-ran updateUIView until a Firestore echo
+        // seconds later — his "name and avatar coming late" with an empty header in between.
+        // didMoveToWindow is the native signal that the owning VC is now resolvable.
+        marker.onAttach = { [weak coordinator = context.coordinator, weak marker] in
+            guard let coordinator, coordinator.isActive, let marker else { return }
+            coordinator.install(from: marker)
+        }
         return marker
     }
 
     func updateUIView(_ marker: UIView, context: Context) {
         context.coordinator.onTap = onTap
         context.coordinator.host.rootView = AnyView(content())
+        context.coordinator.isActive = isActive
         guard isActive else { context.coordinator.suspend(); return }
         context.coordinator.install(from: marker)          // synchronous — install as early as possible
         DispatchQueue.main.async { context.coordinator.install(from: marker) }   // retry once laid out
@@ -38,6 +51,9 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
 
     final class Coordinator: NSObject {
         var onTap: () -> Void
+        /// Mirrors the representable's `isActive`, so the marker's attach callback cannot install
+        /// over selection mode's principal item while we are suspended.
+        var isActive = true
         let host = UIHostingController(rootView: AnyView(EmptyView()))
         private let container = TitleContainerView()
         private weak var target: UIViewController?
@@ -204,6 +220,16 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             backObservation?.invalidate(); backObservation = nil
             if target?.navigationItem.titleView === container { target?.navigationItem.titleView = nil }
         }
+    }
+}
+
+/// The marker that knows when it lands. `didMoveToWindow` fires at the exact moment
+/// `owningViewController` becomes answerable — no guessing with async ticks. See makeUIView.
+final class NavTitleMarkerView: UIView {
+    var onAttach: (() -> Void)?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { onAttach?() }
     }
 }
 

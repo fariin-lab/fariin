@@ -39,6 +39,10 @@ struct OfficialChatView: View {
             .background(NavTitleView(onTap: { showInfo = true }) { headerLabel })
             .navigationDestination(isPresented: $showInfo) { OfficialChatInfoView() }
             .toolbar(.hidden, for: .tabBar)
+            // Belt and braces under the custom header: UIKit shows the plain string title only
+            // while titleView is nil, so any residual gap reads "Fariin" instead of nothing, and
+            // the avatar+name header replaces it the instant it installs.
+            .navigationTitle(OfficialChannel.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { officialToolbar }
             .navigationDestination(item: $pushedScreen) { screen in
