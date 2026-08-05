@@ -1497,15 +1497,32 @@ struct StoryViewer: View {
     /// through `settleViewers`, the one spring — see StoryViewersSheetUIKit's header for the
     /// routing map.
     private var viewersSheetLayer: some View {
-        StoryViewersSheet(activeStoryId: sheetStoryId,
+        // Neighbour flags for the sheet's horizontal page-swipe (Telegram's sheet-to-sheet slide),
+        // in the SAME live order the carousel lays its cards out in, so "next" is the card to the
+        // right and never a stale snapshot's idea of it.
+        let arr = StoriesRepository.shared.mine?.stories ?? myStories
+        let idx = arr.firstIndex { $0.id == sheetStoryId }
+        return StoryViewersSheet(activeStoryId: sheetStoryId,
                           progress: $viewersProgress,
                           carouselBand: carouselBandRect,
+                          hasPrev: (idx ?? 0) > 0,
+                          hasNext: idx.map { $0 < arr.count - 1 } ?? false,
                           onClose: { closeViewers() },
                           onCollapseTap: { closeViewers() },
                           onRelease: { p, start, v in settleViewers(progress: p, dragStart: start, velocityUp: v) },
                           onDragActive: { down in
                               sheetFinger.down = down
                               if down { sheetAnimator.cancel() }   // finger beats spring
+                          },
+                          onPage: { d in
+                              // Swipe the sheet sideways → the neighbour story's sheet. One value
+                              // changes and everything follows it: the list reloads, the carousel
+                              // recentres (activeId IS sheetStoryId), and the frozen story under
+                              // the card jumps via the existing onChange choreography.
+                              let live = StoriesRepository.shared.mine?.stories ?? myStories
+                              guard let i = live.firstIndex(where: { $0.id == sheetStoryId }),
+                                    live.indices.contains(i + d) else { return }
+                              sheetStoryId = live[i + d].id
                           })
             .ignoresSafeArea()
     }

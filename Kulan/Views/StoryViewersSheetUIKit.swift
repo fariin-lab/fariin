@@ -63,6 +63,14 @@ final class StoryViewersSheetView: UIView {
     var onDragActive: ((Bool) -> Void)?
     /// Tap on the dark area above the panel → collapse (NOT dismiss the viewer).
     var onCollapseTap: (() -> Void)?
+    /// Swipe the sheet sideways → the NEIGHBOUR story's sheet (+1 next, -1 previous), Telegram's
+    /// viewListPanGesture: their sheet at .half slides horizontally into the next item's own list.
+    /// The host switches `sheetStoryId`; everything else (list reload, carousel recentre, the
+    /// frozen story jumping underneath) already follows that one value.
+    var onPage: ((Int) -> Void)?
+    /// Whether a neighbour exists on each side — no neighbour means the drag rubber-bands.
+    var hasPrev = false
+    var hasNext = false
     /// Where the my-stories carousel row sits (screen coords). Touches here pass through to SwiftUI
     /// while the sheet is fully open, so the cover-flow swipe and card taps keep working.
     var carouselBand: CGRect = .zero
@@ -130,6 +138,12 @@ final class StoryViewersSheetView: UIView {
 
     // MARK: Init
 
+    /// The horizontal sheet-to-sheet pan (see `onPage`). On SELF like the vertical pan; the two are
+    /// axis-partitioned — the vertical pan's shouldBegin demands |vy| ≥ |vx| and this one is
+    /// direction-locked horizontal, so exactly one of them takes any given drag.
+    private lazy var pagePan = DirectionalSheetPan(axis: .horizontal, target: self, action: #selector(handlePagePan(_:)))
+    private var pageBaselineX: CGFloat = 0
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
@@ -138,6 +152,8 @@ final class StoryViewersSheetView: UIView {
         addGestureRecognizer(pan)
         tapAbove.delegate = self
         addGestureRecognizer(tapAbove)
+        pagePan.delegate = self
+        addGestureRecognizer(pagePan)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -309,7 +325,11 @@ final class StoryViewersSheetView: UIView {
         super.layoutSubviews()
         guard let panel = viewWithTag(1) else { return }
         let h = sheetHeight
-        panel.frame = CGRect(x: 0, y: bounds.height - h * progress, width: bounds.width, height: h)
+        // Setting `frame` on a transformed view is undefined — while the page-slide has the panel
+        // translated, its identity geometry is already correct, so leave it alone.
+        if panel.transform == .identity {
+            panel.frame = CGRect(x: 0, y: bounds.height - h * progress, width: bounds.width, height: h)
+        }
         grabber.frame = CGRect(x: (bounds.width - 38) / 2, y: 8, width: 38, height: 5)
 
         let tabY: CGFloat = 25
@@ -407,6 +427,52 @@ final class StoryViewersSheetView: UIView {
         onCollapseTap?()
     }
 
+    /// The sheet slides sideways under the finger and commits to the neighbour's sheet — Telegram's
+    /// thresholds (30% of the width, or 5% with 200pt/s behind it). On commit the panel exits the
+    /// way it was thrown, the host flips `sheetStoryId` (the list reloads, the carousel and the
+    /// frozen story recentre), and the panel returns from the opposite edge as the new story's
+    /// sheet. No neighbour → a quarter-strength rubber-band and a spring home.
+    @objc private func handlePagePan(_ g: UIPanGestureRecognizer) {
+        guard let panel = viewWithTag(1) else { return }
+        let rawX = g.translation(in: self).x
+        switch g.state {
+        case .began:
+            onDragActive?(true)
+            suspendForeignPans()
+            pageBaselineX = rawX
+        case .changed:
+            let tx = rawX - pageBaselineX
+            let allowed = tx < 0 ? hasNext : hasPrev
+            panel.transform = CGAffineTransform(translationX: allowed ? tx : tx * 0.25, y: 0)
+        case .ended, .cancelled:
+            onDragActive?(false)
+            let tx = rawX - pageBaselineX
+            let vx = g.velocity(in: self).x
+            let w = max(bounds.width, 1)
+            let allowed = tx < 0 ? hasNext : hasPrev
+            let commit = g.state == .ended && allowed
+                && (abs(tx) > w * 0.30 || (abs(tx) > w * 0.05 && abs(vx) > 200))
+            if commit {
+                let dir: CGFloat = tx < 0 ? -1 : 1   // -1 = panel exits left (next story arrives)
+                UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseIn]) {
+                    panel.transform = CGAffineTransform(translationX: dir * (w + 20), y: 0)
+                } completion: { _ in
+                    self.onPage?(dir < 0 ? 1 : -1)
+                    panel.transform = CGAffineTransform(translationX: -dir * (w + 20), y: 0)
+                    UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
+                        panel.transform = .identity
+                    }
+                }
+            } else {
+                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
+                               initialSpringVelocity: 0, options: []) {
+                    panel.transform = .identity
+                }
+            }
+        default: break
+        }
+    }
+
     /// Gates for all four recognizers. IN THE CLASS BODY WITH `override`, not in the delegate
     /// extension: `UIView` already declares `gestureRecognizerShouldBegin(_:)` itself, so putting it
     /// in an extension is an override — and Swift does not allow overriding in an extension. The
@@ -438,6 +504,12 @@ final class StoryViewersSheetView: UIView {
         }
         if gestureRecognizer === tapAbove {
             return tapAbove.location(in: self).y < panelTop
+        }
+        if gestureRecognizer === pagePan {
+            // Only a settled-open sheet pages (Telegram gates theirs to the .half state too), and
+            // only from the panel — the carousel band above has its own horizontal owner.
+            guard progress > 0.95 else { return false }
+            return pagePan.location(in: self).y >= panelTop
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
@@ -633,10 +705,13 @@ struct StoryViewersSheet: UIViewRepresentable {
     let activeStoryId: String
     @Binding var progress: CGFloat
     var carouselBand: CGRect = .zero
+    var hasPrev: Bool = false
+    var hasNext: Bool = false
     var onClose: () -> Void
     var onCollapseTap: () -> Void = {}
     var onRelease: (CGFloat, CGFloat, CGFloat) -> Void = { _, _, _ in }
     var onDragActive: (Bool) -> Void = { _ in }
+    var onPage: (Int) -> Void = { _ in }
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
@@ -651,7 +726,10 @@ struct StoryViewersSheet: UIViewRepresentable {
         v.onCollapseTap = onCollapseTap
         v.onRelease = onRelease
         v.onDragActive = onDragActive
+        v.onPage = onPage
         v.carouselBand = carouselBand
+        v.hasPrev = hasPrev
+        v.hasNext = hasNext
         v.onSendMessage = { viewer in
             AppRouter.shared.pendingChatName = viewer.name
             AppRouter.shared.pendingChatPhoto = viewer.photoUrl
@@ -667,6 +745,8 @@ struct StoryViewersSheet: UIViewRepresentable {
     func updateUIView(_ v: StoryViewersSheetView, context: Context) {
         if !context.coordinator.applying { v.setProgress(progress) }
         v.carouselBand = carouselBand
+        v.hasPrev = hasPrev
+        v.hasNext = hasNext
         context.coordinator.load(activeStoryId)
     }
 
