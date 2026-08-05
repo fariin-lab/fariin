@@ -68,7 +68,7 @@ struct DisconnectSignInView: View {
             } header: {
                 Text("Verify it's you")
             } footer: {
-                Text("We ask every time, even if you just signed in. Removing a login is how somebody who picked up your phone would lock you out of your own account.")
+                Text("Any of your sign-in methods will do. Nothing is removed until you're verified.")
             }
 
             if let error {
