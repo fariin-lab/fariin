@@ -938,12 +938,13 @@ struct StoryViewer: View {
             // INSIDE the sheet. Both layers share `viewersProgress`, so the drag and the release
             // spring stay perfectly in sync.
             if showViewers {
-                StoryViewersBottomSheet(activeStoryId: sheetStoryId,
-                                        progress: $viewersProgress,
-                                        arbiter: sheetDragArbiter,
-                                        onSnapOpen: { sheetAnimator.animate(from: viewersProgress, to: 1,
-                                                                            write: { viewersProgress = $0 }) },
-                                        onClose: closeViewers)
+                // UIKIT NOW (owner's original request, the half I had left). Same `viewersProgress`
+                // in and out, so the live story's morph is driven by exactly the number the finger
+                // is writing — see StoryViewersSheetUIKit for what the move actually bought.
+                StoryViewersSheet(activeStoryId: sheetStoryId,
+                                  progress: $viewersProgress,
+                                  onClose: closeViewers)
+                    .ignoresSafeArea()
             }
         }
     }
@@ -1289,7 +1290,7 @@ struct StoryViewer: View {
                 // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
                 guard currentIsMine || mineOnly else { return }
                 sheetAnimator.cancel()   // the finger owns progress; kill any in-flight snap
-                let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
                 if !showViewers {
                     sheetStoryId = targetStoryId; showViewers = true
                     // Freeze the story the INSTANT the sheet starts to open (don't wait for the
@@ -1327,7 +1328,7 @@ struct StoryViewer: View {
                     NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
                     return
                 }
-                let sheetH = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
                 // Build 216's exact release rule (the feel the user wants): fling weight 0.3,
                 // open past 0.4 — a modest upward pull commits, a small nudge settles back.
                 let projected = viewersProgress + (velocity / sheetH) * 0.3
@@ -1382,7 +1383,7 @@ struct StoryViewer: View {
 
     private var cardSlot: CardSlot {
         let scr = UIScreen.main.bounds
-        let sheetH = scr.height * StoryViewersBottomSheet.heightFraction
+        let sheetH = scr.height * StoryViewersSheetView.heightFraction
         let avail = scr.height - sheetH - topInset          // free area above the open sheet
         // Card block = the centred card + the big count row (~40) below it, centred vertically in
         // the free space with the status bar cleared. The narrow slot is what makes the neighbours
@@ -1479,7 +1480,7 @@ struct StoryViewer: View {
                     // ONE writer at a time (see SheetDragArbiter). A fresh claim re-anchors at the
                     // CURRENT progress, so a stale anchor from a cancelled drag can never jump/fight.
                     guard let claim = sheetDragArbiter.claim("backdrop") else { return }
-                    let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    let h = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
                     if claim == .fresh || closeDragStart == nil {
                         closeDragStart = viewersProgress + v.translation.height / h   // anchor so current touch maps to current progress
                     }
@@ -1496,7 +1497,7 @@ struct StoryViewer: View {
                     sheetDragArbiter.release("backdrop")
                     guard let start = closeDragStart else { return }   // guarded-out drag (horizontal) → not ours
                     closeDragStart = nil
-                    let h = UIScreen.main.bounds.height * StoryViewersBottomSheet.heightFraction
+                    let h = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
                     let projected = start - v.predictedEndTranslation.height / h
                     // 0.8 (was 0.6): demanding nearly half the sheet's travel made ordinary drags
                     // bounce back over and over ("scroll down to close is soo hard"). A deliberate
@@ -2240,271 +2241,11 @@ struct MyStoriesCarousel: View {
     }
 }
 
-// The reference viewers-sheet architecture: a SEPARATE bottom layer holding ONLY the drag handle, search,
-// and the scrollable viewer list — NO story media (the carousel above it is its own layer). It drives
-// `progress` (0 closed … 1 open); the StoryViewer's backdrop reads the same value → always in sync.
-struct StoryViewersBottomSheet: View {
-    // Sheet height as a fraction of the screen. The story viewer derives the carousel slot from this
-    // same value, so the two layers always agree on the layout. The design makes the LIST the dominant
-    // element (~70%) with the story shrunk to a small preview card on top — so the sheet is tall.
-    static let heightFraction: CGFloat = 0.60   // tuned so the ASPECT-TRUE cards land at ~231's 120pt width (chunky) — stable size everywhere, no stretch
-
-    let activeStoryId: String
-    @Binding var progress: CGFloat
-    let arbiter: StoryViewer.SheetDragArbiter   // single-owner rule for all progress-writing drags
-    let onSnapOpen: () -> Void                  // released mid-drag, staying open → host's display-link spring
-    let onClose: () -> Void
-
-    @State private var viewers: [StoryViewerInfo] = []
-    @State private var search = ""
-    @State private var loading = true
-    @State private var tab = 0   // 0 = All Viewers, 1 = Contacts (tabs)
-    @State private var dragStart: CGFloat? = nil
-    @State private var listOffset: CGFloat = 0   // the viewer list's scroll offset (0 = top)
-
-    // Uids of my 1:1 contacts — for the "Contacts" tab filter.
-    private var contactUids: Set<String> {
-        let me = AuthService.shared.uid ?? ""
-        return Set(ConversationsRepository.shared.conversations
-            .filter { !$0.isGroup }.map { $0.otherUid(me) }.filter { !$0.isEmpty })
-    }
-
-    private var filtered: [StoryViewerInfo] {
-        var v = viewers
-        if tab == 1 { let c = contactUids; v = v.filter { c.contains($0.id) } }   // Contacts tab
-        let q = search.trimmingCharacters(in: .whitespaces)
-        if !q.isEmpty { v = v.filter { $0.name.localizedCaseInsensitiveContains(q) } }
-        // Sort order (sortMode .reactionsFirst): people who REACTED come first, then most-recent.
-        return v.sorted { a, b in
-            let ar = !(a.reaction ?? "").isEmpty
-            let br = !(b.reaction ?? "").isEmpty
-            if ar != br { return ar }            // reactions first
-            return a.viewedAt > b.viewedAt       // then newest view
-        }
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            let sheetH = geo.size.height * Self.heightFraction
-            VStack(spacing: 0) {
-                stickyHeader(sheetH: sheetH)        // drag handle + search
-                viewerList(sheetH: sheetH)          // list scrolls; drag its top to collapse the sheet
-            }
-            .frame(height: sheetH)
-            .background(
-                UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-                    .fill(Color(white: 0.10))
-            )
-            .frame(maxHeight: .infinity, alignment: .bottom)   // park at the bottom of the screen
-            // Rubber-band past fully-open (progress can exceed 1 while dragging up): resist so the
-            // sheet eases to a soft stop instead of a hard wall.
-            .offset(y: (1 - min(progress, 1)) * sheetH - overshoot(progress) )
-        }
-        .ignoresSafeArea()
-        // A system-CANCELLED drag skips onEnded and would leave dragStart set forever — which
-        // keeps the viewer list scroll-locked (audit M4). Progress settling at a rest state
-        // means no drag owns the sheet: clear the anchor.
-        .onChange(of: progress) { _, p in
-            if p >= 1 || p <= 0 { dragStart = nil }
-        }
-        .task(id: activeStoryId) {
-            // Debounce: .task(id:) cancels+restarts on every carousel-centre change, so a short sleep
-            // here means a fast scrub across many stories only fires ONE fetch when it settles.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            await load()
-        }
-    }
-
-    // Extra pixels the sheet rises above fully-open, with diminishing return (rubber band).
-    private func overshoot(_ p: CGFloat) -> CGFloat {
-        guard p > 1 else { return 0 }
-        return 22 * (1 - 1 / (1 + (p - 1) * 3))   // asymptotes to ~22pt
-    }
-
-    // ONE unified drag: dragging the handle/search OR the list (when the list is at its
-    // top and you pull down) drives the sheet up/down. `fromList` gates the list case so mid-list
-    // scrolling isn't hijacked. The list is scroll-disabled while the sheet isn't fully open, so once
-    // a collapse starts the list locks and the drag owns the motion.
-    private func sheetDrag(sheetH: CGFloat, fromList: Bool) -> some Gesture {
-        // GLOBAL coordinate space, not the default .local: this drag MOVES the sheet it is
-        // attached to, so local-space translation kept shrinking as the sheet followed the
-        // finger — a per-frame feedback loop (sheet down → reading smaller → sheet back up)
-        // that read as the jitter/heaviness when dragging ON the sheet. The backdrop drag
-        // never had this because its layer is stationary. Global space = honest finger truth.
-        DragGesture(minimumDistance: fromList ? 8 : 4, coordinateSpace: .global)
-            .onChanged { v in
-                if fromList {
-                    let atTop = listOffset <= 0.5
-                    // Take over only when already collapsing, or at the top pulling DOWN.
-                    guard progress < 1 || (atTop && v.translation.height > 0) else { return }
-                }
-                // ONE writer at a time (SheetDragArbiter): a second handler with a different anchor
-                // used to alternate writes with this one every frame = the violent sheet vibration.
-                // A fresh claim re-anchors so the current touch maps to the CURRENT progress — a
-                // stale dragStart from a system-cancelled drag can never jump the sheet again.
-                guard let claim = arbiter.claim(fromList ? "list" : "header") else { return }
-                if claim == .fresh || dragStart == nil {
-                    dragStart = progress + v.translation.height / sheetH
-                }
-                // Track the finger 1:1; allow a little past 1.0 so overshoot() rubber-bands; clamp bottom at 0.
-                var next = max(0, min(1.14, (dragStart ?? 1) - v.translation.height / sheetH))
-                // A system-CANCELLED stroke skips onEnded and leaves dragStart behind; the next quick
-                // stroke's first event would then TELEPORT the sheet by the difference between the two
-                // strokes' translations (the "violent bounce/jump-cut" mid-close). A finger cannot move
-                // 12% of the sheet between two ~8ms events — re-anchor instead of jumping.
-                if abs(next - progress) > 0.12 {
-                    dragStart = progress + v.translation.height / sheetH
-                    next = progress
-                }
-                progress = next
-            }
-            .onEnded { v in
-                arbiter.release(fromList ? "list" : "header")
-                guard dragStart != nil else { return }   // fromList drag that never engaged
-                dragStart = nil
-                // Where the sheet would COME TO REST given the fling: predictedEndTranslation is the
-                // ADDITIONAL travel from here, so subtract only that.
-                let extra = (v.predictedEndTranslation.height - v.translation.height) / sheetH
-                let projected = progress - extra
-                // 0.8 / 160 (was 0.6 / 240): the old thresholds demanded almost half the sheet's
-                // travel or a hard fling, so ordinary pulls bounced back repeatedly ("soo hard").
-                let close = projected < 0.8 || v.predictedEndTranslation.height > 160
-                if close { onClose() }
-                else { onSnapOpen() }   // host display-link spring: model == presentation every frame
-            }
-    }
-
-    // Sticky header (handle + tabs + search). Dragging here drives the sheet.
-    private func stickyHeader(sheetH: CGFloat) -> some View {
-        VStack(spacing: 12) {
-            Capsule().fill(.white.opacity(0.28)).frame(width: 38, height: 5).padding(.top, 8)
-            tabSelector
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.6))
-                TextField("", text: $search, prompt: Text("Search").foregroundColor(.white.opacity(0.5)))
-                    .foregroundStyle(.white)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(.white.opacity(0.12), in: Capsule())
-            .padding(.horizontal, 16)
-        }
-        .padding(.bottom, 10)
-        .contentShape(Rectangle())
-        // simultaneousGesture (not .gesture) so dragging down on the handle/tabs/search still drives the
-        // sheet even though the tabs + search field have their own tap/edit gestures. This is what made
-        // drag-down-to-close feel dead — the tab buttons were swallowing the drag.
-        .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: false))
-    }
-
-    // "All Viewers | Contacts" tabs (the viewer-list tabs component): active tab is white
-    // with an underline, inactive is dimmed. Tapping switches the list filter (no sheet drag).
-    private var tabSelector: some View {
-        HStack(spacing: 24) {
-            ForEach(0..<2, id: \.self) { i in
-                Button { withAnimation(.easeInOut(duration: 0.18)) { tab = i } } label: {
-                    VStack(spacing: 6) {
-                        Text(i == 0 ? "All Viewers" : "Friends")
-                            .font(.subheadline.weight(tab == i ? .semibold : .regular))
-                            .foregroundStyle(tab == i ? .white : .white.opacity(0.5))
-                        Capsule().fill(tab == i ? Color.white : Color.clear).frame(height: 2)
-                    }
-                    .fixedSize()
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 18)
-    }
-
-    private func viewerList(sheetH: CGFloat) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if loading {
-                    ProgressView().tint(.white).padding(.top, 44).frame(maxWidth: .infinity)
-                } else if filtered.isEmpty {
-                    EmptyStateView(title: "No views yet", icon: "eye",
-                                   text: "When people view this story, they'll show up here.")
-                        .padding(.top, 40)
-                } else {
-                    ForEach(filtered) { v in
-                        viewerRow(v)
-                        Divider().overlay(Color.white.opacity(0.08)).padding(.leading, 74)
-                    }
-                }
-            }
-            .padding(.bottom, 30)
-        }
-        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in listOffset = y }
-        // No rubber-band bounce at the top: the bounce fought the collapse-drag below (the list sprang
-        // while the sheet also moved = the "shaking" when pulling DOWN to close). Without it the drag
-        // owns the downward motion cleanly, matching the smooth upward open.
-        .scrollBounceBehavior(.basedOnSize)
-        // Lock the list while the sheet isn't fully open OR while a collapse-drag is active (dragStart
-        // set), so the list's own scroll/rubber-band can NEVER fight the drag at the top (that fight was
-        // the down-drag "shaking"). The drag owns the motion cleanly, matching the smooth upward open.
-        .scrollDisabled(progress < 1 || dragStart != nil)
-        // Pulling the list down at its top collapses the sheet (hand-off).
-        .simultaneousGesture(sheetDrag(sheetH: sheetH, fromList: true))
-    }
-
-    private var doubleCheck: some View {
-        ZStack(alignment: .leading) {
-            Image(systemName: "checkmark"); Image(systemName: "checkmark").offset(x: 4)
-        }
-        .font(.system(size: 9, weight: .bold))
-    }
-
-    private func viewerRow(_ v: StoryViewerInfo) -> some View {
-        HStack(spacing: 12) {
-            AvatarView(name: v.name, photoUrl: v.photoUrl, size: 46)
-                .overlay(alignment: .bottomTrailing) {
-                    if let r = v.reaction, !r.isEmpty {
-                        Text(r).font(.system(size: 11))
-                            .frame(width: 19, height: 19)
-                            .background(Circle().fill(Color(.systemRed)))
-                            .overlay(Circle().stroke(Color(white: 0.10), lineWidth: 2))
-                            .offset(x: 3, y: 3)
-                    }
-                }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(v.name).font(.body.weight(.semibold)).foregroundStyle(.white)
-                HStack(spacing: 5) { doubleCheck; Text(dateFmt(v.viewedAt)) }
-                    .font(.caption).foregroundStyle(.white.opacity(0.5))
-            }
-            Spacer()
-            Menu {
-                // Open my 1:1 chat with this viewer (same pending-chat route the group-member
-                // sheet uses); close the sheet AND the story viewer so the chat lands on top.
-                // No "View profile" here — this sheet has no profile route, and we never fake.
-                Button {
-                    AppRouter.shared.pendingChatName = v.name
-                    AppRouter.shared.pendingChatPhoto = v.photoUrl
-                    AppRouter.shared.pendingChatId = ChatService.convId(AuthService.shared.uid ?? "", v.id)
-                    onClose()
-                    NotificationCenter.default.post(name: .init("storyForceClose"), object: nil)
-                } label: { Label("Send message", systemImage: "message") }
-            } label: {
-                Image(systemName: "ellipsis").font(.body).foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 38, height: 38).contentShape(Rectangle())
-            }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 9)
-    }
-
-    private func dateFmt(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "dd/MM/yy 'at' h:mm a"; return f.string(from: d)
-    }
-
-    private func load() async {
-        let id = activeStoryId
-        guard !id.isEmpty else { loading = false; return }
-        if viewers.isEmpty { loading = true }
-        let v = await StoriesService.shared.fetchViewers(storyId: id)
-        if id == activeStoryId { viewers = v; loading = false }
-    }
-}
+// `StoryViewersBottomSheet` lived here. It is UIKit now — see StoryViewersSheetUIKit.swift, which
+// explains what the move bought: one pan and one scroll view recognised simultaneously, instead of
+// three SwiftUI DragGestures, an arbiter to stop them fighting, a scroll-disable, a bounce-disable
+// and a watchdog. The struct is deleted rather than left unreferenced, because a "removed" thing
+// that is still in the file is how ClearSegmentedTrack stayed live for two rounds.
 
 // Wrapper so a UIImage can drive a .sheet(item:).
 struct StoryImagePayload: Identifiable {
