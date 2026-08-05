@@ -3532,30 +3532,50 @@ struct ThreadView: View {
     // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
     // the sender's copy on-device; the recipient's player deletes the server object).
     private func sendVideo(from url: URL, caption: String = "", hd: Bool = false) async {
-        // Per-send HD button OR the global Sent Media Quality "High" → 1080p.
-        guard let prepared = await VideoTranscoder.prepare(url, hd: hd || ChatService.highQualitySends) else {
+        // THE BUBBLE COMES FIRST, BEFORE THE TRANSCODE. It used to come after: this function awaited
+        // `VideoTranscoder.prepare` and only then had a thumbnail to draw with, so tapping send on a
+        // video did nothing visible for as long as the compression took — the owner timed it at 3.88
+        // seconds on an eighteen second clip and it reads as the app ignoring the tap.
+        //
+        // A poster is one decoded frame, tens of milliseconds. Everything expensive now happens with
+        // the bubble already on screen and its ring already turning, which is what every other send
+        // path in this file does and the video path never did.
+        guard let poster = await VideoTranscoder.poster(url) else {
             try? FileManager.default.removeItem(at: url)
             await MainActor.run { sendError = "Couldn't process this video." }
             return
         }
-        try? FileManager.default.removeItem(at: url)
-        guard prepared.data.count <= Limits.videoMessageBytes else {
-            await MainActor.run { sendError = "This video is too long to send (max \(Limits.videoMessageBytes / 1_048_576) MB after compression)." }
+        let clientId = UUID().uuidString
+        await MainActor.run {
+            var pending = Message(localVideoThumb: poster.jpeg, duration: poster.duration,
+                                  width: poster.width, height: poster.height,
+                                  authorId: me, clientId: clientId, sendState: .sending)
+            pending.text = caption
+            repo.addPending(pending)
+        }
+
+        // Per-send HD button OR the global Sent Media Quality "High" → 1080p.
+        guard let prepared = await VideoTranscoder.prepare(url, hd: hd || ChatService.highQualitySends) else {
+            try? FileManager.default.removeItem(at: url)
+            // The bubble is already on screen, so a failure has to be shown ON it. Before this the
+            // function could return with only an alert, which would have been correct when nothing
+            // had been drawn yet and is not correct now.
+            await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't process this video." }
             return
         }
-        let clientId = UUID().uuidString
+        try? FileManager.default.removeItem(at: url)
+        guard prepared.data.count <= Limits.videoMessageBytes else {
+            await MainActor.run {
+                repo.markFailed(clientId: clientId)
+                sendError = "This video is too long to send (max \(Limits.videoMessageBytes / 1_048_576) MB after compression)."
+            }
+            return
+        }
         // Persist the transcoded bytes to tmp keyed by clientId so a FAILED send can retry the REAL
         // video (the old retry path only had the thumbnail and re-sent it as a photo — data loss).
         let retryURL = FileManager.default.temporaryDirectory.appendingPathComponent("pending-video-\(clientId).mp4")
         try? prepared.data.write(to: retryURL)
-        await MainActor.run {
-            var pending = Message(localVideoThumb: prepared.thumbnail, duration: prepared.duration,
-                                  width: prepared.width, height: prepared.height,
-                                  authorId: me, clientId: clientId, sendState: .sending)
-            pending.localMediaURL = retryURL.path
-            pending.text = caption
-            repo.addPending(pending)
-        }
+        await MainActor.run { repo.attachRetryPayload(clientId: clientId, path: retryURL.path) }
         do {
             try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
                                             duration: prepared.duration, width: prepared.width, height: prepared.height,

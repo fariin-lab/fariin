@@ -26,6 +26,33 @@ enum VideoTranscoder {
     /// not offering them at all). `overlay` is the text and the pen strokes drawn once into a single
     /// transparent image at the editor's own canvas size; `cropRect` is normalised (0-1) in that same
     /// canvas. Both are composited during the export, so what gets uploaded is what he drew.
+    /// One frame and the duration, and nothing else. Decoding a single frame is tens of
+    /// milliseconds; `prepare` cannot answer this until the whole export has finished, which for an
+    /// eighteen second clip is several seconds.
+    ///
+    /// That is the entire reason this exists. The send path used to wait for `prepare` before it had
+    /// a thumbnail to put in the optimistic bubble, so tapping send on a video sat there doing
+    /// nothing visible while the video compressed — measured at 3.88s by the owner. Now the bubble
+    /// is drawn from this, immediately, and the transcode happens behind it.
+    ///
+    /// Returns nil for anything it cannot read, and the caller must treat that as "not a video I can
+    /// send" rather than pressing on with a blank bubble.
+    struct Poster { let jpeg: Data; let duration: Double; let width: Double; let height: Double }
+
+    static func poster(_ url: URL) async -> Poster? {
+        let asset = AVURLAsset(url: url)
+        guard let time = try? await asset.load(.duration), time.seconds > 0 else { return nil }
+        let duration = time.seconds
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true       // honour the rotation, or a portrait clip lands sideways
+        gen.maximumSize = CGSize(width: 1600, height: 1600)
+        // Same instant `prepare` samples, and for the same reason: frame zero is very often black.
+        let t = CMTime(seconds: min(0.1, duration / 2), preferredTimescale: 600)
+        guard let cg = try? await gen.image(at: t).image,
+              let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.72) else { return nil }
+        return Poster(jpeg: jpeg, duration: duration, width: Double(cg.width), height: Double(cg.height))
+    }
+
     static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false,
                         hd: Bool = false, range: CMTimeRange? = nil,
                         overlay: UIImage? = nil, cropRect: CGRect? = nil,

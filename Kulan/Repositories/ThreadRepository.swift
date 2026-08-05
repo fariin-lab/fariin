@@ -252,6 +252,21 @@ final class ThreadRepository {
     }
 
     func addPending(_ m: Message) { pending.append(m); refreshItems() }
+
+    /// Give an already-visible pending message the file a retry would re-send.
+    ///
+    /// Needed because the video path now draws its bubble BEFORE the transcode runs, so at
+    /// `addPending` time the transcoded mp4 does not exist yet and there is no path to attach. Every
+    /// other send path has its bytes in hand first and sets `localMediaURL` up front.
+    ///
+    /// Without this the bubble would sit there with no payload, and a failed video would retry as
+    /// its own thumbnail — a photo instead of the video, which is the exact data loss the retry file
+    /// was introduced to stop.
+    func attachRetryPayload(clientId: String, path: String) {
+        guard let i = pending.firstIndex(where: { $0.clientId == clientId }) else { return }
+        pending[i].localMediaURL = path
+        refreshItems()
+    }
     // "Delete for me" — hide a single message locally (the doc stays for the other person). Deleting
     // "for everyone" removes the Firestore doc instead (ChatService.deleteMessage).
     func hideForMe(_ id: String) { HiddenMessages.hide(id); refreshItems() }
