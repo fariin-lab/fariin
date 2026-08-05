@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import ImageIO       // stripping metadata from an image UIKit could not decode
 import PDFKit
 import FirebaseAuth
 import FirebaseFirestore
@@ -692,15 +693,41 @@ enum ChatService {
     }
 
     static func downscaledJPEG(_ data: Data, maxDimension: CGFloat = 1600, quality: CGFloat = 0.72) -> Data {
-        guard let img = UIImage(data: data) else { return data }
+        // The three `?? data` fallbacks used to hand back the ORIGINAL FILE. Photos are normally
+        // rebuilt from raw pixels here, which drops the camera's metadata as a side effect — but on
+        // those fallback paths the original went out untouched, GPS coordinates and all, the same
+        // leak that video had until this session. Rare (an image UIKit cannot decode, or an encode
+        // that fails) is not the same as never, and a privacy promise that holds "almost always" is
+        // not a privacy promise. `stripped` is the fallback now.
+        guard let img = UIImage(data: data) else { return stripped(data) }
         let longEdge = max(img.size.width, img.size.height)
         let scale = min(1, maxDimension / longEdge)
-        if scale >= 1 { return img.jpegData(compressionQuality: quality) ?? data }
+        if scale >= 1 { return img.jpegData(compressionQuality: quality) ?? stripped(data) }
         let newSize = CGSize(width: img.size.width * scale, height: img.size.height * scale)
         let resized = UIGraphicsImageRenderer(size: newSize).image { _ in
             img.draw(in: CGRect(origin: .zero, size: newSize))
         }
-        return resized.jpegData(compressionQuality: quality) ?? data
+        return resized.jpegData(compressionQuality: quality) ?? stripped(data)
+    }
+
+    /// Re-write an image file keeping the pixels and dropping everything else.
+    ///
+    /// Uses ImageIO rather than UIKit precisely because this runs when UIKit has ALREADY failed —
+    /// ImageIO reads formats UIImage will not, which is the case that lands here. Copying an image
+    /// source to a destination does not carry the source's metadata dictionary across unless it is
+    /// asked to, so the location, the device and the timestamps are gone.
+    ///
+    /// Returns the original ONLY if the file cannot be read as an image at all, in which case it is
+    /// not a photo and there is nothing to leak from.
+    private static func stripped(_ data: Data) -> Data {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(src),
+              let out = CFDataCreateMutable(nil, 0),
+              let dest = CGImageDestinationCreateWithData(out, type, 1, nil) else { return data }
+        // An empty properties dictionary, not nil: nil means "carry the source's properties over".
+        CGImageDestinationAddImageFromSource(dest, src, 0, [:] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return data }
+        return out as Data
     }
 
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false) async throws {
