@@ -76,7 +76,22 @@ enum VideoTranscoder {
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("send-\(UUID().uuidString).mp4")
         try? FileManager.default.removeItem(at: out)
         // HD = 1080p (bigger file, sharper); standard = 720p (smaller, the default).
-        let preset = hd ? AVAssetExportPreset1920x1080 : AVAssetExportPreset1280x720
+        // 540p BY DEFAULT, down from 720p. Read Signal's pipeline for this: they export everything at
+        // AVAssetExportPreset640x480 and that single line is why an 18 second clip leaves their app
+        // in about three seconds while ours took nearly four just to compress, before a byte moved.
+        // Three times the pixels costs twice — the encode is ~3x longer AND the file is ~3x bigger,
+        // so the upload afterwards is ~3x longer too.
+        //
+        // Not 480p though, and the reason is who this app is for. Fariin is people sending video home
+        // to family, very often to a phone in Somalia on expensive mobile data. The RECIPIENT pays to
+        // download every one of those megabytes, on a connection the site itself says we cannot
+        // assume is fast — so file size matters more here than it does for most messengers. But 480p
+        // on a 2026 phone is visibly rough, and a video of a wedding that arrives soft has lost the
+        // thing it was sent for.
+        //
+        // 540p is half the pixels of 720p (twice as fast, half the data) and still 1.7x Signal's. HD
+        // stays 1080p because that is an explicit choice somebody made for a reason.
+        let preset = hd ? AVAssetExportPreset1920x1080 : AVAssetExportPreset960x540
         // A composition of our own needs a preset that will not impose a size as well — the render
         // size is the thing deciding the output here, and two things deciding it is one too many.
         let composing = overlay != nil || cropRect != nil
@@ -84,6 +99,13 @@ enum VideoTranscoder {
                                                  presetName: composing ? AVAssetExportPresetHighestQuality : preset)
         else { return nil }
         session.shouldOptimizeForNetworkUse = true
+        // STRIP THE METADATA. An iPhone recording carries the GPS coordinates it was taken at, the
+        // device model and the original timestamps, and we were passing all of it straight through.
+        // The clip is end-to-end encrypted so the server never sees any of it — but the person
+        // receiving it gets the sender's exact location embedded in the file, permanently, and can
+        // read it out with any photo app. In an app that sells itself on privacy that is not a
+        // trade-off, it is an oversight. Signal has always set this filter; we never did.
+        session.metadataItemFilter = AVMetadataItemFilter.forSharing()
         if composing {
             session.videoComposition = await burnIn(asset: exportAsset, overlay: overlay,
                                                     cropRect: cropRect, canvasAspect: canvasAspect,
