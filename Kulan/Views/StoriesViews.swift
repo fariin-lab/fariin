@@ -850,6 +850,18 @@ struct StoryViewer: View {
         self.onDeletedRemaining = onDeletedRemaining
     }
 
+    /// Every story in this viewer, in the order they will actually be watched, one person after the
+    /// next. FLATTENED ACROSS PEOPLE on purpose: the moment a story viewer is most likely to stall is
+    /// the jump to somebody new, because nothing of theirs is warm. Signal crosses that boundary for
+    /// the same reason (`ensureSubsequentItemsDownloaded`, the `contextAfter` loop).
+    private var flatStories: [StoryUI.Story] { models.flatMap { $0.stories } }
+
+    private func prefetchAhead(currentId: String) {
+        let all = flatStories
+        guard let i = all.firstIndex(where: { $0.id == currentId }) else { return }
+        StoryPrefetcher.prefetch(from: i, in: all)
+    }
+
     private var models: [StoryUIModel] {
         groups.map { g in
             StoryUIModel(
@@ -1255,6 +1267,10 @@ struct StoryViewer: View {
             onUserChanged: { uid in currentBucketUid = uid; loadBarViewers() },
             onItemSeen: { id in
                 currentStoryId = id
+                // DOWNLOAD WHAT IS COMING WHILE THIS ONE PLAYS. Signal fires this on every item
+                // change rather than only when a person's stories run out, and keeps THREE ahead —
+                // see StoryPrefetcher for the rule and where it is written down.
+                prefetchAhead(currentId: id)
                 // The synthetic still-uploading item has no real doc — don't persist it as "seen"
                 // (junk entry) or fetch its (non-existent) viewers.
                 guard id != StoriesService.uploadingStoryId else { return }
