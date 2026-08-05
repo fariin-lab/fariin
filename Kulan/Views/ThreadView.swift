@@ -3563,7 +3563,24 @@ struct ThreadView: View {
         }
 
         // Per-send HD button OR the global Sent Media Quality "High" → 1080p.
-        guard let prepared = await VideoTranscoder.prepare(url, hd: hd || ChatService.highQualitySends) else {
+        //
+        // AND IF THAT COMES OUT TOO BIG, GO AGAIN AT STANDARD RATHER THAN REFUSING TO SEND.
+        //
+        // Our "compression" can make a file BIGGER than the one it started with. A modern iPhone
+        // records HEVC; the export writes H.264, which is roughly half as efficient. So at 1080p the
+        // output can exceed the input — the owner's 18 second clip was a 23.7 MB HEVC source at 60fps
+        // and came back over the 25 MB storage limit, which refused it with a message about
+        // "permission" that named neither size nor quality.
+        //
+        // Telling somebody their video is too large when we could simply have sent it smaller is a
+        // bad answer. Standard is 540p, which for the same clip is a few megabytes.
+        let wantHD = hd || ChatService.highQualitySends
+        var exported = await VideoTranscoder.prepare(url, hd: wantHD)
+        if wantHD, let big = exported, big.data.count > Limits.videoMessageBytes {
+            print("sendVideo: HD export was \(big.data.count / 1_048_576)MB, over the limit — retrying at standard")
+            exported = await VideoTranscoder.prepare(url, hd: false)
+        }
+        guard let prepared = exported else {
             try? FileManager.default.removeItem(at: url)
             // The bubble is already on screen, so a failure has to be shown ON it. Before this the
             // function could return with only an alert, which would have been correct when nothing
@@ -3575,7 +3592,11 @@ struct ThreadView: View {
         guard prepared.data.count <= Limits.videoMessageBytes else {
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
-                sendError = "This video is too long to send (max \(Limits.videoMessageBytes / 1_048_576) MB after compression)."
+                // Says the actual size it reached, because "too long" was misleading: the owner's
+                // clip was 18 seconds. Length is not what fails, weight is, and a 60fps 1080p clip
+                // is heavy at any length. By the time this shows, the standard-quality retry above
+                // has already been tried, so there is genuinely nothing smaller left to offer.
+                sendError = "This video is \(prepared.data.count / 1_048_576) MB, and the most that can be sent is \(Limits.videoMessageBytes / 1_048_576) MB. Try a shorter clip."
             }
             return
         }
