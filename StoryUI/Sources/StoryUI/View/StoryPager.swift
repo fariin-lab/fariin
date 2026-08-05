@@ -180,10 +180,34 @@ struct StoryPager: UIViewControllerRepresentable {
         }
 
         // MARK: dismiss pan (down only) + require-to-fail on the pager's own scroll
+        /// How many times the scroll-view lookup below has come up empty. Capped so a pager that
+        /// genuinely never builds one cannot spin forever.
+        private var bindAttempts = 0
+
         func installDismissPan() {
             guard !didInstallPan, let pager else { return }
+            // THE ONE-SHOT FLAG USED TO BE SET HERE, BEFORE WE KNEW WE HAD ANYTHING, and that is why
+            // the viewers sheet came up over a full-size story that never shrank.
+            //
+            // This runs one runloop tick after `makeUIViewController`, and a UIPageViewController has
+            // not always built its internal scroll view by then. When it had not, `scroll` was nil,
+            // `internalScroll` and `StoryCardMorph.shared.card` were both set to nil, and
+            // `didInstallPan = true` meant it never looked again. The morph then silently did nothing
+            // for the whole session: `apply` guards on `card` and returns, so the story stayed exactly
+            // where it was while the sheet slid up over it. That is his screenshot.
+            //
+            // It failed silently in the worst way — the swipe-down dismiss still worked, because that
+            // pan goes on `pager.view` rather than on the scroll view, so nothing looked broken until
+            // somebody pulled the sheet.
+            guard let scroll = pager.view.subviews.compactMap({ $0 as? UIScrollView }).first else {
+                guard bindAttempts < 20 else { return }
+                bindAttempts += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.installDismissPan()
+                }
+                return
+            }
             didInstallPan = true
-            let scroll = pager.view.subviews.compactMap { $0 as? UIScrollView }.first
             internalScroll = scroll
             StoryPager.horizontalScroll = scroll   // getAngle gates the cube on ITS live activity
             // The SAME view the dismiss pan transforms is the one the viewers sheet shrinks. There is
@@ -225,7 +249,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
-                scroll?.panGestureRecognizer.require(toFail: pan)
+                scroll.panGestureRecognizer.require(toFail: pan)
                 dismissPan = pan
                 // The zoom navigationTransition installs its OWN hidden interactive-dismiss pan on the
                 // presentation chain, and it wins the race on fast flicks (re-lays-out the cover mid-
@@ -244,7 +268,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 let upPan = DirectionalPanGestureRecognizer(direction: .up, target: self, action: #selector(handleSwipeUp(_:)))
                 upPan.delegate = self
                 pager.view.addGestureRecognizer(upPan)
-                scroll?.panGestureRecognizer.require(toFail: upPan)
+                scroll.panGestureRecognizer.require(toFail: upPan)
             }
             // NO UIKit cube display-link: the cube is now the StoryUI library's SwiftUI rotation3DEffect
             // (getAngle in StoryDetailView). The old CADisplayLink applyCube fought it and caused the
