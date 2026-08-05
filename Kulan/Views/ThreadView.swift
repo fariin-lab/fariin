@@ -2819,6 +2819,10 @@ struct ThreadView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     Text(liveTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    // Who you are actually talking to. The header is the surface that matters most
+                    // for this mark: it is on screen for the whole conversation, and it is the last
+                    // thing somebody sees before they answer a stranger.
+                    if !isGroup { VerifiedMark(uid: otherUid, size: 14) }
                     // Constant reminder that messages self-delete here —
                     // this timer being invisible is how a whole chat history vanished unnoticed.
                     if repo.disappearSeconds > 0 {
@@ -4227,6 +4231,7 @@ struct ThreadView: View {
                     HStack(spacing: 10) {
                         AvatarView(name: c.name, photoUrl: conversation?.photos[c.uid], size: 30)
                         Text(c.name).foregroundStyle(.primary).lineLimit(1)
+                        VerifiedMark(uid: c.uid, size: 12)
                         Spacer()
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
@@ -5389,11 +5394,14 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: isMe ? .trailing : .leading, spacing: 3) {
                 // Sender name above others' messages in a group (colored, once per cluster).
                 if isGroup && !isMe && isFirstInCluster {
-                    Text(nameFor(message.authorId))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(senderColor)
-                        .padding(.leading, 12)
-                        .onTapGesture { onTapSender(message.authorId) }
+                    HStack(spacing: 4) {
+                        Text(nameFor(message.authorId))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(senderColor)
+                        VerifiedMark(uid: message.authorId, size: 11)
+                    }
+                    .padding(.leading, 12)
+                    .onTapGesture { onTapSender(message.authorId) }
                 }
                 // "Forwarded" tag — the owner's pick (the big messengers behavior, our drawing):
                 // above the bubble like the group sender name, ONE insertion point for every
@@ -6005,6 +6013,10 @@ struct MessageBubble: View, Equatable {
                 HStack(spacing: 10) {
                     AvatarView(name: card.name, photoUrl: card.photo, size: 44)
                     Text(card.name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    // A shared contact is a recommendation from somebody you trust, which is exactly
+                    // the shape a con takes. The mark belongs on the card, not only on the profile
+                    // it opens.
+                    VerifiedMark(uid: card.uid, size: 14)
                     Spacer(minLength: 6)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 14, weight: .semibold)).opacity(0.7)

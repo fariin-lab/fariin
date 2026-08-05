@@ -367,7 +367,10 @@ struct BlockedUsersView: View {
         HStack(spacing: 12) {
             AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 44)
             VStack(alignment: .leading, spacing: 2) {
-                Text(conv.name(for: me)).font(.body)
+                HStack(spacing: 5) {
+                    Text(conv.name(for: me)).font(.body)
+                    VerifiedMark(uid: conv.otherUid(me), size: 13)
+                }
                 if let h = handles[conv.otherUid(me)], !h.isEmpty {
                     Text("@\(h)").font(.caption).foregroundStyle(.secondary)
                 }

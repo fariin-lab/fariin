@@ -101,6 +101,7 @@ struct ReactorsSheet: View {
                 ForEach(reactions.sorted { $0.key < $1.key }, id: \.key) { uid, emoji in
                     HStack {
                         Text(nameFor(uid)).font(.body)
+                        VerifiedMark(uid: uid, size: 13)
                         Spacer()
                         Text(emoji).font(.title3)
                     }

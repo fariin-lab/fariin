@@ -404,6 +404,9 @@ struct ContactInfoView: View {
                     HStack(spacing: 7) {
                         AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
                         Text(shownName).font(.headline).lineLimit(1)
+                        // Not tappable: the whole collapsed bar is `allowsHitTesting(false)` so it
+                        // cannot eat scrolls, and the hero mark below is the one to tap anyway.
+                        VerifiedMark(uid: otherUid, size: 14)
                     }
                     .opacity(collapse)
                     // Rises the last few points rather than appearing in place, so it reads as the same
@@ -955,7 +958,14 @@ struct ContactInfoView: View {
                 SheetAction("View profile photo") { showProfilePhoto = true },
                 SheetAction("View story") { storyViewerGroup = publicStory },
             ])
-            Text(shownName).font(.title.weight(.bold))
+            // TAPPABLE HERE, and only here. A profile is the one screen where a tap on the mark
+            // cannot have meant something else, and it is where somebody goes when they actually
+            // want to know who this is. Anybody can type a tick into their display name; a real one
+            // opens a sheet that says what was checked, and a typed one does nothing at all.
+            HStack(spacing: 6) {
+                Text(shownName).font(.title.weight(.bold))
+                VerifiedMark(uid: otherUid, size: 20, explains: true)
+            }
             // Always reserve the @handle line (a space when it hasn't loaded yet) so the
             // async profile fetch fills it in WITHOUT pushing the action tiles down — that
             // height change was the up/down "jump" when opening a profile from Calls (cold
@@ -1038,8 +1048,14 @@ struct ContactInfoView: View {
     /// without pushing the buttons down.
     private func posterCaption(_ text: Color) -> some View {
         VStack(spacing: 3) {
-            Text(shownName).font(.title.weight(.bold)).foregroundStyle(text)
-                .lineLimit(2).multilineTextAlignment(.center)
+            // The poster header draws the same name as the classic hero, so it carries the same
+            // mark. Two headers with one of them missing a badge is how a verified account looks
+            // unverified to half the people who open it.
+            HStack(spacing: 6) {
+                Text(shownName).font(.title.weight(.bold)).foregroundStyle(text)
+                    .lineLimit(2).multilineTextAlignment(.center)
+                VerifiedMark(uid: otherUid, size: 20, explains: true)
+            }
             Text(handle.isEmpty ? " " : "@\(handle)")
                 .font(.subheadline).foregroundStyle(text.opacity(0.82))
                 .frame(minHeight: 20)

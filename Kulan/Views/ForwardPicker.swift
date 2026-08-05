@@ -173,6 +173,7 @@ struct ForwardPicker: View {
                             AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 44)
                             Text(c.displayName(me))
                                 .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
+                            if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 13) }
                             Spacer()
                             Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 20))

@@ -116,7 +116,13 @@ struct ChatSearchView: View {
                             HStack(spacing: 12) {
                                 AvatarView(name: u.name.isEmpty ? u.handle : u.name, photoUrl: u.photoUrl, size: 44)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(u.name.isEmpty ? u.handle : u.name).font(.system(size: 15, weight: .semibold))
+                                    // Search is where impersonation is actually attempted: somebody
+                                    // typing a company's name gets a list, and the mark is what
+                                    // separates the real one from the four copies underneath it.
+                                    HStack(spacing: 5) {
+                                        Text(u.name.isEmpty ? u.handle : u.name).font(.system(size: 15, weight: .semibold))
+                                        VerifiedMark(uid: u.id, size: 13)
+                                    }
                                     Text("@\(u.handle)").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()

@@ -439,10 +439,13 @@ struct CallHistoryRow: View {
                 HStack(spacing: 12) {
                     AvatarView(name: call.name, photoUrl: call.photoUrl, size: 46)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(count > 1 ? "\(call.name) (\(count))" : call.name)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(call.missedIncoming ? Color.red : Color.primary)
-                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Text(count > 1 ? "\(call.name) (\(count))" : call.name)
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(call.missedIncoming ? Color.red : Color.primary)
+                                .lineLimit(1)
+                            VerifiedMark(uid: call.otherUid, size: 13)
+                        }
                         HStack(spacing: 4) {
                             Image(systemName: directionIcon).font(.system(size: 11, weight: .semibold))
                             Text(directionText).font(.system(size: 14))
@@ -2017,10 +2020,22 @@ struct ChatRow: View, Equatable {
                     Text(conv.displayName(me))
                         .font(.system(size: 16, weight: unread > 0 ? .bold : .semibold))   // heavier when unread
                         .lineLimit(1)
-                    // The one place in the whole list a tick can appear, and it is drawn from a
-                    // hardcoded id rather than any field on any document — so there is nothing a
-                    // copycat account could write to earn one.
-                    if OfficialChannel.isOfficial(conv.id) { VerifiedTick(size: 15) }
+                    // TWO TICKS, from two different authorities, and they are not interchangeable.
+                    //
+                    // The official channel's is drawn from a HARDCODED id rather than any field on
+                    // any document, so there is nothing a copycat account could write to earn one.
+                    // That is the right rule for the one channel that must never be impersonable.
+                    //
+                    // Everybody else's comes from the verification record on their own document,
+                    // which only an admin holding `verify` can write. `VerifiedMark` draws nothing
+                    // when there is no record, so it needs no `if` around it — and no `if` around it
+                    // is the point, because an `if` here is a place for the rule to be restated
+                    // slightly differently.
+                    if OfficialChannel.isOfficial(conv.id) {
+                        VerifiedTick(size: 15)
+                    } else if !conv.isGroup {
+                        VerifiedMark(uid: conv.otherUid(me), size: 15)
+                    }
                     if muted {
                         Image(systemName: "bell.slash.fill")
                             .font(.system(size: 11)).foregroundStyle(.tertiary)

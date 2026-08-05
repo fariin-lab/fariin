@@ -523,6 +523,7 @@ struct GroupInfoView: View {
             HStack(spacing: 12) {
                 AvatarView(name: name(uid), photoUrl: conv?.photos[uid], size: 40)
                 Text(name(uid)).foregroundStyle(.primary)
+                VerifiedMark(uid: uid, size: 13)
                 Spacer()
                 if isAdmin { Text("Admin").font(.caption).foregroundStyle(.secondary) }
             }
@@ -616,6 +617,7 @@ struct AddMembersSheet: View {
             HStack(spacing: 12) {
                 AvatarView(name: name, photoUrl: photo, size: 40)
                 Text(name).foregroundStyle(.primary)
+                VerifiedMark(uid: id, size: 13)
                 Spacer()
                 Image(systemName: selected.contains(id) ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(selected.contains(id) ? Color.accentColor : .secondary)

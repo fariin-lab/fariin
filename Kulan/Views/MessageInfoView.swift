@@ -65,6 +65,7 @@ struct MessageInfoView: View {
         HStack(spacing: 12) {
             AvatarView(name: nameFor(uid), photoUrl: photoFor(uid), size: 40)
             Text(nameFor(uid)).font(.system(size: 16, weight: .medium))
+            VerifiedMark(uid: uid, size: 13)
             Spacer()
         }
     }
