@@ -69,6 +69,27 @@ struct StoryDetailView: View {
     @State private var isBuffering: Bool = false
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
 
+    /// The index is RIGHT BEFORE THE FIRST FRAME, not corrected after it. `timerProgress` started
+    /// at 0 and the jump to the first unseen item lived in `.onAppear` — so the first body
+    /// evaluation always rendered item 0, the OLDEST story. For a video that mounts a player: the
+    /// old clip's poster (and, warm from cache, the clip itself) painted for a beat before the view
+    /// switched to the story actually being opened. That is his "briefly displays a different video
+    /// that was already in my Story". The `.onAppear`/`.onChange` corrections stay — they become
+    /// no-ops on first paint and still handle bucket changes.
+    init(viewModel: StoryViewModel, model: StoryUIModel, isPresented: Binding<Bool>,
+         userClosure: UserCompletionHandler?, onProfile: ((StoryUIUser) -> Void)? = nil,
+         onItemSeen: ((String) -> Void)? = nil, showMore: Bool = false, isDismissing: Bool = false) {
+        self.viewModel = viewModel
+        _model = State(initialValue: model)
+        _isPresented = isPresented
+        self.userClosure = userClosure
+        self.onProfile = onProfile
+        self.onItemSeen = onItemSeen
+        self.showMore = showMore
+        self.isDismissing = isDismissing
+        _timerProgress = State(initialValue: CGFloat(model.stories.firstIndex(where: { !$0.isSeen }) ?? 0))
+    }
+
     private var messageViewPosition: CGFloat {
         return -keyboardManager.currentHeight
     }

@@ -12,6 +12,22 @@ public enum Result<T> {
     case failure(String)
 }
 
+/// App-side seeding: the story UPLOADER holds the exact bytes its download URL will return, so it
+/// can put them where `CacheManager.loadVideo` looks and the just-posted story plays with zero
+/// network instead of re-downloading its own upload. Public because the poster lives in the app
+/// target; CacheManager itself stays internal.
+public enum StoryVideoSeed {
+    public static func seed(_ data: Data, for remoteURL: URL) {
+        guard data.count > 4096,   // below isUsableCacheFile's floor it would only wedge the cache
+              let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return }
+        let dir = caches.appendingPathComponent("VideoCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent(CacheManager.cacheFileName(for: remoteURL))
+        try? data.write(to: file, options: .atomic)
+    }
+}
+
 final class CacheManager: NSObject {
 
     private let fileManager = FileManager.default

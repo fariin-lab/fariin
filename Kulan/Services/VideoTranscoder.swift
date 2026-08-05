@@ -144,6 +144,15 @@ enum VideoTranscoder {
             session.timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: cap, preferredTimescale: 600))
             duration = cap
         }
+        // PROPORTIONAL TO LENGTH, NOT JUST THE FLAT CEILING. The flat cap above only defends the
+        // 90-second worst case: an 18-second 60fps clip sailed under it at ~19 MB — 8 Mbps of
+        // bytes the upload then carried for no visible gain, which is most of "uploading a story
+        // video takes much longer than expected" on a short clip. ~3.2 Mbps is generous for
+        // 540p/720p H.264 (the big messengers ship less); AVFoundation only lowers quality as far
+        // as it must, so a clip already under its target is untouched. Sits AFTER the timeRange
+        // block because `duration` is only final once the slice and the cap have had their say.
+        session.fileLengthLimit = min(session.fileLengthLimit,
+                                      max(Int64(duration * 400_000), 2 * 1024 * 1024))
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
         try? FileManager.default.removeItem(at: out)

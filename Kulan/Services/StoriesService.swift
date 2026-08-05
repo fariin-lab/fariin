@@ -75,12 +75,19 @@ final class StoriesService {
     // separate placeholder screen. Its image is served from URLCache (pre-stored on upload start); its
     // fixed id marks it so the viewer shows the "Uploading…" bar and blocks delete.
     static let uploadingStoryId = "story.uploading.placeholder"
-    private static let uploadingURLString = "https://fariin.local/uploading-placeholder.jpg"
+    /// PER-POST, not a constant. It was one fixed URL, and StoryUI's ImageLoader keeps decoded
+    /// images in StoryMemoryCache keyed by absoluteString — so the placeholder for post B could
+    /// serve post A's picture out of that cache (for a video story, A's poster: his "shows a
+    /// different video that was already in my Story" report). URLCache was refreshed each post;
+    /// the memory cache in FRONT of it was not, and could not be from here. A fresh path per post
+    /// misses every cache by construction. The path must vary, not a query — the disk cache's key
+    /// ignores queries.
+    private var uploadingURLString = "https://fariin.local/uploading-placeholder.jpg"
     var uploadingStory: Story? {
         guard uploading, uploadingImage != nil else { return nil }
         return Story(id: Self.uploadingStoryId, authorUid: uid, createdAt: uploadStartedAt,
                      expiresAt: uploadStartedAt.addingTimeInterval(24 * 3600),
-                     mediaUrl: Self.uploadingURLString, allowsReplies: false)
+                     mediaUrl: uploadingURLString, allowsReplies: false)
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
@@ -90,9 +97,10 @@ final class StoriesService {
         let previous = uploadTask
         uploadingImage = UIImage(data: image)
         uploadStartedAt = Date()
+        uploadingURLString = "https://fariin.local/uploading-\(UUID().uuidString).jpg"
         // Pre-store the picked bytes in URLCache under the synthetic URL so the injected uploading item
         // renders instantly in the viewer (StoryUI's ImageLoader reads URLCache first).
-        if let u = URL(string: Self.uploadingURLString) {
+        if let u = URL(string: uploadingURLString) {
             let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: image.count, textEncodingName: nil)
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: image), for: URLRequest(url: u))
         }
@@ -256,7 +264,8 @@ final class StoriesService {
         let previous = uploadTask
         uploadingImage = UIImage(data: thumbnail)
         uploadStartedAt = Date()
-        if let u = URL(string: Self.uploadingURLString) {
+        uploadingURLString = "https://fariin.local/uploading-\(UUID().uuidString).jpg"
+        if let u = URL(string: uploadingURLString) {
             let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: thumbnail.count, textEncodingName: nil)
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: thumbnail), for: URLRequest(url: u))
         }
@@ -272,10 +281,16 @@ final class StoriesService {
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
+                self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
                 guard self.currentUploadToken == token else { return }
                 self.uploading = false; self.uploadingImage = nil; self.uploadTask = nil; self.uploadError = failure
             }
         }
+        // IN THE CANCEL CHAIN, like the photo path always was. This append was missing here, so
+        // with video A uploading and B queued, the X reached only B — A finished and POSTED the
+        // thing the user watched themselves cancel. The exact bug the photo path's comment says
+        // was fixed once already; it had been re-introduced for video-first chains.
+        if let t = uploadTask { queuedUploads.append(t) }
     }
 
     /// A long video becomes SEVERAL stories, in order, instead of being cut down to the first 90
@@ -396,16 +411,27 @@ final class StoriesService {
 
         do {
             try Task.checkCancellation()
+            // THE TWO PUTS RUN TOGETHER, and the URL asks run together after them. This chain was
+            // strictly serial — thumb, then video, then two downloadURL round trips one at a time —
+            // so every video story paid the thumb's upload and ~two extra round trips on top of the
+            // one transfer that matters. Same relaxation the photo path already uses (storage.rules
+            // stopped requiring the doc first; see the note there). The doc write above has already
+            // happened, so recipients' listeners still see either the full story or nothing.
             let thumbRef = Storage.storage().reference().child(thumbPath)
-            let thumbMeta = StorageMetadata(); thumbMeta.contentType = "image/jpeg"
-            _ = try await thumbRef.putDataAsync(prepared.thumbnail, metadata: thumbMeta)
-            try Task.checkCancellation()
             let videoRef = Storage.storage().reference().child(videoPath)
-            let videoMeta = StorageMetadata(); videoMeta.contentType = "video/mp4"
-            _ = try await videoRef.putDataAsync(prepared.data, metadata: videoMeta)
+            async let thumbPut: Void = {
+                let thumbMeta = StorageMetadata(); thumbMeta.contentType = "image/jpeg"
+                _ = try await thumbRef.putDataAsync(prepared.thumbnail, metadata: thumbMeta)
+            }()
+            async let videoPut: Void = {
+                let videoMeta = StorageMetadata(); videoMeta.contentType = "video/mp4"
+                _ = try await videoRef.putDataAsync(prepared.data, metadata: videoMeta)
+            }()
+            _ = try await (thumbPut, videoPut)
             try Task.checkCancellation()
-            let thumbUrl = try await thumbRef.downloadURL().absoluteString
-            let videoUrl = try await videoRef.downloadURL().absoluteString
+            async let tURL = thumbRef.downloadURL()
+            async let vURL = videoRef.downloadURL()
+            let (thumbUrl, videoUrl) = try await (tURL.absoluteString, vURL.absoluteString)
             // One atomic update: recipients' listeners either see the full story or nothing.
             try await docRef.updateData(["mediaUrl": videoUrl, "thumbUrl": thumbUrl])
             // Warm both caches with the poster so my-story cards + the viewer's first frame are instant.
@@ -418,6 +444,13 @@ final class StoriesService {
                 URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: prepared.thumbnail),
                                                     for: URLRequest(url: u))
             }
+            // AND THE VIDEO ITSELF. Only the poster was warmed, so opening the just-posted story
+            // re-downloaded the 4-23MB file the phone had JUST finished uploading, on the same
+            // connection — the poster sat under a spinner for the whole round trip, which is his
+            // "after the upload finishes it keeps showing the loading state". The uploaded bytes
+            // ARE what the URL returns; put them where StoryUI's video cache looks and the story
+            // plays with zero network.
+            if let u = URL(string: videoUrl) { StoryVideoSeed.seed(prepared.data, for: u) }
         } catch {
             try? await docRef.delete()
             try? await Storage.storage().reference().child(videoPath).delete()
