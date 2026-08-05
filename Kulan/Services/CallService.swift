@@ -1208,11 +1208,16 @@ final class CallService: NSObject {
         // The callee ALSO refuses on their own side, and that stays: this is a courtesy so the caller
         // gets a sentence instead of a call that dies for no visible reason. It is not the security
         // boundary and must never be treated as one.
+        // Freshen on EVERY press, including a refused one. This used to run only when the call went
+        // through, so a person who turned calls back ON stayed refused forever on any surface
+        // without the live thread listener (Calls tab, search) — the index had no path back to yes.
+        // The decision itself stays synchronous on the cached answer (miss means ring); inside an
+        // open chat the thread's own users-doc listener keeps the answer current in real time.
+        Task { await CallPrivacyIndex.refresh(uid) }
         if CallPrivacyIndex.refuses(uid) {
             restrictedCallee = RestrictedCallee(uid: uid, name: name, photo: photo, fromProfile: fromProfile)
             return
         }
-        Task { await CallPrivacyIndex.refresh(uid) }   // keep the answer fresh for next time
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
         startedAsVideo = video
         noteVideo()
