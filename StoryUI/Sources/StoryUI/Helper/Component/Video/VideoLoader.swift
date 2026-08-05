@@ -352,6 +352,22 @@ private extension PlayerView {
     /// stays on top of it, because a video genuinely can take a moment and something has to say so —
     /// but it turns over the picture instead of over nothing. Black is only the fallback for a clip
     /// whose poster we have not got.
+    /// The poster as a frozen dark blur: aspect-fill at 1/8 scale (the upscale's interpolation is
+    /// the blur) with the dark veil baked in. One draw, at load time, never re-sampled.
+    static func frozenVeil(of poster: UIImage) -> UIImage {
+        let small = CGSize(width: max(8, UIScreen.main.bounds.width / 8),
+                           height: max(8, UIScreen.main.bounds.height / 8))
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        return UIGraphicsImageRenderer(size: small, format: fmt).image { ctx in
+            let s = max(small.width / max(poster.size.width, 1), small.height / max(poster.size.height, 1))
+            let w = poster.size.width * s, h = poster.size.height * s
+            poster.draw(in: CGRect(x: (small.width - w) / 2, y: (small.height - h) / 2, width: w, height: h))
+            UIColor.black.withAlphaComponent(0.45).setFill()
+            ctx.fill(CGRect(origin: .zero, size: small))
+        }
+    }
+
     func addActivityIndicatory() {
         removeActivityIndicatory()
         let w = UIScreen.main.bounds.width
@@ -360,16 +376,21 @@ private extension PlayerView {
         view.backgroundColor = .black
         view.tag = 999
         if let poster = posterImage {
-            let iv = UIImageView(image: poster)
+            // STATIC PIXELS, NOT A LIVE MATERIAL. This used to be a UIVisualEffectView over the
+            // poster, and a visual effect re-samples what is behind it EVERY FRAME and composites
+            // outside its view's transform — so the moment the viewers-sheet morph scaled the card,
+            // the veil shimmered and shook against the poster it was supposed to be part of (owner
+            // 2026-08-05: "scroll up video blur... is shaking"). A photo story never shook because
+            // ImageLoader FREEZES its blur into a bitmap when the sheet opens. The video's veil is
+            // now born frozen: the poster downscaled hard (a downscale is a blur — the profile
+            // poster's wash trick) and darkened once, drawn as an ordinary image that transforms
+            // like every other pixel on the card.
+            let iv = UIImageView(image: Self.frozenVeil(of: poster))
             iv.frame = view.bounds
             iv.contentMode = .scaleAspectFill
             iv.clipsToBounds = true
             iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(iv)
-            let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
-            blur.frame = view.bounds
-            blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            view.addSubview(blur)
         }
         self.addSubview(view)
         let activityView = UIActivityIndicatorView(style: .large)

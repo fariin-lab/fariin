@@ -2036,8 +2036,6 @@ struct MyStoriesCarousel: View {
     /// The jump was the stick, and the scaling looked choppy because it is computed from the same
     /// number. A CGFloat animates, so position and scale now move together for the whole glide.
     @State private var scroll: CGFloat = 0
-    @State private var scrollAtDragStart: CGFloat = 0
-    @State private var dragging = false
 
     /// The card the carousel considers centred. Derived, never stored: with `scroll` continuous
     /// there is exactly one answer and it cannot drift from what is on screen.
@@ -2062,20 +2060,8 @@ struct MyStoriesCarousel: View {
         self._scroll = State(initialValue: CGFloat(stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0))
     }
 
-    @State private var interactGen = 0   // invalidates a stale "settled" callback when a new swipe starts
-    // Swipe finished settling → hand the centre back to the real story (identical pixels = invisible swap).
-    /// `after`: how long the glide that just started will take. The hand-off has to wait for the
-    /// card to actually stop — handing the centre back to the real story on a still-moving card was
-    /// a logged bug, and a long flick now glides for longer than the old fixed 0.55s allowed.
-    private func endInteractionSoon(after: Double = 0.42) {
-        interactGen += 1
-        let gen = interactGen
-        // The spring's tail outlives its response: a 1-3pt drift was still visible well after the
-        // stated duration, which is why this waits a beat past it rather than exactly for it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + after + 0.16) {
-            if gen == interactGen, !dragging { onInteracting(false) }
-        }
-    }
+    // The settle timer that used to live here is gone: the scroller's own delegate events say
+    // exactly when the row has stopped, so the story hand-off no longer waits a guessed beat.
 
     // Carousel geometry (ported from the reference container). itemSpacing=12;
     // side cards are 54pt narrower (sideVisibleItemWidth); fullItemScrollDistance / halfItemScroll-
@@ -2125,67 +2111,23 @@ struct MyStoriesCarousel: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: slotH)
-            .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 4)
-                    .onChanged { v in
-                        if !dragging {
-                            // Engage almost immediately (5pt, was 12) so the cards start tracking the
-                            // finger right away — the 12pt dead-zone read as laggy.
-                            guard abs(v.translation.width) > 5,
-                                  abs(v.translation.width) > abs(v.translation.height) * 1.2 else { return }
-                            dragging = true
-                            scrollAtDragStart = scroll
-                            interactGen += 1
-                            onInteracting(true)
-                        }
-                        // 1:1 finger tracking, expressed as a position rather than an offset, so the
-                        // release below has nothing to convert.
-                        scroll = scrollAtDragStart - v.translation.width / fullDist
-                    }
-                    .onEnded { v in
-                        let wasDragging = dragging
-                        dragging = false
-                        if !wasDragging {
-                            // A fast flick that never crossed the engage gate still turns the page —
-                            // otherwise it's a tap: engage so the momentum path below runs.
-                            if abs(v.predictedEndTranslation.width) < fullDist * 0.15 { return }
-                            scrollAtDragStart = scroll
-                            onInteracting(true)
-                        }
-                        // MOMENTUM: predictedEndTranslation already carries the gesture VELOCITY (UIKit
-                        // projects where the finger would coast to). Convert that projected landing to
-                        // card-steps so a quick flick GLIDES across as many cards as the fling would
-                        // carry (capped so it never flies off), and a gentle pull past ~40% advances one.
-                        let predicted = v.predictedEndTranslation.width
-                        // Both `Int(_:)` calls below are on values that came out of a division or out
-                        // of a gesture, and `Int(_:)` traps rather than clamps. Guarded for the same
-                        // reason as `index` above.
-                        let projected = predicted / fullDist
-                        let hardSteps = projected.isFinite ? Int(projected.rounded()) : 0
-                        let softStep = abs(v.translation.width) > fullDist * 0.4        // gentle-drag commit
-                            ? (v.translation.width < 0 ? -1 : 1) : 0
-                        var steps = abs(hardSteps) >= 1 ? hardSteps : softStep
-                        steps = max(-6, min(6, steps))                                  // never fly off
-                        // Drag/flick RIGHT (+) reveals the PREVIOUS card → the position decreases.
-                        let base = scrollAtDragStart.isFinite ? Int(scrollAtDragStart.rounded()) : 0
-                        let ni = max(0, min(n - 1, base - steps))
-                        // ONE animation on ONE number, so every card's x AND scale are interpolated by
-                        // the same curve for the whole glide — which is the whole point: the scaling
-                        // can no longer stutter, because it is the same value that is moving.
-                        //
-                        // The further the flick throws it, the longer it is given to get there, so a
-                        // four-card fling decelerates instead of arriving at the speed of a one-card
-                        // nudge. Damping 0.86 lands without a wobble at these distances.
-                        let travel = abs(CGFloat(ni) - scroll)
-                        let response = min(0.62, 0.34 + Double(travel) * 0.07)
-                        withAnimation(.spring(response: response, dampingFraction: 0.86)) {
-                            scroll = CGFloat(ni)
-                        }
-                        if stories.indices.contains(ni) { activeId = stories[ni].id }
-                        endInteractionSoon(after: response)
-                    }
-            )
+            // TELEGRAM'S ENGINE, not a SwiftUI gesture (owner 2026-08-05: "make it exactly telegram
+            // no lag and clear... deep read first"). The overlay owns the row's touches; a hidden
+            // UIScrollView's re-homed pan does the physics, willEndDragging snaps to a whole card,
+            // and `scroll` is fed continuously from its contentOffset — the same number the cards
+            // below already draw from, so the drag, the glide and the scale are one motion on the
+            // native deceleration curve. The hand-rolled momentum formula, the engage dead-zone and
+            // the settle timer are deleted with the gesture that needed them; settle is now an
+            // exact scroll-view event, so the story hand-off happens when the row has actually
+            // stopped, not a guessed 0.58s later.
+            .overlay {
+                CarouselScroller(count: n, fullDist: fullDist, scroll: $scroll,
+                                 onInteracting: { on in onInteracting(on) },
+                                 onSettled: { i in
+                                     if stories.indices.contains(i) { activeId = stories[i].id }
+                                 },
+                                 onTap: { steps in if steps == 0 { onActiveTap() } })
+            }
             // The centred card's count, big + centred under the carousel (mockup).
             countRow(views: active.count, likes: activeReacts, big: true)
         }
@@ -2198,9 +2140,10 @@ struct MyStoriesCarousel: View {
             guard stories.indices.contains(i), stories[i].id != activeId else { return }
             activeId = stories[i].id
         }
-        // External retarget (rare) → recentre, but never while the finger is dragging.
+        // External retarget (rare) → recentre. The scroller ignores pushed positions while a
+        // finger is down (its sync checks isTracking), so this cannot fight a live drag.
         .onChange(of: activeId) { _, v in
-            guard !dragging, let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
+            guard let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
             withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) { scroll = CGFloat(ni) }
         }
         // Re-seed from the opened-on story in case `stories` was still loading at init.
@@ -2235,18 +2178,8 @@ struct MyStoriesCarousel: View {
             // (Cover-flow scale now comes from the itemScale applied in body — no per-card
             // visualEffect scale here, or it would double.)
             .id(s.id)
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))   // tappable even with hidden content
-            .onTapGesture {
-                if s.id == activeId { onActiveTap() }
-                else if let ni = stories.firstIndex(where: { $0.id == s.id }) {
-                    onInteracting(true)   // tap-to-recentre animates cards too — same hand-off dance
-                    // `scroll`, not `index` — the position is the one continuous number now and the
-                    // index is derived from it. Tap-to-recentre glides on the same curve a flick does.
-                    withAnimation(.interactiveSpring(response: 0.4, dampingFraction: 0.84)) { scroll = CGFloat(ni) }
-                    activeId = s.id
-                    endInteractionSoon()
-                }
-            }
+            // Taps live on the scroller overlay now (centre card → collapse, side card → native
+            // glide to it) — a gesture here would never fire underneath it.
     }
 
     // 0 when the card is centred on screen, → 1 one slot-width away (clamped). Drives the cover-flow scale.
