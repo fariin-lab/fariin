@@ -28,10 +28,6 @@ struct NotificationsSettingsView: View {
     @State private var resetting = false
 
     private var me: String { AuthService.shared.uid ?? "" }
-    private var mutedCount: Int {
-        let now = Date().timeIntervalSince1970 * 1000
-        return ConversationsRepository.shared.conversations.filter { $0.isMuted(me, now: now) }.count
-    }
 
     var body: some View {
         List {
@@ -87,11 +83,17 @@ struct NotificationsSettingsView: View {
                         if resetting { Spacer(); ProgressView() }
                     }
                 }
-                // Enabled when ANY customization exists, not just a mute (audit): a chat with a
-                // custom tone and nothing muted left this greyed out, in exactly the case it is for.
-                .disabled(resetting || (mutedCount == 0 && !SoundStore.hasAnyCustom))
+                // ALWAYS TAPPABLE (owner 2026-08-05: "reset all custom notifications is not
+                // working" — with his screenshot of this row sitting greyed out). It used to be
+                // disabled unless a mute or a per-chat tone existed, and that gate had two ways to
+                // be wrong: `mutedCount` read the conversations repo WITHOUT observing it, so the
+                // answer could go stale the moment it was computed; and the things HE had customised
+                // — the global sound, Message Preview, the in-app switches, all on this very page —
+                // were not counted and were not reset. A reset that is a no-op costs nothing, so
+                // the honest gate is none at all.
+                .disabled(resetting)
             } footer: {
-                Text("Undo all custom notification settings for your chats.")
+                Text("Undo all custom notification settings, including per-chat sounds and muted chats.")
             }
         }
         .navigationTitle("Notifications")
@@ -111,6 +113,17 @@ struct NotificationsSettingsView: View {
             await ChatService.setMute(c.id, until: 0)
         }
         SoundStore.clearAllCustom()   // per-chat message/call tones — "ALL custom settings"
+        // THE PAGE'S OWN SETTINGS TOO (the reference app's Reset does the same): the global tone,
+        // the preview switch and the in-app block go back to their defaults, on the device and on
+        // the server where the server reads them. Show Notifications is deliberately left alone —
+        // that switch is push REGISTRATION, not a preference, and a reset must never silently
+        // re-subscribe somebody who turned notifications off.
+        messagePreview = true
+        soundName = "rebound"
+        inAppSound = true
+        inAppVibrate = true
+        inAppPreview = true
+        try? await ProfileStore.shared.setNotifPrefs(preview: true, sound: "rebound")
         resetting = false
     }
 }
