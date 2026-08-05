@@ -12,8 +12,19 @@ final class StoryViewModel: ObservableObject {
     @Published var currentStoryUser: String = ""
     @Published var stories: [StoryUIModel] = []
     
+    /// NEVER ZERO, and that floor is what stops the app dying.
+    ///
+    /// `getProgressBarFrame` divides by this. A duration of 0 made it `0.005 / 0` = INFINITY, which
+    /// went straight into `timerProgress`, and the next `getCurrentIndex()` did `Int(infinity)` —
+    /// which is a Swift runtime trap, not a wrong answer. EXC_BREAKPOINT on the main thread inside a
+    /// GeometryReader update, which is exactly the crash report from build 463.
+    ///
+    /// A zero duration was always going to do this; it only became reachable when the video's length
+    /// started arriving asynchronously. The caller has been fixed too, but the division is the thing
+    /// that turns a bad number into a dead app, so it is guarded here as well.
     func getVideoProgressBarFrame(duration: Double) -> Double {
-        return duration * 0.1 // convert any second to  between 0 - 1 second
+        let seconds = duration.isFinite && duration > 0 ? duration : Constant.storySecond
+        return max(0.1, seconds * 0.1) // convert any second to between 0 - 1 second
     }
     
     func getStoryModel() -> StoryUIModel? {

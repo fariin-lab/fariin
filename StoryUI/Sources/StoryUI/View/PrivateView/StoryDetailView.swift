@@ -342,7 +342,12 @@ private extension StoryDetailView {
                 state: $state,
                 player: player
             ) { media, duration in
-                model.stories[index].duration = duration
+                // ONLY A REAL LENGTH REPLACES THE ONE WE HAVE. Making `getVideoLength` asynchronous
+                // meant this callback now fires at `.ready` with duration still 0, and writing that
+                // zero here is what set up the divide-by-zero that killed build 463. The story
+                // already carries a sensible length from the host; the player refines it when it
+                // knows, and until then the existing one stands.
+                if duration.isFinite, duration > 0 { model.stories[index].duration = duration }
                 start(index: index)
                 state = media
             }
@@ -692,6 +697,12 @@ private extension StoryDetailView {
     }
     
     func getCurrentIndex() -> Int {
+        // `Int(_:)` on a Double TRAPS for infinity and for NaN — it does not clamp and it does not
+        // return zero, it kills the process. `timerProgress` is accumulated by division, so one bad
+        // divisor poisons it permanently and every later read of this crashes. Belt and braces with
+        // the divisor guard in `getVideoProgressBarFrame`: this is read on every layout pass, and a
+        // layout pass is the worst place to find out.
+        guard timerProgress.isFinite else { return 0 }
         return max(0, min(Int(timerProgress), model.stories.count - 1))   // never -1 on an empty bucket
     }
     
