@@ -255,6 +255,26 @@ struct ForwardPicker: View {
         // download, a decrypt, a re-encrypt and an upload had all finished. You landed in the chat and
         // watched an empty space (owner report). The bubble now appears immediately and the real
         // message replaces it in place, matched on this clientId.
+        // THE POSTER, RESOLVED ONCE, BEFORE THE BUBBLES ARE BUILT.
+        //
+        // A forwarded copy carries the ORIGINAL message's `thumbUrl` and `thumbEnc`, and those were
+        // sealed for the SOURCE conversation. The bubble renders with `SecureImageView(..., cid: cid)`
+        // where cid is the TARGET chat, so it tries to open the source chat's thumbnail with the
+        // target chat's key and cannot. The picture only appeared if the bytes happened to be sitting
+        // in the cache already, and otherwise the bubble stayed blank until the real message came
+        // back — which is the late draw the owner saw when forwarding a video.
+        //
+        // Handing the copy a LOCAL thumbnail sidesteps the key entirely, and it is what every other
+        // optimistic bubble in the app already does: draw from bytes the phone is holding. A cache
+        // miss changes nothing, so this can only ever make the bubble earlier.
+        var posters: [String: Data] = [:]   // message id -> jpeg for the pending bubble
+        for m in ordered where m.localImageData == nil {
+            guard let url = m.thumbUrl ?? m.imageUrl, !url.isEmpty,
+                  let ui = DiskImageCache.shared.smallImageSync(url),
+                  let jpeg = ui.jpegData(compressionQuality: 0.8) else { continue }
+            posters[m.id] = jpeg
+        }
+
         var ids: [String: [String]] = [:]   // cid -> clientIds, so a failure can clear the right ones
         for cid in targets where cid != src {
             for m in ordered {
@@ -267,6 +287,7 @@ struct ForwardPicker: View {
                 p.forwarded = true
                 p.reactions = [:]     // reactions belong to the ORIGINAL message, not this copy
                 p.replyTo = nil       // and so does whatever it was replying to over there
+                if p.localImageData == nil { p.localImageData = posters[m.id] }
                 PendingOutbox.add(p, to: cid)
                 ids[cid, default: []].append(clientId)
             }
