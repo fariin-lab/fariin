@@ -267,9 +267,34 @@ struct ForwardPicker: View {
         // Handing the copy a LOCAL thumbnail sidesteps the key entirely, and it is what every other
         // optimistic bubble in the app already does: draw from bytes the phone is holding. A cache
         // miss changes nothing, so this can only ever make the bubble earlier.
-        var posters: [String: Data] = [:]   // message id -> jpeg for the pending bubble
-        for m in ordered where m.localImageData == nil {
-            guard let url = m.thumbUrl ?? m.imageUrl, !url.isEmpty,
+        var posters: [String: Data] = [:]        // message id -> jpeg for the pending bubble
+        var albumPosters: [String: [Data]] = [:] // message id -> one jpeg per album tile
+        for m in ordered {
+            // AN ALBUM HITS THE SAME WALL ONCE PER TILE. Every AlbumItem carries its own `enc`,
+            // sealed for the source conversation, so a forwarded four-photo album had four thumbnails
+            // it could not open and sat blank until the server echo — the owner timed it at 10.65s.
+            // The single-message fix above did nothing for these, because an album's pictures are in
+            // `album[i].imageUrl`, not in `thumbUrl`/`imageUrl`.
+            if m.isAlbum, m.localAlbum.isEmpty, !m.album.isEmpty {
+                var tiles: [Data] = []
+                var gotAny = false
+                for item in m.album {
+                    if let ui = DiskImageCache.shared.smallImageSync(item.imageUrl),
+                       let jpeg = ui.jpegData(compressionQuality: 0.8) {
+                        tiles.append(jpeg); gotAny = true
+                    } else {
+                        // A miss stays a hole of the RIGHT LENGTH. The grid sizes itself from
+                        // localAlbum.count once that array exists, and the tile falls through to the
+                        // encrypted path on its own because UIImage(data:) of nothing is nil. So a
+                        // partly-cached album draws the tiles it has and waits only for the rest.
+                        tiles.append(Data())
+                    }
+                }
+                if gotAny { albumPosters[m.id] = tiles }
+                continue
+            }
+            guard m.localImageData == nil,
+                  let url = m.thumbUrl ?? m.imageUrl, !url.isEmpty,
                   let ui = DiskImageCache.shared.smallImageSync(url),
                   let jpeg = ui.jpegData(compressionQuality: 0.8) else { continue }
             posters[m.id] = jpeg
@@ -288,6 +313,7 @@ struct ForwardPicker: View {
                 p.reactions = [:]     // reactions belong to the ORIGINAL message, not this copy
                 p.replyTo = nil       // and so does whatever it was replying to over there
                 if p.localImageData == nil { p.localImageData = posters[m.id] }
+                if p.localAlbum.isEmpty, let tiles = albumPosters[m.id] { p.localAlbum = tiles }
                 PendingOutbox.add(p, to: cid)
                 ids[cid, default: []].append(clientId)
             }
