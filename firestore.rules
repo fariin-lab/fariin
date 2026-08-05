@@ -63,9 +63,15 @@ service cloud.firestore {
       // `handleLower` straight onto its own document walked around the whole thing and could have
       // taken any name already in use. The client has never written these fields — every one comes
       // from the server — so refusing them costs nothing.
+      // `verification` is here for the most important reason on the list: a badge somebody can give
+      // themselves is not a badge. This is the whole security model — the client is never trusted to
+      // write it, so spoofing it locally, editing an API response or replacing the app changes
+      // nothing that anybody else can see. Only the rule below, gated on an admin capability, may
+      // touch it.
       function serverOnlyUserFields() {
         return ['banned', 'bannedAt', 'bannedBy', 'banReason',
-                'handle', 'handleLower', 'usernameHistory'];
+                'handle', 'handleLower', 'usernameHistory',
+                'verification'];
       }
 
       allow create: if signedIn() && request.auth.uid == uid
@@ -80,6 +86,18 @@ service cloud.firestore {
       allow update: if adminCan('moderate')
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['banned', 'bannedAt', 'bannedBy', 'banReason']);
+
+      // VERIFICATION. A separate capability from `moderate` on purpose: banning somebody and marking
+      // an account as genuine are different powers and should be grantable separately. `hasOnly` is
+      // what stops this being a general "edit any profile" right — an admin with `verify` cannot
+      // rename anyone, change a photo or touch a privacy setting, only this one map.
+      //
+      // Note this rule GRANTS and never revokes: rules are an OR, not a chain. That is exactly the
+      // mistake that left the ban flag writable by the banned account, so the field is in
+      // serverOnlyUserFields() above as well — the owner's own update rule refuses it there, and this
+      // is the only path that allows it.
+      allow update: if adminCan('verify')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['verification']);
       // NO delete. (A copy of the message-request decline rule was pasted here by mistake; it read
       // conversation fields off a user document, so it could only ever error, and the real one lives
       // on /conversations/{cid} where it belongs. Removed 2026-08-04, no behaviour change.)
@@ -202,6 +220,24 @@ service cloud.firestore {
         && resource.data.get('role', '') == 'admin'
         && request.resource.data.get('role', '') == 'admin';
       allow delete: if adminIsOwner() && resource.data.get('role', '') == 'admin';
+    }
+
+    // VERIFICATION AUDIT. Every grant, change, suspension and removal, with who did it, when, what it
+    // was before, what it became, and why.
+    //
+    // APPEND ONLY, AND THAT IS THE POINT: no update, no delete, for anybody, including the owner. An
+    // audit trail an administrator can edit answers no question worth asking. A record written here
+    // is permanent, and if one is wrong the correction is another record.
+    //
+    // Readable only by admins. It carries internal reasons about real people and is nobody else's
+    // business — least of all the person it is about, who would learn exactly what was noticed.
+    match /verificationAudit/{entryId} {
+      allow read: if adminCan('verify');
+      // Pinned to the caller: an admin cannot write an entry attributed to somebody else, so the
+      // trail cannot be used to blame a colleague for your own decision.
+      allow create: if adminCan('verify')
+        && request.resource.data.get('adminUid', '') == request.auth.uid;
+      allow update, delete: if false;
     }
 
     // A send to CHOSEN PEOPLE never touches /announcements. The words would be readable by anybody

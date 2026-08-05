@@ -37,6 +37,7 @@ enum SessionWipe {
         AppRouter.shared.pendingInviteCode = nil
         wipeAccountPrefs()
         CallPrivacyIndex.clear()                // who-refuses-calls is per-account too
+        VerificationIndex.clear()               // and who is verified — the next account starts blank
         Crypto.shared.wipeIdentity()            // fresh keypair for the next account
     }
 

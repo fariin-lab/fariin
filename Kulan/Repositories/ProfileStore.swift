@@ -99,6 +99,10 @@ final class ProfileStore {
         // The same one hook feeds the call-privacy answer, so pressing the call button has something
         // to read on the frame it is pressed. See CallPrivacyIndex.
         CallPrivacyIndex.record(uid: p.id, privacy: p.privacy)
+        // And verification, for the same reason and through the same door: a badge is drawn during a
+        // layout pass and cannot await anything. Every profile the app already reads warms it, so no
+        // screen ever fetches to find out whether to draw one. See VerificationIndex.
+        VerificationIndex.record(uid: p.id, verification: p.verification)
         return p
     }
 

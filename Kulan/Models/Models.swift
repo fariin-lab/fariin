@@ -32,6 +32,9 @@ struct UserProfile: Identifiable, Equatable {
     /// face centred for a full-width header is not centred for a 40pt circle. nil = never set one.
     var posterUrl: String?
     var publicKeyB64: String?
+    /// The account's verification record, or nil for the overwhelming majority who have none. Granted
+    /// only by us, never requested, never bought — see Verification.swift.
+    var verification: Verification?
     var privacy: [String: String]   // per-field audience: "everyone" | "contacts" | "nobody"
     /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
     /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
@@ -53,6 +56,9 @@ struct UserProfile: Identifiable, Equatable {
         self.photoUrl = data["photoUrl"] as? String
         self.posterUrl = data["posterUrl"] as? String
         self.publicKeyB64 = data["publicKey"] as? String
+        // Verification rides along with the profile rather than being fetched. See Verification.swift
+        // for why that single decision is what makes the badge appear everywhere without a request.
+        self.verification = Verification(data["verification"] as? [String: Any])
         self.privacy = (data["privacy"] as? [String: String]) ?? [:]
     }
 }
