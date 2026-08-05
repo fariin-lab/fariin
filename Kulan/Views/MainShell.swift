@@ -1024,7 +1024,15 @@ struct ChatsView: View {
     @ViewBuilder private func chatMenu(_ conv: Conversation) -> some View {
         // Blocked-aware like the row badge (audit: the menu offered "Read" — which would leak read
         // receipts to the blocked person — for a chat whose row displays zero unread).
-        if !conv.isBlockedByMe(me) && conv.unread(me) > 0 {
+        // `hasUnreadMark`, NOT `unread(me) > 0`. A chat you marked unread yourself stores -1 as a
+        // sentinel, and `unread()` clamps with max(0,…) so the list can never print "-1" — which
+        // means the manual mark reads as ZERO here. The menu therefore offered "Unread" on a chat
+        // that was already unread, and there was no way to undo it: mark it unread, and the only
+        // thing on offer forever after is marking it unread again. That is what he circled.
+        //
+        // The archived menu below already asks the right question. This one was missed when the
+        // sentinel went in.
+        if !conv.isBlockedByMe(me) && conv.hasUnreadMark(me) {
             Button {
                 // Full parity with opening the chat: reset MY counter, send read receipts,
                 // and drop its delivered notifications + fix the app badge.
@@ -1099,7 +1107,10 @@ struct ChatsView: View {
         // Read All to the rendered list. Selected -> resolve out of the repo, so a chat that the
         // filter stopped showing while you were selecting is still honoured.
         let pool = selection.isEmpty ? visible : repo.conversations.filter { selection.contains($0.id) }
-        return pool.filter { !$0.isBlockedByMe(me) && $0.unread(me) > 0 }.map(\.id)
+        // hasUnreadMark, so Read All also clears the ones you marked unread BY HAND. `unread()`
+        // clamps the -1 sentinel to zero, so those chats were invisible to this filter and survived
+        // a "mark everything read" untouched.
+        return pool.filter { !$0.isBlockedByMe(me) && $0.hasUnreadMark(me) }.map(\.id)
     }
 
     private func markReadTargets() {
@@ -1711,7 +1722,10 @@ struct ArchivedChatsView: View {
         let pool = selection.isEmpty ? archived : repo.conversations.filter { selection.contains($0.id) }
         // Same blocked exclusion as the main list's version (audit) — the archived list can hold
         // silently blocked chats too, and markRead there leaks read receipts just the same.
-        return pool.filter { !$0.isBlockedByMe(me) && $0.unread(me) > 0 }.map(\.id)
+        // hasUnreadMark, so Read All also clears the ones you marked unread BY HAND. `unread()`
+        // clamps the -1 sentinel to zero, so those chats were invisible to this filter and survived
+        // a "mark everything read" untouched.
+        return pool.filter { !$0.isBlockedByMe(me) && $0.hasUnreadMark(me) }.map(\.id)
     }
 
     private func markReadTargets() {
