@@ -74,20 +74,24 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PLEASE TRY THIS FIRST. Settings, Account, Sign-in Methods. If you have two logins connected, each one now has a Remove button. Tap it and check three things: it tells you what you will still be able to sign in with, it makes you sign in again before it does anything, and you get an email afterwards saying a login was removed.
+            PLEASE TRY THIS FIRST. Send a video. It should appear the INSTANT you tap send. It used to sit there doing nothing for nearly 4 seconds while the video compressed, because the bubble waited for the thumbnail and the thumbnail was only made at the very end. Now one frame is grabbed straight away and the compressing happens behind it.
 
-            YOU CAN TAKE A LOGIN OFF YOUR ACCOUNT NOW. Adding one used to be permanent. That was the worst hole in the app: somebody holding your unlocked phone could attach their own Google account to your Fariin and sign in as you forever, and nothing anywhere could undo it. A password you can change. That you could not.
+            Then send a LONG video, 15 seconds or more. If it fails, it will now tell you WHY on screen instead of only saying "Not delivered". Please send me that sentence. It is the one thing I need to fix the real cause instead of guessing.
 
-            Two rules keep it safe. You can never remove the last one, because that would leave an account with no way in. And it always makes you prove it is you first, even if you just signed in a minute ago. That second rule matters more than it looks: without it, the same person holding your phone could connect their login, remove yours, and lock you out of your own account.
+            VIDEO IS SMALLER AND FASTER NOW. It sends at 540p instead of 720p, which is about twice as quick to compress and half the data. Signal sends everything at 480p, which is how they are so fast; 540p is the middle, still sharper than theirs. It will look slightly softer than before. Tell me if it is too soft.
 
-            YOU NOW GET AN EMAIL when a login is added OR removed, including when you are the one doing it. It names the login, the account, the time, and what ways in you have left.
+            YOUR VIDEOS WERE CARRYING YOUR LOCATION. When your phone records a video it writes the GPS coordinates inside the file, and we were passing that straight through. Encryption did not help, because the person receiving it is meant to open it: they got your exact location, permanently, readable in any photo app. It is stripped now. Videos already sent still carry it and nothing can change that.
 
-            AN ALBUM WITH A VIDEO IN IT no longer draws the play button on top of the upload spinner. They came from two different places and overlapped into one broken smear while sending. The play button now waits until the album has finished going out, which is also more honest, since it cannot be played yet.
+            APP LOCK NOW COVERS THE APP SWITCHER. Before, you could turn on App Lock and your last open chat was still sitting in the multitasking view for anyone who picked up your phone. Face ID on the front door, window wide open.
 
-            THAT ONE IS TEMPORARY, on purpose. The real fix is a progress ring on each item that fills as it uploads, that you can tap to cancel, the way WhatsApp does it. That is the next piece of work. Right now an album reports no progress at all, which is why the spinner spins instead of filling.
+            MESSAGE PREVIEW ACTUALLY WORKS NOW. That switch has never done anything. Turn it off and your notifications say "New message" with no name at all. That matters beyond the lock screen, because every word in a notification passes through Apple's servers.
 
-            STILL MISSING, so you do not go hunting. Announcements make no sound at all, not even security ones. Cancelling a send only hides the bubble, it does not actually stop the upload yet.
+            LAST SEEN IS ENFORCED BY THE SERVER. "My friends" used to be enforced only by the app doing the looking, so anybody reading the database directly got your last seen time anyway.
 
-            WHAT TO WATCH FOR. Nothing that already worked should have changed. Send a photo. Send a video. Forward an album with photos and a video mixed together and check it arrives in the SAME ORDER you sent it. Open your old chats. Open the Fariin chat.
+            THE "EVERYONE" STORY AUDIENCE IS GONE. It never helped anybody find you, there is no browse or explore anywhere in the app, so all it did was let a stranger who already found your profile watch your story. In exchange it forced every story to be stored unencrypted and was the one place an App Store reviewer could see a stranger's content. Signal has no public story either, for the same reason.
+
+            ALSO FIXED. Forward is no longer offered on a deleted message, where it used to send an empty one. A forwarded video or album shows its pictures immediately instead of blank for up to 10 seconds. The play badge no longer sits on top of the upload spinner.
+
+            WHAT TO CHECK. Settings, Account, Sign-in Methods should have a Remove button, ask you to sign in again, and email you afterwards. Post a story and check Everyone is gone. Then the ordinary things: send a photo, open old chats, make a call.
 
         run: fastlane beta
