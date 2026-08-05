@@ -99,6 +99,24 @@ enum VideoTranscoder {
                                                  presetName: composing ? AVAssetExportPresetHighestQuality : preset)
         else { return nil }
         session.shouldOptimizeForNetworkUse = true
+        // A HARD CEILING ON THE OUTPUT. This is the thing that was missing, and its absence cost a
+        // very long hunt.
+        //
+        // A resolution preset is a HINT, not a guarantee. Measured on the owner's clip: 18 seconds,
+        // 1080x1750 portrait, 59.88 fps, exported through AVAssetExportPreset960x540 and it came out
+        // at 19 MB — roughly 8 Mbps, because the preset's bitrate is tuned for 960x540 at THIRTY
+        // frames a second and this had double the frame rate and an aspect the box does not fit.
+        // Storage then refused it for being over 25 MB, and said "User does not have permission",
+        // which names neither size nor quality.
+        //
+        // I chased the network, then the app's own limits, then the quality setting. All wrong. The
+        // real answer is that we were never actually controlling the size — we were asking for a
+        // resolution and hoping. `fileLengthLimit` says it outright, and AVFoundation lowers quality
+        // as far as it must to obey. A video can now be long, 60fps, portrait, HDR, whatever it
+        // likes, and the export still fits.
+        //
+        // The margin covers AVFoundation overshooting slightly and the few bytes encryption adds.
+        session.fileLengthLimit = Int64(Limits.videoMessageBytes - 2 * 1024 * 1024)
         // STRIP THE METADATA. An iPhone recording carries the GPS coordinates it was taken at, the
         // device model and the original timestamps, and we were passing all of it straight through.
         // The clip is end-to-end encrypted so the server never sees any of it — but the person
