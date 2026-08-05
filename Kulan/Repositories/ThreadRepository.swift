@@ -449,7 +449,16 @@ final class ThreadRepository {
         if isOneToOne, !other.isEmpty {
             userListener = db.collection("users").document(other)
                 .addSnapshotListener { [weak self] snap, _ in
-                    self?.otherPrivacy = (snap?.data()?["privacy"] as? [String: String]) ?? [:]
+                    let privacy = (snap?.data()?["privacy"] as? [String: String]) ?? [:]
+                    self?.otherPrivacy = privacy
+                    // AND THE CALL BUTTON LEARNS IT ON THE SAME SNAPSHOT. This listener is already
+                    // live on their user document, so the moment they set calls to No One we know —
+                    // but `CallPrivacyIndex` was only ever filled by one-off profile FETCHES, and it
+                    // refreshed itself AFTER a call was placed. So the first press on somebody who
+                    // had just changed the setting rang anyway, and only the second press said
+                    // anything. That is the "appears a little late" in his report: not a slow dialog,
+                    // a stale answer.
+                    CallPrivacyIndex.record(uid: other, privacy: privacy)
                 }
             presenceListener = db.collection("users").document(other)
                 .collection("presence").document("state")

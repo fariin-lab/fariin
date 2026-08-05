@@ -1111,15 +1111,12 @@ struct ChatsView: View {
     // pointing at a property declared at the top of this very file. It was not a real missing
     // symbol, it was the compiler giving up on the body and losing track of what was in it.
 
-    /// The PROFILE's refusal — the full sheet. nil for every other dial site, so the sheet simply
-    /// does not present there.
-    private var restrictedCalleeSheet: Binding<CallService.RestrictedCallee?> {
-        Binding(get: { let r = CallService.shared.restrictedCallee; return r?.fromProfile == true ? r : nil },
-                set: { if $0 == nil { CallService.shared.restrictedCallee = nil } })
-    }
-    /// Everywhere else — a centred alert with one button, which is all there is to say.
+    /// EVERY dial site, including the profile. It used to read `!$0.fromProfile`, so a refusal raised
+    /// from a profile fell through to a bottom sheet instead — see the alert for why that is gone.
+    /// `fromProfile` is still carried on the value; nothing reads it any more, and it stays only so
+    /// the call sites do not all need editing to drop an argument.
     private var restrictedCalleeAlert: Binding<Bool> {
-        Binding(get: { CallService.shared.restrictedCallee.map { !$0.fromProfile } ?? false },
+        Binding(get: { CallService.shared.restrictedCallee != nil },
                 set: { if !$0 { CallService.shared.restrictedCallee = nil } })
     }
 
@@ -1340,16 +1337,17 @@ struct ChatsView: View {
                 // scroll-down pan — use Apple's zoom dismiss instead). Heroes from the uploading card.
                 .navigationTransition(.zoom(sourceID: "my-story", in: storyNS))
             }
-            // ONE presentation for every dial site (profile tiles, chat header, Calls list, search,
-            // New Call): the gate lives in CallService, so the sheet does too.
-            .sheet(item: restrictedCalleeSheet) { r in
-                CantCallSheet(name: r.name, photoUrl: r.photo, onSendMessage: {})
-            }
-            // In a chat, on the Calls tab or in search, the answer is one sentence and one button.
+            // ONE ANSWER, EVERYWHERE, and it is this alert.
+            //
+            // A profile used to get a bottom sheet with the person's avatar on it while every other
+            // dial site got this. The owner asked for the sheet gone: "no bottom sheet should ever be
+            // shown". He is right that two presentations for one refusal was the wrong shape — the
+            // sheet was a whole screen of furniture to say a sentence, and it made the same tap
+            // behave differently depending on which screen you happened to be standing on.
             .alert("Can't Call", isPresented: restrictedCalleeAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("This person restricts who can call them")
+                Text("This person restricts who can call them.")
             }
             .sheet(item: $profileGroup) { g in
                 NavigationStack {
