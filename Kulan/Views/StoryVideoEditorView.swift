@@ -24,7 +24,8 @@ struct StoryVideoEditorView: View {
     @State private var pendingExtras: [StoryExtra] = []
     @State private var loadFailed = false
     @FocusState private var captionFocused: Bool
-    @StateObject private var keyboard = KeyboardWatcher()   // manual keyboard rise (same as the photo editor)
+    // No KeyboardWatcher: the bottom bar is a sibling of the canvas and SwiftUI's own avoidance
+    // lifts it. Same change as the photo editor, same reason.
     // One AVQueuePlayer + looper for the whole editor session.
     @State private var player = AVQueuePlayer()
     @State private var looper: AVPlayerLooper?
@@ -148,6 +149,24 @@ struct StoryVideoEditorView: View {
     struct StoryVideoShare: Identifiable { let id = UUID(); let payload: StoryVideoPayload; let caption: String }
 
     var body: some View {
+        // Same two-layer split as the photo editor, and for the same reason: the canvas must never
+        // move for the keyboard (the pen bakes strokes against `geo`), while the bar must move with
+        // it exactly. Making them siblings lets SwiftUI's own avoidance lift the bar on the system's
+        // curve instead of a hand-computed padding arriving a beat late. See StoryEditorView.body.
+        ZStack {
+            videoCanvasLayer
+            if !showTrim, editingID == nil {
+                bottomStack
+                    .animation(.easeInOut(duration: 0.3), value: showTrim)
+            }
+        }
+        // ALWAYS DARK, whatever the phone is set to. This is the screen he photographed rendering
+        // light: grey wash, pale glass, the pen bar washed out. `.environment` and not
+        // `.preferredColorScheme` — see the note in StoryEditorView.body.
+        .environment(\.colorScheme, .dark)
+    }
+
+    private var videoCanvasLayer: some View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
@@ -172,8 +191,9 @@ struct StoryVideoEditorView: View {
                 // it. The caption already stood aside for its OWN keyboard; this is the other one.
                 if !showTrim, editingID == nil {
                     topControls
-                    bottomStack(geo: geo)
                 }
+                // `bottomStack` used to sit HERE. It is a sibling of this whole layer now, in `body`,
+                // which is what lets the keyboard lift it without touching the canvas.
                 trimOverlay
             }
             .animation(.easeInOut(duration: 0.3), value: showTrim)
@@ -291,18 +311,20 @@ struct StoryVideoEditorView: View {
         .opacity(strokeInFlight ? 0 : 1)
     }
 
-    /// The caption bar and NEXT, or the pen palette while drawing, lifted manually above the keyboard
-    /// with the photo editor's own measurement.
-    private func bottomStack(geo: GeometryProxy) -> some View {
-        let lift = keyboard.height > 0
-            ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
-            : -14
-        return VStack {
+    /// The caption bar and NEXT, or the pen palette while drawing.
+    ///
+    /// Nothing here measures the keyboard any more. It is a sibling of the canvas layer, so SwiftUI
+    /// lifts it on the keyboard's own curve; the hand-computed lift that used to live here is the
+    /// jump the owner reported. The PEN bar keeps ignoring the keyboard because a drawing screen has
+    /// none, and a canvas that shifted under a stroke would put the line off the finger.
+    private var bottomStack: some View {
+        VStack {
             Spacer()
-            Group {
-                if isDrawing { penBar } else { bottomBar }
+            if isDrawing {
+                penBar.ignoresSafeArea(.keyboard, edges: .bottom)
+            } else {
+                bottomBar
             }
-            .padding(.bottom, lift)
         }
         .opacity(strokeInFlight ? 0 : 1)
     }
@@ -427,18 +449,24 @@ struct StoryVideoEditorView: View {
         VStack(spacing: 12) {
             if !captionFocused { clipStrip }
             HStack(alignment: .bottom, spacing: 10) {
-                HStack(spacing: 10) {
+                HStack(spacing: 6) {
                     addMoreButton
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
                         .foregroundStyle(.white).focused($captionFocused)
                         // ...and the text itself carries a hairline shadow so it reads on white.
                         .shadow(color: .black.opacity(0.45), radius: 1.5)
                         .lineLimit(1...5)
+                        // The text carries its own breathing room; one line is then shorter than the
+                        // 40 the + pins, so the bar rests at exactly 40 and still grows for a long
+                        // caption. Same fix as the photo editor.
+                        .padding(.vertical, 6)
                         .onChange(of: caption) { _, v in
                             if v.count > Limits.storyCaptionChars { caption = String(v.prefix(Limits.storyCaptionChars)) }
                         }
                 }
-                .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)
+                // EXACTLY 40 AT REST (owner spec). It measured 50: the + is a 32pt square and the bar
+                // added 9pt above and below it, so `minHeight: 40` never bit.
+                .padding(.leading, 6).padding(.trailing, 18).frame(minHeight: 40)
                 // Liquid Glass, tinted dark (owner 2026-08-04). Plain glass goes pale over a bright
                 // frame and swallows the white placeholder, which is the bug the flat pill was
                 // covering for; the tint is Apple's own, so this is real glass that still gives
@@ -589,8 +617,10 @@ struct StoryVideoEditorView: View {
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .contentShape(Circle())
+                // 40 tall on purpose: this is what sets the caption bar's resting height, and it
+                // gives the + the whole height of the bar to be tapped in.
+                .frame(width: 38, height: 40)
+                .contentShape(Rectangle())
         }
         .buttonStyle(StoryPressStyle())
     }
@@ -842,6 +872,10 @@ struct StoryVideoEditorView: View {
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
                         .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                        // The 44pt frame was LAYOUT only. A bare Image takes touches on the glyph it
+                        // actually draws, so this button was a 17pt tick in a 44pt hole — the owner
+                        // circled it. Every other control in this bar already had its contentShape.
+                        .contentShape(Circle())
                 }
                 .buttonStyle(StoryPressStyle())
             }

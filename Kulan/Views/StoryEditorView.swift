@@ -68,7 +68,8 @@ struct StoryEditorView: View {
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
     @FocusState private var captionFocused: Bool
-    @StateObject private var keyboard = KeyboardWatcher()   // manual keyboard rise (editor ignores the keyboard safe area)
+    // No KeyboardWatcher here any more: the bottom bar is a sibling of the canvas and SwiftUI's own
+    // avoidance lifts it. The class stays because the video editor and the text composer still use it.
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
@@ -157,6 +158,50 @@ struct StoryEditorView: View {
     }
 
     var body: some View {
+        // TWO LAYERS, AND THE SPLIT IS THE POINT. The canvas ignores the keyboard so it can never be
+        // squished or re-measured (the pen bakes strokes against `geo`, so a canvas that moves puts
+        // the line somewhere other than the finger). The bottom bar is a SIBLING of it, outside that
+        // ignore, so SwiftUI's own keyboard avoidance lifts it — on the system's exact curve, on the
+        // system's exact frame, because it is the system doing it.
+        //
+        // It used to be one layer with `.ignoresSafeArea(.keyboard)` over everything and a hand-
+        // computed `.padding(.bottom, ...)` from a KeyboardWatcher. That is the jump the owner
+        // reported, and it was TWO jumps: focusing the field tore the thumbnail strip and the tool
+        // row out of the stack, which dropped the bar DOWN, and then the keyboard notification
+        // arrived and shoved it UP. Two state changes, two moments, neither animated with the
+        // keyboard. Nothing here computes a keyboard height any more.
+        ZStack {
+            canvasLayer
+            // Bottom bar. While DRAWING, our pen bar takes the bottom instead; it stays pinned
+            // because a drawing screen has no keyboard and the canvas must not move under a stroke.
+            if isDrawing {
+                VStack { Spacer(); penBar.padding(.bottom, 8) }
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
+                    // OPACITY, not an `if`: removing the bar from the tree mid-stroke would relayout
+                    // the screen the canvas is measured against, and the canvas has to stay exactly
+                    // where it is or the line lands somewhere other than the finger.
+                    .opacity(strokeInFlight ? 0 : 1)
+            } else {
+                VStack { Spacer(); bottomBar }
+                    .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
+            }
+            // Above the bar, and keyboard-proof: cropping has no keyboard and must cover everything.
+            cropOverlay
+                .ignoresSafeArea(.keyboard)
+        }
+        // ALWAYS DARK, whatever the phone is set to (owner: "all story buttons always use dark mode
+        // no light mode"). A story is white text and glass over somebody's photo; in light mode the
+        // materials go pale and the controls wash out, which he photographed on the pen screen.
+        //
+        // `.environment(\.colorScheme, .dark)` and NOT `.preferredColorScheme(.dark)`: KulanApp sets
+        // preferredColorScheme OUTSIDE RootView, and an outer one always wins, so a pin inside a
+        // screen is dead code — five of them in the auth flow never did anything. See
+        // [[kulan-preferredcolorscheme-trap]]. The environment value is read by the materials
+        // themselves, so it works where it is written.
+        .environment(\.colorScheme, .dark)
+    }
+
+    private var canvasLayer: some View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
@@ -308,36 +353,9 @@ struct StoryEditorView: View {
                 .opacity(draggingID == nil && editingID == nil && !strokeInFlight ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
-                // Bottom bar — ONLY this rises above the keyboard (caption docks above it, toolbar hides).
-                // While DRAWING, OUR pen bar takes the bottom instead. It used to be hidden entirely so
-                // Apple's PencilKit palette could own that strip; the palette is gone now, so the space
-                // belongs to the colour track and the three tools.
-                if isDrawing {
-                    VStack {
-                        Spacer()
-                        penBar.padding(.bottom, 8)
-                    }
-                    .ignoresSafeArea(.keyboard, edges: .bottom)
-                    // OPACITY, not an `if`: removing the bar from the tree mid-stroke would relayout
-                    // the screen the canvas is measured against, and the canvas has to stay exactly
-                    // where it is or the line lands somewhere other than the finger.
-                    .opacity(strokeInFlight ? 0 : 1)
-                } else {
-                    VStack {
-                        Spacer()
-                        bottomBar
-                            // Keyboard rise is MANUAL (the editor ignores the keyboard's safe area).
-                            // Computed against the GEO's real screen position: the raw height left a
-                            // fat gap (geo's bottom sits above the physical bottom, and the bar has
-                            // 10pt internal lift) — the caption now floats 8pt above the keyboard.
-                            .padding(.bottom, keyboard.height > 0
-                                ? max(8, geo.frame(in: .global).maxY - (UIScreen.main.bounds.height - keyboard.height) - 2)
-                                : -14)
-                    }
-                    .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // hide chrome while dragging text (trash owns the bottom)
-                }
-
-                cropOverlay
+                // The bottom bar and the crop overlay used to sit HERE, inside the canvas. They are
+                // siblings of it now, in `body`, which is what lets the keyboard move one without
+                // touching the other.
             }
             .coordinateSpace(name: "canvas")
             .onAppear { canvasSize = geo.size; if items.isEmpty { items = [DraftItem(image: source)] }; recomputeEdited() }
@@ -353,10 +371,11 @@ struct StoryEditorView: View {
                 }
             }
         }
-        // The editor NEVER resizes for the keyboard: automatic avoidance was squishing the
-        // canvas (user bug 1) and desynced the compact send button's visual vs tappable
-        // frame (user bug 2 — taps landed on nothing). The bottom bar rises by a MEASURED
-        // keyboard height instead (KeyboardWatcher).
+        // THE CANVAS never resizes for the keyboard, and that part was always right: automatic
+        // avoidance squished it (user bug 1) and desynced the compact send button's visual frame from
+        // its tappable one (user bug 2, taps landed on nothing). What changed is that the BAR is no
+        // longer in here with it, so it can be lifted natively instead of by hand. Both old bugs stay
+        // fixed and the jump goes with the hand-computed padding. See `body`.
         .ignoresSafeArea(.keyboard)
         .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
@@ -474,7 +493,9 @@ struct StoryEditorView: View {
             Image(systemName: "plus.square.on.square")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
+                // 40 tall on purpose: this is what sets the caption bar's resting height, and it
+                // gives the + the full height of the bar as a touch target rather than 32 of it.
+                .frame(width: 38, height: 40)
                 .contentShape(Rectangle())
         }
         .buttonStyle(StoryPressStyle())
@@ -487,7 +508,7 @@ struct StoryEditorView: View {
             // Caption bar — dark pill. While typing, Send sits beside it so you can post without
             // dismissing the keyboard (it used to hide with the toolbar → no way to send).
             HStack(alignment: .bottom, spacing: 10) {
-                HStack(spacing: 10) {
+                HStack(spacing: 6) {
                     addMoreButton
                     // Grows with the text (up to 5 lines) instead of staying a single truncated line.
                     TextField("", text: $caption, prompt: Text("Add a caption…").foregroundColor(Color.white.opacity(0.6)), axis: .vertical)
@@ -495,9 +516,17 @@ struct StoryEditorView: View {
                         // ...and the text itself carries a hairline shadow so it reads on white.
                         .shadow(color: .black.opacity(0.45), radius: 1.5)
                         .lineLimit(1...5)
+                        // The text carries its own breathing room instead of the bar padding it. One
+                        // line is then 34 tall, under the 40 the + pins, so the resting bar is exactly
+                        // 40 and a long caption still grows from there.
+                        .padding(.vertical, 6)
                         .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
                 }
-                .padding(.horizontal, 18).padding(.vertical, 9).frame(minHeight: 40)   // user spec: 40px
+                // EXACTLY 40 AT REST (owner spec). It was 50: the + is a 32pt square and the bar
+                // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
+                // the content was already taller than the floor it was being held to. The + now
+                // measures 40 itself, which sets the height and keeps a full-height touch target.
+                .padding(.leading, 6).padding(.trailing, 18).frame(minHeight: 40)
                 // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
                 // glass"). Plain glass was here once and came back off: on a bright photo it went pale
                 // and the white placeholder disappeared into it, which he photographed. `tint` is
