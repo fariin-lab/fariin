@@ -327,6 +327,7 @@ private extension StoryDetailView {
         case .video:
             VideoView(
                 videoURL: story.mediaURL,
+                posterURL: story.previewURL,
                 state: $state,
                 player: player
             ) { media, duration in

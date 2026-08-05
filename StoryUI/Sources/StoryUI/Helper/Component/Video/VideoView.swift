@@ -12,6 +12,9 @@ struct VideoView: UIViewRepresentable {
     
     // MARK: Public Properties
     var videoURL: String
+    /// The clip's cover, drawn blurred while it loads. Without it a video story opens on a solid
+    /// black rectangle, which is the black screen the owner reported.
+    var posterURL: String?
     @Binding var state: MediaState
     var player: AVPlayer
     let mediaState: ((MediaState, Double) -> Void)?
@@ -38,6 +41,9 @@ struct VideoView: UIViewRepresentable {
     
     func updateUIView(_ playerView: PlayerView, context: Context) {
         playerView.state = state
+        // BEFORE startVideo, always: `startVideo` puts the loading cover up immediately, and it can
+        // only draw a poster it already has.
+        playerView.setPoster(posterURL)
         playerView.startVideo(url: URL(string: videoURL))
         playerView.mediaState = { state, duration in
             mediaState?(state, duration)

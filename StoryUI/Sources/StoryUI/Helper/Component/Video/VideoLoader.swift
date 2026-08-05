@@ -33,6 +33,11 @@ final class PlayerView: UIView {
     private var cachedFileInUse: URL?
     /// One retry per story, or a dead URL becomes an endless download loop.
     private var didRetryRemote = false
+    /// The clip's cover, drawn blurred while it loads instead of a black rectangle. Set by the host
+    /// through `VideoView`; nil simply falls back to the old black.
+    var posterImage: UIImage?
+    /// The poster this view was told about, so a late fetch can be dropped if the story moved on.
+    private var posterURL: String?
 
     // MARK: - Initializers
     override init(frame: CGRect) {
@@ -51,6 +56,30 @@ final class PlayerView: UIView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    /// Hand over the clip's cover before `startVideo`, so the loading state has a picture to show.
+    /// Reads the caches the prefetcher and the image loader already fill, and only fetches if both
+    /// miss — the poster is a few KB and is usually already on disk from the story row.
+    func setPoster(_ urlString: String?) {
+        guard posterURL != urlString else { return }
+        posterURL = urlString
+        posterImage = nil
+        guard let urlString, let u = URL(string: urlString) else { return }
+        if let cached = URLCache.shared.cachedResponse(for: .init(url: u)),
+           let img = UIImage(data: cached.data) { posterImage = img; return }
+        if let disk = StoryDiskCache.image(u) { posterImage = disk; return }
+        URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+            guard let data, let img = UIImage(data: data) else { return }
+            StoryDiskCache.store(data, for: u)
+            DispatchQueue.main.async {
+                // Still the same clip, and still loading — otherwise this would drop a poster on top
+                // of a video that has already started.
+                guard let self, self.posterURL == urlString else { return }
+                self.posterImage = img
+                if self.viewWithTag(999) != nil { self.addActivityIndicatory() }
+            }
+        }.resume()
+    }
 
     func startVideo(url: URL?) {
         guard let validatedUrl = url else { return }
@@ -159,8 +188,27 @@ private extension PlayerView {
         addObserverToVideo()
     }
 
+    /// A SYNCHRONOUS `AVURLAsset.duration` ON THE MAIN THREAD, which is what this was.
+    ///
+    /// That property blocks until the asset has parsed enough of the container to answer, and it was
+    /// being read from `setupPlayer` on the main thread every time a story opened. On a local cache
+    /// file that is a short stall; on the fallback path, where the url is remote, it is a network
+    /// round trip with the whole UI stopped behind it.
+    ///
+    /// It is loaded asynchronously now and reported when it arrives. Nothing needs it in the same
+    /// turn: the progress bar starts from the story's declared duration and refines to the real one,
+    /// which is what `mediaState` already existed to do.
     func getVideoLength(videoURL: URL) {
-        duration = AVURLAsset(url: videoURL).duration.seconds
+        let asset = AVURLAsset(url: videoURL)
+        Task { [weak self] in
+            guard let seconds = try? await asset.load(.duration).seconds, seconds.isFinite, seconds > 0
+            else { return }
+            await MainActor.run {
+                guard let self, self.url == videoURL || self.cachedFileInUse == videoURL else { return }
+                self.duration = seconds
+                self.mediaState?(self.state, seconds)
+            }
+        }
     }
 
     func stopAndRestartVideo() {
@@ -242,6 +290,15 @@ private extension PlayerView {
 // MARK: - Setup Func
 
 private extension PlayerView {
+    /// THE LOADING STATE FOR A VIDEO WAS A SOLID BLACK VIEW OVER THE WHOLE SCREEN, and that is the
+    /// black screen the owner keeps seeing. It went up on EVERY `startVideo`, before anything had
+    /// even been asked for.
+    ///
+    /// It is the clip's own poster behind glass now, the same treatment a photo story already gets
+    /// while it downloads, so a video opens on a picture of itself rather than on a hole. The spinner
+    /// stays on top of it, because a video genuinely can take a moment and something has to say so —
+    /// but it turns over the picture instead of over nothing. Black is only the fallback for a clip
+    /// whose poster we have not got.
     func addActivityIndicatory() {
         removeActivityIndicatory()
         let w = UIScreen.main.bounds.width
@@ -249,6 +306,18 @@ private extension PlayerView {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: w, height: h))
         view.backgroundColor = .black
         view.tag = 999
+        if let poster = posterImage {
+            let iv = UIImageView(image: poster)
+            iv.frame = view.bounds
+            iv.contentMode = .scaleAspectFill
+            iv.clipsToBounds = true
+            iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(iv)
+            let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+            blur.frame = view.bounds
+            blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(blur)
+        }
         self.addSubview(view)
         let activityView = UIActivityIndicatorView(style: .large)
         activityView.color = UIColor.lightGray.withAlphaComponent(0.7)
