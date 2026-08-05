@@ -415,7 +415,13 @@ struct BlockedUsersView: View {
                             // button is gone: an undo-the-block action sitting in every row is one
                             // mis-tap from undoing something somebody chose deliberately, and it made
                             // each row read as a button.
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            // FULL SWIPE ALLOWED, like every other list in the app. It was off, so a
+                            // swipe that kept going hit an invisible wall and did nothing — the
+                            // gesture behaved differently here than in the chat list for no reason
+                            // the finger can see. The confirm still stands behind it: a full swipe
+                            // opens the same "Unblock?" dialog the button does, so nothing is undone
+                            // by accident, which is what turning it off was trying to protect.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button { toUnblock = conv } label: {
                                     Label("Unblock", systemImage: "hand.raised.slash")
                                 }
