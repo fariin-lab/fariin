@@ -29,6 +29,15 @@ struct NotificationsSettingsView: View {
 
     private var me: String { AuthService.shared.uid ?? "" }
 
+    /// Anything on this page off its default, or any per-chat customisation anywhere.
+    private var hasAnythingToReset: Bool {
+        if !pushOn || !messagePreview || soundName != "rebound"
+            || !inAppSound || !inAppVibrate || !inAppPreview { return true }
+        if SoundStore.hasAnyCustom { return true }
+        let now = Date().timeIntervalSince1970 * 1000
+        return ConversationsRepository.shared.conversations.contains { $0.isMuted(me, now: now) }
+    }
+
     var body: some View {
         List {
             Section {
@@ -83,15 +92,13 @@ struct NotificationsSettingsView: View {
                         if resetting { Spacer(); ProgressView() }
                     }
                 }
-                // ALWAYS TAPPABLE (owner 2026-08-05: "reset all custom notifications is not
-                // working" — with his screenshot of this row sitting greyed out). It used to be
-                // disabled unless a mute or a per-chat tone existed, and that gate had two ways to
-                // be wrong: `mutedCount` read the conversations repo WITHOUT observing it, so the
-                // answer could go stale the moment it was computed; and the things HE had customised
-                // — the global sound, Message Preview, the in-app switches, all on this very page —
-                // were not counted and were not reset. A reset that is a no-op costs nothing, so
-                // the honest gate is none at all.
-                .disabled(resetting)
+                // RED ONLY WHEN THERE IS SOMETHING TO RESET (owner 2026-08-05: "the Reset text is
+                // always red, even when all settings are already at their default values"). The
+                // page's own values are live @AppStorage, so the gate follows every switch as it
+                // flips; the muted-chats and per-chat-tone halves are read at render, which is the
+                // best a page that does not own them can do — at worst the row is red with only
+                // those to undo, never grey while a visible switch is off.
+                .disabled(resetting || !hasAnythingToReset)
             } footer: {
                 Text("Undo all custom notification settings, including per-chat sounds and muted chats.")
             }
@@ -115,9 +122,11 @@ struct NotificationsSettingsView: View {
         SoundStore.clearAllCustom()   // per-chat message/call tones — "ALL custom settings"
         // THE PAGE'S OWN SETTINGS TOO (the reference app's Reset does the same): the global tone,
         // the preview switch and the in-app block go back to their defaults, on the device and on
-        // the server where the server reads them. Show Notifications is deliberately left alone —
-        // that switch is push REGISTRATION, not a preference, and a reset must never silently
-        // re-subscribe somebody who turned notifications off.
+        // the server where the server reads them. Show Notifications INCLUDED, on the owner's
+        // direct order (2026-08-05: "if notifications are turned OFF, they stay OFF even after I
+        // tap Reset — fix this so Reset restores the default settings"); its onChange re-registers
+        // push, so flipping the value here is the whole job.
+        pushOn = true
         messagePreview = true
         soundName = "rebound"
         inAppSound = true

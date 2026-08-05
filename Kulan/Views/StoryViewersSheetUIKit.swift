@@ -147,6 +147,13 @@ final class StoryViewersSheetView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        // ALWAYS DARK (owner 2026-08-05: "search in viewer plz make it dark mode always"). The
+        // panel's own colours are hard-coded dark, but the SYSTEM pieces inside it — the search
+        // field's text, placeholder, loupe and cursor, the table's scroll indicator — resolve from
+        // the interface style, and on a light-mode phone they came out light-on-light. One override
+        // here and every system control inside the sheet resolves dark, matching the story area's
+        // standing rule.
+        overrideUserInterfaceStyle = .dark
         buildHierarchy()
         pan.delegate = self
         addGestureRecognizer(pan)

@@ -69,6 +69,10 @@ private extension MessageView {
                 .shadow(color: .black.opacity(0.35), radius: 4, y: 1)   // soft shadow so it reads on any photo
                 .scaleEffect(likeButtonTapped ? 1.18 : 1.0)      // pop when you give love
                 .animation(.spring(response: 0.3, dampingFraction: 0.45), value: likeButtonTapped)
+                // ROOM TO BREATHE AND TO TAP (owner 2026-08-05: "React give more space plz" — the
+                // heart sat squeezed against the screen edge). A 44pt target, Apple's floor.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
     }
     
@@ -88,7 +92,7 @@ private extension MessageView {
     
     
     func messageViewBuilder(_ config: StoryInteractionConfig?, _ placeholder: String) -> some View {
-        HStack(spacing: 8) {   // spec: 8pt between the text pill and the side icon (heart/send)
+        HStack(spacing: 12) {   // 12pt between the pill and the side icon — 8 left the heart cramped
             replyPill(placeholder)
 
             // Send button appears once you've typed (heart shows when empty) — was Return-key only.
