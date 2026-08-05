@@ -301,7 +301,13 @@ struct ForwardPicker: View {
         }
 
         var ids: [String: [String]] = [:]   // cid -> clientIds, so a failure can clear the right ones
-        for cid in targets where cid != src {
+        // The SOURCE chat used to be skipped here. The outbox is drained once when a repository
+        // starts, so a bubble parked for the chat you are already standing in was never claimed and
+        // a forward back into your own chat drew only when the server echoed — the one case where a
+        // forward felt slower than a normal photo send, and the case people hit most, because the
+        // chat you are reading is the obvious thing to forward into. PendingOutbox.didAdd now tells
+        // an open chat to claim it, so every target is treated the same.
+        for cid in targets {
             for m in ordered {
                 let clientId = UUID().uuidString
                 var p = m

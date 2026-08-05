@@ -22,8 +22,19 @@ enum PendingOutbox {
     private static var byCid: [String: [Message]] = [:]
     private static let lock = NSLock()
 
+    /// Posted so a chat that is ALREADY OPEN can claim this straight away.
+    ///
+    /// `take` is a drain and the repository only calls it as it starts, so anything parked for a
+    /// chat the user is currently standing in would have sat here untouched until the next open.
+    /// That is why ForwardPicker used to skip the source chat entirely: a bubble it could not
+    /// deliver was worse than none. With this the open chat hears about it and the forward draws
+    /// as fast as a normal send does.
+    static let didAdd = Notification.Name("PendingOutbox.didAdd")
+
     static func add(_ m: Message, to cid: String) {
         lock.lock(); byCid[cid, default: []].append(m); lock.unlock()
+        // AFTER the unlock. An observer on this thread can call straight back into `take`.
+        NotificationCenter.default.post(name: didAdd, object: cid)
     }
 
     /// Drained, not copied. The repository owns them from here, so a second open cannot resurrect a
@@ -85,6 +96,7 @@ final class ThreadRepository {
     private let db = Firestore.firestore()
     private var listener: ListenerRegistration?
     private var outboxObserver: NSObjectProtocol?
+    private var outboxAddObserver: NSObjectProtocol?
     private var convListener: ListenerRegistration?
     private var userListener: ListenerRegistration?
     /// Separate from `userListener` because presence lives in its own subcollection now, so the
@@ -335,6 +347,19 @@ final class ThreadRepository {
             outboxObserver = NotificationCenter.default.addObserver(
                 forName: PendingOutbox.didFail, object: nil, queue: .main) { [weak self] n in
                     if let id = n.object as? String { self?.markFailed(clientId: id) }
+                }
+        }
+        // And a forward can ARRIVE while its chat is open — forwarding back into the chat you are
+        // standing in is the commonest case of all. The drain above already ran, so without this the
+        // bubble would wait for the server echo while every other chat got one instantly.
+        if outboxAddObserver == nil {
+            outboxAddObserver = NotificationCenter.default.addObserver(
+                forName: PendingOutbox.didAdd, object: nil, queue: .main) { [weak self] n in
+                    guard let self, n.object as? String == self.cid else { return }
+                    let claimed = PendingOutbox.take(self.cid)
+                    guard !claimed.isEmpty else { return }
+                    self.pending.append(contentsOf: claimed)
+                    self.refreshItems()
                 }
         }
         guard let uid = Auth.auth().currentUser?.uid else { return }
@@ -784,6 +809,8 @@ final class ThreadRepository {
         listener?.remove(); listener = nil
         if let outboxObserver { NotificationCenter.default.removeObserver(outboxObserver) }
         outboxObserver = nil
+        if let outboxAddObserver { NotificationCenter.default.removeObserver(outboxAddObserver) }
+        outboxAddObserver = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil

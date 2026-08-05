@@ -1874,9 +1874,15 @@ struct ThreadView: View {
         items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
             UIPasteboard.general.string = m.text
         })
-        items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
-            forwardTarget = m
-        })
+        // Same `canForward` as the other two paths. Today every row that reaches this menu already
+        // passes it (uikitBubbleModel filters out undelivered, view-once, calls, and tombstones via
+        // their empty text), so this changes nothing — it just stops the next guard added to
+        // canForward from missing this copy, which is how the view-once hole opened in the first place.
+        if canForward(m) {
+            items.append(UIAction(title: "Forward", image: UIImage(systemName: "arrowshape.turn.up.right")) { _ in
+                forwardTarget = m
+            })
+        }
         items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
             withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
         })
@@ -1944,11 +1950,9 @@ struct ThreadView: View {
         if delivered {
             out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
         }
-        // NOT a tombstone. `bulkForwardStart` has always filtered deleted messages out of a multi-select
-        // forward, but this single-message path never did — so long-pressing a "You deleted this
-        // message" placeholder offered Forward, and taking it delivered an EMPTY message to somebody
-        // else's chat. The bulk path failing silently was the lesser of the two bugs.
-        if delivered && !m.isCall && !m.viewOnce && !m.deleted {
+        // Both forward paths now ask `canForward` and nothing else — see the note on it. This one
+        // used to spell the rule out inline, which is how the two copies drifted apart.
+        if canForward(m) {
             out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
@@ -2276,16 +2280,42 @@ struct ThreadView: View {
         exitSelection()
     }
 
-    /// Is there anything in the selection the Forward button could actually act on? Deliberately the
-    /// SAME predicate `bulkForwardStart` filters by — if the two ever drift, the button goes back to
-    /// being tappable while doing nothing, which is the bug this exists to prevent.
-    private var selectionHasForwardable: Bool {
-        repo.items.contains { selectedIds.contains($0.id) && !$0.isCall && !$0.isSystem && !$0.deleted }
+    /// THE one answer to "can this message be forwarded". Every forward path asks this and only this:
+    /// the long-press menu, the selection bar's enabled state, and the bulk send itself.
+    ///
+    /// It is one function because it used to be three copies and they had already drifted. The
+    /// long-press copy excluded view-once photos; the multi-select copy did not, so ticking a
+    /// view-once photo in selection mode forwarded it to somebody else and the whole point of
+    /// view-once was gone. Signal keeps a single `isForwardable` on the selection item for exactly
+    /// this reason (ConversationViewController+Selection.swift), and checks `wasRemotelyDeleted`,
+    /// `isViewOnceMessage` and renderable content in that one place.
+    ///
+    /// - `sendState == nil`: still-sending messages have no id the other device has ever seen. Same
+    ///   guard Reply, Edit, Pin and Info already share, for the reason written above the menu.
+    private func canForward(_ m: Message) -> Bool {
+        m.sendState == nil && !m.isCall && !m.isSystem && !m.deleted && !m.viewOnce
+    }
+
+    /// EVERY selected row must be forwardable, not merely one of them.
+    ///
+    /// It used to be `contains`, and that read the wrong way round: ticking a photo alongside a
+    /// "You deleted this message" placeholder lit the arrow, then `bulkForwardStart` dropped the
+    /// placeholder and sent one message where two were ticked. The count in the middle of the bar
+    /// still said 2. Silently sending less than the person selected is worse than making them untick
+    /// it, because they never find out. A tombstone stays SELECTABLE on purpose — the trash button is
+    /// how you clear the placeholder off your own list — it just can't be part of a forward.
+    ///
+    /// Signal's `selectionCanBeForwarded` is the same shape: empty is false, then one `guard
+    /// item.isForwardable else { return false }` over every item.
+    private var selectionIsForwardable: Bool {
+        let picked = repo.items.filter { selectedIds.contains($0.id) }
+        guard !picked.isEmpty else { return false }
+        return picked.allSatisfy(canForward)
     }
 
     private func bulkForwardStart() {
-        // A tombstone has nothing to forward, and forwarding one would deliver an empty message.
-        let msgs = repo.items.filter { selectedIds.contains($0.id) && !$0.isCall && !$0.isSystem && !$0.deleted }
+        // Belt and braces: the button is already off unless every pick passes canForward.
+        let msgs = repo.items.filter { selectedIds.contains($0.id) && canForward($0) }
             .sorted { $0.createdAt < $1.createdAt }
         guard !msgs.isEmpty else { return }
         bulkForward = msgs
@@ -3707,12 +3737,9 @@ struct ThreadView: View {
                     .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())   // whole circle is the tap target, not just the icon
             }
-            // Greys out when there is nothing in the selection that CAN be forwarded, not merely when
-            // the selection is empty. `bulkForwardStart` drops tombstones, calls and system rows, so
-            // selecting only those left a live-looking button that did nothing at all when tapped —
-            // the owner found it by selecting a single "You deleted this message" placeholder. A
-            // button that is tappable and inert is worse than one that is plainly off.
-            .buttonStyle(.plain).disabled(!selectionHasForwardable)
+            // Off unless EVERY pick can be forwarded. See selectionIsForwardable for why the earlier
+            // "any of them" reading was wrong. Tombstones, calls and system rows all switch it off.
+            .buttonStyle(.plain).disabled(!selectionIsForwardable)
         }
         .padding(.horizontal, 20).padding(.bottom, 4)
     }
