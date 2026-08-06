@@ -18,8 +18,6 @@ struct OfficialChatView: View {
     @State private var isAtBottom = true
     @State private var scrollTarget: String?
     @State private var zoomedImage: String?
-    @State private var confirmBlock = false
-    @State private var confirmClear = false
     @State private var pendingLink: URL?
     @State private var pushedScreen: AnnouncementButton.Screen?
     @State private var shareInvite = false
@@ -68,23 +66,10 @@ struct OfficialChatView: View {
             } message: {
                 Text(pendingLink?.absoluteString ?? "")
             }
-            // ALERT, NOT confirmationDialog. On iOS 26 a confirmationDialog renders as an anchored
-            // popover with a tail pointing at the toolbar, and it DROPS the cancel button, because a
-            // popover expects you to dismiss it by tapping outside. So the owner got a floating bubble
-            // over the header offering only "Block". MainShell already learned this and says so in a
-            // comment next to its own delete alert; I walked into the same trap building this screen.
-            .alert("Block this chat?", isPresented: $confirmBlock) {
-                Button("Block", role: .destructive) { store.setBlocked(true) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("You will stop getting updates from Fariin. Security alerts about your own account still come through. Nothing is lost and you can unblock it later.")
-            }
-            .alert("Clear this chat?", isPresented: $confirmClear) {
-                Button("Clear", role: .destructive) { store.clearHistory() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Removes these messages from this phone. New updates will still arrive.")
-            }
+            // The Block and Clear alerts that used to live here went with the "..." menu that was
+            // their only trigger. They still exist in OfficialChatInfoView, including the ⚠️ note
+            // about why they are alerts and not `confirmationDialog`s — on iOS 26 that renders as an
+            // anchored popover and DROPS the cancel button.
             .onAppear {
                 AppRouter.shared.activeChatId = OfficialChannel.cid
                 store.markRead()
@@ -174,27 +159,12 @@ struct OfficialChatView: View {
             }
             .tint(.primary)
         }
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button {
-                    store.setMuted(!store.state.muted)
-                } label: {
-                    Label(store.state.muted ? "Unmute" : "Mute", systemImage: store.state.muted ? "bell" : "bell.slash")
-                }
-                Button(role: .destructive) { confirmClear = true } label: {
-                    Label("Clear Chat", systemImage: "trash")
-                }
-                Button(role: .destructive) { confirmBlock = true } label: {
-                    Label("Block", systemImage: "hand.raised")
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .tint(.primary)
-        }
+        // NO "..." MENU. It held Mute, Clear Chat and Block — all three of which are in Chat Info,
+        // one tap away on the header, with the sentences that explain what each one actually does.
+        // Three doors to three actions on a chat you cannot even reply to is clutter, and the menu
+        // copy had to say the same things in fewer words than the screen that says them properly.
+        // The bell stays because it is not a duplicate: it is the mute STATE, readable without
+        // opening anything (owner, 2026-08-05).
     }
 
     // MARK: The bar where the composer would be
@@ -280,6 +250,14 @@ struct OfficialChatInfoView: View {
                 .listRowBackground(Color.clear)
             }
 
+            // ONE CARD, NOT TWO. This was "What this is" and "Why you can trust this one" as separate
+            // sections, and the owner read them as two unrelated blocks stacked up. They are one
+            // thought: here is what this chat is, and here is why you can believe it. Split apart,
+            // the trust half looked like an afterthought rather than the point.
+            //
+            // NOT WhatsApp's shape though (he asked for that explicitly). Theirs is one grey card of
+            // plain paragraphs with a link at the bottom. Ours keeps a header and keeps the seal on
+            // the line it belongs to, so the card has structure theirs does not.
             Section {
                 Text("This is where we tell you about new things, fixes and updates.")
                 // THE LINE THAT ACTUALLY PROTECTS SOMEBODY. Read from WhatsApp's official chat, which
@@ -292,11 +270,6 @@ struct OfficialChatInfoView: View {
                 // can apply forever, against a scammer neither of us has seen yet, costs one sentence.
                 Text("We will never ask you for your password, your login code, or money. Nobody from Fariin will ever ask you for those, anywhere.")
                     .fontWeight(.medium)
-            } header: {
-                Text("What this is")
-            }
-
-            Section {
                 Label {
                     Text("There is no Fariin account. This chat is built into the app itself, so it cannot be copied. Anyone claiming to be Fariin is not.")
                 } icon: {
@@ -304,7 +277,7 @@ struct OfficialChatInfoView: View {
                         .foregroundStyle(.white, Color(hex: 0x0A84FF))
                 }
             } header: {
-                Text("Why you can trust this one")
+                Text("About this chat")
             }
 
             Section {
