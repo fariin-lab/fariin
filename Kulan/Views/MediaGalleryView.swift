@@ -81,8 +81,11 @@ struct MediaGalleryView: View {
         all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile && Self.firstURL(in: $0.text) != nil }
     }
 
-    private var photoCount: Int { expandedAll.filter { $0.isImage && !$0.isGif }.count }
-    private var videoCount: Int { expandedAll.filter { $0.isVideo }.count }
+    // Counted off `mediaItems`, NOT the whole list. The "..." menu can narrow the grid to photos
+    // only or videos only, and these two ignored that — so the header went on announcing the full
+    // totals over a grid deliberately showing fewer, which reads as tiles missing.
+    private var photoCount: Int { mediaItems.filter { $0.isImage && !$0.isGif }.count }
+    private var videoCount: Int { mediaItems.filter { $0.isVideo }.count }
 
     // The count line under "All Media" reflects the visible tab.
     private var subtitle: String {
@@ -168,6 +171,14 @@ struct MediaGalleryView: View {
                                        set: { tab = Tab.allCases[$0] }))
         .padding(.horizontal, 16)
         .padding(.vertical, 8)   // together with barHeight this is MediaTabBar.slotHeight
+        // A BACKDROP ACROSS THE WHOLE SLOT, not just under the control. Without this the bar was
+        // floating over nothing: the 16pt beside it and the 8pt above and below were transparent,
+        // so photos scrolling under the bar were visible raw in that gap — empty black at rest,
+        // full of sliding tiles mid-scroll (owner report). "Scrolls under it" only reads as under
+        // if there is something to be under. `.bar` is the same material the navigation bar
+        // directly above uses, so the two sit flush and read as one surface instead of a strip.
+        .frame(maxWidth: .infinity)
+        .background(.bar)
     }
 
     // (Deleted: ClearSegmentedTrack. It reached into the segmented control and erased its background
@@ -284,7 +295,12 @@ struct MediaGalleryView: View {
         ScrollView {
             if loaded && items.isEmpty { emptyState(emptyIcon, emptyText) }
             LazyVStack(alignment: .leading, spacing: 22) {
-                ForEach(sections(items), id: \.title) { section in
+                // KEYED BY POSITION, NOT BY TITLE. `id: \.title` assumed two groups can never carry
+                // the same name, which only holds while every message is in strict date order. One
+                // message with a pending or unreadable `createdAt` puts a second "Today" further
+                // down the list, and SwiftUI's answer to a duplicate id is to drop one of them —
+                // silently, so it looks like photos are simply missing rather than like a bug.
+                ForEach(Array(sections(items).enumerated()), id: \.offset) { _, section in
                     Text(section.title)
                         .font(.title3.weight(.bold))
                         .padding(.horizontal, 14).padding(.top, 6)
