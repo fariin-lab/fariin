@@ -87,6 +87,27 @@ struct ShareStorySheet: View {
 
     private var contactIds: Set<String> { StoryContact.ids(contacts) }
 
+    /// How tall the sheet has to be to show every audience without scrolling.
+    ///
+    /// Measured from the pieces rather than guessed as a fraction of the screen, because the same
+    /// fraction is a different number of rows on every phone. The row height is the real one: two
+    /// lines of text plus the 40pt badge and its padding.
+    ///
+    /// Bounded at both ends. The floor stops a two-row sheet from being a sliver; the ceiling is 88%
+    /// of the screen, so even a full five custom stories leaves the story visible above it and the
+    /// sheet still reads as a sheet. With his ceiling of five that works out at seven rows, which
+    /// fits inside 88% on every phone we support — but the clamp stays, because a number that only
+    /// happens to fit is a number waiting to stop fitting.
+    private var sheetHeight: CGFloat {
+        let rowH: CGFloat = 68        // badge 40 + two lines + vertical padding
+        let chrome: CGFloat = 56      // the inline navigation bar
+            + 44                      // "Who can see your story" + the New button
+            + 44                      // the footer line under the list
+            + 76                      // Post Story and its padding
+        let wanted = chrome + rowH * CGFloat(max(2, store.all.count))
+        return min(wanted, UIScreen.main.bounds.height * 0.88)
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -102,7 +123,7 @@ struct ShareStorySheet: View {
                     HStack {
                         Text("Who can see your story")
                         Spacer()
-                        NewAudienceButton { creating = true }
+                        NewAudienceButton(onCustom: { creating = true }, canAddCustom: store.canAddCustom)
                     }
                     // Sentence case, his reference. A section header uppercases its text by
                     // default, and the + New button is not a header at all.
@@ -135,8 +156,10 @@ struct ShareStorySheet: View {
                 onCreated: { a in store.select(a.id); creating = false },
                 onCancel: { creating = false })
         }
-        // 60% shows the built-ins plus a couple of custom lists and the Post button. Drag up for more.
-        .presentationDetents([.fraction(0.6), .large])
+        // THE SHEET IS AS TALL AS ITS LIST (owner 2026-08-06: "the sheet height should fit the
+        // content instead of using a fixed height"). It was a flat 60%, which fitted the two
+        // built-ins and one custom story; his fourth row was cut off behind the Post button.
+        .presentationDetents([.height(sheetHeight), .large])
         .presentationDragIndicator(.visible)
         // SOLID background — the default translucent material let the story photo show through the
         // sheet ("looks different"); this makes it a normal opaque grouped-list sheet.

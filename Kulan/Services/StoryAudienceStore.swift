@@ -120,6 +120,10 @@ struct StoryAudience: Identifiable, Codable, Equatable {
 final class StoryAudienceStore {
     static let shared = StoryAudienceStore()
 
+    /// His ceiling ("the maximum number of Custom Stories is 5"). It also bounds the share sheet's
+    /// height, which sizes itself to the list — see `ShareStorySheet`.
+    static let maxCustom = 5
+
     /// Fixed. `Everyone` cannot be edited (owner's rule), so it is a constant rather than a document.
     let everyone = StoryAudience.everyone
     /// Editable, and stored — its mode and its except/only list have to follow the account.
@@ -202,6 +206,8 @@ final class StoryAudienceStore {
     /// Create a custom story and return it, already visible. The write is fire-and-forget and the
     /// listener will confirm it: the create flow ends by selecting this list and posting, and making
     /// that wait on a round trip is how a story post comes to depend on the network twice.
+    var canAddCustom: Bool { custom.count < Self.maxCustom }
+
     @discardableResult
     func createCustom(name: String, members: [String], allowReplies: Bool) -> StoryAudience {
         let a = StoryAudience(id: UUID().uuidString, kind: .custom,

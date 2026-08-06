@@ -64,11 +64,21 @@ struct StoryAudienceRow<Trailing: View>: View {
     }
 
     @ViewBuilder private var badge: some View {
-        ZStack {
-            Circle().fill(badgeTint.gradient)
-            Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+        // EVERYONE WEARS YOUR OWN FACE (owner 2026-08-06: "on the Everyone tab, please set my profile
+        // picture not icon"). It is the audience that reaches your profile, so your profile is the
+        // truest picture of it — and it is what Signal draws there. AvatarView falls back to the
+        // coloured letter on its own when there is no photo, so there is no empty-circle case.
+        if audience.kind == .everyone {
+            AvatarView(name: ProfileStore.shared.me?.name ?? "You",
+                       photoUrl: ProfileStore.shared.me?.photoUrl,
+                       size: 40)
+        } else {
+            ZStack {
+                Circle().fill(badgeTint.gradient)
+                Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+            }
+            .frame(width: 40, height: 40)
         }
-        .frame(width: 40, height: 40)
     }
 
     private var badgeIcon: String {
@@ -543,6 +553,9 @@ struct CreateCustomStoryFlow: View {
 /// says so honestly; hiding it would leave a menu with one item pretending to be a choice.
 struct NewAudienceButton: UIViewRepresentable {
     let onCustom: () -> Void
+    /// Greyed once he is at the ceiling — his number ("the maximum number of Custom Stories is 5").
+    /// A menu item that silently does nothing is worse than one that says why it cannot.
+    var canAddCustom: Bool = true
 
     func makeUIView(context: Context) -> UIButton {
         var cfg = UIButton.Configuration.gray()
@@ -561,8 +574,10 @@ struct NewAudienceButton: UIViewRepresentable {
 
     func updateUIView(_ b: UIButton, context: Context) {
         let custom = UIAction(title: "New Custom Story",
-                              subtitle: "Visible only to specific people",
-                              image: UIImage(systemName: "rectangle.stack")) { _ in
+                              subtitle: canAddCustom ? "Visible only to specific people"
+                                                     : "You have the maximum of \(StoryAudienceStore.maxCustom)",
+                              image: UIImage(systemName: "rectangle.stack"),
+                              attributes: canAddCustom ? [] : [.disabled]) { _ in
             context.coordinator.onCustom()
         }
         let group = UIAction(title: "New Group Story",

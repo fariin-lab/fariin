@@ -1022,7 +1022,7 @@ struct StorySettingsView: View {
                     HStack {
                         Text("Stories")
                         Spacer()
-                        NewAudienceButton { creating = true }
+                        NewAudienceButton(onCustom: { creating = true }, canAddCustom: audiences.canAddCustom)
                     }
                     .textCase(nil)
                 } footer: {
