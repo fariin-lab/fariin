@@ -1272,6 +1272,27 @@ struct StoryViewer: View {
         // black canvas and the light Chats list bleeds through as the "white" bug. Clear only at rest,
         // so the swipe-DOWN dismiss still reveals the Chats list sliding behind the story.
         .presentationBackground { Color.black.opacity(showViewers ? 1 : 0) }
+        // TELL THE PRESENTATION TO STAND DOWN, instead of arguing with its recogniser.
+        //
+        // His report: sometimes a downward drag over an OPEN sheet closes the whole viewer instead
+        // of the sheet. The rule has been right for a long time and the enforcement has not — the
+        // cover is presented with `.navigationTransition(.zoom)`, whose interactive drag-to-dismiss
+        // is UIKit's, and every attempt so far has been made from inside the sheet's own view:
+        // `require(toFail:)` (disproved on device, build 466) and then switching foreign pans off
+        // by hand (`suspendForeignPans`). Both are archaeology on somebody else's recogniser, and
+        // both have the same hole — they run when the sheet MOUNTS and when one of OUR pans begins,
+        // so a system pan created lazily in between, or a drag our own gates deliberately refuse
+        // (a sideways-ish one in the carousel band), is a drag nobody suspended. That is the
+        // "sometimes".
+        //
+        // This is the documented API for the exact question, and UIKit asks it BEFORE it will begin
+        // an interactive dismissal, so there is no recogniser to lose a race with and nothing to
+        // re-scan. `suspendForeignPans` stays: it also stops other foreign pans riding along, and
+        // this is the belt to its braces rather than a replacement.
+        //
+        // Released the moment the sheet is genuinely down, so the swipe-down dismiss AT REST is
+        // still Apple's zoom-back hero — which is the behaviour he signed off and must not change.
+        .interactiveDismissDisabled(showViewers && viewersProgress > 0.02)
     }
 
     // The Active Story layer: media + header + progress bars + owner bar/footer.
