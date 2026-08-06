@@ -844,9 +844,15 @@ struct StoryViewer: View {
     // story steps aside; it takes the centre back once the swipe settles (identical pixels
     // at both hand-off moments = invisible swaps, and the swipe stays as smooth as ever).
     @State private var carouselInteracting = false
-    /// The sheet's sideways page-drag, live per frame (fraction of one width, signed). While it is
-    /// non-zero the carousel draws the centre copy and slides the row with the panel, so the card's
-    /// picture follows the finger instead of switching when the swipe commits.
+    /// The sheet's sideways page-drag, live per frame, in POINTS and signed. While it is non-zero
+    /// the carousel draws the centre copy and slides the row with the panel, so the card's picture
+    /// follows the finger instead of switching when the swipe commits.
+    ///
+    /// POINTS, and the carousel divides by its own `fullDist` — the same points-per-card its finger
+    /// scroller uses. It was a fraction of the screen width, which made one whole width worth one
+    /// card step while a finger on the row itself covers a card in about half that. So the row
+    /// crawled at half speed behind the panel: his "when I swipe sheet viewer the window card is
+    /// not working like when I'm using my finger".
     @State private var sheetPageDrag: CGFloat = 0
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
@@ -1573,6 +1579,11 @@ struct StoryViewer: View {
                           carouselBand: carouselBandRect,
                           hasPrev: (idx ?? 0) > 0,
                           hasNext: idx.map { $0 < arr.count - 1 } ?? false,
+                          // The ids as well as the flags: the sheet fetches the neighbour's viewers
+                          // as soon as a sideways drag picks a side, so what slides in is that
+                          // story's real list rather than a spinner.
+                          prevStoryId: idx.flatMap { $0 > 0 ? arr[$0 - 1].id : nil } ?? "",
+                          nextStoryId: idx.flatMap { $0 < arr.count - 1 ? arr[$0 + 1].id : nil } ?? "",
                           onClose: { closeViewers() },
                           onCollapseTap: { closeViewers() },
                           onRelease: { p, start, v in settleViewers(progress: p, dragStart: start, velocityUp: v) },
@@ -2115,9 +2126,10 @@ struct MyStoriesCarousel: View {
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
     var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
     var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
-    /// The sheet's sideways page-drag, as a fraction of the screen (see onPageDrag). Slides the
-    /// whole row in step with the sliding panel, so the picture in the slot follows the finger
-    /// instead of switching at commit.
+    /// The sheet's sideways page-drag IN POINTS (see onPageDrag). Slides the whole row in step with
+    /// the sliding panel, so the picture in the slot follows the finger instead of switching at
+    /// commit. Converted to card units below with `fullDist`, which is exactly what CarouselScroller
+    /// divides a finger's own travel by — so both ways of moving the row move it the same distance.
     var pageDrag: CGFloat = 0
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
@@ -2195,10 +2207,12 @@ struct MyStoriesCarousel: View {
                         let i = pair.offset
                         let s = pair.element
                         // combinedFraction = (index offset) + scroll fraction. `pageDrag` biases the
-                        // whole row while the SHEET is being thrown sideways: finger left → drag
-                        // fraction negative → effective scroll grows → the NEXT card slides toward
-                        // the centre, in step with the panel under the same finger.
-                        let cf = CGFloat(i) - (scroll - pageDrag)
+                        // whole row while the SHEET is being thrown sideways: finger left → points
+                        // negative → effective scroll grows → the NEXT card slides toward the
+                        // centre, in step with the panel under the same finger. Divided by
+                        // `fullDist` because that is what a point of finger travel is worth in card
+                        // units — the number CarouselScroller is handed for the row's own drag.
+                        let cf = CGFloat(i) - (scroll - pageDrag / fullDist)
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
