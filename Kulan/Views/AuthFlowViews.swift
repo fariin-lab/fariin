@@ -343,7 +343,9 @@ struct EmailAuthView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var reveal = false
-    @FocusState private var emailFocused = false
+    // No `= false`: FocusState's init takes no arguments and defaults to false on its own. The other
+    // FocusState in this file (ForgotPasswordView) was already written the right way.
+    @FocusState private var emailFocused: Bool
     // The password box is a UITextField (see RevealablePasswordField), so its focus CANNOT ride on
     // @FocusState: setting a FocusState to a value no SwiftUI view claims gets reset to nil by
     // SwiftUI on the same pass, which would have resigned the keyboard the instant we asked for it.
