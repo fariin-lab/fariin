@@ -60,6 +60,16 @@ enum VideoTranscoder {
         let asset = AVURLAsset(url: url)
         guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
         var duration = fullTime.seconds
+        let composing = overlay != nil || cropRect != nil
+
+        // FAST PATH. When the clip already obeys every rule we were about to impose, copy it instead
+        // of re-encoding it. The encode IS the wait before a video starts uploading, and spending
+        // several seconds to produce a slightly worse copy of an already-fine file buys nothing.
+        if let copied = await passthrough(url: url, stripAudio: stripAudio, hd: hd, composing: composing,
+                                          range: range, maxSeconds: maxSeconds, duration: duration),
+           let quick = await finish(data: copied, asset: asset, duration: duration) {
+            return quick
+        }
 
         var exportAsset: AVAsset = asset
         if stripAudio {
@@ -94,7 +104,7 @@ enum VideoTranscoder {
         let preset = hd ? AVAssetExportPreset1920x1080 : AVAssetExportPreset960x540
         // A composition of our own needs a preset that will not impose a size as well — the render
         // size is the thing deciding the output here, and two things deciding it is one too many.
-        let composing = overlay != nil || cropRect != nil
+        // (`composing` is decided at the top, because the passthrough check needs it too.)
         guard let session = AVAssetExportSession(asset: exportAsset,
                                                  presetName: composing ? AVAssetExportPresetHighestQuality : preset)
         else { return nil }
@@ -156,8 +166,12 @@ enum VideoTranscoder {
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
         try? FileManager.default.removeItem(at: out)
+        return await finish(data: data, asset: asset, duration: duration)
+    }
 
-        // Thumbnail just after the start (frame 0 is often black), rotation-corrected.
+    /// The half both paths share: the poster frame. Taken just after the start, because frame 0 is
+    /// very often black, and rotation-corrected so a portrait clip does not land sideways.
+    private static func finish(data: Data, asset: AVAsset, duration: Double) async -> Prepared? {
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)
@@ -166,6 +180,68 @@ enum VideoTranscoder {
               let thumb = UIImage(cgImage: cg).jpegData(compressionQuality: 0.72) else { return nil }
         return Prepared(data: data, thumbnail: thumb, duration: duration,
                         width: Double(cg.width), height: Double(cg.height))
+    }
+
+    /// COPY INSTEAD OF RE-ENCODE, when the clip already obeys every rule we would have imposed.
+    ///
+    /// Returns the mp4 bytes, or nil to mean "not eligible, do the real export". Deliberately narrow:
+    /// anything with an overlay, a crop, a mute or a trim needs real frames rendered, and anything
+    /// that is not already H.264 has to be converted or some devices cannot play it — that conversion
+    /// is most of why this transcoder exists.
+    ///
+    /// ⚠️ THE METADATA READ-BACK IS NOT DECORATION. An iPhone recording carries the GPS coordinates
+    /// it was taken at, and stripping those was a real privacy fix in this app. The same
+    /// `metadataItemFilter` the re-encode uses is set here, but passthrough copies existing bytes
+    /// rather than rebuilding them, so the output is READ BACK and refused if any location survived.
+    /// A refusal costs only the speed: the caller falls through to the ordinary export.
+    private static func passthrough(url: URL, stripAudio: Bool, hd: Bool, composing: Bool,
+                                    range: CMTimeRange?, maxSeconds: Double?, duration: Double) async -> Data? {
+        guard !composing, !stripAudio, range == nil else { return nil }
+        if let cap = maxSeconds, duration > cap { return nil }
+
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let natural = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform),
+              let formats = try? await track.load(.formatDescriptions),
+              let first = formats.first,
+              CMFormatDescriptionGetMediaSubType(first) == kCMVideoCodecType_H264 else { return nil }
+
+        // Inside the box the preset would have put it in, measured the way the clip actually appears
+        // (after its own rotation), or a portrait 1080x1920 would read as "too wide" and be refused.
+        let displayed = natural.applying(transform)
+        let long = max(abs(displayed.width), abs(displayed.height))
+        let short = min(abs(displayed.width), abs(displayed.height))
+        let box: (CGFloat, CGFloat) = hd ? (1920, 1080) : (960, 540)
+        guard long <= box.0, short <= box.1 else { return nil }
+
+        // The same ceiling the export path computes, so passthrough can never post a file the
+        // re-encode would have shrunk (and Storage would then refuse).
+        let ceiling = min(Int64(Limits.videoMessageBytes - 2 * 1024 * 1024),
+                          max(Int64(duration * 400_000), 2 * 1024 * 1024))
+        guard let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              Int64(bytes) <= ceiling else { return nil }
+
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("pass-\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: out)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough)
+        else { return nil }
+        session.shouldOptimizeForNetworkUse = true
+        session.metadataItemFilter = AVMetadataItemFilter.forSharing()
+        do { try await session.export(to: out, as: .mp4) } catch { return nil }
+        defer { try? FileManager.default.removeItem(at: out) }
+
+        let result = AVURLAsset(url: out)
+        let all = ((try? await result.load(.metadata)) ?? []) + ((try? await result.load(.commonMetadata)) ?? [])
+        guard !all.contains(where: isLocation) else { return nil }
+        return try? Data(contentsOf: out)
+    }
+
+    /// Location hides under more than one key: the common one, and QuickTime's own
+    /// `com.apple.quicktime.location.ISO6709`. Match on either rather than name every spelling.
+    private static func isLocation(_ item: AVMetadataItem) -> Bool {
+        if item.commonKey == .commonKeyLocation { return true }
+        return (item.key as? String)?.lowercased().contains("location") ?? false
     }
 
     /// Build the composition that paints the editor's work onto the frames.

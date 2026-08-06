@@ -751,7 +751,9 @@ struct FloatingCallWindow: View {
 
 // The "alive" wash for the minimized call bars (user reference: the reference app's animated call banner): a
 // soft band of light drifting across the green every ~3s, so the bar reads as a LIVE call rather
-// than a static banner. Same technique as the sign-up logo's light sweep. TimelineView-driven at
+// than a static banner. (The sign-up logo used the same trick until its sweep was removed on
+// 2026-08-05; this one stays, because here the movement means the call is still running.)
+// TimelineView-driven at
 // 30fps over a 40pt strip — GPU-trivial, and it only exists while a bar is on screen.
 struct LiveCallBarBackground: View {
     var body: some View {
