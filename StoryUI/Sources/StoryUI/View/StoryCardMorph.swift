@@ -10,6 +10,16 @@ import UIKit
 /// the host, because the host is the only thing that knows what the story was opened from.
 public enum StoryHeroPhase { case began, changed, ended, cancelled }
 
+/// Something that can hand over the video frame it is showing RIGHT NOW.
+///
+/// Implemented by the story's player. It exists because the alternative — photographing the screen
+/// with `drawHierarchy` — cannot see a video layer reliably: it returns the frame sometimes and a
+/// black rectangle other times, with no error and nothing for the caller to check.
+public protocol StoryVideoFrameSource: AnyObject {
+    /// Nil is a normal answer, not a failure to hide. Callers fall back.
+    func currentVideoFrame() -> UIImage?
+}
+
 /// One handle on the story card that is actually on screen.
 ///
 /// WHY THIS EXISTS. The card behind the viewers sheet used to be a photograph of the story:
@@ -82,6 +92,10 @@ public final class StoryCardMorph {
     /// NOT called when a close commits: the card is on its way out, and repainting the page black
     /// behind it puts a black rectangle where the chat list should already be showing through.
     public var restoreAfterHero: (() -> Void)?
+
+    /// The story's current player, while there is one. Weak: a player that has gone away must not be
+    /// asked for frames, and must not be kept alive by having been asked once.
+    public weak var frameSource: StoryVideoFrameSource?
 
     /// Make the page see-through for a hero flight: what pulls away has to be the story, over the
     /// chat list, not a black page with a story in it. Registered by whichever pager installed the
@@ -258,6 +272,11 @@ public final class StoryCardMorph {
         guard let card, card.bounds.width > 1, card.bounds.height > 1 else { return nil }
         let rect = contentRect(in: card)
         guard rect.width > 1, rect.height > 1 else { return nil }
+        // ASK THE PLAYER FIRST. For a video this is the only answer that cannot come back black, and
+        // the black-picture rejection below exists precisely because the fallback sometimes does.
+        // A photo has no frame source, so it goes straight past this to the screen capture, which is
+        // reliable for everything that is not a video layer.
+        if let frame = frameSource?.currentVideoFrame() { return frame }
         // Rendered at the size it will be DRAWN at, not the size it is on screen. These are kept for
         // the length of a viewing session and a full-screen bitmap is several megabytes each.
         let fmt = UIGraphicsImageRendererFormat()

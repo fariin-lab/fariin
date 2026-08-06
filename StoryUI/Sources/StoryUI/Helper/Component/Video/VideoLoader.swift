@@ -8,8 +8,9 @@
 import Foundation
 import UIKit
 import AVKit
+import CoreImage   // CIImage / CIContext, for reading a real frame out of the player
 
-final class PlayerView: UIView {
+final class PlayerView: UIView, StoryVideoFrameSource {
 
     // MARK: Public Properties
     weak var player: AVPlayer?
@@ -122,7 +123,22 @@ final class PlayerView: UIView {
     /// clip's size is not — it SHOWS. A blurred fill behind a video that turns out to fill the frame
     /// is invisible; a black one behind a video that does not is the bug.
     private func refreshBackdrop() {
-        guard bounds.width > 1, bounds.height > 1, let poster = posterImage else {
+        // ⚠️ THE POSTER WAS NEVER GUARANTEED TO BE HERE, AND THAT IS THE BLACK BARS.
+        //
+        // This used to give up when `posterImage` was nil, and giving up means HIDING, which is a
+        // black bar. `setPoster` looks in `URLCache.shared` and `StoryDiskCache` — both StoryUI's own
+        // caches, filled by its ImageLoader and prefetcher. The app draws its story row through its
+        // OWN DiskImageCache and warms that one. So for a story you just posted, the two caches this
+        // reads are cold, the poster becomes a network fetch, and until it lands there is nothing to
+        // blur. That is the square-video report, three times: the decision logic was right all along,
+        // the picture it needed was simply not there yet.
+        //
+        // The player is a better source than the poster anyway: it is the frame actually on screen
+        // rather than second zero, it needs no network, and it cannot come back black the way a
+        // screen capture can. The poster stays as the fallback for the moments before the first
+        // frame is decoded.
+        let source = posterImage ?? currentVideoFrame()
+        guard bounds.width > 1, bounds.height > 1, let poster = source else {
             if !backdropView.isHidden { backdropView.isHidden = true }
             return
         }
@@ -168,6 +184,43 @@ final class PlayerView: UIView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    // MARK: - A real frame, from the player rather than from the screen
+
+    /// ⚠️ `drawHierarchy` DOES NOT RELIABLY CAPTURE A VIDEO LAYER. It sometimes returns the frame and
+    /// sometimes a plain black rectangle, with no error and no way for the caller to tell — which is
+    /// what made the viewers carousel go black in build 470, and what still makes a video story fall
+    /// back to its second-zero poster whenever a capture quietly fails.
+    ///
+    /// `AVPlayerItemVideoOutput` asks the PLAYER for the frame it is showing, which is the only way
+    /// to get one that cannot come back black. Attached when the item is set rather than when a
+    /// picture is wanted: an output has no frames for the first moments after it is added, so one
+    /// created on demand answers nil exactly when it is needed.
+    private var frameOutput: AVPlayerItemVideoOutput?
+    private let frameContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    private func attachFrameOutput() {
+        guard let item = player?.currentItem else { return }
+        // A new item means the old output belongs to a video that is no longer playing.
+        if let old = frameOutput, item.outputs.contains(old) { return }
+        let out = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        ])
+        item.add(out)
+        frameOutput = out
+    }
+
+    /// The frame on screen right now, or nil if the player cannot supply one. Nil is a normal answer
+    /// — an item that has not decoded anything yet has nothing to give — and every caller already has
+    /// a fallback, so it must never be papered over with a black rectangle.
+    func currentVideoFrame() -> UIImage? {
+        guard let item = player?.currentItem, let out = frameOutput else { return nil }
+        let t = item.currentTime()
+        guard let buffer = out.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: nil) else { return nil }
+        let ci = CIImage(cvPixelBuffer: buffer)
+        guard let cg = frameContext.createCGImage(ci, from: ci.extent) else { return nil }
+        return UIImage(cgImage: cg)
+    }
 
     /// Hand over the clip's cover before `startVideo`, so the loading state has a picture to show.
     /// Reads the caches the prefetcher and the image loader already fill, and only fetches if both
@@ -336,6 +389,10 @@ private extension PlayerView {
             if Thread.isMainThread { self.notePresentationSize(s) }
             else { DispatchQueue.main.async { self.notePresentationSize(s) } }
         }
+        // A REAL FRAME, ASKED FOR PROPERLY. Attached here rather than on demand, because an output
+        // added the instant somebody wants a picture has no frame to give yet and answers nil.
+        attachFrameOutput()
+        StoryCardMorph.shared.frameSource = self
         // CLEAR, not black: the backdrop lives behind this layer and a black fill would cover it.
         // The view's own backgroundColor still guarantees nothing shows through when there is no
         // poster to blur.
