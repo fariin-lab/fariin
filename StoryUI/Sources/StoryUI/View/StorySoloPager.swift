@@ -83,7 +83,9 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 onItemSeen: parent.onItemSeen,
                 showMore: parent.showMore
             )
-            let hc = StoryPageHostVC(rootView: AnyView(root))   // clear bg + safeAreaRegions = []
+            // No `AnyView`: StoryPageHostVC takes the concrete view now, so SwiftUI keeps the
+            // structural information it needs to diff. See the note on the class.
+            let hc = StoryPageHostVC(rootView: root)            // clear bg + safeAreaRegions = []
             host.addChild(hc)
             hc.view.frame = host.cardContainer.bounds
             hc.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

@@ -168,6 +168,20 @@ struct StoryLibraryPicker: View {
 
                 if tab == 0 { photosTab } else { albumsTab }
             }
+            // ONE BLACK, not two. The theme fix made the bar dark; it did not make it the SAME dark.
+            //
+            // A navigation bar's default background is a translucent chrome material, so it sits a
+            // few percent lighter than the content under it and picks up a faint colour cast from
+            // whatever it is blurring — his "why is the top green and the bottom the real dark". The
+            // segmented control's row had the same problem for the same reason: no background of its
+            // own, so it showed whatever the bar was drawing behind it.
+            //
+            // Pinning both to `systemBackground` — which under this screen's forced-dark trait is the
+            // same black the grid and the album list already use — means there is one colour on the
+            // screen and nothing left to sample.
+            .background(Color(.systemBackground))
+            .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .navigationTitle("Add to Story")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
