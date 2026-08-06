@@ -482,6 +482,10 @@ private extension StoryDetailView {
     @ViewBuilder
     func getUserInfoAndProgressBar(with index: Int) -> some View {
         let date = getStoryOrNil(with: index)?.date ?? ""
+        // PER STORY, read from the item on screen right now — not from the bucket. An author
+        // with ten stories up posted them to different audiences, and the header has to follow
+        // the one you are looking at as you tap through them.
+        let audience = getStoryOrNil(with: index)?.audience
         let name = model.user.name
         let image = model.user.image
         VStack {
@@ -504,6 +508,7 @@ private extension StoryDetailView {
                 image: image,
                 name: name,
                 date: date,
+                audience: audience,
                 onProfile: { onProfile?(model.user) },
                 showMore: showMore,
                 isMyStory: model.isMine,

@@ -297,6 +297,47 @@ enum StoryPrefs {
     static func setHidden(_ uid: String, _ hidden: Bool) {
         var s = set("hiddenStories"); if hidden { s.insert(uid) } else { s.remove(uid) }; save("hiddenStories", s)
     }
+    // MARK: - One-time stories, and the private name of a custom one
+
+    /// A ONE-TIME STORY I HAVE OPENED. Local, and only ever a HEAD START on the server.
+    ///
+    /// The real enforcement is that the server takes me out of the story's `recipientUids`, which no
+    /// client can undo (the update rule pins that field). But that happens on a trigger a beat after
+    /// my receipt lands, and "immediately" is his word — so the story leaves my tray on the tap and
+    /// this remembers that decision across a relaunch in the seconds before the server agrees.
+    ///
+    /// Deliberately NOT the thing that makes one-time work. If this file were deleted the story would
+    /// still be gone, because it is gone on the server.
+    static func isOneTimeUsed(_ storyId: String) -> Bool { set("oneTimeUsed").contains(storyId) }
+    static func markOneTimeUsed(_ storyId: String) {
+        var s = set("oneTimeUsed"); s.insert(storyId); save("oneTimeUsed", s)
+    }
+
+    /// THE NAME OF A CUSTOM STORY I POSTED, kept here and nowhere else.
+    ///
+    /// The header shows the list's name to ME and the plain word "Custom" to everybody else, which is
+    /// his rule twice over ("only you can see the name of this story", and "they should not see any
+    /// private details beyond the audience type"). A recipient can read the whole story document, so
+    /// the only way that rule can be true is for the name never to be in it.
+    ///
+    /// A plain dictionary rather than the space-joined sets above, because a story name can contain
+    /// spaces and those sets split on them.
+    private static let audienceNamesKey = "storyAudienceNames"
+    static func rememberAudienceName(storyId: String, tag: StoryAudienceTag) {
+        guard tag.label == "custom", !tag.name.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        var d = UserDefaults.standard.dictionary(forKey: audienceNamesKey) as? [String: String] ?? [:]
+        // Same append-only shape as the seen/liked stores, and the same answer to it: a story is
+        // gone in 24 hours but its name would sit here forever.
+        if d.count > 300 { d.removeAll() }
+        d[storyId] = tag.name
+        UserDefaults.standard.set(d, forKey: audienceNamesKey)
+    }
+    static func audienceName(storyId: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return (UserDefaults.standard.dictionary(forKey: audienceNamesKey) as? [String: String])?[storyId]
+    }
+
     static func isNotifying(_ uid: String) -> Bool { set("notifyStories").contains(uid) }
     static func toggleNotify(_ uid: String) {
         var s = set("notifyStories"); if s.contains(uid) { s.remove(uid) } else { s.insert(uid) }; save("notifyStories", s)
@@ -1045,6 +1086,7 @@ struct StoryViewer: View {
                         // sits above the card's bottom edge (21c78c5), the same place friends'
                         // captions sit and the same place the editor's caption pill shows it.
                         caption: s.caption,
+                        audience: audienceBadge(for: s, isMine: g.isMine),
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an
@@ -1630,6 +1672,36 @@ struct StoryViewer: View {
         // only be a second, staler copy of it.
         guard let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w) else { return }
         frozenCovers[sheetStoryId] = shot
+    }
+
+    /// THE LINE UNDER THE NAME: which audience this story went to.
+    ///
+    /// Per story, so an author with ten stories up can tap through them and watch the label change
+    /// (his request, 2026-08-06, with three reference screens).
+    ///
+    /// ⚠️ THE NAME OF A CUSTOM STORY IS THE AUTHOR'S ALONE. Everybody else is told the TYPE and
+    /// nothing more — his rule, stated twice: "only you can see the name of this story", and "they
+    /// should not see any private details beyond the audience type". It holds by construction rather
+    /// than by care, because the name is not in the story document at all; it lives on the author's
+    /// own device (`StoryPrefs.audienceName`) and there is nothing here for anybody else to read.
+    ///
+    /// Everyone deliberately does NOT wear the profile photo, which is his other instruction on this
+    /// screen ("do not use the profile picture as the audience icon, use the dedicated Everyone
+    /// icon"). The audience row in the share sheet does wear it, and that is a different question:
+    /// there it is a picture of who you are posting AS, here it is a statement of who can see it.
+    private func audienceBadge(for s: Story, isMine: Bool) -> StoryAudienceBadge? {
+        if s.oneTime { return StoryAudienceBadge(systemImage: "1.circle", text: "View once") }
+        switch s.audienceLabel {
+        case "everyone": return StoryAudienceBadge(systemImage: "globe", text: "Everyone")
+        case "custom":
+            // The author's private name for the list, or the plain type for everybody else. A name
+            // this device happens not to have (posted from another phone, or reinstalled) also falls
+            // through to the type, which is the safe way round to be wrong.
+            let name = isMine ? StoryPrefs.audienceName(storyId: s.id) : nil
+            return StoryAudienceBadge(systemImage: "person.crop.rectangle.stack",
+                                      text: name?.isEmpty == false ? name! : "Custom")
+        default: return StoryAudienceBadge(systemImage: "person.2.fill", text: "My Friends")
+        }
     }
 
     // MARK: - The hero transition

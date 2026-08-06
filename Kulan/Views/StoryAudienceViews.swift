@@ -602,12 +602,11 @@ struct CreateCustomStoryFlow: View {
 
 /// The "+ New" capsule and the menu behind it, identical in the share sheet and in Settings.
 ///
-/// STILL UIKIT, though the reason has changed. It began as a two-line UIMenu, which SwiftUI cannot
-/// draw — a `Button` inside a SwiftUI `Menu` renders one line whatever view you hand it, while
-/// `UIAction` has carried a `subtitle` since iOS 15. The menu is gone now (see `updateUIView`), and
-/// what keeps this in UIKit is the button itself: a small capsule with an explicit font, an explicit
-/// symbol size and an explicit disabled state, sized to sit in a section header. `UIButton
-/// .Configuration` says all of that in one place.
+/// STILL UIKIT, for the reason it always was: a `Button` inside a SwiftUI `Menu` renders on ONE
+/// line whatever view you hand it, and his reference shows two-line items. `UIAction` has carried a
+/// `subtitle` since iOS 15. The button itself wants UIKit too — a small capsule with an explicit
+/// font, an explicit symbol size and an explicit disabled state, sized to sit in a section header,
+/// which `UIButton.Configuration` says in one place.
 ///
 /// GROUP STORIES ARE NOT DRAWN AT ALL. They need their own delivery path — the group's membership
 /// resolved into viewers, replies landing in the group, the group's identity on the story row — and
@@ -618,6 +617,13 @@ struct NewAudienceButton: UIViewRepresentable {
     /// Greyed once he is at the ceiling — his number ("the maximum number of Custom Stories is 5").
     /// A menu item that silently does nothing is worse than one that says why it cannot.
     var canAddCustom: Bool = true
+    /// ONE-TIME STORY, and it is only offered where there is a story to post.
+    ///
+    /// Nothing is saved for a one-time story: you pick the people, it goes to them, and next time you
+    /// pick again (the owner's call). So it has no place on the Settings page, which exists to manage
+    /// the audiences you keep — an entry there would open a picker with nothing to send.
+    /// Nil means no menu at all, and the button goes straight to New Custom Story.
+    var onOneTime: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> UIButton {
         // SIZED FOR A SECTION HEADER, which is what it sits in.
@@ -655,25 +661,49 @@ struct NewAudienceButton: UIViewRepresentable {
 
     func updateUIView(_ b: UIButton, context: Context) {
         context.coordinator.onCustom = onCustom
-        // NEW GROUP STORY IS GONE (owner 2026-08-06: "plz hide new group story that feature"). It was
-        // shown greyed with "Coming soon" on his earlier call, so that a menu of one did not pretend
-        // to be a choice. He would rather not see it at all until it exists.
+        context.coordinator.onOneTime = onOneTime
+        // NEW GROUP STORY IS STILL GONE (owner 2026-08-06: "plz hide new group story that feature").
+        // One-Time Story takes the slot it used to hold, and unlike Group Story it exists.
         //
-        // Which leaves one action — so there is no menu. A menu that opens to a single item is two
-        // taps for one decision, and the reason the greyed entry was there in the first place was to
-        // stop exactly that. The button just does the thing now.
-        guard canAddCustom else {
-            // At the ceiling there is nothing to open and nothing to do. Disabled says why better
-            // than a button that opens a menu whose only item is dimmed.
+        // THE MENU IS BACK ONLY WHERE THERE ARE TWO THINGS TO CHOOSE BETWEEN. On the Settings page
+        // there is still exactly one action, and a menu that opens to a single item is two taps for
+        // one decision — the reason `da53a71` took the menu away in the first place.
+        guard onOneTime != nil else {
+            guard canAddCustom else {
+                // At the ceiling there is nothing to open and nothing to do. Disabled says why
+                // better than a button that opens a menu whose only item is dimmed.
+                b.menu = nil
+                b.isEnabled = false
+                return
+            }
+            b.isEnabled = true
             b.menu = nil
-            b.isEnabled = false
+            b.showsMenuAsPrimaryAction = false
+            b.removeTarget(nil, action: nil, for: .touchUpInside)
+            b.addTarget(context.coordinator, action: #selector(Coordinator.fire), for: .touchUpInside)
             return
         }
-        b.isEnabled = true
-        b.menu = nil
-        b.showsMenuAsPrimaryAction = false
+
+        // UIKit, NOT SwiftUI's `Menu`, and that is the whole reason this view is a representable.
+        // His reference shows two-line items, and SwiftUI renders a menu item on ONE line whatever
+        // view you hand it. `UIAction.subtitle` has existed since iOS 15 and does it properly.
+        let custom = UIAction(title: "New Custom Story",
+                              subtitle: "Visible only to specific people.",
+                              image: UIImage(systemName: "person.2")) { _ in
+            context.coordinator.onCustom()
+        }
+        // Dimmed rather than absent at the ceiling: an item that vanishes leaves you wondering
+        // whether you imagined it, and this one says why it cannot be used.
+        custom.attributes = canAddCustom ? [] : [.disabled]
+        let oneTime = UIAction(title: "One-Time Story",
+                               subtitle: "Can only be viewed once by each recipient.",
+                               image: UIImage(systemName: "flame")) { _ in
+            context.coordinator.onOneTime?()
+        }
         b.removeTarget(nil, action: nil, for: .touchUpInside)
-        b.addTarget(context.coordinator, action: #selector(Coordinator.fire), for: .touchUpInside)
+        b.menu = UIMenu(children: [custom, oneTime])
+        b.showsMenuAsPrimaryAction = true   // one tap opens it; there is no other action to lose
+        b.isEnabled = true
     }
 
     /// Without this SwiftUI hands a representable the whole width it was offered, and a "+ New"
@@ -689,6 +719,7 @@ struct NewAudienceButton: UIViewRepresentable {
     /// touches — the create sheet would open against a stale `creating` binding.
     final class Coordinator: NSObject {
         var onCustom: () -> Void
+        var onOneTime: (() -> Void)?
         init(_ onCustom: @escaping () -> Void) { self.onCustom = onCustom }
         @objc func fire() { onCustom() }
     }

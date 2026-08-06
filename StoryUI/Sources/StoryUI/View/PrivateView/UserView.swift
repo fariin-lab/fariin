@@ -12,6 +12,8 @@ struct UserView: View {
     var image: String
     var name: String
     var date: String
+    /// Who this story went to. Nil draws nothing and the header keeps its old two-line shape.
+    var audience: StoryAudienceBadge? = nil
     var onProfile: (() -> Void)?   // tap the avatar+name block → that user's profile
     var showMore: Bool = false     // show the "…" dropdown menu; its buttons post notifications the host runs
     var isMyStory: Bool = false    // my own story → Delete (red) instead of Hide Stories; no Forward
@@ -24,12 +26,34 @@ struct UserView: View {
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image)   // 38×38 circle
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                    Text(date)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundColor(.white.opacity(0.7))
+                    // NAME AND TIME ON ONE LINE, his layout: the time is a detail about the name,
+                    // not a line of its own, and stacking them left the audience nowhere to go
+                    // without pushing a three-line block into the picture.
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(name)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        Text(date)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundColor(.white.opacity(0.7))
+                            .lineLimit(1)
+                            // The name may be long; the time must not be the thing that gets cut,
+                            // because half a timestamp reads as a bug rather than as a shortage of room.
+                            .layoutPriority(1)
+                    }
+                    if let audience {
+                        HStack(spacing: 5) {
+                            Image(systemName: audience.systemImage)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(audience.text).font(.system(size: 12, weight: .regular))
+                                .lineLimit(1)
+                        }
+                        // Brighter than the timestamp above it: this is information, not metadata,
+                        // and at 0.7 on a bright photo it disappeared into the picture.
+                        .foregroundColor(.white.opacity(0.85))
+                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                    }
                 }
             }
             .contentShape(Rectangle())

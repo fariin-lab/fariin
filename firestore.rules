@@ -794,6 +794,11 @@ service cloud.firestore {
         && request.resource.data.mediaPath == resource.data.mediaPath
         // type is pinned with the path (they were validated as a pair at create).
         && request.resource.data.type == resource.data.type
+        // A story cannot change what KIND of story it is after people have it. Without this an
+        // author could post a one-time story, let it be consumed, and clear the flag - or the
+        // reverse, turning an ordinary story people have already opened into a burned one.
+        && request.resource.data.get('oneTime', false) == resource.data.get('oneTime', false)
+        && request.resource.data.get('audienceLabel', '') == resource.data.get('audienceLabel', '')
         && (resource.data.get('mediaUrl', '') == ''
             || (request.resource.data.get('mediaUrl', '') == resource.data.get('mediaUrl', '')
                 && request.resource.data.get('caption', '') == resource.data.get('caption', '')));
@@ -843,6 +848,35 @@ service cloud.firestore {
         // NO delete — a view receipt is not something a viewer takes back. (Second stray paste of the
         // message-request decline rule; it read conversation fields off a view receipt, so it could
         // only ever error. Removed 2026-08-04, no behaviour change.)
+      }
+
+      // A ONE-TIME STORY, BURNED. The recipient says "I have opened this"; `onStoryConsumed` then
+      // takes them out of `recipientUids`, and THAT is the enforcement — the tray query stops
+      // matching the story and the read rule above refuses a direct fetch, neither of which any
+      // client can undo, because the story update rule pins `recipientUids` for everybody.
+      //
+      // WHY NOT JUST DENY THE READ ONCE A RECEIPT EXISTS, which is the obvious version: a `list`
+      // query fails ENTIRELY if any document it returns is unreadable. A story the viewer had
+      // consumed would still match `recipientUids array-contains me`, so an `exists()` clause on
+      // the read rule would not hide that one story, it would break the whole story tray. Changing
+      // what the query MATCHES is the only way to remove one document from a list.
+      //
+      // Separate from `views` because a view receipt is optional (the Story View Receipts setting)
+      // and consumption cannot be, or turning that switch off would turn a one-time story into an
+      // ordinary one. It is also why this is not a field on the receipt: that would put somebody
+      // with receipts off into the author's Seen-by list.
+      //
+      // Only ever created, never updated or deleted: unburning is the whole thing this prevents.
+      match /consumed/{viewerUid} {
+        // Nobody lists this. The viewer may confirm their own, and a moderator may look while
+        // acting on a report. The AUTHOR is not given it — they can already infer it from their
+        // own recipient list, and there is no reason to hand them a second, tidier copy.
+        allow read: if signedIn() && (request.auth.uid == viewerUid || adminCan('moderate'));
+        allow create: if signedIn()
+          && request.auth.uid == viewerUid
+          && storyData().get('oneTime', false) == true
+          && request.auth.uid in storyData().recipientUids
+          && request.resource.data.keys().hasOnly(['at']);
       }
     }
   }

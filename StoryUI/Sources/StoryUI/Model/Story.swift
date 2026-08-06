@@ -7,6 +7,25 @@
 
 import Foundation
 
+/// WHO A STORY WENT TO, as the header shows it: an SF Symbol and a word.
+///
+/// Per STORY, not per person, which is the point of it — an author with ten stories up posted them
+/// to different audiences and the header has to say which one you are looking at (his request,
+/// 2026-08-06, three reference screens).
+///
+/// The library is handed a finished symbol and a finished string and knows nothing else. Deciding
+/// what a viewer is allowed to be told is the host's job, and this is the seam that keeps it there:
+/// the author's own device turns "custom" into the list's private name, and everybody else's turns
+/// it into the plain word "Custom".
+public struct StoryAudienceBadge: Hashable {
+    public let systemImage: String
+    public let text: String
+    public init(systemImage: String, text: String) {
+        self.systemImage = systemImage
+        self.text = text
+    }
+}
+
 public struct Story: Identifiable, Hashable {
     public var id: String
     public var mediaURL: String
@@ -25,6 +44,8 @@ public struct Story: Identifiable, Hashable {
     public var duration: Double = Constant.storySecond
     public var config: StoryConfiguration
     public var caption: String = ""   // overlay caption (rendered on the media, never baked in)
+    /// The audience line under the name. Nil draws nothing, which is what every story had before.
+    public var audience: StoryAudienceBadge? = nil
 
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
@@ -34,6 +55,7 @@ public struct Story: Identifiable, Hashable {
                 isSeen: Bool = false,
                 duration: Double = 5,
                 caption: String = "",
+                audience: StoryAudienceBadge? = nil,
                 config: StoryConfiguration) {
 
         self.id = id
@@ -43,6 +65,7 @@ public struct Story: Identifiable, Hashable {
         self.duration = duration
         self.config = config
         self.caption = caption
+        self.audience = audience
         self.isLiked = isLiked
         self.isSeen = isSeen
         // (Removed `Constant.storySecond = duration` — mutating a global per-instance leaked the

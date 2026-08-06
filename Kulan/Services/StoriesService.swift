@@ -8,6 +8,30 @@ import FirebaseStorage
 import StoryUI   // StoryVideoSeed — the uploader warms the viewer's video cache
 
 // One story (photo or video). Rules-protected (v1, not E2EE); media is a plain file in Storage.
+/// WHO A STORY WENT TO, as a label — not as a pointer to the list it came from.
+///
+/// The header shows this so an author with ten stories up can tell at a glance which went where
+/// (his request, 2026-08-06, with three reference screens). It is a LABEL and nothing more: it says
+/// what KIND of audience was chosen, never who was in it, because a recipient reads the whole story
+/// document and anything on it is something they can see.
+///
+/// ⚠️ `name` IS NEVER WRITTEN TO FIRESTORE. A custom story's name is the author's own private note
+/// for it — "only you can see the name of this story" — and he restated that rule with this very
+/// request ("they should not see any private details beyond the audience type"). So the name is kept
+/// on the author's own device, keyed by the story it belongs to, and other people see the plain word
+/// "Custom".
+///
+/// It is also NOT a listId, deliberately. Nothing on a posted story points back at the list it came
+/// from, which is what makes "changes never affect stories you've already sent" true by construction
+/// rather than by care. A label is frozen at post time and cannot lead anywhere.
+struct StoryAudienceTag {
+    var label: String        // "everyone" | "friends" | "custom" | "oneTime"
+    var name: String = ""    // custom lists only, device-local
+    var oneTime: Bool { label == "oneTime" }
+    static let friends = StoryAudienceTag(label: "friends")
+    static let everyone = StoryAudienceTag(label: "everyone")
+}
+
 struct Story: Identifiable, Hashable, Codable {
     let id: String
     let authorUid: String
@@ -19,6 +43,11 @@ struct Story: Identifiable, Hashable, Codable {
     var isVideo: Bool = false
     var duration: Double = 0   // video length in seconds (photos: 0 → viewer uses the 5s standard)
     var thumbUrl: String = ""  // video poster frame (photos: empty)
+    /// The audience LABEL this story was posted with. See `StoryAudienceTag`.
+    var audienceLabel: String = "friends"
+    /// Each recipient may open it exactly once. Enforced on the server by removing them from
+    /// `recipientUids` the moment they do — see `StoryPrefs.consumeOneTime` and `onStoryConsumed`.
+    var oneTime: Bool = false
 
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
@@ -116,7 +145,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -141,7 +170,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies) }
+            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
             catch is CancellationError { cancelled = true }   // user hit cancel → postStory removed the doc
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -238,7 +267,7 @@ final class StoriesService {
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", expiryHours: Double = 24,
-                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) async throws {
+                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
@@ -295,6 +324,10 @@ final class StoriesService {
                 "mediaUrl": "",
                 "caption": caption,
                 "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
+                // THE LABEL, and only the label. See StoryAudienceTag: the custom NAME never comes
+                // here, because a recipient reads this document.
+                "audienceLabel": tag.label,
+                "oneTime": tag.oneTime,
                 // Public ("Everyone") stories are viewable by anyone who finds your profile — the
                 // read rules gate on this flag. Contacts still get it in their tray via
                 // recipientUids below.
@@ -303,6 +336,7 @@ final class StoriesService {
                 "replyCount": 0,
                 "recipientUids": Array(recipients),
             ])
+            StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
             // Both halves were in flight together; wait for the photo to land before asking for its
             // URL. If the doc write above threw, this child task is cancelled and awaited on the way
@@ -348,7 +382,7 @@ final class StoriesService {
     @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false,
                                              burn: StoryBurnIn? = nil,
                                              trim: ClosedRange<Double>? = nil, caption: String = "",
-                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) {
+                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         uploadingImage = UIImage(data: thumbnail)
@@ -366,7 +400,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -398,7 +432,7 @@ final class StoriesService {
     /// what this feature is for.
     func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil, burn: StoryBurnIn? = nil,
                         caption: String = "", expiryHours: Double = 24,
-                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) async throws {
+                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) async throws {
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
         // A hand trim decides where the material starts and how much of it there is; the split then
         // works on THAT, not on the original file. Trim to 20s and you get one story, not the first
@@ -414,7 +448,7 @@ final class StoriesService {
             // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
             try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
                                        expiryHours: expiryHours, excluded: excluded,
-                                       included: included, everyone: everyone, allowsReplies: allowsReplies)
+                                       included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag)
             return
         }
 
@@ -434,7 +468,7 @@ final class StoriesService {
                     try await postVideoSegment(videoURL: videoURL, range: range,
                                                caption: i == 0 ? caption : "", muted: muted, burn: burn,
                                                expiryHours: expiryHours, excluded: excluded,
-                                               included: included, everyone: everyone, allowsReplies: allowsReplies)
+                                               included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag)
                     lastError = nil
                     break
                 } catch is CancellationError {
@@ -459,7 +493,7 @@ final class StoriesService {
     // with an empty mediaUrl, so nobody sees a half-uploaded story).
     private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool, burn: StoryBurnIn? = nil,
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
-                                  everyone: Bool, allowsReplies: Bool) async throws {
+                                  everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()
@@ -497,11 +531,15 @@ final class StoriesService {
             "duration": prepared.duration,
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
+            // The label only — the custom name stays on this device. See StoryAudienceTag.
+            "audienceLabel": tag.label,
+            "oneTime": tag.oneTime,
             "public": everyone,
             "allowsReplies": allowsReplies,
             "replyCount": 0,
             "recipientUids": Array(recipients),
         ])
+        StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
         do {
             try Task.checkCancellation()
@@ -582,6 +620,38 @@ final class StoriesService {
                 .collection("views").document(me)
                 .setData(["viewedAt": FieldValue.serverTimestamp()], merge: true)
         }
+        if story.oneTime { await consumeOneTime(story) }
+    }
+
+    /// BURN A ONE-TIME STORY, for me.
+    ///
+    /// ⚠️ A SEPARATE SUBCOLLECTION FROM THE VIEW RECEIPT, ON PURPOSE, AND NOT AN OPTIMISATION TO
+    /// UNDO. A view receipt is optional — "Story View Receipts" is a setting, and with it off no
+    /// receipt is written at all. Consumption cannot be optional, or turning that switch off would
+    /// turn a one-time story into an ordinary one. And it must not be written INTO the receipt
+    /// either, because that would put somebody with receipts off into the author's Seen-by list.
+    ///
+    /// This write is what the server watches. `onStoryConsumed` takes me out of the story's
+    /// `recipientUids`, which is the actual enforcement: the tray query stops matching, a direct read
+    /// is refused by the existing rule, and no client can put me back — the story update rule pins
+    /// `recipientUids` to its current value for everybody.
+    ///
+    /// WHAT THIS DOES NOT DO, said plainly: the media file in Storage is readable by any signed-in
+    /// user who already has its URL. Someone who captured the URL during their one view could fetch
+    /// the file again outside the app. Closing that needs per-story Storage rules or signed URLs, and
+    /// it is not this change.
+    ///
+    /// THE COST HE SHOULD KNOW: the author can tell who has opened a one-time story, because their
+    /// uid leaves `recipientUids` and the author can read their own story. That is inherent to
+    /// enforcing it at the audience — Snapchat behaves the same way — and it is not affected by the
+    /// viewer's receipt setting.
+    func consumeOneTime(_ story: Story) async {
+        let me = uid
+        guard !me.isEmpty, story.oneTime, story.authorUid != me else { return }
+        await MainActor.run { StoryPrefs.markOneTimeUsed(story.id) }
+        try? await db.collection("stories").document(story.id)
+            .collection("consumed").document(me)
+            .setData(["at": FieldValue.serverTimestamp()])
     }
 
     // Set my reaction emoji on my view receipt (shows in the author's "Seen by" list).
@@ -830,6 +900,13 @@ final class StoriesRepository {
             guard let author = data["authorUid"] as? String,
                   let url = data["mediaUrl"] as? String, !url.isEmpty,   // skip the pre-upload window (empty URL froze the viewer)
                   let exp = (data["expiresAt"] as? Timestamp)?.dateValue() else { return nil }
+            // A ONE-TIME STORY I HAVE ALREADY OPENED IS GONE, and it goes here because this is the
+            // one place every story list is built. The server is removing me from its recipients as
+            // this runs; this is what makes "immediately" true on the tap rather than a beat later.
+            // Never applied to my OWN stories — the author keeps theirs until it expires.
+            if data["oneTime"] as? Bool ?? false, author != uid, StoryPrefs.isOneTimeUsed(d.documentID) {
+                return nil
+            }
             let created = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             return Story(id: d.documentID, authorUid: author, createdAt: created,
                          expiresAt: exp, mediaUrl: url,
@@ -837,7 +914,13 @@ final class StoriesRepository {
                          caption: data["caption"] as? String ?? "",
                          isVideo: data["type"] as? String == "video",
                          duration: data["duration"] as? Double ?? 0,
-                         thumbUrl: data["thumbUrl"] as? String ?? "")
+                         thumbUrl: data["thumbUrl"] as? String ?? "",
+                         // Stories posted before this field existed fall back to "friends", which is
+                         // what they were: the audience list is newer than the story collection, and
+                         // a public story is caught by the `public` flag below it.
+                         audienceLabel: data["audienceLabel"] as? String
+                            ?? ((data["public"] as? Bool ?? false) ? "everyone" : "friends"),
+                         oneTime: data["oneTime"] as? Bool ?? false)
         }
     }
 
