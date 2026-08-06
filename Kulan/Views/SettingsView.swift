@@ -399,15 +399,42 @@ struct AccountSettingsView: View {
             Button("OK", role: .cancel) {}
         } message: { Text(connectError ?? "") }
         .disabled(working)
+        // Sign-out is one-way and has network work behind it, so it gets the treatment every other
+        // messenger gives it: the page stops answering and says why. Same idiom as
+        // DisconnectSignInView, with the scrim and the word added because this one ends the session
+        // and a bare spinner over a still-bright list does not read as "stop tapping".
+        .overlay {
+            if working {
+                ZStack {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Signing out").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
+        }
         .sheet(item: $exportFile) { f in ActivityView(items: [f.url]) }
         .alert("Sign out?", isPresented: $showSignOut) {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
+                // Set BEFORE the Task, so the page locks on this run loop rather than after the
+                // first await. The two cleanups below are network writes: on a weak signal they
+                // took seconds, and this page sat there fully live the whole time. The tap read as
+                // if nothing had happened, Sign Out could be tapped again, and Delete Account was
+                // still reachable with a sign-out already in flight (owner report).
+                working = true
                 Task {
                     await Push.unregister()   // AWAITED before signOut (needs auth): stop message + CallKit ring pushes to this phone
                     // Same reason it is awaited: dropping our own row in Settings › Devices needs
                     // auth, and leaving it behind would show this phone as still signed in.
                     await DeviceRegistry.shared.removeThisDevice()
+                    // Deliberately NOT bounded by a timeout. Leaving early to feel faster would put
+                    // back the bug `Push.unregister`'s retry exists to fix: tokens left under the
+                    // signed-out account keep ringing this phone and showing its notifications.
+                    // Waiting visibly is better than leaking a signed-out account's messages.
                     try? Auth.auth().signOut()
                     SessionWipe.wipeAccountData()   // this account's on-device state must not leak into the next sign-up
                     dismiss(); onSignOut()
@@ -731,10 +758,33 @@ struct AppearanceSettingsView: View {
                         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    // CAROUSEL, WITH APPLE'S OWN API. The row was flat: every card the same size
+                    // right up to the edge, so it read as a list that happens to scroll sideways
+                    // rather than something you turn through. `scrollTransition` hands each card
+                    // its position in the container as a number running -1 (leading edge) → 0
+                    // (settled in view) → 1 (trailing edge), and the card scales, fades and tilts
+                    // off that. No package: this has been in SwiftUI since iOS 17 and we ship 26.
+                    .scrollTransition(axis: .horizontal) { content, phase in
+                        content
+                            .scaleEffect(1 - abs(phase.value) * 0.14)
+                            .opacity(1 - abs(phase.value) * 0.45)
+                            // Around Y, so a card on its way out turns its face away and the ones
+                            // in the middle face you square. Negative because `phase.value` is
+                            // already negative on the leading side, and the tilt has to follow the
+                            // direction of travel or the whole row looks bent the wrong way.
+                            .rotation3DEffect(.degrees(phase.value * -14), axis: (x: 0, y: 1, z: 0))
+                    }
                 }
             }
-            .padding(12)
+            .scrollTargetLayout()
         }
+        // Come to rest ON a card, never between two. Without this the scroll stops wherever the
+        // finger left it and the tilt settles at some random angle, which reads as broken rather
+        // than as a carousel.
+        .scrollTargetBehavior(.viewAligned)
+        // `contentMargins`, not `.padding` on the HStack: padding inside a viewAligned scroll view
+        // is measured as part of the first and last targets, so the row snaps 12pt off.
+        .contentMargins(12, for: .scrollContent)
     }
 
     private var colorDot: some View {
