@@ -18,6 +18,18 @@ final class PlayerView: UIView {
     var mediaState: ((MediaState, Double) -> ())?
 
     let contentView = UIView()
+    /// WHAT FILLS THE BARS WHEN A CLIP DOES NOT FIT THE CARD.
+    ///
+    /// A photo that does not fit gets a blurred, aspect-filled copy of itself behind it — that is
+    /// what `ImageLoader.backgroundImageView` is, and it is the look the owner chose. A video got
+    /// `playerLayer.backgroundColor = .black` instead, so a square clip showed the editor's blurred
+    /// bars right up until it was posted and then flat black ones for ever after. Same story, two
+    /// different backdrops, and only one of them was the one he asked for.
+    ///
+    /// It is the POSTER, blurred the way `frozenVeil` blurs it: a hard downscale, because a downscale
+    /// is a blur and a real Gaussian on every frame of a playing video is not free. Drawn once when
+    /// the poster lands, never re-sampled.
+    private let backdropView = UIImageView()
 
     // MARK: Private Properties
     private let playerLayer = AVPlayerLayer()
@@ -68,9 +80,11 @@ final class PlayerView: UIView {
         CATransaction.setDisableActions(true)   // a resize correction must not animate
         contentView.frame = bounds
         playerLayer.frame = bounds
+        backdropView.frame = bounds
         CATransaction.commit()
         viewWithTag(999)?.frame = bounds        // the loading veil rides along
         applyGravity()
+        refreshBackdrop()
     }
 
     /// Fill vs fit, decided against the CARD the video actually lives in — it was decided against
@@ -92,10 +106,32 @@ final class PlayerView: UIView {
         CATransaction.commit()
     }
 
+    /// The blurred fill behind a letterboxed clip. Nothing to do when the video fills the card —
+    /// there are no bars to fill, and an unnecessary full-size image under a playing video is a
+    /// composite nobody is looking at.
+    private func refreshBackdrop() {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let fits = playerLayer.videoGravity == .resizeAspectFill
+        guard !fits, let poster = posterImage else {
+            if !backdropView.isHidden { backdropView.isHidden = true }
+            return
+        }
+        backdropView.isHidden = false
+        // Rebuilt only when the box it has to cover changes shape — this runs from layoutSubviews.
+        if backdropView.image == nil || backdropSize != bounds.size {
+            backdropSize = bounds.size
+            backdropView.image = Self.frozenVeil(of: poster, covering: bounds.size)
+        }
+    }
+    private var backdropSize: CGSize = .zero
+
     /// The observer's landing point: remember the clip's size, re-take the decision.
     fileprivate func notePresentationSize(_ s: CGSize) {
         presentedSize = s
         applyGravity()
+        // The clip's own size is what decides fit vs fill, so this is the moment the backdrop is
+        // either needed or not. layoutSubviews cannot be relied on to run again after it.
+        refreshBackdrop()
     }
 
     // MARK: - Initializers
@@ -125,8 +161,8 @@ final class PlayerView: UIView {
         posterImage = nil
         guard let urlString, let u = URL(string: urlString) else { return }
         if let cached = URLCache.shared.cachedResponse(for: .init(url: u)),
-           let img = UIImage(data: cached.data) { posterImage = img; return }
-        if let disk = StoryDiskCache.image(u) { posterImage = disk; return }
+           let img = UIImage(data: cached.data) { posterImage = img; refreshBackdrop(); return }
+        if let disk = StoryDiskCache.image(u) { posterImage = disk; refreshBackdrop(); return }
         URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
             guard let data, let img = UIImage(data: data) else { return }
             StoryDiskCache.store(data, for: u)
@@ -135,6 +171,7 @@ final class PlayerView: UIView {
                 // of a video that has already started.
                 guard let self, self.posterURL == urlString else { return }
                 self.posterImage = img
+                self.refreshBackdrop()   // the poster IS the backdrop; build it the moment it lands
                 if self.viewWithTag(999) != nil { self.addActivityIndicatory() }
             }
         }.resume()
@@ -282,7 +319,10 @@ private extension PlayerView {
             if Thread.isMainThread { self.notePresentationSize(s) }
             else { DispatchQueue.main.async { self.notePresentationSize(s) } }
         }
-        self.playerLayer.backgroundColor = UIColor.black.cgColor
+        // CLEAR, not black: the backdrop lives behind this layer and a black fill would cover it.
+        // The view's own backgroundColor still guarantees nothing shows through when there is no
+        // poster to blur.
+        self.playerLayer.backgroundColor = UIColor.clear.cgColor
         playerLayer.removeFromSuperlayer()
         self.contentView.layer.addSublayer(self.playerLayer)
         state = .ready
@@ -457,6 +497,11 @@ private extension PlayerView {
     }
 
     func setupPlayer() {
+        backgroundColor = .black
+        backdropView.contentMode = .scaleAspectFill
+        backdropView.clipsToBounds = true
+        backdropView.isHidden = true
+        self.addSubview(backdropView)      // behind everything
         self.addSubview(contentView)
         // layoutSubviews owns this geometry now (see its note) — the one-shot frame here only
         // covers the beat before the first layout pass. The old Auto Layout pins are gone: they

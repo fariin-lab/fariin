@@ -613,23 +613,26 @@ struct StoryCameraView: View {
             Spacer(minLength: 0)
             modePicker
             Spacer(minLength: 10)
+            // 40x40, the arrow and nothing else (owner 2026-08-06: "remove the NEXT text… replace it
+            // with a 40x40 circular button that contains only the send icon"). The word was doing no
+            // work the arrow was not already doing, and a wide pill beside a capsule switch made the
+            // bottom row read as two competing bars.
             Button {
                 if let data = renderTextStory(text: storyText, styleIndex: styleIndex, fontIndex: fontIndex) {
                     onTextStory(data)
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Text("NEXT").font(.system(size: 15, weight: .bold)).kerning(0.5)
-                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 18).frame(height: 42)
-                .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
-                            in: Capsule())
-                .contentShape(Capsule())
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
+                                in: Circle())
+                    .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(StoryPressStyle())
             .disabled(!hasText)
+            .accessibilityLabel("Next")
         }
         .padding(.horizontal, 20)
     }
@@ -697,7 +700,11 @@ struct StoryCameraView: View {
             modeLabel("TEXT", .text)
         }
         .padding(4)
-        .background(.white.opacity(0.14), in: Capsule())
+        // REAL GLASS (owner 2026-08-06: "that bar plz make it real liquid glass"). It was a flat
+        // 14% white wash, which on a bright camera frame reads as grey plastic — the material has
+        // to sample what is behind it or it is just a tint. `liquidGlass` is the app's own wrapper
+        // and it degrades to the same wash below iOS 26, so nothing regresses on an older phone.
+        .liquidGlass(Capsule(), interactive: true)
     }
 
     /// ONE capsule that MOVES, not two that light up in turn. `matchedGeometryEffect` hands the same

@@ -575,7 +575,14 @@ private extension StoryDetailView {
                     // its own frame. The card ends above the reply bar now — `cardHeight` subtracts
                     // exactly that footer — so the old lift pushed the caption a further ~130pt up
                     // and left it stranded in the middle of the picture, which is what he circled.
-                    .padding(.bottom, plain ? 28 : 16)
+                    //
+                    // 14 IN BOTH CASES (owner 2026-08-06: "slightly too high… make it like telegram").
+                    // It was 28 on my own story and 16 on a friend's — two numbers for one thing, and
+                    // the bigger one is the one he photographed sitting too far up. Telegram puts its
+                    // caption the same short distance off the bottom edge whatever the story is, and
+                    // the reply bar cannot be the reason for a difference any more: it sits BELOW the
+                    // card now, not over the picture.
+                    .padding(.bottom, 14)
                     .contentShape(Rectangle())
                     .onTapGesture {   // tap expands/collapses; consumes the tap so it doesn't advance the story
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { captionExpanded.toggle() }
