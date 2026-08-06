@@ -10,9 +10,15 @@ import UIKit
 import SwiftUI
 
 enum Constant {
-    static let progressBarHeight: CGFloat = 3
+    /// SIGNAL'S OWN NUMBERS, read out of StoryPlaybackProgressView.swift rather than matched by
+    /// eye — `itemHeight: CGFloat = 2` (:96) and `idealSpacing: CGFloat = 2` (:90).
+    ///
+    /// Ours were 3 and 5. The height was half again as tall and the gaps were two and a half times
+    /// wider, and the gaps were the louder of the two: at five or ten stories they eat a real slice
+    /// of the width, which is what made the strip read as a heavy dashed line instead of a thin rule.
+    static let progressBarHeight: CGFloat = 2
     static var storySecond: Double = 5.0
-    static let progressBarSpacing: CGFloat = 5
+    static let progressBarSpacing: CGFloat = 2
     
     enum UserView {
         static let hStackSpace: CGFloat = 13
