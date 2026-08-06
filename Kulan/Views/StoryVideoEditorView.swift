@@ -246,9 +246,17 @@ struct StoryVideoEditorView: View {
         GeometryReader { geo in
             ZStack {
                 Color.black.ignoresSafeArea()
+                // THE SAME RECTANGLE THE PHOTO EDITOR USES, from the same function (owner
+                // 2026-08-06: "make the Story Video Editor use the exact same frame, sizing,
+                // spacing and layout as the Story Image Editor").
+                //
+                // It was `geo.height - 8 - 44`: the photo editor's OLD numbers, left behind when
+                // that screen moved to a 58pt tool band and then to the story's own 9:16 rule. So
+                // the two editors drew different frames, and the video one was the taller of the
+                // two — which is why his bottom buttons sat over the video and not under it.
                 let cardTop: CGFloat = 8
-                let cardBottomGap: CGFloat = 44
-                let cardH = geo.size.height - cardTop - cardBottomGap
+                let card = StoryEditorView.cardSize(in: geo.size, top: cardTop)
+                let cardH = card.height
                 // TRIM ZOOMS THE VIDEO OUT, it does not cover it (owner 2026-08-04: "user never feel
                 // new page… just zoom out then trim appearing"). The card shrinks toward the TOP so
                 // every pixel it gives up appears at the bottom, which is where the strip arrives.
@@ -274,8 +282,11 @@ struct StoryVideoEditorView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showTrim)
             .coordinateSpace(name: "canvas")
-            .onAppear { canvasSize = geo.size }
-            .onChange(of: geo.size) { _, sz in canvasSize = sz }
+            // THE CARD IS THE CANVAS, not the whole screen. Same correction the photo editor got:
+            // the flatten and the burn-in measure against `canvasSize`, so handing them a rectangle
+            // bigger than the one on screen means the posted frame is not the seen frame.
+            .onAppear { canvasSize = StoryEditorView.cardSize(in: geo.size, top: 8) }
+            .onChange(of: geo.size) { _, sz in canvasSize = StoryEditorView.cardSize(in: sz, top: 8) }
             .overlay {
                 if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
                     TextEditorOverlay(draft: $overlays[idx],

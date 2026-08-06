@@ -501,23 +501,26 @@ struct StoriesRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.25)))
 
-                // THE RING ONLY WHILE THE PHONE IS STILL WORKING. Once the bytes are prepared the
-                // story is finished as far as this person is concerned — it is in the row and it
-                // plays from local bytes — so a ring spinning through the upload was telling them
-                // to wait for something that no longer concerns them. Their own copy is done; the
-                // upload is for everybody else. WhatsApp draws exactly this line.
-                if stories.uploadPhase == .preparing {
-                    UploadingAvatarRing(name: meName, photoUrl: mePhoto)   // my avatar + clean spinning ring
-                        // The same shadow `card()` puts under every other circle in the row. Without it
-                        // this one sat flat on the photo while its neighbours lifted off theirs, which is
-                        // the last way the uploading circle differed from the one it turns into.
-                        .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
-                        .padding(8)
-                } else {
-                    AvatarView(name: meName, photoUrl: mePhoto, size: 32)
-                        .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
-                        .padding(8)
-                }
+                // THE RING RUNS FOR THE WHOLE POST, both halves of it.
+                //
+                // ⚠️ DO NOT PUT THIS BACK ON `uploadPhase` (owner, 2026-08-06). It used to be drawn
+                // only while `.preparing`, on WhatsApp's reasoning: once the bytes are ready this
+                // person's own copy is finished and playable, and the upload that follows is for
+                // everybody else. He has overruled that in as many words — "there should be no
+                // moment where the loading indicator is hidden while the operation is still in
+                // progress" — and he is right about what it looked like: the ring vanishing at the
+                // hand-off reads as finished, and then the card sits there saying Adding… with
+                // nothing moving, which reads as stuck.
+                //
+                // The two halves are still named differently in the label below. That was the part
+                // worth keeping: one word for the wait that is holding you up, another for the one
+                // that is not.
+                UploadingAvatarRing(name: meName, photoUrl: mePhoto)   // my avatar + clean spinning ring
+                    // The same shadow `card()` puts under every other circle in the row. Without it
+                    // this one sat flat on the photo while its neighbours lifted off theirs, which is
+                    // the last way the uploading circle differed from the one it turns into.
+                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                    .padding(8)
             }
             // "Preparing…" is the honest word for the half that is actually holding them up, and it
             // is the one the big apps use. "Adding…" says the rest is happening without them.

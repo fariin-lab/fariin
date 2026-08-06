@@ -110,7 +110,7 @@ struct StoryEditorView: View {
     ///
     /// `ceil` and 1.77778 are copied from the viewer deliberately. Two rectangles that have to agree
     /// to the pixel must be the same arithmetic, not arithmetic that happens to match.
-    private static func cardSize(in space: CGSize, top: CGFloat) -> CGSize {
+    static func cardSize(in space: CGSize, top: CGFloat) -> CGSize {
         let available = max(1, space.height - top - toolZoneHeight)
         return CGSize(width: space.width, height: min(ceil(space.width * 1.77778), available))
     }
@@ -292,9 +292,18 @@ struct StoryEditorView: View {
                 //
                 // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
                 // same top anchor, same 10pt nudge, same 0.3 curve.
-                .scaleEffect(showTrim ? 0.9 : 1, anchor: .top)
-                .offset(y: showTrim ? 10 : 0)
+                //
+                // CROP DOES IT TOO NOW (owner 2026-08-06: "the story image should smoothly zoom out
+                // first, then the crop controls and buttons should fade or slide into view"). It was
+                // a bare cross-fade between two full screens, which is the "sudden jump" — nothing
+                // connected the picture he was looking at to the picture he landed on. This is the
+                // motion trim already uses and that he already signed off ("user never feel new
+                // page… just zoom out then trim appearing"), so the two tools in the same bar now
+                // open the same way as each other.
+                .scaleEffect(showTrim || showCrop ? 0.9 : 1, anchor: .top)
+                .offset(y: showTrim || showCrop ? 10 : 0)
                 .animation(.easeInOut(duration: 0.3), value: showTrim)
+                .animation(.easeInOut(duration: 0.3), value: showCrop)
             // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
             if isDrawing {
@@ -964,7 +973,17 @@ struct StoryEditorView: View {
                 croppedSource = cropped
                 recomputeEdited()
             }
-            .transition(.opacity)
+            // THE SECOND HALF OF THE MOVE: the controls arrive AFTER the picture has started
+            // getting out of the way. The delay is what makes it read as one gesture instead of two
+            // things happening at once — 0.10s in, which is a third of the zoom, so the crop frame
+            // lands while the canvas is still settling rather than after it has stopped.
+            //
+            // Asymmetric on purpose: closing has nothing to wait for, so it goes at once and the
+            // canvas grows back underneath it.
+            .transition(.asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .center))
+                    .animation(.easeOut(duration: 0.26).delay(0.10)),
+                removal: .opacity.animation(.easeIn(duration: 0.16))))
             .zIndex(20)
         }
     }
