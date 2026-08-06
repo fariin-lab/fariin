@@ -38,9 +38,23 @@ private struct SheetCaptionFade: ViewModifier {
     private static let goneAt: CGFloat = 0.32
 
     @State private var progress: CGFloat = 0
+    /// ⚠️ THE FLOOR, and the reason this is not just the fade.
+    ///
+    /// His report: the caption and its shadow are hidden on a pull "most of the time", and sometimes
+    /// they are still there behind the open sheet. A fade driven by a continuous value is only ever
+    /// as correct as the last value it was told — and there are several ways for the last value to
+    /// be stale. A cancelled drag skips its `.ended`, the spring can be killed mid-flight, and the
+    /// sheet can arrive open by a path that never walked progress through the fade window at all.
+    /// Every one of those leaves this modifier holding a number from before the pull.
+    ///
+    /// `storyChromeHidden` is the app's own answer to "is the sheet engaged", already posted for the
+    /// header and the progress bars, and it is a BOOLEAN — it cannot be half-told. So the fade still
+    /// draws the drag, and this guarantees the end state no matter how the drag got there.
+    @State private var chromeHidden = false
 
-    /// Linear, straight off the finger.
+    /// Linear, straight off the finger — but never visible once the chrome is down.
     private var opacity: Double {
+        if chromeHidden { return 0 }
         let t = min(1, max(0, progress / Self.goneAt))
         return Double(1 - t)
     }
@@ -64,6 +78,15 @@ private struct SheetCaptionFade: ViewModifier {
                 // rather than invalidating this node on every frame of it.
                 guard p < Self.goneAt || progress < Self.goneAt else { return }
                 progress = p
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .init("storyChromeHidden"))) { note in
+                let hidden = (note.object as? Bool) ?? false
+                guard chromeHidden != hidden else { return }
+                chromeHidden = hidden
+                // Coming back means the sheet is down and the story is exposed again. Reset the
+                // fade's own number with it, or a leftover progress from the pull that just ended
+                // would hold the caption invisible until the next drag happened to overwrite it.
+                if !hidden { progress = 0 }
             }
     }
 }
