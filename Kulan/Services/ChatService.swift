@@ -859,45 +859,76 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document()
 
+        // ONCE, NOT PER ITEM — same note as sendMixedAlbum. This upsert lived inside the loop below,
+        // so a ten-photo album wrote the same two fields ten times.
+        if members == nil {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
+        }
+        // Immutable snapshots for the concurrent tiles: `members` is a `var` and `msgRef` is a
+        // Firebase reference, and neither can be captured by them.
+        let sealMembers = members
+        let msgId = msgRef.documentID
+
         // Upload + seal every photo (natural aspect kept for the grid). Each item uploads under its
         // own progress key ("clientId#i") — this was the ONE send path that never passed a
         // progressId, which is why an album's ring only ever spun — and in its own child task, so
         // the X on one tile can abort exactly that upload while the rest of the album keeps going.
-        var items: [[String: Any]] = []
-        for (i, raw) in images.enumerated() {
-            // A whole-message Cancel cancels the OUTER task; between items this is where it lands.
-            try Task.checkCancellation()
-            let itemKey = clientId.map { MediaSend.itemKey($0, i) }
-            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
-            let data = sendJPEG(raw)
-            let cipher: Data, meta: EncMeta
-            if let members { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: members) }
-            else {
-                (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data)
-                let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-                try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
-            }
-            let path = "chat/\(cid)/\(msgRef.documentID)-\(i).enc"
-            let up: Task<String, Error> = Task { try await uploadEncrypted(cipher, to: path, progressId: itemKey) }
-            if let itemKey { await MediaSend.shared.registerItem(itemKey, up) }
-            let url: String
-            do {
-                url = try await up.value
-                if let itemKey {
-                    await MediaSend.shared.finishItem(itemKey)
-                    await MediaSend.shared.markItemDone(itemKey)   // this tile's ring comes off NOW
+        //
+        // EVERY TILE AT ONCE, AND THIS IS THE PATH THAT MATTERS. ThreadView sends a photos-only
+        // album through here and only reaches sendMixedAlbum when a video is in the selection, so
+        // this serial loop was the actual cause of "one photo is instant, a group of them you can
+        // watch" (owner). Signal's own ceiling is twelve concurrent uploads and our album caps at
+        // ten, so releasing them together sits inside their number.
+        //
+        // Re-sorted by index afterwards: a task group finishes in whatever order the network feels
+        // like, and an album that arrives shuffled is worse than a slow one.
+        let tiles: [AlbumTile] = try await withThrowingTaskGroup(of: AlbumTile?.self) { group in
+            for (i, raw) in images.enumerated() {
+                group.addTask {
+                    // A whole-message Cancel cancels the group; each tile lands on it here.
+                    try Task.checkCancellation()
+                    let itemKey = clientId.map { MediaSend.itemKey($0, i) }
+                    if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                    let data = sendJPEG(raw)
+                    let cipher: Data, meta: EncMeta
+                    if let sealMembers { (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(data, members: sealMembers) }
+                    else { (cipher, meta) = try await Crypto.shared.encryptBytes(cid, data) }
+                    let path = "chat/\(cid)/\(msgId)-\(i).enc"
+                    let up: Task<String, Error> = Task { try await uploadEncrypted(cipher, to: path, progressId: itemKey) }
+                    if let itemKey { await MediaSend.shared.registerItem(itemKey, up) }
+                    let url: String
+                    do {
+                        url = try await up.value
+                        if let itemKey {
+                            await MediaSend.shared.finishItem(itemKey)
+                            await MediaSend.shared.markItemDone(itemKey)   // this tile's ring comes off NOW
+                        }
+                    } catch {
+                        // THIS tile's X: skip the item, the album goes on without it. Any other failure
+                        // (or a whole-message Cancel, which cancels item tasks too) fails the send.
+                        if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                        throw error
+                    }
+                    // The X can land in the instant the upload completes — honour it even then.
+                    if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                    if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }   // instant reconcile
+                    let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
+                    return AlbumTile(index: i, imageUrl: url, imageEnc: meta,
+                                     width: Double(sz.width), height: Double(sz.height),
+                                     videoUrl: nil, videoEnc: nil, duration: 0)
                 }
-            } catch {
-                // THIS tile's X: skip the item, the album goes on without it. Any other failure
-                // (or a whole-message Cancel, which cancels item tasks too) fails the send.
-                if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
-                throw error
             }
-            // The X can land in the instant the upload completes — honour it even then.
-            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
-            if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }   // instant reconcile
-            let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
-            items.append(["imageUrl": url, "enc": meta.asDict, "width": Double(sz.width), "height": Double(sz.height)])
+            var acc: [AlbumTile] = []
+            for try await tile in group { if let tile { acc.append(tile) } }
+            return acc
+        }
+        .sorted { $0.index < $1.index }
+
+        // NO "kind" KEY, deliberately. This path predates mixed albums and the reader treats a tile
+        // without one as a photo; adding it here would be a silent format change.
+        let items: [[String: Any]] = tiles.map {
+            ["imageUrl": $0.imageUrl, "enc": $0.imageEnc.asDict, "width": $0.width, "height": $0.height]
         }
         // Every tile was X'd → there is no album left to send.
         guard !items.isEmpty else { throw CancellationError() }
@@ -958,6 +989,23 @@ enum ChatService {
     /// item is E2EE'd + uploaded independently, then a single doc carries the mixed array; videos
     /// store {kind:"video", imageUrl=poster, videoUrl, videoEnc, duration}. One caption, one timestamp,
     /// one delivery status — the group never splits into separate messages.
+    /// One finished album tile, in a shape a task group can hand back.
+    ///
+    /// Deliberately NOT the `[String: Any]` the message actually carries: a dictionary of `Any` is
+    /// not Sendable, so building it inside the group would not compile. The dictionaries are
+    /// assembled from these afterwards, in index order.
+    private struct AlbumTile: Sendable {
+        let index: Int
+        let imageUrl: String
+        let imageEnc: EncMeta
+        let width: Double
+        let height: Double
+        /// Present only on a video tile; a photo tile leaves all three nil/zero.
+        let videoUrl: String?
+        let videoEnc: EncMeta?
+        let duration: Double
+    }
+
     static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
                                clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
@@ -969,76 +1017,122 @@ enum ChatService {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document()
 
-        func seal(_ data: Data) async throws -> (Data, EncMeta) {
-            if let members { return try await Crypto.shared.encryptBytesForGroup(data, members: members) }
-            let r = try await Crypto.shared.encryptBytes(cid, data)
+        // ONCE, NOT PER ITEM. This upsert used to live inside `seal`, which is called for every tile
+        // in the album — so a ten-photo album made ten identical writes of the same two fields, and
+        // a video tile made two of them by itself (poster, then clip). It has nothing to do with the
+        // bytes being sealed; it is the 1:1 conversation existing, which is true once for the album.
+        if members == nil {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
             try await convRef.setData(["users": [uid, other], "updatedAt": FieldValue.serverTimestamp()], merge: true)
-            return r
+        }
+
+        // IMMUTABLE SNAPSHOTS, taken before the tiles below start running together. `members` is a
+        // `var` and `msgRef` is a Firebase reference; neither can be captured by the concurrent
+        // closures. Everything the tiles need is a plain value from here on.
+        let sealMembers = members
+        let msgId = msgRef.documentID
+
+        @Sendable func seal(_ data: Data) async throws -> (Data, EncMeta) {
+            if let sealMembers { return try await Crypto.shared.encryptBytesForGroup(data, members: sealMembers) }
+            return try await Crypto.shared.encryptBytes(cid, data)
         }
 
         // Per-item progress keys and per-item cancellable uploads, exactly as sendAlbum does them —
         // see the note there. A video item's poster is quick and unkeyed; the clip itself carries
         // the item's progress key, so the tile's ring fills with the part that takes the time.
-        var out: [[String: Any]] = []
-        var videoCount = 0, photoCount = 0
-        for (i, item) in items.enumerated() {
-            try Task.checkCancellation()
-            let itemKey = clientId.map { MediaSend.itemKey($0, i) }
-            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { continue }
-            /// One upload as a child task filed under this item's key, so the tile's X can abort
-            /// exactly this transfer. Returns nil when the item was X'd (skip it); rethrows all else.
-            func uploadItem(_ cipher: Data, _ suffix: String, keyed: Bool) async throws -> String? {
-                let up: Task<String, Error> = Task {
-                    try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID)-\(suffix).enc",
-                                              progressId: keyed ? itemKey : nil)
-                }
-                if let itemKey { await MediaSend.shared.registerItem(itemKey, up) }
-                do {
-                    let url = try await up.value
-                    if let itemKey { await MediaSend.shared.finishItem(itemKey) }
-                    // Done = the KEYED transfer only. A video item uploads its poster first through
-                    // this same func with keyed=false — marking that would kill the ring before the
-                    // clip, the part the ring is FOR, had sent its first byte.
-                    if keyed, let itemKey { await MediaSend.shared.markItemDone(itemKey) }
+        // EVERY TILE AT ONCE. This was a plain `for` loop — seal, upload, wait, next — so a five-photo
+        // album made five transfers end to end while a single photo (one transfer) looked instant.
+        // That is exactly what the owner saw: "single photo you can't catch the ring, a group you
+        // can". Nothing in the loop ever depended on the tile before it. The FORWARD path in this
+        // same file was parallelised for this reason and says so; sending was never given the same
+        // treatment.
+        //
+        // Indexed and re-sorted afterwards, because a task group finishes in whatever order the
+        // network feels like and an album that arrives shuffled is worse than a slow one — the same
+        // rule the forward path already follows.
+        //
+        // Cancellation is unchanged in meaning: a tile that was X'd returns nil and is dropped, and
+        // anything that throws cancels its siblings and propagates, so a partial album still cannot
+        // be delivered.
+        let tiles: [AlbumTile] = try await withThrowingTaskGroup(of: AlbumTile?.self) { group in
+            for (i, item) in items.enumerated() {
+                group.addTask {
+                    try Task.checkCancellation()
+                    let itemKey = clientId.map { MediaSend.itemKey($0, i) }
                     if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
-                    return url
-                } catch {
-                    if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
-                    throw error
+                    /// One upload as a child task filed under this item's key, so the tile's X can abort
+                    /// exactly this transfer. Returns nil when the item was X'd (skip it); rethrows all else.
+                    func uploadItem(_ cipher: Data, _ suffix: String, keyed: Bool) async throws -> String? {
+                        let up: Task<String, Error> = Task {
+                            try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgId)-\(suffix).enc",
+                                                      progressId: keyed ? itemKey : nil)
+                        }
+                        if let itemKey { await MediaSend.shared.registerItem(itemKey, up) }
+                        do {
+                            let url = try await up.value
+                            if let itemKey { await MediaSend.shared.finishItem(itemKey) }
+                            // Done = the KEYED transfer only. A video item uploads its poster first through
+                            // this same func with keyed=false — marking that would kill the ring before the
+                            // clip, the part the ring is FOR, had sent its first byte.
+                            if keyed, let itemKey { await MediaSend.shared.markItemDone(itemKey) }
+                            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                            return url
+                        } catch {
+                            if let itemKey, await MediaSend.shared.isItemCancelled(itemKey) { return nil }
+                            throw error
+                        }
+                    }
+                    switch item {
+                    case .image(let raw):
+                        let data = sendJPEG(raw)
+                        let (cipher, meta) = try await seal(data)
+                        guard let url = try await uploadItem(cipher, "\(i)", keyed: true) else { return nil }
+                        if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }
+                        let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
+                        return AlbumTile(index: i, imageUrl: url, imageEnc: meta,
+                                         width: Double(sz.width), height: Double(sz.height),
+                                         videoUrl: nil, videoEnc: nil, duration: 0)
+                    case .video(let mp4, let thumb, let duration, let w, let h):
+                        // Poster thumbnail (shown in the grid) + the encrypted video clip.
+                        let thumbJpeg = downscaledJPEG(thumb)
+                        let (thumbCipher, thumbMeta) = try await seal(thumbJpeg)
+                        guard let thumbUrl = try await uploadItem(thumbCipher, "\(i)-thumb", keyed: false) else { return nil }
+                        if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
+                        let (vidCipher, vidMeta) = try await seal(mp4)
+                        guard let vidUrl = try await uploadItem(vidCipher, "\(i)-video", keyed: true) else { return nil }
+                        // KEEP THE SENDER'S OWN COPY, like sendVideo does (audit). The mailman model has the
+                        // recipient DELETE the server object once they've watched it, which is only safe
+                        // because the sender kept a local copy — sendVideo stores one, this path did not, so
+                        // the sender's own album video 404'd forever after the other side pressed play (and
+                        // forwarding that album failed for good). Keyed by the synthetic album-child id the
+                        // viewer and cache use: "<parentId>-<index>".
+                        VideoCache.store(mp4, for: "\(msgId)-\(i)")
+                        return AlbumTile(index: i, imageUrl: thumbUrl, imageEnc: thumbMeta,
+                                         width: w, height: h,
+                                         videoUrl: vidUrl, videoEnc: vidMeta, duration: duration)
+                    }
                 }
             }
-            switch item {
-            case .image(let raw):
-                let data = sendJPEG(raw)
-                let (cipher, meta) = try await seal(data)
-                guard let url = try await uploadItem(cipher, "\(i)", keyed: true) else { continue }
-                photoCount += 1
-                if let ui = UIImage(data: raw) { DiskImageCache.shared.store(ui, for: url, owned: true) }
-                let sz = UIImage(data: data)?.size ?? CGSize(width: 1, height: 1)
-                out.append(["kind": "image", "imageUrl": url, "enc": meta.asDict,
-                            "width": Double(sz.width), "height": Double(sz.height)])
-            case .video(let mp4, let thumb, let duration, let w, let h):
-                // Poster thumbnail (shown in the grid) + the encrypted video clip.
-                let thumbJpeg = downscaledJPEG(thumb)
-                let (thumbCipher, thumbMeta) = try await seal(thumbJpeg)
-                guard let thumbUrl = try await uploadItem(thumbCipher, "\(i)-thumb", keyed: false) else { continue }
-                if let ui = UIImage(data: thumb) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
-                let (vidCipher, vidMeta) = try await seal(mp4)
-                guard let vidUrl = try await uploadItem(vidCipher, "\(i)-video", keyed: true) else { continue }
-                videoCount += 1
-                // KEEP THE SENDER'S OWN COPY, like sendVideo does (audit). The mailman model has the
-                // recipient DELETE the server object once they've watched it, which is only safe
-                // because the sender kept a local copy — sendVideo stores one, this path did not, so
-                // the sender's own album video 404'd forever after the other side pressed play (and
-                // forwarding that album failed for good). Keyed by the synthetic album-child id the
-                // viewer and cache use: "<parentId>-<index>".
-                VideoCache.store(mp4, for: "\(msgRef.documentID)-\(i)")
-                out.append(["kind": "video", "imageUrl": thumbUrl, "enc": thumbMeta.asDict,
-                            "videoUrl": vidUrl, "videoEnc": vidMeta.asDict, "duration": duration,
-                            "width": w, "height": h])
-            }
+            var acc: [AlbumTile] = []
+            for try await tile in group { if let tile { acc.append(tile) } }
+            return acc
         }
+        .sorted { $0.index < $1.index }
+
+        // The dictionaries, built here rather than in the group, because `[String: Any]` is not
+        // Sendable. Order is the album's own order, restored by the sort above.
+        let out: [[String: Any]] = tiles.map { t in
+            guard let vurl = t.videoUrl, let venc = t.videoEnc else {
+                return ["kind": "image", "imageUrl": t.imageUrl, "enc": t.imageEnc.asDict,
+                        "width": t.width, "height": t.height]
+            }
+            return ["kind": "video", "imageUrl": t.imageUrl, "enc": t.imageEnc.asDict,
+                    "videoUrl": vurl, "videoEnc": venc.asDict, "duration": t.duration,
+                    "width": t.width, "height": t.height]
+        }
+        let videoCount = tiles.filter { $0.videoUrl != nil }.count
+        let photoCount = tiles.count - videoCount
+
         // Every tile was X'd → there is no album left to send.
         guard !out.isEmpty else { throw CancellationError() }
 
