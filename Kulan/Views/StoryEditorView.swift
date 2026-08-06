@@ -336,12 +336,15 @@ struct StoryEditorView: View {
         // no light mode"). A story is white text and glass over somebody's photo; in light mode the
         // materials go pale and the controls wash out, which he photographed on the pen screen.
         //
-        // `.environment(\.colorScheme, .dark)` and NOT `.preferredColorScheme(.dark)`: KulanApp sets
-        // preferredColorScheme OUTSIDE RootView, and an outer one always wins, so a pin inside a
-        // screen is dead code — five of them in the auth flow never did anything. See
-        // [[kulan-preferredcolorscheme-trap]]. The environment value is read by the materials
-        // themselves, so it works where it is written.
-        .environment(\.colorScheme, .dark)
+        // NOT `.preferredColorScheme(.dark)`: KulanApp sets preferredColorScheme OUTSIDE RootView,
+        // and an outer one always wins, so a pin inside a screen is dead code — five of them in the
+        // auth flow never did anything. See [[kulan-preferredcolorscheme-trap]].
+        //
+        // `storyAlwaysDark` is BOTH halves: the environment value the materials read, and the UIKit
+        // trait everything else reads. The environment on its own left this screen's alerts and any
+        // system sheet it raises resolving light on a light-mode phone — the same split he
+        // photographed on the picker. See the note on `DarkPresentation`.
+        .storyAlwaysDark()
     }
 
     private var canvasLayer: some View {

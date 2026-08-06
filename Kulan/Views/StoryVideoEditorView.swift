@@ -236,9 +236,10 @@ struct StoryVideoEditorView: View {
             }
         }
         // ALWAYS DARK, whatever the phone is set to. This is the screen he photographed rendering
-        // light: grey wash, pale glass, the pen bar washed out. `.environment` and not
-        // `.preferredColorScheme` — see the note in StoryEditorView.body.
-        .environment(\.colorScheme, .dark)
+        // light: grey wash, pale glass, the pen bar washed out. Not `.preferredColorScheme` — see
+        // the note in StoryEditorView.body — and not the environment value alone either, which
+        // leaves the UIKit chrome light. See `DarkPresentation`.
+        .storyAlwaysDark()
     }
 
     private var videoCanvasLayer: some View {

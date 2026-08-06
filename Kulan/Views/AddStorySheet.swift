@@ -1,6 +1,63 @@
 import SwiftUI
+import UIKit
 import Photos
 import AVFoundation
+
+// MARK: - Dark, including the parts SwiftUI does not own
+
+/// Pin a whole PRESENTATION to dark — the UIKit chrome as well as the SwiftUI content.
+///
+/// `.environment(\.colorScheme, .dark)` is not enough and his screenshot is the proof: the picker
+/// carried that pin already and still came up with a WHITE bar and a light segmented control over a
+/// dark grid, on a light-mode phone. The reason is that those two are not SwiftUI. A NavigationStack
+/// is a `UINavigationController` and a segmented `Picker` is a `UISegmentedControl`, and both resolve
+/// their colours from the UIKit **trait collection**, which a SwiftUI environment value does not
+/// touch. So the content went dark and the chrome stayed light — two themes at once, which is
+/// exactly what he photographed.
+///
+/// `overrideUserInterfaceStyle` is the trait, and setting it on the presented view controller
+/// cascades to every child controller and every subview under it. `StoryViewersSheetView` has done
+/// precisely this since it was written, for precisely this reason — its search field and scroll
+/// indicators came out light-on-light the same way.
+///
+/// Applied to the PRESENTED controller (climb to the top of this presentation's own chain) and not
+/// to the window: this must darken the picker, not the app behind it.
+private struct DarkPresentation: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView { Probe() }
+    func updateUIView(_ v: UIView, context: Context) { (v as? Probe)?.pin() }
+
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            pin()
+        }
+
+        func pin() {
+            guard window != nil else { return }
+            var responder: UIResponder? = self
+            while let cur = responder {
+                if let vc = cur as? UIViewController {
+                    // The top of THIS presentation, so a NavigationStack's own controller cannot be
+                    // the one that gets pinned while the bar above it belongs to its parent.
+                    var top = vc
+                    while let p = top.parent { top = p }
+                    if top.overrideUserInterfaceStyle != .dark { top.overrideUserInterfaceStyle = .dark }
+                    return
+                }
+                responder = cur.next
+            }
+        }
+    }
+}
+
+extension View {
+    /// Every story surface is dark whatever the phone is set to (owner's standing rule). Both halves
+    /// of that: the SwiftUI environment for our own views, and the UIKit trait for the chrome.
+    func storyAlwaysDark() -> some View {
+        environment(\.colorScheme, .dark)
+            .background(DarkPresentation().frame(width: 0, height: 0).allowsHitTesting(false))
+    }
+}
 
 // ADD STORY IS THE CAMERA (owner, 2026-08-03, with his reference shot: "when i click add story show
 // this page this camera, old page remove"). The picker page that used to open first is now the
@@ -126,13 +183,15 @@ struct StoryLibraryPicker: View {
             // permission prompt for a screen that is not showing the library yet.
             .task { store.load(); store.loadAlbums() }
         }
-        // ALWAYS DARK, like every story surface (owner's standing rule, and his 2026-08-05
-        // screenshot: on a light-mode phone this picker came up with a WHITE header over dark
-        // photos). `.environment`, not `.preferredColorScheme` — KulanApp pins the scheme outside
-        // RootView, so an inner preferredColorScheme is dead code; the environment value is what
-        // the chrome and controls actually read. On the picker itself so every presentation — the
-        // camera's library button and both editors' + — is dark without each caller remembering.
-        .environment(\.colorScheme, .dark)
+        // ALWAYS DARK, like every story surface (owner's standing rule). On the picker itself so
+        // every presentation — the camera's library button and both editors' + — is dark without
+        // each caller remembering.
+        //
+        // THE ENVIRONMENT VALUE ALONE WAS NOT ENOUGH and the comment that used to sit here said it
+        // was. It claimed the environment is "what the chrome and controls actually read", and his
+        // 2026-08-06 screenshot says otherwise: white bar, light segmented control, dark grid, all
+        // at once. The bar and the control are UIKit and read the trait. See `storyAlwaysDark`.
+        .storyAlwaysDark()
     }
 
     // MARK: - Photos tab
