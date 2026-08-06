@@ -213,10 +213,16 @@ struct StoryImage: View {
         .animation(.easeOut(duration: 0.25), value: image != nil)   // fade in when loaded
         .task(id: url) { await load() }
     }
-    // Fill vs fit. Against the STABLE screen aspect by default (identical to ImageLoader.decideContent
-    // Mode, incl. the 0.02 tolerance — so a photo looks the same in the story and the sheet), OR
-    // against cardFillThreshold when a (shorter) card passes its own aspect, so an image as tall as
-    // the card fills it with no side bars.
+    // Fill vs fit. Against cardFillThreshold when a caller passes the aspect of the box it is
+    // drawing into, so an image as tall as that box fills it with no side bars; against the screen
+    // aspect otherwise.
+    //
+    // ⚠️ THE SCREEN FALLBACK IS NO LONGER WHAT THE STORY ITSELF DOES. `ImageLoader.decideContentMode`
+    // measures the CARD now (it was measuring the screen, which letterboxed every 9:16-ish photo —
+    // his left/right blur bands). The callers that still fall through to the screen here are small
+    // thumbnails and row covers, where the box is nothing like a story card and the old rule is
+    // harmless. Anything drawing a story-shaped surface must pass its own aspect, as the viewers
+    // carousel does.
     private func fillsScreen(_ img: UIImage) -> Bool {
         guard img.size.width > 0 else { return false }
         let ratio = img.size.height / img.size.width

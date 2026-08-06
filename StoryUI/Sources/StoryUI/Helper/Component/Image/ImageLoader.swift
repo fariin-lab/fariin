@@ -170,8 +170,12 @@ final class ImageLoader: UIView {
         previewBlurEffect?.frame = bounds
         frozenBlur?.frame = bounds
         applyCornerMask()
-        // NB: the fit/fill decision is NOT recomputed here — it's fixed once per image in apply(),
-        // so a swipe-down's transient bounds changes can never flip it (that flip was the "shaking").
+        // The fit/fill decision is re-taken here because it is measured against the CARD, and the
+        // card's size is only known once there has been a layout pass. It cannot bring the old
+        // "shaking" back: `decideContentMode` returns the moment the answer is unchanged, and the
+        // two gestures that move this view (the viewers-sheet morph and the swipe-down dismiss) are
+        // both `UIView.transform`, which does not touch bounds and does not run layout at all.
+        decideContentMode()
     }
 
     // Round the bottom two corners of THIS view (which clips every subview, blur included).
@@ -181,19 +185,32 @@ final class ImageLoader: UIView {
         layer.masksToBounds = bottomCornerRadius > 0
     }
 
-    // Fill edge-to-edge (no blur) vs aspect-FIT + blurred backdrop, decided ONCE per image against
-    // the STABLE screen aspect (NOT the live view bounds). The bounds jitter as the card scales/offsets
-    // during a swipe-down, and keying off them made the photo flip fit<->fill every frame = the
-    // "shaking". The screen aspect never changes, so the decision is rock-stable through any drag.
+    // Fill edge-to-edge (no blur) vs aspect-FIT + blurred backdrop, decided against the CARD the
+    // photo actually lives in.
+    //
+    // IT WAS DECIDED AGAINST `UIScreen`, and the card has not been the screen since `8e224d9` made
+    // it 9:16. A phone is 2.17 tall and the card is 1.78, so every photo between those two numbers
+    // — which is every photo a story is framed to — was called "shorter than the screen" and
+    // demoted to letterbox inside a card it very nearly fills. Measured on his own post: a
+    // 2638x4800 picture (1.82) in a 1.78 card, aspect-fit, leaves a 1.3% blurred band down each
+    // side. That is the pair of lines he drew.
+    //
+    // This is the same bug `VideoLoader.applyGravity` was fixed for, in the same words, and the
+    // photo half was left behind. The two now answer the same question against the same rectangle.
+    //
+    // Deliberately kept: the 0.02 tolerance, and FIT for anything genuinely wider than the card —
+    // a landscape photo hard-cropped to a 9:16 card loses most of its frame, and the blurred
+    // backdrop behind it is the look he chose.
     private func decideContentMode() {
-        guard let img = imageView.image, img.size.width > 0 else { return }
+        guard let img = imageView.image, img.size.width > 0,
+              bounds.width > 1, bounds.height > 1 else { return }
         let imgAspect = img.size.height / img.size.width
-        let screen = UIScreen.main.bounds
-        let screenAspect = screen.height / screen.width
-        // Fill when the image is at least as TALL as the screen. Text/colour statuses are rendered
-        // taller than any phone (2.5:1), so they always fill full-bleed on every device; real photos
-        // are shorter than the screen → aspect-FIT + blurred backdrop (the look the user prefers).
-        imageView.contentMode = imgAspect >= screenAspect - 0.02 ? .scaleAspectFill : .scaleAspectFit
+        let cardAspect = bounds.height / bounds.width
+        let want: UIView.ContentMode = imgAspect >= cardAspect - 0.02 ? .scaleAspectFill : .scaleAspectFit
+        // The early return is what makes calling this from `layoutSubviews` free, and it is what
+        // guarantees a settled card can never flip the photo mid-gesture.
+        guard imageView.contentMode != want else { return }
+        imageView.contentMode = want
     }
 
     private func apply(_ image: UIImage?) {
