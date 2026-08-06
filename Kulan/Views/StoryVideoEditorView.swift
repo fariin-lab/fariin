@@ -573,17 +573,22 @@ struct StoryVideoEditorView: View {
 
                 if captionFocused { compactSendButton }
             }
-            // THE CAPTION SITS ON THE CARD, not on the black under it — which is where the photo
-            // editor puts it and is the whole of his report ("move the caption bar a little higher
-            // and make its position match the image story editor page exactly").
+            // ⚠️ 14, AND THE ARITHMETIC IS THE POINT — this is the second attempt at it.
             //
-            // The photo editor rests its pill 14pt above the card's bottom edge. That edge is
-            // `toolZoneHeight` off the screen bottom whenever the 9:16 card fits, which after the
-            // shared `cardSize` it now does here too. So the same lift, expressed the same way, and
-            // the tool row below is untouched because only this HStack moves.
+            // The two editors stack differently. The photo editor's caption is its OWN layer with
+            // `cardBottomGap + 14` under it, which lands its bottom edge 72pt above the safe area
+            // when the 9:16 card fits (58 + 14). THIS editor keeps the caption and the tool row in
+            // one stack pinned to the bottom, so the tool row (46) and the stack's spacing (12)
+            // already lift it 58 — and the pill needs the remaining 14 to reach the same 72.
             //
-            // Focused, the keyboard is the floor and the old 10 is right again.
-            .padding(.bottom, captionFocused ? 10 : StoryEditorView.toolZoneHeight + 14)
+            // Last round I gave it `toolZoneHeight + 14` here, which is the photo editor's WHOLE
+            // number added on top of a 58 this layout had already supplied. That double-count is the
+            // gap under the caption he photographed. Copying the number was wrong because the two
+            // layouts do not measure from the same place; copying the RESULT is what he asked for.
+            //
+            // Focused, the tool row is gone and the keyboard is the floor, so 8 — the photo
+            // editor's focused value, not the 10 this file used to carry.
+            .padding(.bottom, captionFocused ? 8 : 14)
 
             if !captionFocused {
                 HStack(spacing: 14) {
