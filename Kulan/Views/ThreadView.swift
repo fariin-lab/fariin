@@ -847,6 +847,24 @@ struct ThreadView: View {
         } message: { kind in
             Text("\(kind == .video ? "Video call" : "Call") \(title)?")
         }
+        // ⚠️ THE REFUSAL HAS TO BE SHOWN WHERE THE CALL WAS ATTEMPTED.
+        //
+        // His report: tapping call on somebody who restricts calls does NOTHING, and then the
+        // "Can't Call" alert turns up on the chat LIST after he swipes back. That is exactly what
+        // it was: the alert was declared only on ChatsView, and a SwiftUI alert cannot present from
+        // a view that is not on screen. The state was set the instant he tapped, and the alert
+        // waited for its view to come back.
+        //
+        // The same state, bound again here, so whichever screen is in front says it. The two can
+        // never disagree because there is only one `restrictedCallee` and dismissing either clears
+        // it — and a screen that is not on top has nothing to present anyway.
+        .alert("Can't Call",
+               isPresented: Binding(get: { CallService.shared.restrictedCallee != nil },
+                                    set: { if !$0 { CallService.shared.restrictedCallee = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This person restricts who can call them.")
+        }
     }
 
     // Fourth slice of the picker chain (location onward), joined via an erased boundary.
