@@ -43,12 +43,25 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     static let everyoneId = "everyone"
     static let myFriendsId = "myFriends"
 
+    /// ⚠️ NOT `Date.distantPast`, AND THIS CRASHED THE APP IN BUILD 470.
+    ///
+    /// The built-ins only need a date that sorts before any real custom story. `.distantPast` looked
+    /// like the honest way to say that, and it is **two days below the earliest timestamp Firestore
+    /// will accept**: Foundation puts it at -62135769600 seconds from 1970, Firestore's floor is
+    /// -62135596800. `FIRTimestamp` does not return an error for that, it raises an NSException —
+    /// so toggling "Allow Replies & Reactions" on the My Friends page killed the app, because that
+    /// toggle writes the list and the list carried this date.
+    ///
+    /// The epoch sorts before everything real and is comfortably inside the range. `write` clamps as
+    /// well, so no future date from any source can reach Firestore out of range.
+    static let sortsFirst = Date(timeIntervalSince1970: 0)
+
     static let everyone = StoryAudience(id: everyoneId, kind: .everyone, name: "Everyone",
                                         mode: .all, members: [], allowReplies: true,
-                                        createdAt: .distantPast)
+                                        createdAt: sortsFirst)
     static let defaultMyFriends = StoryAudience(id: myFriendsId, kind: .myFriends, name: "My Friends",
                                                 mode: .all, members: [], allowReplies: true,
-                                                createdAt: .distantPast)
+                                                createdAt: sortsFirst)
 
     var title: String {
         switch kind {
@@ -250,8 +263,21 @@ final class StoryAudienceStore {
                 "mode": a.mode.rawValue,
                 "members": a.members,
                 "allowReplies": a.allowReplies,
-                "createdAt": Timestamp(date: a.createdAt),
+                // CLAMPED, not trusted. Firestore raises rather than returning an error for a date
+                // outside 0001-01-01 … 9999-12-31, and a raise from a background write is a crash
+                // with no catch anywhere near it. This date comes from a decode, a disk mirror and
+                // two constants, so it is exactly the kind of value that only has to be wrong once.
+                "createdAt": Timestamp(date: Self.firestoreSafe(a.createdAt)),
             ], merge: true)
+    }
+
+    /// Firestore accepts 0001-01-01 through 9999-12-31 and RAISES outside it. Kept a decade inside
+    /// each end, because nothing here needs the extremes and an exception on a write we do not await
+    /// is a crash rather than a failure.
+    private static func firestoreSafe(_ d: Date) -> Date {
+        let floor = Date(timeIntervalSince1970: -62135596800 + 315_360_000)   // 0011-01-01
+        let ceiling = Date(timeIntervalSince1970: 253402300800 - 315_360_000) // 9989-01-01
+        return min(max(d, floor), ceiling)
     }
 
     private static func decode(id: String, data: [String: Any]) -> StoryAudience? {
