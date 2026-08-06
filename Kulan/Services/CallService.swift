@@ -1415,22 +1415,18 @@ final class CallService: NSObject {
                     return
                 }
                 let caller = d["caller"] as? String ?? ""
-                // Silent block: a call from someone I've blocked never rings me.
-                let cid = [self.me, caller].sorted().joined(separator: "_")
-                self.db.collection("conversations").document(cid).getDocument { cs, _ in
-                    let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
-                    // Calls privacy (Settings > Privacy > Calls): "No One" declines everything;
-                    // "My Contacts" requires a real conversation with the caller. The caller
-                    // sees declined — same signal as a manual decline, nothing leaks.
-                    let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
-                    let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
-                    let callsAllowed = audience == .everyone || (audience == .contacts && isContact)
-                    if !callsAllowed {
+                // THE SHARED GATE, not a second copy of it. This path had its own inline version of
+                // the blocked + Calls-privacy check, with the same discarded read error — so the
+                // comment on `callAllowed` claiming both paths shared it was simply untrue, and the
+                // false-decline bug lived here twice. Silent block and Calls privacy both still
+                // apply; the difference is that a read which FAILS no longer reads as a refusal.
+                self.callAllowed(from: caller) { allowed in
+                    guard allowed else {
                         self.db.collection("calls").document(doc.documentID)
                             .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
                         return
                     }
-                    guard !blocked, self.state == .idle else { return }
+                    guard self.state == .idle else { return }
                     self.callId = doc.documentID
                     self.otherUid = caller
                     self.otherName = Self.displayName(for: caller,
@@ -1505,17 +1501,49 @@ final class CallService: NSObject {
     }
 
     /// Blocked + Calls-privacy gate, shared by both incoming paths so they cannot drift apart again.
+    ///
+    /// ⚠️ A FAILED READ IS NOT A "NO". This threw the error away (`{ cs, _ in }`), so a read that
+    /// failed produced a nil snapshot, which made `isContact` false, which — with Calls defaulting
+    /// to My Friends — DECLINED the call. It could not tell "this person is not your friend" from
+    /// "I could not check", and answered both the same way.
+    ///
+    /// The owner hit it on a real call between two accounts that WERE friends: caller heard two
+    /// rings (the ringback is local, so it starts before this gate resolves) and then Declined,
+    /// while the callee's phone showed nothing at all and he could honestly say he never declined.
+    ///
+    /// So: on an error, ask the local cache, which for any chat you have actually used will have the
+    /// document. Only when BOTH fail do we have no information, and then the call RINGS. A call that
+    /// rings can still be refused by the person; a call silently refused for them cannot be undone,
+    /// and they never learn it happened. The blocked flag rides the same document, so the worst case
+    /// is a blocked caller making the phone ring once on a device that could not reach the network —
+    /// which is a far smaller harm than real calls from real friends vanishing.
     private func callAllowed(from caller: String, completion: @escaping (Bool) -> Void) {
         guard !caller.isEmpty, !me.isEmpty else { completion(true); return }
         let cid = [me, caller].sorted().joined(separator: "_")
-        db.collection("conversations").document(cid).getDocument { [weak self] cs, _ in
+        let ref = db.collection("conversations").document(cid)
+        ref.getDocument { [weak self] cs, err in
             guard let self else { return }
-            let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[self.me] as? Bool) ?? false
-            let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
-            let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
-            let allowed = !blocked && (audience == .everyone || (audience == .contacts && isContact))
-            DispatchQueue.main.async { completion(allowed) }
+            guard err == nil, cs != nil else {
+                ref.getDocument(source: .cache) { [weak self] cached, _ in
+                    guard let self else { return }
+                    guard let cached, cached.exists else {
+                        DispatchQueue.main.async { completion(true) }   // unknown → let it ring
+                        return
+                    }
+                    DispatchQueue.main.async { completion(self.decideAllowed(cached)) }
+                }
+                return
+            }
+            DispatchQueue.main.async { completion(self.decideAllowed(cs)) }
         }
+    }
+
+    /// The gate's actual decision, split out so the live read and the cache fallback cannot drift.
+    private func decideAllowed(_ cs: DocumentSnapshot?) -> Bool {
+        let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[me] as? Bool) ?? false
+        let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
+        let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
+        return !blocked && (audience == .everyone || (audience == .contacts && isContact))
     }
 
     func answer() {
