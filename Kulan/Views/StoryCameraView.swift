@@ -16,11 +16,19 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     private let output = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var input: AVCaptureDeviceInput?
-    /// Attached only when the first recording starts, never at setup. A microphone permission prompt
-    /// the moment you open a camera to take a PHOTO is a prompt for something you did not ask for.
+    /// Never attached at setup: a microphone permission prompt the moment you open a camera to take
+    /// a PHOTO is a prompt for something you did not ask for. But once permission EXISTS, it is
+    /// attached as soon as the session is configured — see `attachAudioIfNeeded`, and the note on
+    /// `startRecording` for why doing it at press time is what made holding the shutter feel heavy.
     private var audioInput: AVCaptureDeviceInput?
     private(set) var position: AVCaptureDevice.Position = .back
-    @Published var torchOn = false
+    /// FLASH, not torch, and the rename is the bug. It was called `torchOn` and only ever reached
+    /// `AVCapturePhotoSettings.flashMode` — so it lit a photo and did precisely nothing for a video,
+    /// because video has no flash at all. Video needs the TORCH, which nothing ever switched on.
+    @Published var flashOn = false
+    /// Whether the lens now in use can produce light at all. The front camera has neither flash nor
+    /// torch on most phones, and a button that cannot do anything should not look like it can.
+    @Published var hasLight = false
     @Published var denied = false   // camera access denied/restricted → the view shows a Settings prompt
     @Published var recording = false
     var onCapture: ((Data) -> Void)?
@@ -51,15 +59,30 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         session.commitConfiguration()
         // A story is short by nature, and a cap means a forgotten recording cannot fill the disk.
         movieOutput.maxRecordedDuration = CMTime(seconds: 60, preferredTimescale: 600)
+        // ALREADY ALLOWED THE MICROPHONE? Then take it now, while nothing is happening, instead of
+        // in the middle of the gesture that starts a recording. This asks for nothing: without
+        // permission it is a no-op and the old press-time path still runs, so the first-ever video
+        // still prompts and every one after that starts clean.
+        attachAudioIfNeeded(promptIfNeeded: false)
+        publishLightAvailability()
     }
 
     // MARK: - Video
 
+    /// WHY THIS USED TO FEEL HEAVY. `attachAudioIfNeeded` was called from here, and it wraps a
+    /// `beginConfiguration`/`commitConfiguration` pair. Reconfiguring a RUNNING capture session
+    /// stalls it — the preview hitches and nothing records until it comes back — and that happened
+    /// on every single press-and-hold, right under the finger. It is done at configure time now when
+    /// permission already exists, so this path is nothing but "start".
+    ///
+    /// The flag is also raised OPTIMISTICALLY by the caller rather than waiting for
+    /// `didStartRecordingTo`. The shutter has to answer the finger, not the capture pipeline.
     func startRecording() {
         guard session.isRunning, !movieOutput.isRecording else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            self.attachAudioIfNeeded()
+            self.attachAudioIfNeeded()   // no-op after the first time; the prompt path only
+            self.setTorch(self.flashOn)  // VIDEO'S FLASH IS THE TORCH, and it was never switched on
             if let conn = self.movieOutput.connection(with: .video) {
                 if conn.isVideoRotationAngleSupported(90) { conn.videoRotationAngle = 90 }
                 // The selfie camera shows you mirrored, so a video that is NOT mirrored looks like
@@ -69,17 +92,53 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("story-\(UUID().uuidString).mov")
             self.movieOutput.startRecording(to: url, recordingDelegate: self)
+            // THE OPTIMISTIC FLAG, PUT RIGHT. The view raises `recording` on the press so the button
+            // answers the finger; if the pipeline never actually opened a file, take it back down
+            // rather than leave a stop button over a camera that is not recording.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, !self.movieOutput.isRecording, self.recording else { return }
+                self.recording = false
+                self.setTorch(false)
+            }
         }
     }
 
     func stopRecording() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self, self.movieOutput.isRecording else { return }
+            guard let self else { return }
+            self.setTorch(false)   // never leave the lamp burning after the clip
+            guard self.movieOutput.isRecording else { return }
             self.movieOutput.stopRecording()
         }
     }
 
-    private func attachAudioIfNeeded() {
+    /// Answer the flash button while a clip is already running. Everything else about the flag is a
+    /// setting for the NEXT shot, so this is the one case that has to reach the hardware at once.
+    func applyTorchNow() {
+        let want = flashOn
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.setTorch(want) }
+    }
+
+    /// The lamp, for video. Separate from the photo flash, which is a per-shot setting on the
+    /// capture request and cannot light a movie.
+    private func setTorch(_ on: Bool) {
+        guard let dev = input?.device, dev.hasTorch, dev.isTorchAvailable else { return }
+        guard (try? dev.lockForConfiguration()) != nil else { return }
+        dev.torchMode = on ? .on : .off
+        dev.unlockForConfiguration()
+    }
+
+    private func publishLightAvailability() {
+        let can = input?.device.hasFlash == true || input?.device.hasTorch == true
+        DispatchQueue.main.async { self.hasLight = can }
+    }
+
+    /// Called twice over: once at configure time (silent — it returns immediately unless permission
+    /// is already granted) and once from `startRecording`, which is the path that may prompt.
+    private func attachAudioIfNeeded(promptIfNeeded: Bool = true) {
+        // The silent pass. `AVCaptureDevice.default(for: .audio)` is itself what raises the prompt,
+        // so the check has to come first — asking politely afterwards is asking.
+        if !promptIfNeeded, AVCaptureDevice.authorizationStatus(for: .audio) != .authorized { return }
         guard audioInput == nil,
               let dev = AVCaptureDevice.default(for: .audio),
               let input = try? AVCaptureDeviceInput(device: dev) else { return }
@@ -120,7 +179,11 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     func stop() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self, self.session.isRunning else { return }
+            guard let self else { return }
+            // Before the session goes, or the lamp is left burning on a camera nobody is looking
+            // at — backgrounding the app mid-clip is the way to reach that.
+            self.setTorch(false)
+            guard self.session.isRunning else { return }
             self.session.stopRunning()
         }
     }
@@ -128,9 +191,14 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     func flip() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
+            // The lamp belongs to the lens being left behind: switch it off BEFORE the swap, or it
+            // stays lit on a device nothing is pointing at any more.
+            self.setTorch(false)
             self.session.beginConfiguration()
             self.setInput(position: self.position == .back ? .front : .back)
             self.session.commitConfiguration()
+            if self.movieOutput.isRecording { self.setTorch(self.flashOn) }
+            self.publishLightAvailability()
         }
     }
 
@@ -159,7 +227,9 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     func capture() {
         guard session.isRunning else { return }   // don't capture before the session is ready
         let settings = AVCapturePhotoSettings()
-        if output.supportedFlashModes.contains(.on) { settings.flashMode = torchOn ? .on : .off }
+        // The PHOTO half of the flash: a per-shot setting on the request. The video half is the
+        // torch, in `setTorch`, and it is the half that was missing.
+        if output.supportedFlashModes.contains(.on) { settings.flashMode = flashOn ? .on : .off }
         if let conn = output.connection(with: .video), conn.isVideoRotationAngleSupported(90) {
             conn.videoRotationAngle = 90   // lock captured photo to portrait
         }
@@ -383,17 +453,28 @@ struct StoryCameraView: View {
                     // (PhotoCaptureViewController.swift:989, `captureModeButton` → `didTapBatchMode`),
                     // which takes a burst and sends them together. We have no such thing, and drawing
                     // a button that does nothing is the one thing this project never does.
-                    HStack(spacing: 0) {
-                        Button { cam.torchOn.toggle() } label: {
-                            Image(systemName: cam.torchOn ? "bolt.fill" : "bolt.slash.fill")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 46, height: 44)
-                                .contentShape(Rectangle())   // the whole 46×44, not just the bolt
+                    // NOT DRAWN AT ALL on a lens with no flash and no torch — the front camera on
+                    // most phones. This project's own rule: a button that does nothing is the one
+                    // thing it never draws.
+                    if cam.hasLight {
+                        HStack(spacing: 0) {
+                            Button {
+                                cam.flashOn.toggle()
+                                // Mid-clip the lamp answers immediately; otherwise this is a setting
+                                // that takes effect at the next shot.
+                                if cam.recording { cam.applyTorchNow() }
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Image(systemName: cam.flashOn ? "bolt.fill" : "bolt.slash.fill")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(cam.flashOn ? .yellow : .white)
+                                    .frame(width: 46, height: 44)
+                                    .contentShape(Rectangle())   // the whole 46×44, not just the bolt
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                        .liquidGlass(Capsule(), interactive: true)
                     }
-                    .liquidGlass(Capsule(), interactive: true)
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
@@ -460,9 +541,23 @@ struct StoryCameraView: View {
             .animation(.snappy(duration: 0.2), value: locked)
         }
         .buttonStyle(.plain)
+        // 0.22s, not 0.3. Long enough that a photo tap is never mistaken for a hold, short enough
+        // that the hold does not feel like it is waiting for permission to begin — the reference
+        // cameras sit around this figure and 0.3 reads as a beat of nothing.
         .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.3)
-                .onEnded { _ in if !cam.recording { locked = false; cam.startRecording() } }
+            LongPressGesture(minimumDuration: 0.22)
+                .onEnded { _ in
+                    guard !cam.recording else { return }
+                    locked = false
+                    // THE FLAG GOES UP HERE, not in the capture callback. It used to wait for
+                    // `didStartRecordingTo`, which lands after the pipeline has actually opened a
+                    // file — so the red square, the clock and the lock all appeared well after the
+                    // finger went down and the control felt dead. The model corrects it back down
+                    // if the start genuinely fails.
+                    cam.recording = true
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    cam.startRecording()
+                }
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
