@@ -472,6 +472,19 @@ private struct AnnouncementImage: View {
 
     @State private var image: UIImage?
 
+    /// Pull the bytes down and put them in the cache, so this device only ever fetches once.
+    ///
+    /// Announcement images are ordinary Storage downloads, not chat media: there is no bubble to
+    /// register, no rect to fly from and nothing to decrypt. `store` persists them, so a relaunch
+    /// finds them on disk and this never runs again for the same image.
+    static func fetch(_ url: String) async -> UIImage? {
+        guard let u = URL(string: url),
+              let (data, _) = try? await URLSession.shared.data(from: u),
+              let img = UIImage(data: data) else { return nil }
+        DiskImageCache.shared.store(img, data: data, for: url)
+        return img
+    }
+
     /// Reserve the real shape before the bytes land so the bubble does not jump when it loads. The
     /// admin screen records the size at upload, so this is known, not guessed.
     private var ratio: CGFloat {
@@ -492,7 +505,15 @@ private struct AnnouncementImage: View {
         .clipped()
         .task(id: url) {
             if let cached = DiskImageCache.shared.memoryImage(for: url) { image = cached; return }
-            image = await DiskImageCache.shared.image(for: url)
+            if let onDisk = await DiskImageCache.shared.image(for: url) { image = onDisk; return }
+            // ⚠️ NOBODY WAS EVER GOING TO PUT IT IN THE CACHE. This asked memory, then disk, and
+            // stopped — but `image(for:)` says in its own comment that nil means "not cached
+            // anywhere, caller should then download", and this caller never did. An announcement
+            // image is uploaded by the admin console and has never been near this device, so both
+            // lookups miss by construction and the bubble draws its grey placeholder for ever.
+            // That is his "official chat images never appear", and it was never a permissions or
+            // a URL problem: nothing was fetching them.
+            image = await Self.fetch(url)
         }
     }
 }
@@ -520,7 +541,10 @@ private struct AnnouncementImageViewer: View {
         .overlay(alignment: .topLeading) {
             CloseXButton { dismiss() }.padding(.leading, 16).padding(.top, 8)
         }
-        .task { image = await DiskImageCache.shared.image(for: url) }
+        .task {
+            if let have = await DiskImageCache.shared.image(for: url) { image = have; return }
+            image = await AnnouncementImage.fetch(url)   // same miss, same fix - see the note there
+        }
     }
 }
 
