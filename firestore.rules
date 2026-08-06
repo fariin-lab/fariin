@@ -734,8 +734,27 @@ service cloud.firestore {
       // Author-only, and the identity + lifetime fields are IMMUTABLE. The old rule pinned
       // nothing, so an author could rewrite authorUid to impersonate a victim (every recipient
       // then renders the victim's name/photo on the attacker's image) or push expiresAt out to
-      // never expire. mediaUrl/caption/replyCount stay mutable (mediaUrl is filled in after the
-      // upload; those don't enable impersonation or immortality).
+      // never expire.
+      //
+      // ⚠️ THE PICTURE AND THE CAPTION FREEZE ONCE THEY ARE SET, and this is not tidiness.
+      //
+      // Telegram was pulled from the App Store on 2026-08-05 because an extortionist EDITED an old
+      // message in a public group: the change was invisible to everybody who had already scrolled
+      // past, so nobody could report it, while Apple could still be pointed straight at it. Durov
+      // wrote it up himself. That trick worked on us too — mediaUrl and caption were mutable
+      // forever, so anyone could post something ordinary, let their contacts watch it, swap the
+      // picture the next day, and report their own story.
+      //
+      // Worse, the pin was on the wrong field. `mediaPath` was locked to this story's own folder,
+      // but the app RENDERS `mediaUrl`, which nothing checked — so it could be pointed at any URL
+      // on the internet after the fact, at content we do not host and cannot take down.
+      //
+      // The post flow writes an empty mediaUrl at create and fills it in exactly once, so "still
+      // empty" is precisely the window where a change is legitimate. `get(…, '')` rather than a
+      // bare field read because old story documents predate the field.
+      //
+      // replyCount is deliberately still free: it is a counter, it carries no content, and freezing
+      // it would stop replies being counted on a story that has been posted.
       allow update: if signedIn()
         && request.auth.uid == resource.data.authorUid
         && request.resource.data.authorUid == resource.data.authorUid
@@ -744,7 +763,10 @@ service cloud.firestore {
         && request.resource.data.recipientUids == resource.data.recipientUids
         && request.resource.data.mediaPath == resource.data.mediaPath
         // type is pinned with the path (they were validated as a pair at create).
-        && request.resource.data.type == resource.data.type;
+        && request.resource.data.type == resource.data.type
+        && (resource.data.get('mediaUrl', '') == ''
+            || (request.resource.data.get('mediaUrl', '') == resource.data.get('mediaUrl', '')
+                && request.resource.data.get('caption', '') == resource.data.get('caption', '')));
       // The author, or a moderator acting on a report. This is the ONE surface in Fariin where a
       // stranger's content is visible to anybody who finds it (an "Everyone" story is public), which
       // makes it the one place Apple could be shown somebody else's illegal post. Being able to take
