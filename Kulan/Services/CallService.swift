@@ -1214,7 +1214,7 @@ final class CallService: NSObject {
         // The decision itself stays synchronous on the cached answer (miss means ring); inside an
         // open chat the thread's own users-doc listener keeps the answer current in real time.
         Task { await CallPrivacyIndex.refresh(uid) }
-        if CallPrivacyIndex.refuses(uid) {
+        if CallPrivacyIndex.refuses(uid, iAmTheirContact: Self.iAmContactOf(uid)) {
             restrictedCallee = RestrictedCallee(uid: uid, name: name, photo: photo, fromProfile: fromProfile)
             return
         }
@@ -1498,6 +1498,23 @@ final class CallService: NSObject {
             }
             self.markRinging()   // allowed — only now does the caller hear it ring
         }
+    }
+
+    /// THE CALLER'S COPY OF THE CALLEE'S CONTACT TEST, and it must stay identical to the one in
+    /// `callAllowed` below: a 1:1 conversation that exists and carries a last message. There is only
+    /// ONE such document and both people can read it, so the caller does not need to fetch anything
+    /// — the conversation is already in the list on screen. Synchronous, because this is decided on
+    /// the frame the call button is pressed.
+    ///
+    /// Unknown (no local conversation) answers false, which through `CallPrivacyIndex.refuses` means
+    /// somebody on My Friends whom we have never spoken to is warned about. That is the correct
+    /// answer: with no conversation there is no last message, so their phone would refuse too.
+    static func iAmContactOf(_ uid: String) -> Bool {
+        let me = Auth.auth().currentUser?.uid ?? ""
+        guard !me.isEmpty, !uid.isEmpty else { return false }
+        guard let conv = ConversationsRepository.shared.conversations
+            .first(where: { !$0.isGroup && $0.otherUid(me) == uid }) else { return false }
+        return !conv.lastMessageCipher.isEmpty
     }
 
     /// Blocked + Calls-privacy gate, shared by both incoming paths so they cannot drift apart again.
