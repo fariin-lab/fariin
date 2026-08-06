@@ -658,9 +658,15 @@ private extension StoryDetailView {
     func getPreviousStory() {
         // Index guard (was `?? 0` then `[index - 1]` → crash if this bucket ever left the array).
         if let bundleIndex = viewModel.stories.firstIndex(where: { model.id == $0.id }), bundleIndex > 0 {
-            withAnimation {
-                viewModel.currentStoryUser = viewModel.stories[bundleIndex - 1].id
-            }
+            // ⚠️ NO `withAnimation` HERE, AND PUTTING ONE BACK COSTS HALF A SECOND FOR NOTHING.
+            //
+            // This used to be wrapped in a bare `withAnimation`, which is SwiftUI's default spring —
+            // about a 0.55s response. Nothing it could animate was on screen: the page move belongs
+            // to `UIPageViewController`, which reads its own duration and ignores SwiftUI entirely.
+            // So the spring drove no visible motion and only held the state change, and everything
+            // waiting behind it, in a slow transaction. Measured against Telegram's ~0.3s
+            // peer-to-peer move, this was the largest single piece of our ~0.9s.
+            viewModel.currentStoryUser = viewModel.stories[bundleIndex - 1].id
         } else {
             let index = getCurrentIndex()
             let story = getStory(with: index)
@@ -686,9 +692,15 @@ private extension StoryDetailView {
                     return model.id == currentBundle.id
                 } ?? 0
                 
-                withAnimation {
-                    viewModel.currentStoryUser = viewModel.stories[bundleIndex + 1].id
-                }
+                // ⚠️ NO `withAnimation` HERE, AND PUTTING ONE BACK COSTS HALF A SECOND FOR NOTHING.
+                //
+                // This used to be wrapped in a bare `withAnimation`, which is SwiftUI's default spring —
+                // about a 0.55s response. Nothing it could animate was on screen: the page move belongs
+                // to `UIPageViewController`, which reads its own duration and ignores SwiftUI entirely.
+                // So the spring drove no visible motion and only held the state change, and everything
+                // waiting behind it, in a slow transaction. Measured against Telegram's ~0.3s
+                // peer-to-peer move, this was the largest single piece of our ~0.9s.
+                viewModel.currentStoryUser = viewModel.stories[bundleIndex + 1].id
             }
         }
     }

@@ -116,8 +116,39 @@ struct StoryPager: UIViewControllerRepresentable {
             parent.viewModel.stories.firstIndex { $0.id == id }
         }
 
+        /// Pages already built, by bucket id. See `makePage`.
+        private var pageCache: [String: StoryPageHostVC] = [:]
+        /// What the cache was built against. When the model changes shape, the cache is wrong.
+        private var cacheSignature = ""
+
+        /// Every bucket and every story in it. `StoryUIModel` is a STRUCT, so a cached page holds a
+        /// SNAPSHOT of its bucket — post a story, delete one, or have the row re-sort, and a cached
+        /// page would keep showing the old set. This is the cheap way to notice: if the shape of the
+        /// data changed at all, throw the whole cache away and build fresh.
+        private func modelSignature() -> String {
+            parent.viewModel.stories.map { "\($0.id):\($0.stories.map(\.id).joined(separator: ","))" }
+                .joined(separator: "|")
+        }
+
+        /// A page per bucket, BUILT ONCE.
+        ///
+        /// It used to construct a whole new `StoryDetailView` and a whole new hosting controller on
+        /// every call — and `syncIfNeeded` calls it on every tap-advance, synchronously, before the
+        /// page transition can even start. A swipe never paid that: `viewControllerBefore/After` let
+        /// UIKit build the neighbour ahead of time. That asymmetry is why swiping felt right and
+        /// tapping felt slow, and it was roughly a third of the delay.
+        ///
+        /// Bounded to the current page and its immediate neighbours, so a long story row cannot turn
+        /// this into a pile of live hosting controllers.
         func makePage(for id: String) -> StoryPageHostVC? {
             guard let idx = index(of: id) else { return nil }
+            let signature = modelSignature()
+            if signature != cacheSignature {
+                pageCache.removeAll()
+                cacheSignature = signature
+            }
+            if let hit = pageCache[id] { return hit }
+
             let model = parent.viewModel.stories[idx]
             let root = StoryDetailView(
                 viewModel: parent.viewModel,
@@ -128,9 +159,23 @@ struct StoryPager: UIViewControllerRepresentable {
                 onItemSeen: parent.onItemSeen,
                 showMore: parent.showMore
             )
-            let vc = StoryPageHostVC(rootView: AnyView(root))
+            let vc = StoryPageHostVC(rootView: root)
             vc.bucketID = id
+            pageCache[id] = vc
+            trimCache(around: idx)
             return vc
+        }
+
+        /// Keep the current page and one either side. NEVER drop something the pager is showing —
+        /// a UIPageViewController holds its visible controllers as children, and pulling one out
+        /// from under it is how you get a blank page.
+        private func trimCache(around idx: Int) {
+            let live = Set((pager?.viewControllers ?? []).compactMap { ($0 as? StoryPageHostVC)?.bucketID })
+            let keep = Set((max(0, idx - 1)...min(parent.viewModel.stories.count - 1, idx + 1))
+                .compactMap { parent.viewModel.stories.indices.contains($0) ? parent.viewModel.stories[$0].id : nil })
+            for (key, _) in pageCache where !keep.contains(key) && !live.contains(key) {
+                pageCache.removeValue(forKey: key)
+            }
         }
 
         // Keep the visible page synced if currentStoryUser changes from outside the pager (e.g. tap-advance
@@ -520,9 +565,15 @@ final class StoryPagerVC: UIPageViewController {
 }
 
 // Hosts one bucket's StoryDetailView; remembers which bucket it is for the dataSource lookups.
-final class StoryPageHostVC: UIHostingController<AnyView> {
+/// ⚠️ NOT `UIHostingController<AnyView>` ANY MORE.
+///
+/// `AnyView` erases the type, and an erased view is one SwiftUI cannot diff structurally — every
+/// update has to be treated as "this might be anything now" instead of "this is the same view with
+/// different values". It cost on every page build, and page builds were happening on every tap (see
+/// `makePage`). The concrete type is free and strictly more information for the framework.
+final class StoryPageHostVC: UIHostingController<StoryDetailView> {
     var bucketID: String = ""
-    override init(rootView: AnyView) {
+    override init(rootView: StoryDetailView) {
         super.init(rootView: rootView)
         view.backgroundColor = .clear
         // The story photo must fill edge-to-edge UNDER the status bar. A UIHostingController insets

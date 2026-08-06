@@ -391,10 +391,12 @@ struct StoryEditorView: View {
                 VStack {
                     HStack {
                         Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
+                            // 40pt, his call (2026-08-06), matching the video editor's. The glyph
+                            // comes down with the circle so the proportion inside it is unchanged.
+                            Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(.primary)   // always white; glass + shadow carry contrast
                                 .shadow(color: .black.opacity(0.35), radius: 2)
-                                .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
+                                .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
                         }
                         Spacer()
                         if isDrawing {

@@ -29,7 +29,12 @@ struct StoryVideoEditorView: View {
     // One AVQueuePlayer + looper for the whole editor session.
     @State private var player = AVQueuePlayer()
     @State private var looper: AVPlayerLooper?
-    @State private var playing = true
+    /// PAUSED ON ARRIVAL (owner 2026-08-06: "when I go to the video story editor page, please make
+    /// the video paused by default"). It opened playing and looping, which means the first thing the
+    /// screen does is move — you cannot read the frame you are about to edit, and the pen and the
+    /// text tools are placed against a picture that will not hold still. Tapping the preview starts
+    /// it, as it always has.
+    @State private var playing = false
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
     @State private var showTrim = false
@@ -191,8 +196,9 @@ struct StoryVideoEditorView: View {
         looper = nil
         player.removeAllItems()
         looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: c.url))
-        playing = true
-        player.play()
+        // Loading a clip does not start it. Switching clips inside the editor keeps whatever the
+        // person had chosen — if they had it running, it keeps running; on arrival it stays still.
+        if playing { player.play() } else { player.pause() }
     }
 
     private func select(_ i: Int) {
@@ -363,11 +369,14 @@ struct StoryVideoEditorView: View {
     private var topControls: some View {
         VStack {
             HStack {
+                // 40pt, his call (2026-08-06). The glyph comes down with the circle so the
+                // proportion inside it is unchanged — shrinking only the button would leave an
+                // oversized X rattling around in a smaller disc.
                 Button { dismiss() } label: {
-                    Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
+                    Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                         .shadow(color: .black.opacity(0.35), radius: 2)
-                        .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
+                        .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
                 }
                 Spacer()
                 // NOTHING IS THROWN AWAY ANY MORE, so the notice stopped being a warning and became a
@@ -382,9 +391,9 @@ struct StoryVideoEditorView: View {
                 }
                 Button { muted.toggle(); player.isMuted = muted } label: {
                     Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48).contentShape(Circle()).liquidGlass(Circle())
+                        .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
                 }
             }
             .padding(.horizontal, 16).padding(.top, max(windowSafeTop - 22, 10))
@@ -1104,7 +1113,8 @@ struct StoryVideoEditorView: View {
         let item = AVPlayerItem(asset: asset)
         looper = AVPlayerLooper(player: player, templateItem: item)
         player.isMuted = muted
-        player.play()
+        // Deliberately NOT `play()`. The editor opens on a still frame — see `playing`.
+        player.pause()
     }
 }
 
