@@ -281,8 +281,19 @@ struct MyFriendsPrivacyView: View {
     @State private var store = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
     @State private var picking: PickTarget?
+    /// WHO IS BEING CHOSEN RIGHT NOW, and not yet who is chosen.
+    ///
+    /// The mode used to be committed on the TAP, before anybody had been picked — so "All Except…"
+    /// went ticked with 0 excluded, which reaches exactly the same people as "All chats you
+    /// accepted" while claiming to be something else. Backing out left it ticked too. Editing a
+    /// draft and committing on Done means the tick can only ever describe a real narrowing.
+    @State private var draft: Set<String> = []
 
-    private enum PickTarget: Identifiable { case except, only; var id: Int { self == .except ? 0 : 1 } }
+    private enum PickTarget: Identifiable {
+        case except, only
+        var id: Int { self == .except ? 0 : 1 }
+        var mode: StoryAudience.Mode { self == .except ? .except : .only }
+    }
 
     private var a: StoryAudience { store.myFriends }
     private var contactIds: Set<String> { StoryContact.ids(contacts) }
@@ -321,25 +332,43 @@ struct MyFriendsPrivacyView: View {
                 MembersEditor(
                     title: target == .except ? "All Except" : "Only Share With",
                     contacts: contacts,
-                    members: Binding(
-                        get: { Set(a.members) },
-                        set: { v in var n = a; n.members = Array(v); store.update(n) }
-                    ),
-                    onDone: { picking = nil })
+                    members: $draft,
+                    // NOTHING CHOSEN IS NOT A CHOICE. Done stays dead until at least one person is
+                    // picked, the same rule Select Viewers already uses for a custom story — an
+                    // empty except-list and an empty only-list both mean "the mode did nothing".
+                    requireAtLeastOne: true,
+                    onDone: {
+                        // COMMITTED HERE, not on the tap that opened this. An empty draft leaves the
+                        // mode exactly as it was, so backing out cannot leave a tick behind.
+                        if !draft.isEmpty {
+                            var n = a
+                            n.mode = target.mode
+                            n.members = Array(draft)
+                            store.update(n)
+                        }
+                        picking = nil
+                    },
+                    onCancel: { picking = nil })
             }
         }
     }
 
     private func modeRow(_ m: StoryAudience.Mode, _ title: String, detail: String?) -> some View {
         Button {
-            var n = a
-            // SWITCHING MODE CLEARS THE LIST. `except` and `only` mean opposite things by the same
+            guard m != .all else {
+                // "All chats" needs nobody picked, so it is the one mode that commits on the tap.
+                var n = a
+                n.mode = .all
+                n.members = []
+                store.update(n)
+                return
+            }
+            // SWITCHING MODE STARTS FROM EMPTY. `except` and `only` mean opposite things by the same
             // field, so carrying one over to the other would turn "hide from these three" into
-            // "show ONLY these three" without anybody asking for it.
-            if n.mode != m { n.members = [] }
-            n.mode = m
-            store.update(n)
-            if m != .all { picking = (m == .except ? .except : .only) }
+            // "show ONLY these three" without anybody asking for it. Returning to the mode you are
+            // already on opens on the people you already chose.
+            draft = a.mode == m ? Set(a.members) : []
+            picking = (m == .except ? .except : .only)
         } label: {
             HStack(spacing: 12) {
                 StoryTick(on: a.mode == m)
@@ -490,7 +519,13 @@ struct MembersEditor: View {
     let title: String
     let contacts: [StoryContact]
     @Binding var members: Set<String>
+    /// Done is dead until somebody is picked. Used where an empty list would mean the mode does
+    /// nothing at all — see `MyFriendsPrivacyView`.
+    var requireAtLeastOne: Bool = false
     let onDone: () -> Void
+    /// Leaves without applying anything. Without it the only way out of this sheet is a swipe,
+    /// which lands on `onDone` in some presentations and on nothing in others.
+    var onCancel: (() -> Void)? = nil
 
     @State private var search = ""
 
@@ -519,7 +554,14 @@ struct MembersEditor: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { Button("Done") { onDone() }.fontWeight(.semibold) }
+            if let onCancel {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { onCancel() } }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { onDone() }
+                    .fontWeight(.semibold)
+                    .disabled(requireAtLeastOne && members.isEmpty)
+            }
         }
     }
 }

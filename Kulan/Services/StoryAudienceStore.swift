@@ -320,12 +320,19 @@ final class StoryAudienceStore {
 
     private static func decode(id: String, data: [String: Any]) -> StoryAudience? {
         guard let kind = StoryAudience.Kind(rawValue: data["kind"] as? String ?? "") else { return nil }
+        var mode = StoryAudience.Mode(rawValue: data["mode"] as? String ?? "") ?? .all
+        let members = data["members"] as? [String] ?? []
+        // SELF-HEAL AN EMPTY NARROWING. Builds before this one committed the mode on the tap, so
+        // anybody who opened "All Except…" and backed out has `except` with nobody in it saved —
+        // a mode that reaches exactly the same people as `all` while ticking a different row and
+        // reporting "0 excluded". It IS `all`; say so, rather than leaving the screen lying.
+        if kind == .myFriends, mode != .all, members.isEmpty { mode = .all }
         return StoryAudience(
             id: id,
             kind: kind,
             name: data["name"] as? String ?? "",
-            mode: StoryAudience.Mode(rawValue: data["mode"] as? String ?? "") ?? .all,
-            members: data["members"] as? [String] ?? [],
+            mode: mode,
+            members: members,
             allowReplies: data["allowReplies"] as? Bool ?? true,
             createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
         )
