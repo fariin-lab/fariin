@@ -541,16 +541,17 @@ struct CreateCustomStoryFlow: View {
 
 /// The "+ New" capsule and the menu behind it, identical in the share sheet and in Settings.
 ///
-/// UIKIT, AND NOT BECAUSE ANYONE PREFERRED IT. His reference shows two-line menu items — a title
-/// with a grey explanation under it — and SwiftUI's `Menu` cannot draw one: a `Button` inside it
-/// renders a single line whatever view you hand it. `UIAction` has carried a `subtitle` since iOS
-/// 15, so the platform has the API and only SwiftUI's wrapper does not. This is the same call as
-/// everywhere else in this app: where SwiftUI has no API, use the one UIKit already has.
+/// STILL UIKIT, though the reason has changed. It began as a two-line UIMenu, which SwiftUI cannot
+/// draw — a `Button` inside a SwiftUI `Menu` renders one line whatever view you hand it, while
+/// `UIAction` has carried a `subtitle` since iOS 15. The menu is gone now (see `updateUIView`), and
+/// what keeps this in UIKit is the button itself: a small capsule with an explicit font, an explicit
+/// symbol size and an explicit disabled state, sized to sit in a section header. `UIButton
+/// .Configuration` says all of that in one place.
 ///
-/// GROUP STORIES ARE SHOWN AND DISABLED, on the owner's call. A group story needs its own delivery
-/// path — the group's membership resolved into viewers, replies landing in the group, the group's
-/// identity on the story row — and he chose to land the person side first. Greyed with "Coming soon"
-/// says so honestly; hiding it would leave a menu with one item pretending to be a choice.
+/// GROUP STORIES ARE NOT DRAWN AT ALL. They need their own delivery path — the group's membership
+/// resolved into viewers, replies landing in the group, the group's identity on the story row — and
+/// the owner chose to land the person side first. It was greyed with "Coming soon" on his earlier
+/// call and removed outright on his later one (2026-08-06).
 struct NewAudienceButton: UIViewRepresentable {
     let onCustom: () -> Void
     /// Greyed once he is at the ceiling — his number ("the maximum number of Custom Stories is 5").
@@ -585,26 +586,33 @@ struct NewAudienceButton: UIViewRepresentable {
         cfg.cornerStyle = .capsule
         cfg.baseForegroundColor = .label
         let b = UIButton(configuration: cfg)
-        b.showsMenuAsPrimaryAction = true   // one tap opens it; no long press, no dead first tap
+        // Set in updateUIView, which decides between a menu and a direct action.
         b.setContentHuggingPriority(.required, for: .horizontal)
         b.setContentCompressionResistancePriority(.required, for: .horizontal)
         return b
     }
 
     func updateUIView(_ b: UIButton, context: Context) {
-        let custom = UIAction(title: "New Custom Story",
-                              subtitle: canAddCustom ? "Visible only to specific people"
-                                                     : "You have the maximum of \(StoryAudienceStore.maxCustom)",
-                              image: UIImage(systemName: "rectangle.stack"),
-                              attributes: canAddCustom ? [] : [.disabled]) { _ in
-            context.coordinator.onCustom()
-        }
-        let group = UIAction(title: "New Group Story",
-                             subtitle: "Coming soon",
-                             image: UIImage(systemName: "person.2"),
-                             attributes: [.disabled]) { _ in }
-        b.menu = UIMenu(children: [custom, group])
         context.coordinator.onCustom = onCustom
+        // NEW GROUP STORY IS GONE (owner 2026-08-06: "plz hide new group story that feature"). It was
+        // shown greyed with "Coming soon" on his earlier call, so that a menu of one did not pretend
+        // to be a choice. He would rather not see it at all until it exists.
+        //
+        // Which leaves one action — so there is no menu. A menu that opens to a single item is two
+        // taps for one decision, and the reason the greyed entry was there in the first place was to
+        // stop exactly that. The button just does the thing now.
+        guard canAddCustom else {
+            // At the ceiling there is nothing to open and nothing to do. Disabled says why better
+            // than a button that opens a menu whose only item is dimmed.
+            b.menu = nil
+            b.isEnabled = false
+            return
+        }
+        b.isEnabled = true
+        b.menu = nil
+        b.showsMenuAsPrimaryAction = false
+        b.removeTarget(nil, action: nil, for: .touchUpInside)
+        b.addTarget(context.coordinator, action: #selector(Coordinator.fire), for: .touchUpInside)
     }
 
     /// Without this SwiftUI hands a representable the whole width it was offered, and a "+ New"
@@ -618,8 +626,9 @@ struct NewAudienceButton: UIViewRepresentable {
     /// The closure lives on the coordinator, not captured in the action: `updateUIView` runs on
     /// every SwiftUI pass and a captured closure would pin the FIRST body's copy of the state it
     /// touches — the create sheet would open against a stale `creating` binding.
-    final class Coordinator {
+    final class Coordinator: NSObject {
         var onCustom: () -> Void
         init(_ onCustom: @escaping () -> Void) { self.onCustom = onCustom }
+        @objc func fire() { onCustom() }
     }
 }
