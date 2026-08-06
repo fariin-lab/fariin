@@ -209,8 +209,10 @@ struct NameStoryView: View {
                 Text("Only you can see the name of this story.")
             }
 
-            Section("Replies & Reactions") {
+            Section {
                 Toggle("Allow Replies & Reactions", isOn: $allowReplies).tint(.green)
+            } header: {
+                Text("Replies & Reactions")
             } footer: {
                 Text("Let people who can view your story react and reply.")
             }
@@ -258,22 +260,26 @@ struct MyFriendsPrivacyView: View {
 
     var body: some View {
         List {
-            Section("Who Can View This Story") {
+            Section {
                 modeRow(.all, "All chats you accepted",
                         detail: "\(contactIds.count) \(contactIds.count == 1 ? "Viewer" : "Viewers")")
                 modeRow(.except, "All Except…",
                         detail: a.mode == .except ? "\(a.members.count) excluded" : nil)
                 modeRow(.only, "Only Share With…",
                         detail: a.mode == .only ? "\(a.members.count) selected" : nil)
+            } header: {
+                Text("Who Can View This Story")
             } footer: {
                 Text("Choose which of your chats can view your story. Changes won't affect stories you've already sent.")
             }
 
-            Section("Replies & Reactions") {
+            Section {
                 Toggle("Allow Replies & Reactions", isOn: Binding(
                     get: { a.allowReplies },
                     set: { v in var n = a; n.allowReplies = v; store.update(n) }
                 )).tint(.green)
+            } header: {
+                Text("Replies & Reactions")
             } footer: {
                 Text("Let people who can view your story react and reply.")
             }
@@ -357,7 +363,7 @@ struct CustomStoryDetailView: View {
 
     @ViewBuilder private func list(_ a: StoryAudience) -> some View {
         List {
-            Section("Who Can View This Story") {
+            Section {
                 Button { addSelection = []; adding = true } label: {
                     HStack(spacing: 12) {
                         ZStack {
@@ -385,15 +391,19 @@ struct CustomStoryDetailView: View {
                     n.members.removeAll { going.contains($0) }
                     store.update(n)
                 }
+            } header: {
+                Text("Who Can View This Story")
             } footer: {
                 Text("Choose which of your chats can view your story. Changes won't affect stories you've already sent.")
             }
 
-            Section("Replies & Reactions") {
+            Section {
                 Toggle("Allow Replies & Reactions", isOn: Binding(
                     get: { a.allowReplies },
                     set: { v in var n = a; n.allowReplies = v; store.update(n) }
                 )).tint(.green)
+            } header: {
+                Text("Replies & Reactions")
             } footer: {
                 Text("Let people who can view your story react and reply.")
             }
