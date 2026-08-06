@@ -21,7 +21,12 @@ import UIKit
     /// scrolled, the lookup could miss entirely, which dropped the open to a plain presentation and the
     /// close to the drift-down fallback — his "sometimes it uses the old animation / the image goes
     /// down". One id, three screens, one dictionary. Now every screen owns its own namespace.
-    enum Scope: String { case chat, gallery, profile, album }
+    /// `storyRow` is the stories strip at the top of the chat list, keyed by story-group id. It
+    /// joins this registry rather than starting a private one because it wants exactly what the
+    /// others do — a rectangle in window coordinates and the real corner radius — and because a
+    /// second dictionary answering the same question is how the three chat scopes ended up
+    /// overwriting each other in the first place.
+    enum Scope: String { case chat, gallery, profile, album, storyRow }
     static func key(_ scope: Scope, _ id: String) -> String { "\(scope.rawValue)|\(id)" }
 
     static func capture(_ key: String, _ rect: CGRect, cornerRadius: CGFloat) {
@@ -73,6 +78,10 @@ struct MediaRectReporter: ViewModifier {
             .background(
                 GeometryReader { g in
                     Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
+                        // An empty id identifies nothing, and a rect filed under one would be a
+                        // rectangle any caller with an empty key could later fly to. Story row
+                        // cards with nothing posted take this path.
+                        guard !id.isEmpty else { return }
                         MediaOpenRects.capture(key, f, cornerRadius: cornerRadius)
                     }
                 }

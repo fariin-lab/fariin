@@ -24,6 +24,12 @@ struct StoryPager: UIViewControllerRepresentable {
     var onSwipeUpEnded: (CGFloat, CGFloat) -> Void = { _, _ in }  // (translation +up, velocity +up) on release
     var dismissEnabled: Bool = true        // install the library's native DOWN dismiss pan (smooth UIKit)
     var swipeUpEnabled: Bool = true        // install the library's UP pan (false -> host owns swipe-up)
+    /// Install the HOST-DRIVEN down pan instead: it moves nothing itself and decides nothing, it
+    /// reports the finger and lets the host animate the card back into whatever it was opened from.
+    /// Mutually exclusive with `dismissEnabled` (that one is the library's own shrink-and-melt) and
+    /// with the passive watcher (that one exists only to nudge Apple's transition along).
+    var heroDismiss: Bool = false
+    var onHeroDrag: (StoryHeroPhase, CGPoint, CGPoint) -> Void = { _, _, _ in }   // phase, translation, velocity
 
     // TRUE while a swipe-down dismiss drag/exit is running. The cube fold (getAngle) derives
     // its 3D angle from each page's GLOBAL minX — and the dismiss transform MOVES the card,
@@ -47,6 +53,25 @@ struct StoryPager: UIViewControllerRepresentable {
         context.coordinator.pager = pager
         if let first = context.coordinator.makePage(for: viewModel.currentStoryUser) {
             pager.setViewControllers([first], direction: .forward, animated: false)
+        }
+        // BORN INVISIBLE for a hero open — see StoryCardMorph.heroOpenPending. Set here, in
+        // `makeUIViewController`, because this is the last synchronous moment before the first
+        // paint; anything later is a frame too late and the frame is the bug.
+        if heroDismiss {
+            pager.view.alpha = 0
+            StoryCardMorph.shared.revealAfterHeroOpen = { [weak pager] in pager?.view.alpha = 1 }
+            // REGISTERED HERE, NOT WHERE THE PAN IS INSTALLED, and the difference is a real bug that
+            // was in this file for about ten minutes. `installDismissPan` attaches the card BEFORE
+            // it installs the pan, and attaching the card is what fires the host's staged open — so
+            // hooks registered next to the pan would still be nil at the one moment the open needs
+            // them, and the story would grow out of the row on a full black screen.
+            StoryCardMorph.shared.prepareForHero = { [weak pager] in pager?.view.backgroundColor = .clear }
+            StoryCardMorph.shared.restoreAfterHero = { [weak pager] in pager?.view.backgroundColor = .black }
+            // A story nobody can see is worse than an open with no animation. If the host has not
+            // claimed the card by now, something upstream is wrong and the story is shown as it is.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak pager] in
+                if pager?.view.alpha == 0 { pager?.view.alpha = 1 }
+            }
         }
         DispatchQueue.main.async { context.coordinator.installDismissPan() }
         return pager
@@ -284,7 +309,19 @@ struct StoryPager: UIViewControllerRepresentable {
             // DOWN dismiss pan (native UIKit — smooth). Installed for BOTH own and friends now, so the
             // own-story swipe-down uses the exact same buttery pan friends use (no app-level SwiftUI
             // offset). The card moves in pure UIKit; require(toFail:) keeps the horizontal slide separate.
-            if !parent.dismissEnabled {
+            if parent.heroDismiss {
+                // THE HOST'S OWN CLOSE. This pan reports and nothing else — see `handleHeroDrag`.
+                // `require(toFail:)` on the pager's scroller is the same arrangement the library's
+                // own dismiss has always used, and it is what keeps a sideways page swipe and a
+                // downward close from ever contesting the same touch.
+                let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleHeroDrag(_:)))
+                pan.delegate = self
+                pager.view.addGestureRecognizer(pan)
+                scroll.panGestureRecognizer.require(toFail: pan)
+                dismissPan = pan
+                // (prepareForHero / restoreAfterHero are registered in makeUIViewController — see
+                // the note there for why they cannot wait until now.)
+            } else if !parent.dismissEnabled {
                 // PASSIVE watcher over Apple's native zoom-dismiss (user rule: never touch the
                 // native close animation): it moves NOTHING — it only (a) pauses the story the
                 // moment a downward drag starts and (b) COMMITS the close on a fast flick, which
@@ -327,7 +364,7 @@ struct StoryPager: UIViewControllerRepresentable {
         // The cube: rotate each page around the shared vertical edge with perspective depth, driven
         // by its position relative to screen centre. Centre page = flat; ±1 page = 90° (edge-on, hidden).
         @objc func applyCube() {
-            guard let scroll = internalScroll else { return }
+            guard let scroll = internalScroll, !StoryCardMorph.heroDismissActive else { return }
             // Only do per-frame transform work while a horizontal swipe is actually in motion. At rest the
             // pages are already settled (centred page = identity from the last frame), so skip the churn.
             guard scroll.isDragging || scroll.isDecelerating || scroll.isTracking else { return }
@@ -353,6 +390,40 @@ struct StoryPager: UIViewControllerRepresentable {
                     let undoSlide = CATransform3DMakeTranslation(-relX, 0, 0)
                     sub.layer.transform = CATransform3DConcat(StoryPager.cubeTransform(t, width: w), undoSlide)
                 }
+            }
+        }
+
+        /// THE HOST-DRIVEN CLOSE: this method moves nothing and decides nothing.
+        ///
+        /// Everything the old `handleDismiss` did in here — pick a scale, pick a threshold, choose
+        /// an exit — is geometry that belongs to whatever the story was opened FROM, and the library
+        /// has never been able to see that. So the finger is reported and the host answers with a
+        /// rectangle. What stays here is the part that genuinely belongs to the pager: making the
+        /// containers see-through the moment the drag starts, so the shrinking card uncovers the
+        /// chat list rather than a black page, and freezing the cube while the card is not where the
+        /// page-fold maths thinks it is.
+        ///
+        /// The background is cleared on the FINGER, not on any dismissal callback. That lesson is
+        /// already written into `handleDismissWatch` and it cost two device rounds: a dismissal
+        /// formally starts long after the card has begun moving, so anything waiting for it rides
+        /// down as a black bar for the whole drag.
+        @objc func handleHeroDrag(_ g: UIPanGestureRecognizer) {
+            guard let pager else { return }
+            let t = g.translation(in: pager.view)
+            let v = g.velocity(in: pager.view)
+            switch g.state {
+            case .began:
+                StoryCardMorph.heroDismissActive = true
+                StoryCardMorph.shared.prepareForHero?()
+                NotificationCenter.default.post(name: .pauseStory, object: nil)
+                parent.onHeroDrag(.began, t, v)
+            case .changed:
+                parent.onHeroDrag(.changed, t, v)
+            case .ended:
+                parent.onHeroDrag(.ended, t, v)
+            case .cancelled, .failed:
+                parent.onHeroDrag(.cancelled, t, v)
+            default: break
             }
         }
 

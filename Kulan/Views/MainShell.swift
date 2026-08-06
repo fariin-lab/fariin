@@ -626,6 +626,11 @@ struct ChatsView: View {
     // exact circle the user tapped: a top stories-row card (its group id) or a chat-row
     // ring ("row-<cid>"). Set BEFORE viewerGroup at every open site.
     @State private var viewerSourceID: String = ""
+    /// This viewer was opened from the stories row and owns its own open and close (StoryViewer's
+    /// `heroDismiss`). False everywhere else, and everywhere else therefore still gets Apple's zoom
+    /// transition — the same cover serves the chat-row rings, and those were deliberately left alone
+    /// until this one is proven.
+    @State private var viewerHero = false
     @State private var showUploadViewer = false   // live viewer for the still-uploading story
     @State private var profileGroup: StoryGroup?
     @Namespace private var storyNS   // zoom transition: story card ⇄ full-screen viewer
@@ -844,6 +849,7 @@ struct ChatsView: View {
                     if selecting { toggleSelection(conv.id); return }
                     if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
                         viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
+                        viewerHero = false                  // chat-row rings keep Apple's zoom for now
                         viewerGroup = g
                     }
                 },
@@ -1253,7 +1259,17 @@ struct ChatsView: View {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                  storyNS: storyNS,
                                  onCompose: { showCompose = true },
-                                 onOpen: { g in viewerSourceID = g.isMine ? g.id : "story-\(g.id)"; viewerGroup = g },
+                                 // THE ONE SURFACE ON THE NEW TRANSITION (owner, 2026-08-06: make the
+                                 // story list right first, then spread it). The cover is presented
+                                 // with no animation of its own — the card flying out of this row IS
+                                 // the animation, and a cover sliding up behind it would be a second
+                                 // one nobody asked for.
+                                 onOpen: { g in
+                                     viewerSourceID = g.isMine ? g.id : "story-\(g.id)"
+                                     viewerHero = true
+                                     var t = Transaction(); t.disablesAnimations = true
+                                     withTransaction(t) { viewerGroup = g }
+                                 },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
                                  onOpenUploading: { showUploadViewer = true })
@@ -1326,22 +1342,55 @@ struct ChatsView: View {
                 let close: () -> Void = {
                     // Snappier zoom-back into the ring (user: the default felt sluggish): the
                     // cover dismissal follows the transaction's animation.
-                    var t = Transaction(animation: .spring(response: 0.28, dampingFraction: 0.92))
+                    //
+                    // A HERO PRESENTATION HAS NO ZOOM TO BACK OUT OF, so there is nothing for a
+                    // spring to animate except the cover itself sliding away — which is not a close
+                    // anybody designed. This path is only reached on a hero when the card cannot be
+                    // flown home (the row scrolled away, no rect), and an instant exit is the honest
+                    // answer to that: no animation beats the wrong animation.
+                    let t: Transaction = viewerHero
+                        ? { var x = Transaction(); x.disablesAnimations = true; return x }()
+                        : Transaction(animation: .spring(response: 0.28, dampingFraction: 0.92))
                     withTransaction(t) { viewerGroup = nil }
+                    viewerHero = false
+                    MediaSourceVisibility.shared.reveal()
                     // Defer the reload so the hero shrink animation lands BEFORE the row re-sorts (the
                     // just-seen bucket moves, which would otherwise make the zoom shrink toward a moving card).
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         Task { await StoriesRepository.shared.load(force: true) }   // refresh seen rings
                     }
                 }
+                // THE HERO CLOSE'S EXIT. The card has already flown home by the time this runs, so
+                // the cover leaves with no animation of its own: anything else plays a second close
+                // over the top of the one the finger just drew. The row card is revealed on the far
+                // side of that, once the cover is gone and the story cannot be seen landing on top
+                // of a card that is already showing the same picture.
+                let heroClose: () -> Void = {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { viewerGroup = nil }
+                    viewerHero = false
+                    MediaSourceVisibility.shared.reveal()
+                    // Same reason the zoom close defers its reload: the just-seen bucket moves to a
+                    // different place in the row, and re-sorting while the card is still settling
+                    // makes the landing look like it missed.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        Task { await StoriesRepository.shared.load(force: true) }
+                    }
+                }
                 // A friend's story opens the whole ordered list (swipe person to person);
                 // My Story (not in `others`) opens on its own.
-                Group {
+                let viewerBody = Group {
                     if let idx = others.firstIndex(where: { $0.id == g.id }) {
-                        StoryViewer(groups: others, startIndex: idx, onClose: close,
+                        StoryViewer(groups: others, startIndex: idx,
+                                    heroDismiss: viewerHero, heroSourceKey: viewerHero ? g.id : "",
+                                    onHeroClose: heroClose,
+                                    onClose: close,
                                     onProfile: { grp in profileGroup = grp })
                     } else {
-                        StoryViewer(group: g, onClose: close,
+                        StoryViewer(group: g,
+                                    heroDismiss: viewerHero, heroSourceKey: viewerHero ? g.id : "",
+                                    onHeroClose: heroClose,
+                                    onClose: close,
                                     onProfile: { grp in profileGroup = grp },
                                     onDeletedRemaining: { fresh in
                                         // A story was deleted but I still have others — re-feed the viewer the
@@ -1353,16 +1402,29 @@ struct ChatsView: View {
                                     })
                     }
                 }
-                // APPLE-NATIVE open + close (user's final call): the zoom transition provides the
-                // ring→story hero AND its own interactive drag-to-dismiss — the shrink-over-chats
-                // close from the user's reference. Its historical fast-flick "explosions" were the
-                // CUBE folding while the system moved the pages (getAngle reads global minX): that
-                // fold is now gated to real horizontal page swipes only, and the library's custom
-                // dismiss pan is REMOVED (dismissEnabled: false) so exactly ONE close gesture
-                // exists — Apple's. Do not reintroduce a custom dismiss pan alongside this.
-                // Zoom from WHEREVER the story was opened: a top stories-row card or a chat-row
-                // ring — viewerSourceID is set at every open site (falls back to the card).
-                .navigationTransition(.zoom(sourceID: viewerSourceID.isEmpty ? (g.isMine ? g.id : "story-\(g.id)") : viewerSourceID, in: storyNS))
+                // ONE TRANSITION PER PRESENTATION, NEVER BOTH.
+                //
+                // The zoom transition does not just animate — it brings its own interactive
+                // dismissal, which is the thing being replaced. So a hero presentation cannot merely
+                // ignore it, it has to not have it: they would be two close gestures on one screen,
+                // which is the arrangement every note in this area warns about.
+                //
+                // Everything that is NOT the stories row still gets the zoom, unchanged. That is the
+                // owner's instruction, not an accident of scope: the chat-row rings, the archive and
+                // the reply-quote openings keep working exactly as they do today until this one
+                // surface has been proven on a real phone.
+                //
+                // The zoom's own history, kept for whoever reads this next: its fast-flick
+                // "explosions" were the CUBE folding while the system moved the pages (getAngle
+                // reads global minX), which is gated to real horizontal page swipes now.
+                if viewerHero {
+                    viewerBody
+                } else {
+                    // Zoom from WHEREVER the story was opened: a top stories-row card or a chat-row
+                    // ring — viewerSourceID is set at every open site (falls back to the card).
+                    viewerBody
+                        .navigationTransition(.zoom(sourceID: viewerSourceID.isEmpty ? (g.isMine ? g.id : "story-\(g.id)") : viewerSourceID, in: storyNS))
+                }
             }
             // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
             // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting

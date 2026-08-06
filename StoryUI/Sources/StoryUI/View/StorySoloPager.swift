@@ -29,6 +29,9 @@ struct StorySoloPager: UIViewControllerRepresentable {
     var onSwipeUpEnded: (CGFloat, CGFloat) -> Void = { _, _ in }  // (translation +up, velocity +up)
     var dismissEnabled: Bool = true        // true: library's own DOWN dismiss pan; false: Apple's
                                            // zoom-dismiss owns the close, we only watch it
+    /// The host's own close (see StoryPager.heroDismiss). Mutually exclusive with both of the above.
+    var heroDismiss: Bool = false
+    var onHeroDrag: (StoryHeroPhase, CGPoint, CGPoint) -> Void = { _, _, _ in }   // phase, translation, velocity
 
     func makeUIViewController(context: Context) -> StorySoloHostVC {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
@@ -38,6 +41,16 @@ struct StorySoloPager: UIViewControllerRepresentable {
         let vc = StorySoloHostVC()
         context.coordinator.host = vc
         context.coordinator.installPans(on: vc)
+        // BORN INVISIBLE for a hero open — see StoryCardMorph.heroOpenPending and the same block in
+        // StoryPager. `installPans` has already run and called `loadViewIfNeeded`, so the view
+        // exists and this is still before the first paint.
+        if heroDismiss {
+            vc.view.alpha = 0
+            StoryCardMorph.shared.revealAfterHeroOpen = { [weak vc] in vc?.view.alpha = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak vc] in
+                if vc?.view.alpha == 0 { vc?.view.alpha = 1 }
+            }
+        }
         return vc
     }
 
@@ -102,7 +115,20 @@ struct StorySoloPager: UIViewControllerRepresentable {
             up.delegate = self
             vc.view.addGestureRecognizer(up)
 
-            if parent.dismissEnabled {
+            if parent.heroDismiss {
+                // THE HOST'S OWN CLOSE — see StoryPager.handleHeroDrag for what this pan is and is
+                // not. No scroll view to arrange against here: the solo host is one plain container,
+                // which is the whole reason my own story is hosted this way.
+                let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleHeroDrag(_:)))
+                pan.delegate = self
+                vc.view.addGestureRecognizer(pan)
+                dismissPan = pan
+                StoryCardMorph.shared.prepareForHero = { [weak vc] in
+                    vc?.cardContainer.backgroundColor = .clear
+                    vc?.view.backgroundColor = .clear
+                }
+                StoryCardMorph.shared.restoreAfterHero = { [weak vc] in vc?.view.backgroundColor = .black }
+            } else if parent.dismissEnabled {
                 // The library's own DOWN dismiss (reply-quote presentations: no zoom hero exists,
                 // so this pan is the close). Identical behaviour to StoryPager.handleDismiss; the
                 // view it moves is our plain container instead of a page controller's scroll view.
@@ -146,6 +172,30 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 let up = -(t.y - (swipeUpBaselineY ?? t.y))
                 parent.onSwipeUpEnded(up, -v.y)                // translation +up, velocity +up
                 swipeUpBaselineY = nil
+            default: break
+            }
+        }
+
+        /// Reports the finger; the host owns every decision. See `StoryPager.handleHeroDrag`.
+        @objc func handleHeroDrag(_ g: UIPanGestureRecognizer) {
+            guard let host else { return }
+            let t = g.translation(in: host.view)
+            let v = g.velocity(in: host.view)
+            switch g.state {
+            case .began:
+                StoryCardMorph.heroDismissActive = true
+                // Both containers go see-through for the flight: the card paints its own black
+                // inside its own rounded rect, so what pulls away is the story and nothing around
+                // it. Shared with the button close (see StoryCardMorph.prepareForHero).
+                StoryCardMorph.shared.prepareForHero?()
+                NotificationCenter.default.post(name: .pauseStory, object: nil)
+                parent.onHeroDrag(.began, t, v)
+            case .changed:
+                parent.onHeroDrag(.changed, t, v)
+            case .ended:
+                parent.onHeroDrag(.ended, t, v)
+            case .cancelled, .failed:
+                parent.onHeroDrag(.cancelled, t, v)
             default: break
             }
         }

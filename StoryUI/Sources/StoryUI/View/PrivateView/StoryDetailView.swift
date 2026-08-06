@@ -625,7 +625,10 @@ private extension StoryDetailView {
         // Cube is INERT while a swipe-down dismiss moves the card: the fold angle derives from
         // the page's GLOBAL minX, and the dismiss transform shifts it — a fast flick otherwise
         // slams the page into a sudden violent 3D fold (flipped/black frames on close).
-        if StoryPager.dismissActive { return .zero }
+        // Both flags mean "the card is being moved by something that is not a page swipe": the
+        // library's own dismiss writes the transform itself, the hero close drives it through
+        // StoryCardMorph. Either way the page's global minX is no longer evidence of anything.
+        if StoryPager.dismissActive || StoryCardMorph.heroDismissActive { return .zero }
         // And the fold may fire ONLY during a live horizontal page swipe. Apple's zoom-dismiss
         // (the native close) moves every page's global minX while it shrinks the cover — the
         // cube folding along with it was the true source of the fast-flick "explosions".

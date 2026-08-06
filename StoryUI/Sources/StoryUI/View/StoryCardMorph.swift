@@ -5,6 +5,11 @@
 
 import UIKit
 
+/// Where a hero drag has got to. The pan lives in the library, because it has to be arranged
+/// against the pager's own scroll view with `require(toFail:)`; every decision it leads to lives in
+/// the host, because the host is the only thing that knows what the story was opened from.
+public enum StoryHeroPhase { case began, changed, ended, cancelled }
+
 /// One handle on the story card that is actually on screen.
 ///
 /// WHY THIS EXISTS. The card behind the viewers sheet used to be a photograph of the story:
@@ -61,6 +66,63 @@ public final class StoryCardMorph {
         cardHeight = height
     }
 
+    /// TRUE while the host's own hero open/close owns this card.
+    ///
+    /// It is not the same flag as `StoryPager.dismissActive`, and the difference matters. That one
+    /// means "somebody else is writing `card.transform` directly, so `apply` must stand down". The
+    /// hero transition drives the card THROUGH `apply`, so it must not raise that flag or it would
+    /// switch itself off. What it does need is the other half of what that flag buys: the cube must
+    /// not fold while the card is moving, because `getAngle` derives its angle from the page's
+    /// global position and this transition moves the page.
+    public static var heroDismissActive = false
+
+    /// Undo the see-through a hero drag turned on. Registered by whichever pager installed the hero
+    /// pan (it owns that page's background), called by the host when a close springs back.
+    ///
+    /// NOT called when a close commits: the card is on its way out, and repainting the page black
+    /// behind it puts a black rectangle where the chat list should already be showing through.
+    public var restoreAfterHero: (() -> Void)?
+
+    /// Make the page see-through for a hero flight: what pulls away has to be the story, over the
+    /// chat list, not a black page with a story in it. Registered by whichever pager installed the
+    /// hero pan, because the page's background belongs to the pager.
+    ///
+    /// Called from the drag's `.began` AND from a button close, so both exits look the same. That
+    /// they must is not a detail: the chat media viewer shipped with an arrow that used a different
+    /// exit from its drag, and it was reported.
+    public var prepareForHero: (() -> Void)?
+
+    /// Show a page that was born invisible for a hero OPEN.
+    ///
+    /// THE ONE-FRAME FLASH THIS EXISTS TO PREVENT. A hero open has to seat the card on the row card
+    /// BEFORE anybody sees it, and the card is neither attached, in a window, nor laid out at the
+    /// moment the cover goes up. So the first painted frame would be the story at full size, and the
+    /// open would begin with a pop.
+    ///
+    /// The pager therefore gives birth to the page INVISIBLE when a hero open is expected, and the
+    /// host reveals it through here once it has placed the card. If nothing ever does, the pager
+    /// reveals the page by itself shortly afterwards: a missed animation is a disappointment, an
+    /// invisible story is a broken screen.
+    public var revealAfterHeroOpen: (() -> Void)?
+
+    /// The story card's rectangle in WINDOW coordinates, at rest.
+    ///
+    /// The one honest source for where the card is. The host needs it to open FROM the row card
+    /// rather than to a rectangle it worked out for itself with a second copy of `cardHeight`'s
+    /// rule — and two copies of the same geometry that have to agree to the pixel is what produced
+    /// the picture-jumping-inside-its-frame bug in `402ec4d`.
+    ///
+    /// Read it before a transform is applied, or `convert` will fold that transform into the answer.
+    public var cardWindowRect: CGRect? {
+        // `cardHeight` is published by StoryDetailView once it has laid out. Without it `contentRect`
+        // honestly falls back to the whole page, which is a rectangle taller than the card and NOT
+        // what a hero should fly to — better to answer "not yet" and let the caller wait a frame.
+        guard let card, card.window != nil, card.bounds.width > 1, cardHeight > 1 else { return nil }
+        let r = contentRect(in: card)
+        guard r.width > 1, r.height > 1 else { return nil }
+        return card.convert(r, to: nil)
+    }
+
     /// The card in the registered view's CURRENT coordinates, or the whole view if nobody has
     /// published metrics yet.
     private func contentRect(in view: UIView) -> CGRect {
@@ -102,13 +164,25 @@ public final class StoryCardMorph {
     /// also computes, which is what makes `fraction: 0` exactly the identity by construction. Two
     /// copies of the same geometry that have to agree to the pixel is precisely the mistake that
     /// produced the picture-jumping-inside-its-frame bug in `402ec4d`.
-    public func apply(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat) {
+    /// - Parameters:
+    ///   - centerOverride: put the card's centre EXACTLY here (window coords) instead of
+    ///     interpolating rest → `targetCenter` by `fraction`. The hero close needs this: while the
+    ///     finger is down the card must sit under the finger, 1:1, and `fraction` must still be free
+    ///     to describe how far the SHRINK has got. Those are two different journeys and the sheet's
+    ///     single-fraction lerp cannot express both. Nil keeps the original behaviour exactly, which
+    ///     is what the viewers sheet still uses.
+    ///   - alpha: the card's own opacity. 1 for the sheet; the hero close softens it slightly as it
+    ///     is pulled away.
+    public func apply(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
+                      centerOverride: CGPoint? = nil, alpha: CGFloat = 1) {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
         guard !StoryPager.dismissActive, let card, let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
-        guard f > 0.001 else { reset(); return }
+        // A hero drag begins at fraction 0 and moves the card by translation alone for the first
+        // few points, so "nothing to do" cannot be decided from the fraction on its own any more.
+        guard f > 0.001 || centerOverride != nil else { reset(); return }
         let content = contentRect(in: card)
         let restW = content.width, restH = content.height
         guard restW > 1, restH > 1, card.bounds.width > 1 else { return }
@@ -134,8 +208,14 @@ public final class StoryCardMorph {
         let targetLocal = superview.convert(targetCenter, from: nil)
         let restCenter = CGPoint(x: card.center.x + offset.x, y: card.center.y + offset.y)
         // Where the card's centre has to be this frame...
-        let wantX = restCenter.x + (targetLocal.x - restCenter.x) * f
-        let wantY = restCenter.y + (targetLocal.y - restCenter.y) * f
+        let wantX: CGFloat, wantY: CGFloat
+        if let centerOverride {
+            let p = superview.convert(centerOverride, from: nil)
+            wantX = p.x; wantY = p.y
+        } else {
+            wantX = restCenter.x + (targetLocal.x - restCenter.x) * f
+            wantY = restCenter.y + (targetLocal.y - restCenter.y) * f
+        }
         // ...minus where the scale alone will already have put it. At f = 0 this is exactly zero.
         let dx = wantX - card.center.x - offset.x * scale
         let dy = wantY - card.center.y - offset.y * scale
@@ -155,6 +235,7 @@ public final class StoryCardMorph {
                                height: min(restH, visibleH / scale)),
                   cornerRadius: cornerRadius * f / scale)
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
+        if abs(card.alpha - alpha) > 0.001 { card.alpha = alpha }
         CATransaction.commit()
     }
 

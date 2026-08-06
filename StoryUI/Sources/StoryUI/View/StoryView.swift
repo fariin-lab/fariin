@@ -29,6 +29,10 @@ public struct StoryView: View {
     let onSwipeUpEnded: ((CGFloat, CGFloat) -> Void)?   // (translation +up, velocity +up) on release
     let dismissEnabled: Bool               // install the library's native DOWN swipe-down-to-dismiss pan
     let swipeUpEnabled: Bool               // install the library's UP pan (false → host owns swipe-up)
+    /// The host owns the close: install a down pan that only REPORTS, and let the host animate the
+    /// card back into whatever it was opened from. Takes precedence over `dismissEnabled`.
+    let heroDismiss: Bool
+    let onHeroDrag: ((StoryHeroPhase, CGPoint, CGPoint) -> Void)?
 
 
     /// Stories and isPresented required, selectedIndex is optional default: 0
@@ -51,7 +55,9 @@ public struct StoryView: View {
         onSwipeUpChanged: ((CGFloat) -> Void)? = nil,
         onSwipeUpEnded: ((CGFloat, CGFloat) -> Void)? = nil,
         dismissEnabled: Bool = true,
-        swipeUpEnabled: Bool = true
+        swipeUpEnabled: Bool = true,
+        heroDismiss: Bool = false,
+        onHeroDrag: ((StoryHeroPhase, CGPoint, CGPoint) -> Void)? = nil
     ) {
         self.stories = stories
         self.selectedIndex = selectedIndex
@@ -67,6 +73,8 @@ public struct StoryView: View {
         self.onSwipeUpEnded = onSwipeUpEnded
         self.dismissEnabled = dismissEnabled
         self.swipeUpEnabled = swipeUpEnabled
+        self.heroDismiss = heroDismiss
+        self.onHeroDrag = onHeroDrag
     }
     
     /// My own story is always a SINGLE bucket, and it is the only place the viewers-sheet morph
@@ -95,7 +103,9 @@ public struct StoryView: View {
                         onCancel: { onDrag?(0) },
                         onSwipeUpChanged: { up in onSwipeUpChanged?(up) },
                         onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
-                        dismissEnabled: dismissEnabled
+                        dismissEnabled: dismissEnabled,
+                        heroDismiss: heroDismiss,
+                        onHeroDrag: { p, t, v in onHeroDrag?(p, t, v) }
                     )
                 } else {
                     // UIKit pager owns left/right (flat slide) AND the swipe-down dismiss. The card moves in pure
@@ -124,7 +134,9 @@ public struct StoryView: View {
                         onSwipeUpChanged: { up in onSwipeUpChanged?(up) },
                         onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
                         dismissEnabled: dismissEnabled,
-                        swipeUpEnabled: swipeUpEnabled
+                        swipeUpEnabled: swipeUpEnabled,
+                        heroDismiss: heroDismiss,
+                        onHeroDrag: { p, t, v in onHeroDrag?(p, t, v) }
                     )
                 }
             }
