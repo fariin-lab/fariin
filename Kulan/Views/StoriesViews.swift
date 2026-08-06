@@ -1594,7 +1594,24 @@ struct StoryViewer: View {
         // The card is attached at a different moment in each of the two hosts and is in a window at
         // neither of them, so the open waits for real geometry rather than for an event. See
         // `stageHeroOpen`. A no-op unless this presentation owns its own transition.
-        .onAppear { stageHeroOpen() }
+        .onAppear {
+            stageHeroOpen()
+            // A FRESH VIEWER NEVER STARTS PAUSED, whatever the last one left behind.
+            //
+            // His report: post a story, open it, leave, open it again — and it sits there paused.
+            // The pause is a notification, and there are several places that post `pauseStory` and
+            // rely on something else posting `resumeStory` later: the dismiss watcher pauses on the
+            // drag's `.began` and only resumes on the branches where the drag was ABANDONED, and the
+            // sheet's watchdog reasserts a pause twice a second while it is up. A close that
+            // committed, or a drag that never delivered an end, leaves the last word as "paused".
+            //
+            // This is a BACKSTOP, not a diagnosis, and it is worth being straight about that: I have
+            // not proved which of those paths leaves it stuck. But "a viewer that has just been
+            // opened is playing" is unconditionally true, so asserting it on mount is safe no matter
+            // which one it was — the same reasoning as the bulletproof pause the sheet already does,
+            // pointed the other way.
+            NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+        }
         // REPLIES ARE OFF: SAY SO, rather than showing nothing.
         //
         // A story whose author turned replies off maps to `.plain()`, which draws no bar at all —
