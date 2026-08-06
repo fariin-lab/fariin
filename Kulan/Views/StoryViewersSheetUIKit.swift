@@ -72,15 +72,21 @@ final class StoryViewersSheetView: UIView {
     /// to the story we are still on. Fired the instant a page drag picks a side, so what slides in
     /// under the finger is the neighbour's real sheet rather than a stand-in. See `beginPagePreview`.
     var onPagePreview: ((Int) -> Void)?
-    /// LIVE sideways page drag in POINTS, signed, rubber-banded past the ends. The host slides the
-    /// carousel row by it so the picture in the card slot tracks the finger DURING the swipe (owner:
-    /// "do not wait until the swipe ends before changing the image").
+    /// LIVE sideways page drag as a FRACTION OF ONE PANEL WIDTH, signed, rubber-banded past the ends.
+    /// The host spends it as card units, so one full width of travel is exactly one card.
     ///
-    /// POINTS, NOT A FRACTION OF THE WIDTH, and that was his second report. The row converts this to
-    /// card units with the SAME points-per-card its own scroller uses (`fullDist`, ~half a screen),
-    /// so a sideways sheet swipe now moves the row exactly as far as the same finger travel would on
-    /// the row itself. A screen-width fraction made one full width worth one card step, so the row
-    /// crawled at about half finger speed and did not feel like dragging the cards.
+    /// ⚠️ THIS HAS BEEN BOTH WAYS IN ONE DAY AND THIS IS THE ONE HE WANTS. It shipped in 470 as raw
+    /// POINTS, divided by the row's own points-per-card, because he said the row "is not working
+    /// like when I'm using my finger" — and 1:1 points does make the two gestures move the row at
+    /// the same rate. But it cannot also keep them in step, because the two gestures have different
+    /// journeys: the row brings a card home in `fullDist`, about half a screen, while the panel
+    /// needs a whole width. 1:1 points therefore ran the row about two cards for one sheet.
+    ///
+    /// His newer spec is synchronisation, in his words: "if I swipe 10% in the sheet viewer, the top
+    /// image should also move 10%… when the sheet viewer reaches the next image, the corresponding
+    /// top image should also be centered". That is proportional, so proportional it is. The cost is
+    /// the one he reported this morning — dragging the SHEET moves the row at about half the rate
+    /// dragging the ROW does — and it is unavoidable while the two have different lengths to cover.
     var onPageDrag: ((CGFloat) -> Void)?
     /// Whether a neighbour exists on each side — no neighbour means the drag rubber-bands.
     var hasPrev = false
@@ -510,7 +516,7 @@ final class StoryViewersSheetView: UIView {
             guard allowed else {
                 if pageDir != 0 { endPagePreview(restore: true) }
                 panel.transform = CGAffineTransform(translationX: tx * 0.25, y: 0)
-                onPageDrag?(tx * 0.25)
+                onPageDrag?(tx * 0.25 / max(bounds.width, 1))
                 return
             }
             if pageDir != dir { beginPagePreview(dir) }
@@ -518,7 +524,8 @@ final class StoryViewersSheetView: UIView {
             // behind. One number, two views, no gap between them at any moment of the drag.
             pageGhost?.transform = CGAffineTransform(translationX: tx, y: 0)
             panel.transform = CGAffineTransform(translationX: tx + CGFloat(dir) * pageTravel, y: 0)
-            onPageDrag?(tx)
+            // A FRACTION OF THE PANEL'S OWN JOURNEY, not raw points. See the note on `onPageDrag`.
+            onPageDrag?(tx / max(bounds.width, 1))
         case .ended, .cancelled:
             onDragActive?(false)
             let tx = rawX - pageBaselineX

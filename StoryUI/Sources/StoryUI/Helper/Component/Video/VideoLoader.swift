@@ -109,10 +109,27 @@ final class PlayerView: UIView {
     /// The blurred fill behind a letterboxed clip. Nothing to do when the video fills the card —
     /// there are no bars to fill, and an unnecessary full-size image under a playing video is a
     /// composite nobody is looking at.
+    ///
+    /// ⚠️ SECOND ATTEMPT. The first shipped in 470 and did nothing, and the flaw was that it asked
+    /// `playerLayer.videoGravity` whether the clip fits. That is a DERIVED value written by
+    /// `applyGravity`, so the answer depended on whether that had already run — and it starts life
+    /// as `.resizeAspectFill` (set in `setupPlayer(_:)`), which reads as "fills, no bars needed", so
+    /// every call before the clip's real size arrived HID the backdrop. Hiding is exactly the black
+    /// he photographed.
+    ///
+    /// It measures the same two numbers `applyGravity` measures now, so the two cannot disagree and
+    /// neither waits on the other. And when the answer is not known yet — the poster is here but the
+    /// clip's size is not — it SHOWS. A blurred fill behind a video that turns out to fill the frame
+    /// is invisible; a black one behind a video that does not is the bug.
     private func refreshBackdrop() {
-        guard bounds.width > 1, bounds.height > 1 else { return }
-        let fits = playerLayer.videoGravity == .resizeAspectFill
-        guard !fits, let poster = posterImage else {
+        guard bounds.width > 1, bounds.height > 1, let poster = posterImage else {
+            if !backdropView.isHidden { backdropView.isHidden = true }
+            return
+        }
+        // Undecided (presentedSize still zero) counts as "might have bars" — see the note above.
+        let known = presentedSize.width > 0 && presentedSize.height > 0
+        let fills = known && presentedSize.height / presentedSize.width >= bounds.height / bounds.width - 0.02
+        guard !fills else {
             if !backdropView.isHidden { backdropView.isHidden = true }
             return
         }
@@ -468,7 +485,12 @@ private extension PlayerView {
         let h = bounds.height > 1 ? bounds.height : UIScreen.main.bounds.height
         let view = UIView(frame: CGRect(x: 0, y: 0, width: w, height: h))
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.backgroundColor = .black
+        // CLEAR, not black. This veil sits ON TOP of everything while the clip loads, so an opaque
+        // black one hides the blurred backdrop underneath it for as long as it is up — and it is
+        // only taken down when the player reports `.playing`. The poster image it carries already
+        // covers the card; the black behind that was belt on top of braces and it was the belt that
+        // showed.
+        view.backgroundColor = .clear
         view.tag = 999
         if let poster = posterImage {
             // STATIC PIXELS, NOT A LIVE MATERIAL. This used to be a UIVisualEffectView over the

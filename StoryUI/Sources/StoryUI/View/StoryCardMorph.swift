@@ -182,13 +182,47 @@ public final class StoryCardMorph {
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = UIScreen.main.scale * max(0.1, min(1, targetW / rect.width))
         fmt.opaque = true
-        return UIGraphicsImageRenderer(size: rect.size, format: fmt).image { _ in
+        let shot = UIGraphicsImageRenderer(size: rect.size, format: fmt).image { _ in
             // Shifted so `rect` lands at the origin: the card is a page-wide strip and only the
             // story part of it is wanted.
             card.drawHierarchy(in: CGRect(x: -rect.minX, y: -rect.minY,
                                           width: card.bounds.width, height: card.bounds.height),
                                afterScreenUpdates: false)
         }
+        // ⚠️ A BLACK PICTURE IS A FAILED PICTURE, AND IT MUST NOT BE KEPT.
+        //
+        // `drawHierarchy` does not reliably capture an AVPlayerLayer. Sometimes it does and
+        // sometimes it hands back a black rectangle, and the caller had no way to tell — so a
+        // failed capture was cached as though it were the frame he had been watching, and every
+        // carousel card for that video went black for the rest of the session. His report, and only
+        // ever on videos, because videos are the only thing this is taken for.
+        //
+        // Rejecting it costs nothing: the caller falls back to the poster, which is the behaviour
+        // that existed before any of this and is merely second-zero rather than broken.
+        return isBlank(shot) ? nil : shot
+    }
+
+    /// Nine points across the image; if every one of them is essentially black, the capture failed.
+    /// A real story frame that is uniformly black at all nine is possible and would simply keep its
+    /// poster, which is the safe way round to be wrong.
+    private func isBlank(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage else { return true }
+        let w = cg.width, h = cg.height
+        guard w > 2, h > 2 else { return true }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let space = CGColorSpaceCreateDeviceRGB()
+        for fx in [0.15, 0.5, 0.85] {
+            for fy in [0.15, 0.5, 0.85] {
+                guard let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8,
+                                          bytesPerRow: 4, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                else { return true }
+                ctx.translateBy(x: -CGFloat(w) * fx, y: -CGFloat(h) * (1 - fy))
+                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+                if Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2]) > 24 { return false }
+            }
+        }
+        return true
     }
 
     /// Step the live card aside while the carousel row is being swiped.

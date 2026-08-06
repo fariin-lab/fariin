@@ -2286,10 +2286,11 @@ struct MyStoriesCarousel: View {
                         // combinedFraction = (index offset) + scroll fraction. `pageDrag` biases the
                         // whole row while the SHEET is being thrown sideways: finger left → points
                         // negative → effective scroll grows → the NEXT card slides toward the
-                        // centre, in step with the panel under the same finger. Divided by
-                        // `fullDist` because that is what a point of finger travel is worth in card
-                        // units — the number CarouselScroller is handed for the row's own drag.
-                        let cf = CGFloat(i) - (scroll - pageDrag / fullDist)
+                        // centre, in step with the panel under the same finger. `pageDrag` is
+                        // already a fraction of the panel's own journey, so one whole width of
+                        // sheet travel is exactly one card — see the note on `onPageDrag` for why
+                        // it is proportional rather than 1:1 with the finger.
+                        let cf = CGFloat(i) - (scroll - pageDrag)
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
