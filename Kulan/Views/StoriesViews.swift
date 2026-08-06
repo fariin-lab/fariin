@@ -1595,6 +1595,38 @@ struct StoryViewer: View {
         // neither of them, so the open waits for real geometry rather than for an event. See
         // `stageHeroOpen`. A no-op unless this presentation owns its own transition.
         .onAppear { stageHeroOpen() }
+        // REPLIES ARE OFF: SAY SO, rather than showing nothing.
+        //
+        // A story whose author turned replies off maps to `.plain()`, which draws no bar at all —
+        // so the screen simply ended below the card and there was no way to tell a story you may
+        // not answer from one that never had a bar. His design says it outright.
+        //
+        // Drawn by the host, not the library: it is a statement about OUR permission rule, the
+        // library has no idea replies can be refused, and adding a whole story type to say one
+        // sentence would be the wrong place to put it.
+        //
+        // Same three conditions the reply bar itself is built from, so the pill appears exactly
+        // where a bar would have been and never anywhere else: somebody else's story, somebody you
+        // actually have a chat with, and replies refused.
+        .overlay(alignment: .bottom) {
+            if !currentIsMine,
+               StoryContact.isFriend(currentBucketUid),
+               currentStory?.allowsReplies == false {
+                Text("You can't reply to this story 🔒")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Capsule().stroke(.white.opacity(0.28), lineWidth: 1))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, max(10, bottomInset))
+                    // Steps aside for the same two things every other piece of chrome does: the
+                    // close drag, and the viewers sheet coming up over the card.
+                    .opacity((dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
+                    .animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    .allowsHitTesting(false)   // it is a statement, not a control
+            }
+        }
         // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
         // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
         .overlay(alignment: .bottom) {
