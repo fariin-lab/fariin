@@ -23,6 +23,10 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case myFriends
         /// A named list of specific people.
         case custom
+        /// NOT AN AUDIENCE. The people hidden from your stories entirely, whichever audience you
+        /// pick — "Hide my stories from X" off a viewer row. Stored as a list because it is one,
+        /// and kept out of `all` so it can never be posted to.
+        case hidden
     }
 
     /// How the underlying set of people is narrowed. `custom` is always `.only` over its own members.
@@ -42,6 +46,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     /// The two fixed ids. Custom lists get a uuid, so neither can ever be taken.
     static let everyoneId = "everyone"
     static let myFriendsId = "myFriends"
+    static let hiddenId = "hiddenFrom"
 
     /// ⚠️ NOT `Date.distantPast`, AND THIS CRASHED THE APP IN BUILD 470.
     ///
@@ -68,6 +73,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case .everyone: return "Everyone"
         case .myFriends: return "My Friends"
         case .custom: return name
+        case .hidden: return ""
         }
     }
 
@@ -83,7 +89,13 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     /// Everything is intersected with the accepted-chat set, so a list holding somebody you have
     /// since blocked or lost the chat with quietly stops reaching them instead of posting into a
     /// hole. Blocked people are already out of `contacts` before it gets here.
-    func recipients(contacts: Set<String>) -> Set<String> {
+    func recipients(contacts: Set<String>, hiddenFrom: Set<String> = []) -> Set<String> {
+        // "Hide my stories from X" beats every audience, including Everyone. Subtracted last so no
+        // list, however it was built, can put somebody back in.
+        return rawRecipients(contacts: contacts).subtracting(hiddenFrom)
+    }
+
+    private func rawRecipients(contacts: Set<String>) -> Set<String> {
         switch kind {
         case .everyone:
             // Delivered to the tray of everyone you have a chat with, exactly like My Friends. What
@@ -97,6 +109,8 @@ struct StoryAudience: Identifiable, Codable, Equatable {
             }
         case .custom:
             return Set(members).intersection(contacts)
+        case .hidden:
+            return []          // never an audience — see Kind.hidden
         }
     }
 
@@ -116,6 +130,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case .custom:
             let n = members.count
             return "Custom story · \(n) \(n == 1 ? "viewer" : "viewers")"
+        case .hidden: return ""
         }
     }
 }
@@ -142,6 +157,8 @@ final class StoryAudienceStore {
     /// Editable, and stored — its mode and its except/only list have to follow the account.
     private(set) var myFriends = StoryAudience.defaultMyFriends
     private(set) var custom: [StoryAudience] = []
+    /// People hidden from every story, whatever audience it is posted to. See `Kind.hidden`.
+    private(set) var hiddenFrom: Set<String> = []
 
     /// Which audience the next post goes to. Remembered between posts, as every messenger does.
     ///
@@ -188,11 +205,15 @@ final class StoryAudienceStore {
                 guard let self, let docs = snap?.documents else { return }
                 var friends = StoryAudience.defaultMyFriends
                 var lists: [StoryAudience] = []
+                var hidden: Set<String> = []
                 for d in docs {
                     guard let a = Self.decode(id: d.documentID, data: d.data()) else { continue }
-                    if a.id == StoryAudience.myFriendsId { friends = a } else if a.kind == .custom { lists.append(a) }
+                    if a.id == StoryAudience.myFriendsId { friends = a }
+                    else if a.kind == .hidden { hidden = Set(a.members) }
+                    else if a.kind == .custom { lists.append(a) }
                 }
                 self.myFriends = friends
+                self.hiddenFrom = hidden
                 self.custom = lists.sorted { $0.createdAt < $1.createdAt }
                 self.saveMirror()
             }
@@ -210,6 +231,7 @@ final class StoryAudienceStore {
         stop()
         myFriends = .defaultMyFriends
         custom = []
+        hiddenFrom = []
         select(StoryAudience.myFriendsId)
         UserDefaults.standard.removeObject(forKey: Self.mirrorKey)
     }
@@ -220,6 +242,22 @@ final class StoryAudienceStore {
     /// listener will confirm it: the create flow ends by selecting this list and posting, and making
     /// that wait on a round trip is how a story post comes to depend on the network twice.
     var canAddCustom: Bool { custom.count < Self.maxCustom }
+
+    func isHidden(_ uid: String) -> Bool { hiddenFrom.contains(uid) }
+
+    /// "Hide my stories from X", and the same door back out again.
+    ///
+    /// GLOBAL, not per-audience. A custom list narrows one story; this one says "not this person,
+    /// ever", and it has to survive whichever audience is picked next — which is why it is its own
+    /// list and why `recipients(contacts:)` subtracts it for every kind including Everyone.
+    func setHidden(_ uid: String, _ hidden: Bool) {
+        guard !uid.isEmpty else { return }
+        if hidden { hiddenFrom.insert(uid) } else { hiddenFrom.remove(uid) }
+        saveMirror()
+        write(StoryAudience(id: StoryAudience.hiddenId, kind: .hidden, name: "",
+                            mode: .except, members: Array(hiddenFrom), allowReplies: true,
+                            createdAt: Self.sortsFirst))
+    }
 
     @discardableResult
     func createCustom(name: String, members: [String], allowReplies: Bool) -> StoryAudience {
@@ -295,10 +333,15 @@ final class StoryAudienceStore {
 
     // MARK: The disk mirror
 
-    private struct DiskCopy: Codable { var myFriends: StoryAudience; var custom: [StoryAudience] }
+    private struct DiskCopy: Codable {
+        var myFriends: StoryAudience
+        var custom: [StoryAudience]
+        /// Optional so a mirror written before hiding existed still decodes.
+        var hiddenFrom: [String]? = nil
+    }
 
     private func saveMirror() {
-        let m = DiskCopy(myFriends: myFriends, custom: custom)
+        let m = DiskCopy(myFriends: myFriends, custom: custom, hiddenFrom: Array(hiddenFrom))
         guard let d = try? JSONEncoder().encode(m) else { return }
         UserDefaults.standard.set(d, forKey: Self.mirrorKey)
     }
@@ -308,5 +351,6 @@ final class StoryAudienceStore {
               let m = try? JSONDecoder().decode(DiskCopy.self, from: d) else { return }
         myFriends = m.myFriends
         custom = m.custom
+        hiddenFrom = Set(m.hiddenFrom ?? [])
     }
 }

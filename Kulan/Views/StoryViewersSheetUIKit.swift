@@ -55,6 +55,11 @@ final class StoryViewersSheetView: UIView {
     var onProgress: ((CGFloat) -> Void)?
     var onClose: (() -> Void)?
     var onSendMessage: ((StoryViewerInfo) -> Void)?
+    /// Tap the row → that person's profile. Blocking is the host's job too: it writes the
+    /// conversation and revokes my live stories from them (see `ChatService.setBlocked`), neither of
+    /// which belongs to a sheet that only knows how to draw a list.
+    var onOpenProfile: ((StoryViewerInfo) -> Void)?
+    var onBlock: ((StoryViewerInfo) -> Void)?
     /// Finger lifted: (progress now, progress when the drag began, velocity in progress-units/sec,
     /// + = opening). The host decides open/close (Telegram's thresholds) and runs the one spring.
     var onRelease: ((CGFloat, CGFloat, CGFloat) -> Void)?
@@ -740,7 +745,19 @@ extension StoryViewersSheetView: UITableViewDataSource, UITableViewDelegate {
         // badge already exist and already look right; rebuilding them in UIKit would only be a chance
         // for the two to drift apart.
         cell.contentConfiguration = UIHostingConfiguration {
-            StoryViewerRowContent(viewer: v, onSendMessage: { [weak self] in self?.onSendMessage?(v) })
+            StoryViewerRowContent(
+                viewer: v,
+                onSendMessage: { [weak self] in self?.onSendMessage?(v) },
+                onOpenProfile: { [weak self] in self?.onOpenProfile?(v) },
+                onToggleHidden: { [weak self] in
+                    let store = StoryAudienceStore.shared
+                    store.setHidden(v.id, !store.isHidden(v.id))
+                    // Redraw: the menu's label is the state, so a stale row would offer to hide
+                    // somebody it just hid.
+                    self?.table.reloadRows(at: [indexPath], with: .none)
+                },
+                onBlock: { [weak self] in self?.onBlock?(v) },
+                isHidden: StoryAudienceStore.shared.isHidden(v.id))
         }
         .margins(.horizontal, 16)
         .margins(.vertical, 9)
@@ -776,6 +793,14 @@ extension StoryViewersSheetView: UIGestureRecognizerDelegate {
 struct StoryViewerRowContent: View {
     let viewer: StoryViewerInfo
     var onSendMessage: () -> Void
+    /// Open this person's profile. The whole row is the target — his ask: "if I click profile, user
+    /// or name or other area, one tap shows that person's profile".
+    var onOpenProfile: () -> Void = {}
+    /// "Hide my stories from X", and the way back. The label flips, so one row is both states and
+    /// there is never a menu offering to hide somebody who is already hidden.
+    var onToggleHidden: () -> Void = {}
+    var onBlock: () -> Void = {}
+    var isHidden: Bool = false
 
     private var doubleCheck: some View {
         ZStack(alignment: .leading) {
@@ -820,11 +845,34 @@ struct StoryViewerRowContent: View {
             }
             Spacer()
             Menu {
-                Button(action: onSendMessage) { Label("Send message", systemImage: "message") }
+                rowActions
             } label: {
                 Image(systemName: "ellipsis").font(.body).foregroundStyle(.white.opacity(0.55))
                     .frame(width: 38, height: 38).contentShape(Rectangle())
             }
+        }
+        // ONE TAP ANYWHERE ON THE ROW OPENS THE PROFILE, and the contentShape is what makes the gaps
+        // count: without it the empty space between the name and the "…" is not part of the row and
+        // a tap there does nothing.
+        .contentShape(Rectangle())
+        .onTapGesture { onOpenProfile() }
+        // The same three actions on a long press as behind the "…", because people reach for both
+        // and finding one of them empty is the kind of difference that reads as broken.
+        .contextMenu { rowActions }
+    }
+
+    /// The one definition of what you can do to a viewer, used by the "…" menu and the long press.
+    @ViewBuilder private var rowActions: some View {
+        Button(action: onSendMessage) { Label("Send message", systemImage: "message") }
+        Button(action: onToggleHidden) {
+            // The label carries the state, so the menu never offers to hide somebody already hidden.
+            Label(isHidden ? "Don't hide my stories from \(viewer.name)"
+                           : "Hide my stories from \(viewer.name)",
+                  systemImage: isHidden ? "eye" : "eye.slash")
+        }
+        // Destructive and last, where iOS puts the action you least want to hit by accident.
+        Button(role: .destructive, action: onBlock) {
+            Label("Block \(viewer.name)", systemImage: "hand.raised")
         }
     }
 }
@@ -855,6 +903,8 @@ struct StoryViewersSheet: UIViewRepresentable {
     var onDragActive: (Bool) -> Void = { _ in }
     var onPage: (Int) -> Void = { _ in }
     var onPageDrag: (CGFloat) -> Void = { _ in }
+    /// Tap a viewer row → show that person's profile. The host owns the presentation.
+    var onOpenProfile: (StoryViewerInfo) -> Void = { _ in }
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
@@ -880,6 +930,17 @@ struct StoryViewersSheet: UIViewRepresentable {
             AppRouter.shared.pendingChatId = ChatService.convId(AuthService.shared.uid ?? "", viewer.id)
             onClose()
             NotificationCenter.default.post(name: .init("storyForceClose"), object: nil)
+        }
+        // Tap a row → that person's profile. Handed to the host rather than routed from here: the
+        // host already presents exactly this sheet for the story header, and two presentations of
+        // one screen would be two things to keep in step.
+        v.onOpenProfile = { viewer in onOpenProfile(viewer) }
+        // Block: writes the conversation AND revokes my live stories from them, which
+        // `ChatService.setBlocked` already does — the audience is frozen at post time, so without
+        // that reach-back a blocked person keeps watching for up to 24 hours.
+        v.onBlock = { viewer in
+            let cid = ChatService.convId(AuthService.shared.uid ?? "", viewer.id)
+            Task { await ChatService.setBlocked(cid, true) }
         }
         v.onPagePreview = { [weak c = context.coordinator] d in c?.preview(d) }
         context.coordinator.view = v

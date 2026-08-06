@@ -191,9 +191,14 @@ final class StoriesService {
                 }
                 .map { $0.otherUid(me) })
         }
-        if !included.isEmpty { return (included.intersection(allContacts), "only") }
-        if !excluded.isEmpty { return (allContacts.subtracting(excluded), "except") }
-        return (allContacts, "all")
+        // The global hide list, applied here as well as at the picker. This function is the one
+        // place that resolves an audience against the LIVE chat list at upload time, so a story
+        // queued before somebody was hidden must not reach them when it finally goes up.
+        let hidden = await MainActor.run { StoryAudienceStore.shared.hiddenFrom }
+        let pool = allContacts.subtracting(hidden)
+        if !included.isEmpty { return (included.intersection(pool), "only") }
+        if !excluded.isEmpty { return (pool.subtracting(excluded), "except") }
+        return (pool, "all")
     }
 
 

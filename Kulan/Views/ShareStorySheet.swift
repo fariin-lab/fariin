@@ -181,7 +181,7 @@ struct ShareStorySheet: View {
     private func post() {
         guard !posting else { return }   // ignore a second tap while the first is in flight
         let a = store.selected
-        let recipients = a.recipients(contacts: contactIds)
+        let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom)
         // Block ONLY when you HAVE chats but this audience narrows down to literally no one. With no
         // chats at all, posting is still fine: it is YOUR OWN story and always visible to you, it
         // just has no other recipients yet. Without that carve-out a brand-new user could never post
@@ -199,7 +199,10 @@ struct ShareStorySheet: View {
         // list holding somebody you blocked five minutes ago from reaching them. Everything above is
         // a nicer way of arriving at these three values.
         let everyone = a.isPublic
-        let excluded: Set<String> = (a.kind == .myFriends && a.mode == .except) ? Set(a.members) : []
+        // "Hide my stories from X" rides along as an exclusion, so it applies to EVERY audience —
+        // Everyone and custom lists included, not just My Friends' own except-list.
+        let excluded: Set<String> = ((a.kind == .myFriends && a.mode == .except)
+                                     ? Set(a.members) : []).union(store.hiddenFrom)
         let included: Set<String> = {
             if a.kind == .custom { return Set(a.members) }
             if a.kind == .myFriends && a.mode == .only { return Set(a.members) }

@@ -1686,7 +1686,14 @@ struct StoryViewer: View {
                                   sheetPageDrag = 0
                               }
                           },
-                          onPageDrag: { f in sheetPageDrag = f })
+                          onPageDrag: { f in sheetPageDrag = f },
+                          // A viewer's profile opens in the SAME sheet the story header uses, so
+                          // there is one profile screen in this viewer and not two that drift.
+                          onOpenProfile: { v in
+                              profileSheet = StoryGroup(authorUid: v.id, name: v.name,
+                                                        photoUrl: v.photoUrl, stories: [],
+                                                        lastViewedAt: nil, isMine: false)
+                          })
             .ignoresSafeArea()
     }
 
