@@ -150,10 +150,11 @@ extension View {
     }
 }
 
-// The chrome logo with a slow light sweep — like the metal is catching light.
+// The logo, still. The light sweep that used to run across it was removed on the owner's word
+// (2026-08-05): the first thing anybody sees should be the mark itself, and a mark that keeps
+// moving reads as a loading screen rather than a brand. Kept as its own view because the Welcome
+// screen refers to it by name and the artwork note below is worth not losing.
 private struct ShiningLogo: View {
-    @State private var sweep = false
-
     var body: some View {
         ZStack {
             // THE CURRENT MARK, not the retired one. This pointed at `welcome-logo`, a 512px PNG of
@@ -170,17 +171,6 @@ private struct ShiningLogo: View {
                 Image(uiImage: ui).resizable().scaledToFill()
             } else {
                 Color.black
-            }
-            LinearGradient(colors: [.clear, .white.opacity(0.22), .clear],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
-                .frame(width: 60)
-                .rotationEffect(.degrees(18))
-                .offset(x: sweep ? 130 : -130)
-                .blendMode(.screen)
-        }
-        .onAppear {
-            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: false).delay(0.6)) {
-                sweep = true
             }
         }
     }
@@ -348,14 +338,22 @@ struct EmailAuthView: View {
     let mode: AuthMethodView.Mode
     var onAuthed: () -> Void
 
-    private enum Field { case email, password }
-
     @State private var email = ""
     @State private var password = ""
     @State private var busy = false
     @State private var error: String?
     @State private var reveal = false
-    @FocusState private var focus: Field?
+    @FocusState private var emailFocused = false
+    // The password box is a UITextField (see RevealablePasswordField), so its focus CANNOT ride on
+    // @FocusState: setting a FocusState to a value no SwiftUI view claims gets reset to nil by
+    // SwiftUI on the same pass, which would have resigned the keyboard the instant we asked for it.
+    // Plain @State, bridged to first responder inside the representable.
+    @State private var passwordFocused = false
+
+    /// Sign-up asks ONE thing at a time: the address, then the password. Log in still shows both,
+    /// because there you are recalling a pair you already know rather than making one up.
+    @State private var showPassword = false
+    private var onEmailStep: Bool { mode == .create && !showPassword }
 
     /// Sign-up's only rule, checked live so the answer is on screen before the button is pressed
     /// rather than after a round trip to Firebase.
@@ -363,6 +361,16 @@ struct EmailAuthView: View {
     private var canSubmit: Bool {
         !email.isEmpty && !password.isEmpty && (mode == .login || passwordLongEnough)
     }
+
+    /// Enough of a check to be worth moving on. Not a full RFC address parser: Firebase decides,
+    /// and the point is only to catch the typo BEFORE somebody invents a password behind it.
+    private var emailLooksValid: Bool {
+        let t = email.trimmingCharacters(in: .whitespaces)
+        guard let at = t.firstIndex(of: "@"), at != t.startIndex else { return false }
+        let domain = t[t.index(after: at)...]
+        return domain.contains(".") && !domain.hasSuffix(".") && !domain.contains("@")
+    }
+    private var primaryEnabled: Bool { onEmailStep ? emailLooksValid : canSubmit }
 
     var body: some View {
         ZStack {
@@ -378,90 +386,62 @@ struct EmailAuthView: View {
                     .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
                     .padding(.bottom, 4)
 
-                field("Email") {
-                    TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
-                        .keyboardType(.emailAddress)
-                        .textContentType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focus, equals: .email)
-                        // Return moves on rather than closing the keyboard, so the whole form is
-                        // fillable without ever reaching for the screen.
-                        .submitLabel(.next)
-                        .onSubmit { focus = .password }
-                }
-
-                field("Password") {
-                    HStack(spacing: 8) {
-                        // Swapped rather than toggled, because SecureField cannot be told to show
-                        // its text. Focus is restored by hand on the next runloop: replacing the
-                        // view drops first responder, and a keyboard that vanishes when you tap
-                        // the eye is worse than no eye at all.
-                        Group {
-                            if reveal {
-                                TextField("", text: $password, prompt: passwordPrompt)
-                                    .textContentType(mode == .create ? .newPassword : .password)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                            } else {
-                                SecureField("", text: $password, prompt: passwordPrompt)
-                                    .textContentType(mode == .create ? .newPassword : .password)
-                            }
+                // Step 2 of sign-up keeps the address on screen, but as a line rather than a box:
+                // you are past it, and it must still be fixable without losing the page.
+                if mode == .create && showPassword {
+                    Button { backToEmail() } label: {
+                        HStack(spacing: 8) {
+                            Text(email).lineLimit(1).truncationMode(.middle)
+                                .foregroundStyle(.secondary)
+                            Text("Change").font(.footnote.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 0)
                         }
-                        .focused($focus, equals: .password)
-                        .submitLabel(.go)
-                        .onSubmit { if canSubmit { submit() } }
-
-                        if !password.isEmpty {
-                            Button {
-                                reveal.toggle()
-                                DispatchQueue.main.async { focus = .password }
-                            } label: {
-                                Image(systemName: reveal ? "eye.slash" : "eye")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 28, height: 28)   // a real target, not a glyph
-                                    .contentShape(Rectangle())
+                        .font(.system(size: 15))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 2)
+                } else {
+                    field("Email") {
+                        TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
+                            .keyboardType(.emailAddress)
+                            .textContentType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .focused($emailFocused)
+                            // Return moves on rather than closing the keyboard, so the whole form is
+                            // fillable without ever reaching for the screen.
+                            .submitLabel(.next)
+                            .onSubmit {
+                                if mode == .create { if emailLooksValid { advance() } }
+                                else { emailFocused = false; passwordFocused = true }
                             }
-                            .buttonStyle(.plain)
-                        }
                     }
                 }
 
-                // The rule, kept ON SCREEN while it is being met. It used to live in the
-                // placeholder, which disappears the moment somebody starts typing — exactly when
-                // they need to know how far they have to go.
-                if mode == .create {
-                    HStack(spacing: 6) {
-                        Image(systemName: passwordLongEnough ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 12))
-                        Text("At least 6 characters")
-                        Spacer()
-                    }
-                    .font(.caption)
-                    .foregroundStyle(passwordLongEnough ? .primary : .secondary)
-                    .animation(.easeInOut(duration: 0.15), value: passwordLongEnough)
-                    .padding(.top, -6)
-                }
+                if !onEmailStep { passwordStep }
 
                 Button {
-                    submit()
+                    if onEmailStep { advance() } else { submit() }
                 } label: {
                     Group {
                         if busy {
                             ProgressView().tint(AuthPalette.page)   // spinner reads on the filled pill
+                        } else if onEmailStep {
+                            Text("Continue")
                         } else {
                             Text(mode == .create ? "Create Account" : "Log In")
                         }
                     }
                     .authPrimaryPill()
                 }
-                .disabled(busy || !canSubmit)
+                .disabled(busy || !primaryEnabled)
                 // 0.3, not 0.55. At 0.55 the black pill turned a solid mid-grey that read as a
                 // broken button rather than one waiting for you; faded far enough back, it reads
                 // as not-yet.
-                .opacity(canSubmit ? 1 : 0.3)
-                .animation(.easeInOut(duration: 0.15), value: canSubmit)
+                .opacity(primaryEnabled ? 1 : 0.3)
+                .animation(.easeInOut(duration: 0.15), value: primaryEnabled)
                 .padding(.top, 4)
 
                 if mode == .login {
@@ -509,18 +489,91 @@ struct EmailAuthView: View {
             .padding(.horizontal, 24)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { focus = .email }
+        .onAppear { emailFocused = true }
         // The "Check your email" alert that used to live here has moved INTO ForgotPasswordView.
         // An alert is the wrong shape for that moment anyway: it is dismissed and gone, and the
         // one thing a person needs at exactly that second is the address to check, still readable
         // while they go looking for the mail.
     }
 
-    /// One prompt, built once, because the reveal toggle swaps between two different field types
-    /// and the two must not be allowed to say different things.
-    private var passwordPrompt: Text {
-        Text(mode == .create ? "At least 6 characters" : "Your password")
-            .foregroundStyle(.tertiary)
+    /// Plain text now rather than a styled `Text`. It was shared so a TextField and a SecureField
+    /// could not drift apart; there is one field left, and it colours its own placeholder.
+    private var passwordPrompt: String {
+        mode == .create ? "At least 6 characters" : "Your password"
+    }
+
+    /// The password box and its rule. Its own property only so the step check in `body` stays one
+    /// readable line instead of wrapping fifty.
+    @ViewBuilder private var passwordStep: some View {
+        field("Password") {
+            HStack(spacing: 8) {
+                // ONE field that flips, not two that swap. This used to hold a SwiftUI TextField
+                // and a SecureField and exchange them on every tap of the eye, because SecureField
+                // cannot be told to show its text and no modifier adds that. Swapping REPLACES the
+                // view the keyboard is attached to: first responder dropped, the keyboard started
+                // to leave, and a hand-written `focus = .password` on the next runloop hauled it
+                // back. That bounce is what the owner photographed. UIKit flips `isSecureTextEntry`
+                // on the live field, so nothing is replaced and the keyboard never moves at all.
+                RevealablePasswordField(
+                    text: $password,
+                    secure: !reveal,
+                    focused: $passwordFocused,
+                    placeholder: passwordPrompt,
+                    contentType: mode == .create ? .newPassword : .password,
+                    onSubmit: { if canSubmit { submit() } }
+                )
+
+                if !password.isEmpty {
+                    Button {
+                        reveal.toggle()   // no focus to restore: nothing is being replaced
+                    } label: {
+                        Image(systemName: reveal ? "eye.slash" : "eye")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)   // a real target, not a glyph
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        // The rule, kept ON SCREEN while it is being met. It used to live in the placeholder,
+        // which disappears the moment somebody starts typing — exactly when they need to know how
+        // far they have to go.
+        if mode == .create {
+            HStack(spacing: 6) {
+                Image(systemName: passwordLongEnough ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12))
+                Text("At least 6 characters")
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(passwordLongEnough ? .primary : .secondary)
+            .animation(.easeInOut(duration: 0.15), value: passwordLongEnough)
+            .padding(.top, -6)
+        }
+    }
+
+    /// Email step → password step. The email box is removed and the password box created in the
+    /// same pass, so UIKit hands first responder straight over and the keyboard never drops.
+    private func advance() {
+        error = nil
+        email = email.trimmingCharacters(in: .whitespaces)
+        withAnimation(.easeInOut(duration: 0.2)) { showPassword = true }
+        passwordFocused = true
+    }
+
+    /// Back to the address. The password is CLEARED on the way: it was invented for the address on
+    /// screen a second ago, and carrying it silently behind a changed email is how somebody ends up
+    /// with an account whose password they never meant to pair with it.
+    private func backToEmail() {
+        error = nil
+        password = ""
+        reveal = false
+        passwordFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) { showPassword = false }
+        emailFocused = true
     }
 
     private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
@@ -562,6 +615,116 @@ struct EmailAuthView: View {
     // here as a private function, which is exactly why Delete Account was still showing people
     // "The supplied auth credential is malformed or has expired".
     private func plain(_ error: Error) -> String? { AuthService.plainMessage(error) }
+}
+
+// MARK: - The password box that can show itself
+
+/// A password field whose eye does not move the keyboard.
+///
+/// SwiftUI genuinely cannot do this. `SecureField` has no way to reveal its text, no modifier adds
+/// one, and iOS 26 still has not shipped an API for it, so every pure-SwiftUI version swaps in a
+/// `TextField` — which replaces the view the keyboard is attached to and makes it bounce. UIKit has
+/// always had the right shape: `isSecureTextEntry` is a property on a live field, and setting it
+/// replaces nothing.
+///
+/// Standing rule from the owner (2026-08-05): where SwiftUI cannot do the thing, drop to UIKit
+/// rather than force SwiftUI through a workaround.
+struct RevealablePasswordField: UIViewRepresentable {
+    @Binding var text: String
+    /// Hidden while true. Owned by the caller's eye button; this view only reads it.
+    var secure: Bool
+    /// Two-way. SwiftUI drives it (Return on the email field hands over), and the coordinator writes
+    /// back when the field is tapped directly, so the flag and the real first responder stay in step.
+    @Binding var focused: Bool
+    var placeholder: String
+    var contentType: UITextContentType
+    var onSubmit: () -> Void
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField()
+        tf.delegate = context.coordinator
+        // Set here, not in SwiftUI: `field()`'s .font and .foregroundStyle cannot reach a UIView.
+        // All system colours, because the front door follows the phone into dark mode.
+        tf.font = .systemFont(ofSize: 17)
+        tf.textColor = .label
+        tf.tintColor = .label            // the caret, kept out of iOS blue like the rest of the app
+        tf.autocapitalizationType = .none
+        tf.autocorrectionType = .no
+        tf.spellCheckingType = .no
+        tf.returnKeyType = .go
+        tf.textContentType = contentType   // this is what keeps the iOS Passwords offer alive
+        tf.isSecureTextEntry = secure
+        tf.text = text
+        tf.attributedPlaceholder = Self.placeholder(placeholder)
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)),
+                     for: .editingChanged)
+        // Without these the field refuses to give up any width and the eye loses its 28pt.
+        tf.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        tf.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return tf
+    }
+
+    func updateUIView(_ tf: UITextField, context: Context) {
+        context.coordinator.parent = self       // keep the bindings fresh
+        if tf.text != text { tf.text = text }
+        if tf.textContentType != contentType { tf.textContentType = contentType }
+        if tf.attributedPlaceholder?.string != placeholder {
+            tf.attributedPlaceholder = Self.placeholder(placeholder)
+        }
+        applySecure(tf)
+        // Focus LAST, so the field is fully dressed before it is allowed to raise a keyboard.
+        if focused, !tf.isFirstResponder { tf.becomeFirstResponder() }
+        else if !focused, tf.isFirstResponder { tf.resignFirstResponder() }
+    }
+
+    /// ⚠️ The one UIKit trap in here. Switching secure entry ON while the field is being edited
+    /// leaves it primed to replace its whole contents on the next keystroke, so the password
+    /// silently vanishes the moment somebody types after tapping the eye. Re-entering the same text
+    /// through the field's own editing path consumes that state. Assigning `.text` does not.
+    private func applySecure(_ tf: UITextField) {
+        guard tf.isSecureTextEntry != secure else { return }
+        tf.isSecureTextEntry = secure
+        guard secure, tf.isFirstResponder, let saved = tf.text, !saved.isEmpty else { return }
+        tf.selectAll(nil)
+        tf.insertText(saved)
+    }
+
+    private static func placeholder(_ s: String) -> NSAttributedString {
+        NSAttributedString(string: s, attributes: [.foregroundColor: UIColor.tertiaryLabel])
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: RevealablePasswordField
+        init(_ parent: RevealablePasswordField) { self.parent = parent }
+
+        @objc func editingChanged(_ tf: UITextField) { parent.text = tf.text ?? "" }
+
+        // Written back on the NEXT runloop, never inside the delegate call. A field that becomes
+        // first responder from `updateUIView` is doing so while SwiftUI is mid-update, and writing
+        // state there is the "Modifying state during view update" warning — and a redraw loop.
+        func textFieldDidBeginEditing(_ tf: UITextField) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.parent.focused else { return }
+                self.parent.focused = true
+            }
+        }
+
+        func textFieldDidEndEditing(_ tf: UITextField) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.parent.focused else { return }
+                self.parent.focused = false
+            }
+        }
+
+        func textFieldShouldReturn(_ tf: UITextField) -> Bool {
+            parent.onSubmit()
+            // false, not true: Go submits, and it must not ALSO drop the keyboard, or a refused
+            // attempt leaves somebody staring at a closed keyboard and an error.
+            return false
+        }
+    }
 }
 
 // MARK: - Forgot password

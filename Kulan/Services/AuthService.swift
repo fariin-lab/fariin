@@ -550,7 +550,12 @@ final class AuthService: NSObject {
         case 17026: return "Password must be at least 6 characters."
         case 17009, 17004: return credentialHint
         case 17011: return "No account with that email. Create one instead."
-        case 17007: return "This email already has an account. Go back and choose Log In instead."
+        // NOT a bare "choose Log In instead": that promised a password door which may not exist.
+        // Removing a sign-in method calls `unlink` and nothing else, so it takes away the LOGIN and
+        // leaves the ADDRESS on the account — Firebase still refuses a second account on it, and no
+        // password can be right because the account no longer has one. Google- or Apple-only
+        // accounts never had one either. So point at Log In, which is also where the code door is.
+        case 17007: return "This email already has an account. Go back and choose Log In, then use the way you signed up or log in with a code."
         case 17020: return "No internet connection. Try again."
         case 17010: return "Too many attempts. Wait a moment and try again."
         case 17014: return "Please sign in again before doing this."
@@ -583,7 +588,9 @@ enum AuthFlowError: LocalizedError {
         switch self {
         case .appleFailed: return "Apple sign-in didn't complete. Please try again."
         case .googleFailed: return "Google sign-in didn't complete. Please try again."
-        case .emailTaken: return "This email already has an account. Go back and choose Log In instead."
+        // Same words as 17007 in `plainMessage`, and for the same reason: this is what that code
+        // becomes on the sign-up door. Keep the two in step.
+        case .emailTaken: return "This email already has an account. Go back and choose Log In, then use the way you signed up or log in with a code."
         case .emailTakenWrongPassword:
             return "You already have an account with this email, but that password doesn't match. Enter the right password to log in, or tap \"Forgot password?\"."
         case .notSignedIn: return "You're not signed in."
