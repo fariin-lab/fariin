@@ -606,49 +606,61 @@ struct StoryCameraView: View {
         if mode == .text { textBar } else { cameraBar }
     }
 
-    /// TEXT mode: the switch, and NEXT. No library and no flip — neither has anything to do here,
-    /// and his drawing has neither.
+    /// TEXT mode: the switch, and the send button. No library and no flip — neither has anything to
+    /// do here, and his drawing has neither.
+    ///
+    /// THE SWITCH IS DEAD CENTRE, and that is why this is a ZStack rather than an HStack.
+    ///
+    /// It used to be one HStack per mode with the side controls as siblings, so the switch sat
+    /// wherever the Spacers left it: pushed left here by the send button, and roughly centred in
+    /// CAMERA only because the library card and the flip button happen to weigh about the same. So
+    /// it JUMPED sideways when he changed tab — his two screenshots, one above the other. Centred in
+    /// a ZStack with the side controls floating over it, nothing beside it can move it, whatever
+    /// appears or disappears there.
     private var textBar: some View {
-        HStack {
-            Spacer(minLength: 0)
+        ZStack {
             modePicker
-            Spacer(minLength: 10)
-            // 40x40, the arrow and nothing else (owner 2026-08-06: "remove the NEXT text… replace it
-            // with a 40x40 circular button that contains only the send icon"). The word was doing no
-            // work the arrow was not already doing, and a wide pill beside a capsule switch made the
-            // bottom row read as two competing bars.
-            Button {
-                if let data = renderTextStory(text: storyText, styleIndex: styleIndex, fontIndex: fontIndex) {
-                    onTextStory(data)
+            HStack {
+                Spacer(minLength: 0)
+                // 40x40, the arrow and nothing else (owner 2026-08-06: "remove the NEXT text…
+                // replace it with a 40x40 circular button that contains only the send icon"). The
+                // word was doing no work the arrow was not already doing, and a wide pill beside a
+                // capsule switch made the bottom row read as two competing bars.
+                Button {
+                    if let data = renderTextStory(text: storyText, styleIndex: styleIndex, fontIndex: fontIndex) {
+                        onTextStory(data)
+                    }
+                } label: {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
+                                    in: Circle())
+                        .contentShape(Circle())
                 }
-            } label: {
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
-                                in: Circle())
-                    .contentShape(Circle())
+                .buttonStyle(StoryPressStyle())
+                .disabled(!hasText)
+                .accessibilityLabel("Next")
             }
-            .buttonStyle(StoryPressStyle())
-            .disabled(!hasText)
-            .accessibilityLabel("Next")
         }
         .padding(.horizontal, 20)
     }
 
     private var cameraBar: some View {
-        HStack {
+        // Centred exactly as TEXT is — see the note there. It also means the switch cannot drift when
+        // the library card and the flip button step aside mid-recording, which was the old comment's
+        // whole worry and was being held together by the two side controls happening to match.
+        ZStack {
+            modePicker
+            HStack {
             // While recording, the library and the flip step aside: neither can be used mid-clip,
-            // and his mock has only the switch down there. The switch keeps its place rather than
-            // sliding to the middle, so nothing moves under a finger that is holding the shutter.
+            // and his mock has only the switch down there.
             Button { onLibrary() } label: { libraryCard }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Choose from library")
                 .opacity(cam.recording ? 0 : 1)
                 .disabled(cam.recording)
-            Spacer(minLength: 8)
-            modePicker
             Spacer(minLength: 8)
             Button { cam.flip() } label: {
                 // The symbol the app already used for this, not a newer one I would be guessing at:
@@ -664,6 +676,7 @@ struct StoryCameraView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Flip camera")
+            }
         }
         .padding(.horizontal, 20)
     }

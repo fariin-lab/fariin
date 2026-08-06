@@ -4,6 +4,7 @@ import FirebaseCore
 import FirebaseFirestore
 import FirebaseAuth
 import FirebaseMessaging
+import FirebaseStorage
 import UserNotifications
 import PushKit
 
@@ -27,6 +28,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         URLCache.shared = storyCache
 
         FirebaseApp.configure()
+
+        // ⚠️ A DEAD UPLOAD MUST FAIL, NOT HANG. Firebase Storage's default `maxUploadRetryTime` is
+        // 600 SECONDS: on a bad connection `putDataAsync` retries quietly for ten minutes before it
+        // ever throws. Nothing is wrong with that as a network policy and everything is wrong with
+        // it as a user-facing one — the story card sits on "Uploading…" the whole time, because the
+        // code that clears it is in the catch that never runs. That is his "it never finishes".
+        //
+        // 120s is well past any upload that is genuinely going to succeed and well short of a wait
+        // anybody will sit through. When it does expire, `postStory`'s catch already deletes both
+        // halves and `uploadError` already carries the reason to the UI.
+        //
+        // Set once here rather than per call site, because chat photos, voice notes and profile
+        // pictures all had the same ten-minute silence waiting for them.
+        Storage.storage().maxUploadRetryTime = 120
+        Storage.storage().maxOperationRetryTime = 60   // downloadURL, delete, metadata
 
         // REAL on-disk offline persistence (the win the JS SDK couldn't do in Hermes).
         let settings = FirestoreSettings()

@@ -564,7 +564,17 @@ struct StoryVideoEditorView: View {
 
                 if captionFocused { compactSendButton }
             }
-            .padding(.bottom, 10)
+            // THE CAPTION SITS ON THE CARD, not on the black under it — which is where the photo
+            // editor puts it and is the whole of his report ("move the caption bar a little higher
+            // and make its position match the image story editor page exactly").
+            //
+            // The photo editor rests its pill 14pt above the card's bottom edge. That edge is
+            // `toolZoneHeight` off the screen bottom whenever the 9:16 card fits, which after the
+            // shared `cardSize` it now does here too. So the same lift, expressed the same way, and
+            // the tool row below is untouched because only this HStack moves.
+            //
+            // Focused, the keyboard is the floor and the old 10 is right again.
+            .padding(.bottom, captionFocused ? 10 : StoryEditorView.toolZoneHeight + 14)
 
             if !captionFocused {
                 HStack(spacing: 14) {

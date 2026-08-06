@@ -204,11 +204,21 @@ struct StoryEditorView: View {
     /// Everything a pick from OUR library grid needs to become an item. The same work the old
     /// PhotosPicker handler did, minus the transferable dance — the grid resolves the asset itself
     /// and hands over a UIImage or a file URL.
+    /// ⚠️ `restoreCurrent()`, NOT `recomputeEdited()`. This is what made a picked photo look like
+    /// nothing had happened.
+    ///
+    /// The tools are held OUTSIDE the item — croppedSource, cropRect, filterIndex, drawing,
+    /// overlays, photoZoom, photoOffset — and `select(_:)` has always been stash, move, restore.
+    /// These two append paths did stash, move, and then `recomputeEdited`, which is the last line of
+    /// restore without the restore. So the new picture arrived wearing the PREVIOUS one's tools, and
+    /// `recomputeEdited` reads `croppedSource ?? current` — meaning if the item before it had been
+    /// cropped, the editor recomputed from that old cropped bitmap and drew the OLD PHOTO on the new
+    /// item. He picked a second image and the screen did not change.
     @MainActor private func appendPicked(image ui: UIImage) {
         stashCurrent()
         items.append(DraftItem(image: ui))
         index = max(0, items.count - 1)
-        recomputeEdited()
+        restoreCurrent()   // a fresh item has clean tools; this ends in recomputeEdited()
     }
 
     private func appendPicked(video url: URL) async {
@@ -235,7 +245,7 @@ struct StoryEditorView: View {
             stashCurrent()
             items.append(DraftItem(image: poster, videoURL: url, duration: dur))
             index = max(0, items.count - 1)
-            recomputeEdited()
+            restoreCurrent()   // same fix as the image path above — see its note
         }
     }
 
@@ -445,11 +455,15 @@ struct StoryEditorView: View {
         // while you tap — each pick lands in the strip behind it — and the X brings you back.
         .sheet(isPresented: $showAddPicker) {
             StoryLibraryPicker(
-                onImage: { ui in appendPicked(image: ui) },
-                // A VIDEO pick closes the picker and lands you back on the editor with the clip
-                // selected (owner 2026-08-05: "the app should return directly to the Story Editor
-                // with all the selected videos, not back to the Photo Picker"). Images keep the
-                // stay-open multi-pick — that half he called working.
+                // BOTH KINDS CLOSE THE PICKER NOW (owner 2026-08-06: "I chose other image but photo
+                // picker still I see it, it most go back Story image editor page"). Video has done
+                // this since 2026-08-05; images were deliberately left open for multi-pick, which he
+                // had called working at the time. He has changed that — a pick takes you back to the
+                // picture you are about to edit, whichever kind it was.
+                onImage: { ui in
+                    showAddPicker = false
+                    appendPicked(image: ui)
+                },
                 onVideo: { url in
                     showAddPicker = false
                     Task { await appendPicked(video: url) }

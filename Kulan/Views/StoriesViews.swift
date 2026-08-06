@@ -524,7 +524,9 @@ struct StoriesRow: View {
             }
             // "Preparing…" is the honest word for the half that is actually holding them up, and it
             // is the one the big apps use. "Adding…" says the rest is happening without them.
-            Text(stories.uploadPhase == .preparing ? "Preparing…" : "Adding…")
+            // "Uploading…", his word (2026-08-06). It said "Adding…", borrowed from WhatsApp's
+            // "Adding status…", and he does not want it.
+            Text(stories.uploadPhase == .preparing ? "Preparing…" : "Uploading…")
                 .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).frame(width: cardW)
         }
         .frame(width: cardW)
