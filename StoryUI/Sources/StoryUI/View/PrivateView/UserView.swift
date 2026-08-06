@@ -41,15 +41,26 @@ struct UserView: View {
             if showMore {
                 // Tap "…" → DROPDOWN popover anchored under the button (native iOS Menu).
                 Menu {
-                    Button { NotificationCenter.default.post(name: .init("storyActionSave"), object: nil) }
-                        label: { Label("Save", systemImage: "square.and.arrow.down") }
-                    // Forward only makes sense on someone else's story.
-                    if !isMyStory {
+                    // SAVE, FORWARD AND SHARE ARE MINE-ONLY. All three take somebody else's story
+                    // OFF this app permanently, and a story is a promise that it is gone in 24
+                    // hours. Save puts it in their camera roll, Forward puts it in another chat,
+                    // and Share is the worst of the three because it hands the picture straight to
+                    // Instagram or Messages. The author is never told any of it happened.
+                    //
+                    // Instagram, Snapchat and WhatsApp do not offer any of the three on another
+                    // person's story. Telegram does, but only when the author switched it on for
+                    // that story. Nobody sells it as a paid feature (owner asked, 2026-08-05).
+                    //
+                    // Forward used to be `!isMyStory`, which was exactly backwards. Screenshots
+                    // still exist, and that is fine: this is about not building the door.
+                    if isMyStory {
+                        Button { NotificationCenter.default.post(name: .init("storyActionSave"), object: nil) }
+                            label: { Label("Save", systemImage: "square.and.arrow.down") }
                         Button { NotificationCenter.default.post(name: .init("storyActionForward"), object: nil) }
                             label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
+                        Button { NotificationCenter.default.post(name: .init("storyActionShare"), object: nil) }
+                            label: { Label("Share", systemImage: "square.and.arrow.up") }
                     }
-                    Button { NotificationCenter.default.post(name: .init("storyActionShare"), object: nil) }
-                        label: { Label("Share", systemImage: "square.and.arrow.up") }
                     // No Delete here on my own story — the owner bar already has a trash button, so
                     // it lived in two places. Others' stories keep Hide Stories.
                     if !isMyStory {

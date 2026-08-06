@@ -66,6 +66,30 @@ final class StoriesService {
 
     // Optimistic upload state — drives the "Uploading…" indicator + spinner ring in the story row.
     var uploading = false
+
+    /// WHICH HALF OF THE POST IS RUNNING, because they are not the same kind of wait and must not
+    /// look the same.
+    ///
+    /// `.preparing` is work on THIS phone: squeezing the picture or transcoding the video. It has to
+    /// block, because until it finishes there is no story — nothing to send and nothing to watch.
+    /// This is WhatsApp's "Preparing…" box.
+    ///
+    /// `.sending` is the upload. It does NOT need the person, because their own copy is already
+    /// finished and already playable from local bytes. WhatsApp shows a quiet "Adding status…" line
+    /// here, with no spinner, and lets you open and watch it immediately.
+    ///
+    /// We used to run one spinning ring across BOTH, so a photo whose local work took ~0.3s still
+    /// showed a busy ring for the ~2.9s the server took (owner measured it). The story was watchable
+    /// that whole time; the ring was the only thing saying otherwise.
+    enum UploadPhase { case preparing, sending }
+    var uploadPhase: UploadPhase = .preparing
+
+    /// A real `@MainActor` method rather than an inline `MainActor.run { self.… }`, because both
+    /// callers are non-isolated `async` functions and one of them would have had to reach for `self`
+    /// from inside a `@Sendable` closure to do it. Calling an isolated method on self is the version
+    /// with no capture question at all.
+    @MainActor private func markSending() { uploadPhase = .sending }
+
     var uploadingImage: UIImage?
     var uploadError: String?   // set when a post fails so the UI can show it (was swallowed → "dead silent")
     private var uploadTask: Task<Void, Never>?
@@ -106,6 +130,7 @@ final class StoriesService {
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: image), for: URLRequest(url: u))
         }
         uploading = true
+        uploadPhase = .preparing   // every post starts on the phone's half
         // Each post owns a token; the completion below only touches shared state if it's STILL the
         // owner. Without this, a cancel-then-repost (or a quick second post) let the FIRST task's
         // completion run last and wipe the SECOND upload's spinner + task handle (so it couldn't be
@@ -182,20 +207,26 @@ final class StoriesService {
         // audience check was denying the AUTHOR's own getDownloadURL; the ordering here was never
         // updated to match, so the code kept paying for a constraint that had been removed.
         //
-        // Compression and upload now run CONCURRENTLY with the audience resolve and the doc write.
-        // The chain is only as long as its slowest branch instead of the sum of both.
+        // The UPLOAD now runs CONCURRENTLY with the audience resolve and the doc write, so the chain
+        // is as long as its slowest branch rather than the sum of both. (Compression used to be in
+        // that branch too; see the note on the hoist just below.)
         let docRef = db.collection("stories").document(storyId)
         let ref = Storage.storage().reference().child(path)
 
-        // Returns the compressed bytes so the cache warming below does not have to redo the work.
-        async let uploadedJPEG: Data = {
+        // Decoding, resizing and re-encoding a 12MP photo is real work, and it belongs BEFORE the doc
+        // write rather than after it. HOISTED OUT of the `async let` below on purpose: the phase flip
+        // has to happen the instant this returns, and doing that from inside a `@Sendable` closure
+        // would mean capturing `self` there. The cost is that ~0.3s of CPU no longer overlaps the
+        // audience resolve, which is a local main-actor hop — nothing worth capturing a class for.
+        let jpeg = ChatService.downscaledJPEG(image)
+        // THE PHONE'S HALF IS OVER. Everything past this line is the network, and this person's own
+        // copy is already complete — so the ring comes down here, not at the end.
+        await markSending()
+
+        async let uploadedJPEG: Void = {
             try Task.checkCancellation()
-            // Decoding, resizing and re-encoding a 12MP photo is real work; it belongs off the main
-            // actor and, more to the point, it belongs BEFORE the doc write rather than after it.
-            let jpeg = ChatService.downscaledJPEG(image)
             let meta = StorageMetadata(); meta.contentType = "image/jpeg"
             _ = try await ref.putDataAsync(jpeg, metadata: meta)
-            return jpeg
         }()
 
         let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
@@ -226,7 +257,7 @@ final class StoriesService {
             // Both halves were in flight together; wait for the photo to land before asking for its
             // URL. If the doc write above threw, this child task is cancelled and awaited on the way
             // out, and the catch deletes whatever reached Storage.
-            let jpeg = try await uploadedJPEG
+            try await uploadedJPEG   // `jpeg` is already in scope; this only waits for the transfer
             try Task.checkCancellation()   // cancelled during upload → undo
             let url = try await ref.downloadURL().absoluteString
             try await docRef.updateData(["mediaUrl": url])
@@ -271,6 +302,7 @@ final class StoriesService {
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: thumbnail), for: URLRequest(url: u))
         }
         uploading = true
+        uploadPhase = .preparing   // video starts on the phone's half too — and it is the long one
         let token = UUID()
         currentUploadToken = token
         uploadTask = Task {
@@ -385,6 +417,10 @@ final class StoriesService {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }
+        // THE PHONE'S HALF IS OVER — and on video it is the long half. Past here it is upload only,
+        // and the clip is already playable from the local file, so the ring must stop. See
+        // `uploadPhase`.
+        await markSending()
         try Task.checkCancellation()
 
         let storyId = UUID().uuidString

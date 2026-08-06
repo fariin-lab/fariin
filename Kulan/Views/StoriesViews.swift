@@ -370,6 +370,18 @@ struct StoriesRow: View {
         return unviewed + viewed
     }
 
+    /// The one story each person will actually open on — their first UNSEEN item, which is where the
+    /// viewer starts — falling back to their first if everything is watched. Warming the last item
+    /// instead (the one the card's cover comes from) would warm the wrong end of the ring.
+    private func prefetchFirstOfEachRing() {
+        let items: [StoryPrefetcher.Item] = orderedOthers.compactMap { g in
+            let s = g.stories.first(where: { !StoryPrefs.isStorySeen($0.id) }) ?? g.stories.first
+            guard let s, !s.mediaUrl.isEmpty else { return nil }
+            return StoryPrefetcher.Item(media: s.mediaUrl, poster: s.previewUrl, isVideo: s.isVideo)
+        }
+        StoryPrefetcher.prefetchFirsts(items)
+    }
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: storySpacing) {
@@ -399,6 +411,17 @@ struct StoriesRow: View {
             // Smoothly slide cards to their new spots when a story moves unviewed -> viewed-front (no reload).
             .animation(.spring(response: 0.42, dampingFraction: 0.82), value: orderedOthers.map(\.id))
         }
+        // WARM THE FRONT OF EACH RING WHILE THE ROW IS ON SCREEN.
+        //
+        // `StoryPrefetcher.prefetch(from:in:)` lives inside the viewer, so it can only warm what
+        // comes after something already open — the FIRST tap was cold every time, and that is the
+        // tap somebody decides whether this app is fast on. Instagram and WhatsApp both fill the
+        // front of each ring off the list.
+        //
+        // Keyed on the ordered ids rather than a bare onAppear: the row re-sorts live as stories are
+        // watched and as new ones land, and the ring that just moved to the front is exactly the one
+        // worth having ready.
+        .task(id: orderedOthers.map(\.id).joined()) { prefetchFirstOfEachRing() }
         .alert("Couldn't post story", isPresented: Binding(
             get: { stories.uploadError != nil },
             set: { if !$0 { stories.uploadError = nil } }
@@ -472,16 +495,31 @@ struct StoriesRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(.black.opacity(0.25)))
 
-                UploadingAvatarRing(name: meName, photoUrl: mePhoto)   // my avatar + clean spinning ring
-                    // The same shadow `card()` puts under every other circle in the row. Without it
-                    // this one sat flat on the photo while its neighbours lifted off theirs, which is
-                    // the last way the uploading circle differed from the one it turns into.
-                    .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
-                    .padding(8)
+                // THE RING ONLY WHILE THE PHONE IS STILL WORKING. Once the bytes are prepared the
+                // story is finished as far as this person is concerned — it is in the row and it
+                // plays from local bytes — so a ring spinning through the upload was telling them
+                // to wait for something that no longer concerns them. Their own copy is done; the
+                // upload is for everybody else. WhatsApp draws exactly this line.
+                if stories.uploadPhase == .preparing {
+                    UploadingAvatarRing(name: meName, photoUrl: mePhoto)   // my avatar + clean spinning ring
+                        // The same shadow `card()` puts under every other circle in the row. Without it
+                        // this one sat flat on the photo while its neighbours lifted off theirs, which is
+                        // the last way the uploading circle differed from the one it turns into.
+                        .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                        .padding(8)
+                } else {
+                    AvatarView(name: meName, photoUrl: mePhoto, size: 32)
+                        .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                        .padding(8)
+                }
             }
-            Text("Uploading…").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).frame(width: cardW)
+            // "Preparing…" is the honest word for the half that is actually holding them up, and it
+            // is the one the big apps use. "Adding…" says the rest is happening without them.
+            Text(stories.uploadPhase == .preparing ? "Preparing…" : "Adding…")
+                .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).frame(width: cardW)
         }
         .frame(width: cardW)
+        .animation(.easeInOut(duration: 0.2), value: stories.uploadPhase)
     }
 
     // avatarName: what the LETTER CIRCLE falls back to when there's no photo. The my-card's
@@ -999,18 +1037,24 @@ struct StoryViewer: View {
             }
         }
         // "…" dropdown menu actions (posted from the library header Menu) — run on LIVE state here.
+        // `currentIsMine` ON ALL THREE, the same guard Hide, Report and Delete already carry. The
+        // menu no longer offers them on someone else's story, but the menu is the part a modified
+        // client replaces, and these three are the ones that take a story off the app for good.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionSave"))) { _ in
+            guard currentIsMine else { return }
             if currentStory?.isVideo == true { saveCurrentVideo(currentStory?.mediaUrl) }
             else { saveCurrentImage(currentStory?.mediaUrl) }
         }
         // Forward/Share pipelines are image-based (they re-encode a UIImage); on a video story they
         // would silently do nothing. Say so honestly instead — proper video forward/share comes later.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionForward"))) { _ in
+            guard currentIsMine else { return }
             guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { forwardImg = StoryImagePayload(image: img) } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShare"))) { _ in
+            guard currentIsMine else { return }
             guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { shareImg = StoryImagePayload(image: img) } }

@@ -63,6 +63,44 @@ public enum StoryPrefetcher {
         }
     }
 
+    /// THE ONE STORY THE LOOKAHEAD CANNOT REACH: the first one.
+    ///
+    /// `prefetch(from:in:)` runs inside the viewer, so it can only ever warm what comes AFTER
+    /// something you already opened. That leaves the very first tap cold every single time, which is
+    /// the tap people judge the app on. Instagram and WhatsApp both warm the front of each ring
+    /// while you are still looking at the list.
+    ///
+    /// Two depths on purpose, because this is speculation and speculation costs somebody's data:
+    ///
+    /// - The POSTER for every ring passed in. A few KB each, and it is what the card and the opening
+    ///   frame draw, so it is the difference between opening onto a picture and opening onto grey.
+    /// - The MEDIA for `mediaDepth` rings only. The first ones in the row are the ones actually
+    ///   opened; pulling a video for somebody eight cards along that nobody scrolls to is waste.
+    ///
+    /// Both go through the same warmers as the lookahead, so they land in the same caches, they
+    /// dedupe against the same in-flight set, and they stand down on a constrained connection.
+    /// Deliberately NOT a `Story`. The caller here is the chat-list story row, which has our own
+    /// model and no reason to build StoryUI's — three fields is the whole job.
+    public struct Item {
+        public let media: String
+        public let poster: String?
+        public let isVideo: Bool
+        public init(media: String, poster: String?, isVideo: Bool) {
+            self.media = media; self.poster = poster; self.isVideo = isVideo
+        }
+    }
+
+    public static func prefetchFirsts(_ firsts: [Item], mediaDepth: Int = 2) {
+        guard !firsts.isEmpty else { return }
+        queue.async {
+            for (i, item) in firsts.enumerated() {
+                warmImage(item.poster)
+                guard i < mediaDepth else { continue }
+                if item.isVideo { warmVideo(item.media) } else { warmImage(item.media) }
+            }
+        }
+    }
+
     /// True once this photo's bytes are where `ImageLoader` looks for them.
     public static func isWarm(_ urlString: String?) -> Bool {
         guard let urlString, let url = URL(string: urlString) else { return false }
@@ -79,7 +117,7 @@ public enum StoryPrefetcher {
     private static func warmVideo(_ urlString: String?) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard claim(urlString) else { return }
-        videoCache.loadVideo(from: url) { result in
+        videoCache.loadVideo(from: url, speculative: true) { result in
             release(urlString)
             // ON DISK IS ONLY HALF OF IT. Building the asset, parsing the container, loading the
             // tracks and filling the render pipeline all still happen when you ARRIVE unless they are

@@ -54,7 +54,14 @@ final class CacheManager: NSObject {
         return size > 4096   // no real video is this small; a truncated file or an error page is
     }
 
-    func loadVideo(from url: URL, completion: @escaping (Result<URL>) -> Void) {
+    /// `speculative`: this video is being fetched for a story nobody has asked to watch yet, so it
+    /// stands down on a metered or Low Data Mode connection. WITHOUT THIS THE RULE WAS BACKWARDS.
+    /// `StoryPrefetcher.warmImage` already refused to pull a 200 KB photo on a constrained network
+    /// while `warmVideo` went straight through this method and happily pulled sixteen megabytes,
+    /// because a bare `downloadTask(with: url)` carries no request configuration at all. On the
+    /// expensive mobile data a lot of this app's users are on, that was the single most costly
+    /// thing the app did without being asked.
+    func loadVideo(from url: URL, speculative: Bool = false, completion: @escaping (Result<URL>) -> Void) {
         switch createCacheDirectory() {
         case .success(let cacheDirectory):
             let videoFileName = Self.cacheFileName(for: url)
@@ -68,10 +75,10 @@ final class CacheManager: NSObject {
                 } else {
                     // Clear the wedge, then fetch it properly.
                     try? fileManager.removeItem(at: destinationUrl)
-                    downloadAndCacheVideo(from: url, completion: completion)
+                    downloadAndCacheVideo(from: url, speculative: speculative, completion: completion)
                 }
             } else {
-                downloadAndCacheVideo(from: url, completion: completion)
+                downloadAndCacheVideo(from: url, speculative: speculative, completion: completion)
             }
         case .failure(let error):
             DispatchQueue.main.async { completion(.failure(error)) }
@@ -112,7 +119,7 @@ private extension CacheManager {
         return .success(videoCacheDirectory)
     }
 
-    func downloadAndCacheVideo(from url: URL, completion: @escaping (Result<URL>) -> Void) {
+    func downloadAndCacheVideo(from url: URL, speculative: Bool, completion: @escaping (Result<URL>) -> Void) {
         let backgroundQueue = DispatchQueue.global(qos: .background)
 
         backgroundQueue.async { [weak self] in
@@ -129,7 +136,17 @@ private extension CacheManager {
             // TLS validation, which is correct for the plain HTTPS these files come from — and each
             // download no longer leaks a session that is never invalidated.
             let session = URLSession.shared
-            let task = session.downloadTask(with: url) { [weak self] (tempLocalUrl, response, error) in
+            // A REQUEST, NOT A BARE URL. `downloadTask(with: url)` builds a default request that
+            // ignores every network policy, which is why the speculative flag had nowhere to live.
+            var request = URLRequest(url: url)
+            if speculative {
+                // Same two lines StoryPrefetcher.warmImage already used for photos. On a constrained
+                // connection the task simply fails and the story loads when you reach it, which is
+                // exactly where we were before prefetching existed — no worse, just not expensive.
+                request.allowsConstrainedNetworkAccess = false
+                request.networkServiceType = .background
+            }
+            let task = session.downloadTask(with: request) { [weak self] (tempLocalUrl, response, error) in
                 guard let self else { return }
 
                 if let error = error {
