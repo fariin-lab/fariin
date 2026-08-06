@@ -97,6 +97,27 @@ struct StoryEditorView: View {
     /// re-measured the canvas and visibly shrank the photo. His rule: the preview NEVER resizes.
     /// Geometry that cannot move is geometry derived from nothing that moves.
     static let toolZoneHeight: CGFloat = 58
+
+    /// THE CARD, BY THE VIEWER'S OWN RULE. `StoryDetailView.cardHeight` is `min(9:16, the room
+    /// there is)`, and this must be the same shape or the composer is framing a picture for a
+    /// rectangle that does not exist.
+    ///
+    /// It was `available` on its own, which on his phone is 430 x 782 — aspect 1.8196 against the
+    /// story card's 1.7778, so a picture pinched to exactly fill the composer arrived at the story
+    /// 2.4% too tall. Proved from his own post: the uploaded file is 2638x4800, aspect 1.8196, the
+    /// composer's shape to three decimals, and 1.8196 in a 1.778 card leaves the 1.15%-a-side band
+    /// he drew lines down.
+    ///
+    /// `ceil` and 1.77778 are copied from the viewer deliberately. Two rectangles that have to agree
+    /// to the pixel must be the same arithmetic, not arithmetic that happens to match.
+    private static func cardSize(in space: CGSize, top: CGFloat) -> CGSize {
+        let available = max(1, space.height - top - toolZoneHeight)
+        return CGSize(width: space.width, height: min(ceil(space.width * 1.77778), available))
+    }
+    /// How far the card's bottom edge sits above the bottom of this screen. `toolZoneHeight` when the
+    /// 9:16 card fits in the room available, more when it does not — and the caption pill hangs off
+    /// THIS rather than off the constant, or it drops through the floor of a shortened card.
+    @State private var cardBottomGap: CGFloat = StoryEditorView.toolZoneHeight
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
     @FocusState private var captionFocused: Bool
@@ -264,8 +285,10 @@ struct StoryEditorView: View {
                 // THE CARD'S FRAME IS FIXED (owner: "the Story preview must never shrink, resize,
                 // or change its scale"). It was inset by the bottom bar's MEASURED height, and the
                 // keyboard reached the canvas through that wrapper — focusing the caption or
-                // opening Aa visibly shrank the photo. The card now ends `toolZoneHeight` above
-                // the screen bottom, a constant, and the canvas ignores the keyboard outright.
+                // opening Aa visibly shrank the photo. The card is `Self.cardSize` now — screen
+                // geometry and a constant, nothing measured and nothing that moves — and the canvas
+                // ignores the keyboard outright. Fixed still means fixed; it just is not the same
+                // number it was, because it is the STORY's rectangle now (see cardSize).
                 //
                 // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
                 // same top anchor, same 10pt nudge, same 0.3 curve.
@@ -330,8 +353,8 @@ struct StoryEditorView: View {
             // the photo, the pen, the text, the flatten — lives in the CARD's coordinate space
             // now, not the whole screen's, which is what makes the posted frame the seen frame.
             let cardTop: CGFloat = 8
-            let cardH = max(1, geo.size.height - cardTop - Self.toolZoneHeight)
-            let card = CGSize(width: geo.size.width, height: cardH)
+            let card = Self.cardSize(in: geo.size, top: cardTop)
+            let cardH = card.height
             ZStack {
                 Color.black.ignoresSafeArea()
                 cardContent(card: card)
@@ -374,6 +397,7 @@ struct StoryEditorView: View {
             }
             .onAppear {
                 canvasSize = card
+                cardBottomGap = max(Self.toolZoneHeight, geo.size.height - cardTop - card.height)
                 if items.isEmpty {
                     if seedItems.isEmpty {
                         items = [DraftItem(image: source)]
@@ -390,7 +414,9 @@ struct StoryEditorView: View {
                 recomputeEdited()
             }
             .onChange(of: geo.size) { _, s in
-                canvasSize = CGSize(width: s.width, height: max(1, s.height - cardTop - Self.toolZoneHeight))
+                let c = Self.cardSize(in: s, top: cardTop)
+                canvasSize = c
+                cardBottomGap = max(Self.toolZoneHeight, s.height - cardTop - c.height)
             }
             .onChange(of: filterIndex) { _, _ in recomputeEdited() }
         }
@@ -707,10 +733,12 @@ struct StoryEditorView: View {
             }
         }
         .padding(.horizontal, 16)
-        // At rest the pill sits INSIDE the card: the card ends `toolZoneHeight` above the screen
-        // bottom, so the pill needs that plus its inset from the card's bottom edge. Focused, the
-        // keyboard is the floor and a small gap is enough.
-        .padding(.bottom, captionFocused ? 8 : Self.toolZoneHeight + 14)
+        // At rest the pill sits INSIDE the card, 14pt up from its bottom edge. It used to add 14 to
+        // the CONSTANT `toolZoneHeight`, which was the same thing only while the card was always
+        // exactly that far off the floor. Now that the card takes the viewer's 9:16 rule it can end
+        // higher than that, and a pill measured from the screen would hang below it on the black.
+        // Focused, the keyboard is the floor and a small gap is enough.
+        .padding(.bottom, captionFocused ? 8 : cardBottomGap + 14)
         .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // trash owns the bottom while dragging text
     }
 
