@@ -716,11 +716,22 @@ struct StoryVideoEditorView: View {
     /// that are supposed to be the same screen.
     private var addMoreButton: some View {
         Button { showAddPicker = true } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 17, weight: .semibold))
+            // HIS OWN DRAWING (2026-08-06), and the SAME one on both editors. The photo editor used
+            // `plus.square.on.square` and the video editor a bare `plus` — two different marks for
+            // one action on two screens that are meant to be the same screen.
+            //
+            // Template-rendered, so `.foregroundStyle` tints it. The SVG's `currentColor` was
+            // replaced with a literal black: a template asset takes its colour from the caller, and
+            // `currentColor` has nothing to resolve against inside an asset catalogue — it renders
+            // as nothing at all. Same trap as the icon batch on 2026-08-01.
+            Image("ic_add_media")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 19, height: 19)
                 .foregroundStyle(.white)
                 // 40 tall on purpose: this is what sets the caption bar's resting height, and it
-                // gives the + the whole height of the bar to be tapped in.
+                // gives the button the whole height of the bar to be tapped in.
                 .frame(width: 38, height: 40)
                 .contentShape(Rectangle())
         }
