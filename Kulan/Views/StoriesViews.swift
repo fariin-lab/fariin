@@ -1913,9 +1913,17 @@ struct StoryViewer: View {
             // test below reads the raw translation rather than this clamped one.
             let ty = max(0, t.y)
             hero.f = min(1, ty / Self.heroDragSpan)
-            // 1:1 WITH THE FINGER, BOTH AXES. The scale shrinks around this point, so the card stays
-            // under the thumb however far it has shrunk.
-            hero.center = CGPoint(x: hero.rest.x + t.x, y: hero.rest.y + ty)
+            // VERTICAL ONLY (owner, 2026-08-06: "only scroll up and down… block left right").
+            //
+            // The x is deliberately dropped rather than damped or clamped. The card followed the
+            // finger on both axes for about an hour and he asked for it gone, and he is right that a
+            // close which drifts sideways reads as a drag that has not decided what it is — the
+            // gesture is already direction-locked to `.down` by the recogniser, so letting the card
+            // move on the other axis was the one part of it that disagreed with that.
+            //
+            // The LANDING still travels sideways, and that is a different thing: the card it flies
+            // home to sits wherever it sits in the row. What is locked is the part the finger owns.
+            hero.center = CGPoint(x: hero.rest.x, y: hero.rest.y + ty)
             hero.alpha = 1 - Self.heroFade * hero.f
             applyHero()
             // ONE SwiftUI WRITE PER GESTURE, NOT ONE PER FRAME. `dragDown` only ever feeds a
