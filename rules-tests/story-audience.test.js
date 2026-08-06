@@ -33,6 +33,9 @@ const SID = 'story123';
 // the first run of this file report that posting a private story was refused.
 //
 // Computed at run time rather than pinned: the rule also demands it lands inside the next 30 hours.
+const NOW = new Date().toISOString();
+const SOON = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
 const base = {
   authorUid: A,
   createdAt: new Date().toISOString(),
@@ -79,12 +82,42 @@ const cases = [
 
   // READS. The public half is the whole point of the audience; the private half is what proves it
   // did not become a skeleton key.
-  { name: 'a stranger reads an Everyone story', expect: 'ALLOW', uid: C, method: 'get',
-    path: `${D}/stories/${SID}`, before: publicStory, mocks: mocksFor(C) },
   { name: 'a stranger reads a friends-only story', expect: 'DENY', uid: C, method: 'get',
     path: `${D}/stories/${SID}`, before: privateStory, mocks: mocksFor(C) },
   { name: 'a recipient reads a friends-only story', expect: 'ALLOW', uid: B, method: 'get',
     path: `${D}/stories/${SID}`, before: privateStory, mocks: mocksFor(B) },
+
+  // ⚠️ THE CONTACT-GRAPH LEAK (S1). A story document carries recipientUids — every person the
+  // author has an accepted chat with. It used to be world-readable whenever public == true, so one
+  // read of one "Everyone" story handed a stranger the whole list. A rule cannot hide one field, so
+  // the public clause is gone and public reach moved to a mirror that has no audience in it.
+  { name: 'S1 stranger reads a PUBLIC story document', expect: 'DENY', uid: C, method: 'get',
+    path: `${D}/stories/${SID}`, before: publicStory, mocks: mocksFor(C) },
+  { name: 'S1 author still reads their own public story', expect: 'ALLOW', uid: A, method: 'get',
+    path: `${D}/stories/${SID}`, before: publicStory, mocks: mocksFor(A) },
+  { name: 'S1 recipient still reads a public story', expect: 'ALLOW', uid: B, method: 'get',
+    path: `${D}/stories/${SID}`, before: publicStory, mocks: mocksFor(B) },
+
+  // The mirror is what a stranger reads instead: media only, no audience.
+  { name: 'S1 stranger reads the public MIRROR', expect: 'ALLOW', uid: C, method: 'get',
+    path: `${D}/users/${A}/publicStories/${SID}`,
+    before: { authorUid: A, mediaUrl: 'https://x/y.jpg', type: 'image' }, mocks: mocksFor(C) },
+  { name: 'S1 author writes their own mirror', expect: 'ALLOW', uid: A, method: 'create',
+    path: `${D}/users/${A}/publicStories/${SID}`,
+    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://x/y.jpg',
+             thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true },
+    mocks: mocksFor(A) },
+  { name: 'S1 a stranger cannot write into my mirror', expect: 'DENY', uid: C, method: 'create',
+    path: `${D}/users/${A}/publicStories/${SID}`,
+    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://evil/x.jpg',
+             thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true },
+    mocks: mocksFor(C) },
+  { name: 'S1 the mirror cannot smuggle recipientUids back in', expect: 'DENY', uid: A,
+    method: 'create', path: `${D}/users/${A}/publicStories/${SID}`,
+    after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://x/y.jpg',
+             thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true,
+             recipientUids: [B] },
+    mocks: mocksFor(A) },
 
   // THE CUSTOM LISTS. Names of the people you quietly keep out of things — nobody else's business.
   { name: 'own my story list', expect: 'ALLOW', uid: A, method: 'create',

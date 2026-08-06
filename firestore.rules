@@ -124,6 +124,28 @@ service cloud.firestore {
         allow write: if signedIn() && request.auth.uid == uid;
       }
 
+      // THE PUBLIC FACE OF AN "EVERYONE" STORY, and the reason the story document itself is no
+      // longer world-readable.
+      //
+      // A story doc carries `recipientUids`. Granting it to everybody so that strangers could watch
+      // a public story handed them the author's whole contact list along with it. This mirror
+      // carries the MEDIA and nothing else: no recipients, no audience, nothing about who else can
+      // see it. Anyone signed in may read it — that is the point — and only the author may write it.
+      //
+      // Validated rather than trusted, because this is the one story surface a stranger can reach:
+      // no field may appear here that is not on the list, so a future bug cannot quietly start
+      // mirroring the audience into a world-readable document.
+      match /publicStories/{storyId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && request.auth.uid == uid
+          && (request.method == 'delete'
+              || (request.resource.data.keys().hasOnly(
+                    ['authorUid', 'createdAt', 'expiresAt', 'mediaUrl', 'thumbUrl',
+                     'type', 'caption', 'duration', 'allowsReplies'])
+                  && request.resource.data.authorUid == uid
+                  && !isBanned()));
+      }
+
       // Story distribution lists ("My Status" + custom lists) and per-user seen state.
       // Both are private to the owner.
       match /storyLists/{listId} {
@@ -686,10 +708,18 @@ service cloud.firestore {
       // safe: only the public-filtered query reaches this clause (author/recipient reads short-circuit
       // on the clauses above), so a doc lacking the field never evaluates it, and all new stories
       // write the field anyway.
+      // ⚠️ `public == true` IS NOT A READ CLAUSE ANY MORE, and taking it out is a SECURITY FIX.
+      //
+      // It granted any signed-in user the WHOLE document, and the document carries `recipientUids` —
+      // the uid of every person the author has an accepted chat with. So one read of one "Everyone"
+      // story handed a stranger the author's entire contact graph. A rule cannot hide one field of a
+      // document it grants, so the clause had to go rather than be narrowed.
+      //
+      // Public reach is not lost: it moved to `users/{uid}/publicStories/{storyId}`, a mirror that
+      // carries the media and nothing about the audience. See that block, and `postStory`.
       allow read: if signedIn() && (
         request.auth.uid == resource.data.authorUid
         || request.auth.uid in resource.data.recipientUids
-        || resource.data.public == true
         // A moderator acting on a report. A reported story is often NOT public - somebody's friend
         // reported it - and without this the one person who has to look at it is the one person who
         // cannot. Reading is gated on the `moderate` permission, which nobody has by default.
@@ -788,11 +818,28 @@ service cloud.firestore {
             && (!('reaction' in request.resource.data)
                 || (request.resource.data.reaction is string && request.resource.data.reaction.size() <= 16));
         }
+        // A REACTION IS ONLY A REACTION IF THE AUTHOR ALLOWED ONE.
+        //
+        // `allowsReplies` was read in exactly one place in the whole app — whether to draw the reply
+        // bar — so the switch hid our own button and stopped nothing. Any client could still write a
+        // reaction onto a story whose author had turned them off. Now the server says no. A receipt
+        // with no reaction (a plain view) is always fine; that is not a reaction, it is a read mark.
+        function reactionAllowed() {
+          return !('reaction' in request.resource.data)
+            || request.resource.data.reaction == ''
+            || storyData().get('allowsReplies', true) == true;
+        }
+        // ⚠️ PUBLIC STORIES COUNT THEIR VIEWERS NOW. This required membership of `recipientUids`,
+        // and somebody who reached an "Everyone" story from a profile is not in that list — so the
+        // one audience whose entire purpose is reach was the one audience that could not measure it.
+        // Their write was refused, silently, and the author's Seen-by never showed them.
         allow create: if signedIn()
           && request.auth.uid == viewerUid
-          && request.auth.uid in storyData().recipientUids
-          && validReceipt();
-        allow update: if signedIn() && request.auth.uid == viewerUid && validReceipt();  // set/clear reaction
+          && (request.auth.uid in storyData().recipientUids
+              || storyData().get('public', false) == true)
+          && validReceipt() && reactionAllowed();
+        allow update: if signedIn() && request.auth.uid == viewerUid
+          && validReceipt() && reactionAllowed();  // set/clear reaction
         // NO delete — a view receipt is not something a viewer takes back. (Second stray paste of the
         // message-request decline rule; it read conversation fields off a view receipt, so it could
         // only ever error. Removed 2026-08-04, no behaviour change.)

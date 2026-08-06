@@ -37,6 +37,20 @@ struct StoryContact: Identifiable, Equatable {
     }
 
     static func ids(_ list: [StoryContact]) -> Set<String> { Set(list.map(\.id)) }
+
+    /// Do I share an accepted, unblocked 1:1 chat with this person?
+    ///
+    /// THE SAME TEST THE AUDIENCE IS BUILT FROM, deliberately. It answers "may they reply to my
+    /// story", and a story reply is an ordinary chat message — so if this drifted from `all()` the
+    /// app would offer a reply bar to somebody the story was never sent to.
+    static func isFriend(_ uid: String) -> Bool {
+        guard !uid.isEmpty else { return false }
+        let me = AuthService.shared.uid ?? ""
+        return ConversationsRepository.shared.conversations.contains { c in
+            !c.isGroup && c.otherUid(me) == uid
+                && !c.isBlockedByMe(me) && !c.isBlockedByMe(uid)
+        }
+    }
 }
 
 // MARK: - Shared row

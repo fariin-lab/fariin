@@ -176,14 +176,59 @@ final class StoriesService {
     // BLOCKED — `isBlockedByMe`, NOT `leaksBlocked`: the latter is a chat-list freeze test (true only
     // if they messaged AFTER the block), so a quietly-blocked contact was slipping into the audience.
     private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>) async -> (Set<String>, String) {
+        // BLOCKING IS SYMMETRIC FOR BROADCAST CONTENT, and it was not.
+        //
+        // This filtered `isBlockedByMe` — chats where I blocked THEM — and never asked the other
+        // question. `blockedBy` is a map keyed by whoever did the blocking, so somebody who blocked
+        // ME was still in my audience and my stories kept arriving in their tray. Every other
+        // messenger treats a block as ending the broadcast in both directions.
         let allContacts = await MainActor.run {
             Set(ConversationsRepository.shared.conversations
-                .filter { !$0.isGroup && !$0.isBlockedByMe(me) }
-                .map { $0.otherUid(me) }.filter { !$0.isEmpty })
+                .filter { c in
+                    guard !c.isGroup else { return false }
+                    let them = c.otherUid(me)
+                    return !c.isBlockedByMe(me) && !c.isBlockedByMe(them) && !them.isEmpty
+                }
+                .map { $0.otherUid(me) })
         }
         if !included.isEmpty { return (included.intersection(allContacts), "only") }
         if !excluded.isEmpty { return (allContacts.subtracting(excluded), "except") }
         return (allContacts, "all")
+    }
+
+
+    /// THE PUBLIC FACE OF AN "EVERYONE" STORY — media only, never the audience.
+    ///
+    /// The story document itself is no longer readable by strangers, because it carries
+    /// `recipientUids` and a Firestore rule cannot grant a document while hiding one field of it. So
+    /// one read of one public story used to hand over the author's whole contact list. This mirror
+    /// is what a stranger reaching the profile actually reads: the picture, the caption, when it
+    /// expires, and nothing about who else can see it.
+    ///
+    /// Written only for `public` stories, and only once the media URL is known — a mirror pointing
+    /// at an empty url is a black card on somebody else's profile.
+    private func writePublicMirror(storyId: String, me: String, mediaUrl: String, thumbUrl: String,
+                                   type: String, caption: String, duration: Double,
+                                   expiresAt: Date, allowsReplies: Bool) async {
+        try? await db.collection("users").document(me)
+            .collection("publicStories").document(storyId)
+            .setData([
+                "authorUid": me,
+                "createdAt": FieldValue.serverTimestamp(),
+                "expiresAt": Timestamp(date: expiresAt),
+                "mediaUrl": mediaUrl,
+                "thumbUrl": thumbUrl,
+                "type": type,
+                "caption": caption,
+                "duration": duration,
+                "allowsReplies": allowsReplies,
+            ])
+    }
+
+    /// The mirror goes when the story does. Harmless if there never was one.
+    private func deletePublicMirror(storyId: String, authorUid: String) async {
+        try? await db.collection("users").document(authorUid)
+            .collection("publicStories").document(storyId).delete()
     }
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
@@ -261,6 +306,13 @@ final class StoriesService {
             try Task.checkCancellation()   // cancelled during upload → undo
             let url = try await ref.downloadURL().absoluteString
             try await docRef.updateData(["mediaUrl": url])
+            // The stranger-facing copy, media only. See `writePublicMirror`.
+            if everyone {
+                await writePublicMirror(storyId: storyId, me: me, mediaUrl: url, thumbUrl: "",
+                                        type: "image", caption: caption, duration: 0,
+                                        expiresAt: Date().addingTimeInterval(expiryHours * 3600),
+                                        allowsReplies: allowsReplies)
+            }
             // Warm the cache the My Story card reads from (DiskImageCache), so the final card shows the
             // image instantly as the "Uploading…" placeholder morphs into it — no blank-then-fetch.
             if let img = UIImage(data: jpeg) { DiskImageCache.shared.store(img, data: jpeg, for: url) }
@@ -471,6 +523,14 @@ final class StoriesService {
             let (thumbUrl, videoUrl) = try await (tURL.absoluteString, vURL.absoluteString)
             // One atomic update: recipients' listeners either see the full story or nothing.
             try await docRef.updateData(["mediaUrl": videoUrl, "thumbUrl": thumbUrl])
+            // The stranger-facing copy, media only. See `writePublicMirror`.
+            if everyone {
+                await writePublicMirror(storyId: storyId, me: me, mediaUrl: videoUrl,
+                                        thumbUrl: thumbUrl, type: "video", caption: caption,
+                                        duration: prepared.duration,
+                                        expiresAt: Date().addingTimeInterval(expiryHours * 3600),
+                                        allowsReplies: allowsReplies)
+            }
             // Warm both caches with the poster so my-story cards + the viewer's first frame are instant.
             if let img = UIImage(data: prepared.thumbnail) {
                 DiskImageCache.shared.store(img, data: prepared.thumbnail, for: thumbUrl)
@@ -571,6 +631,11 @@ final class StoriesService {
         // thumb.jpg — the old hardcoded photo.jpg leaked both files on every video delete.
         let data = (try? await db.collection("stories").document(id).getDocument())?.data()
         let path = data?["mediaPath"] as? String ?? "stories/\(id)/photo.jpg"
+        // The public mirror goes with it, or a deleted story keeps playing on the author's profile
+        // to every stranger who opens it. No-op when there never was one.
+        if let author = data?["authorUid"] as? String {
+            await deletePublicMirror(storyId: id, authorUid: author)
+        }
         try? await Storage.storage().reference().child(path).delete()
         if data?["type"] as? String == "video" {
             try? await Storage.storage().reference().child("stories/\(id)/thumb.jpg").delete()
@@ -737,9 +802,13 @@ final class StoriesRepository {
            ((snap.data()?["blockedBy"] as? [String: Any])?[uid] as? Bool) == true {
             return nil   // the AUTHOR blocked me → no ring, no story
         }
-        let snap = try? await db.collection("stories")
-            .whereField("authorUid", isEqualTo: uid)
-            .whereField("public", isEqualTo: true)
+        // READS THE MIRROR, NOT THE STORY COLLECTION. The story documents carry `recipientUids` and
+        // are no longer readable by anyone outside the audience — because granting them to strangers
+        // so this query could work is exactly what leaked the author's contact list. The mirror at
+        // `users/{uid}/publicStories` holds the media and nothing about who else can see it, which
+        // is all a profile visitor ever needed. `parse` reads the same field names either way.
+        let snap = try? await db.collection("users").document(uid)
+            .collection("publicStories")
             .getDocuments()
         let now = Date()
         let stories = parse(snap?.documents)

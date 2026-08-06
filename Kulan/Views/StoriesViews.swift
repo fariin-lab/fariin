@@ -978,7 +978,12 @@ struct StoryViewer: View {
                         caption: s.caption,
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
-                            storyType: g.isMine
+                            // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an
+                            // ordinary 1:1 message, so the bar on a story reached from a profile was
+                            // a direct line to somebody who never accepted you — on the one surface
+                            // built for reach. `isFriend` is the same accepted-chat test the audience
+                            // itself is built from, so the two cannot disagree about who counts.
+                            storyType: g.isMine || !StoryContact.isFriend(g.authorUid)
                                 ? .plain()
                                 : (s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: true),
