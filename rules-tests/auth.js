@@ -9,6 +9,17 @@ const PROJECT = 'kulan-2ef85';
 const BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
 
 async function token() {
+  // ⚠️ AN ESCAPE HATCH FOR WHEN NODE CANNOT REACH GOOGLE FROM THIS PC.
+  //
+  // Node's fetch times out against oauth2.googleapis.com here while PowerShell's Invoke-RestMethod
+  // on the same machine succeeds — repeatedly, on the same network, minutes apart. Rather than
+  // discover that mid-suite and report a rules failure that is really a connectivity failure, mint
+  // the token in PowerShell and hand it over:
+  //
+  //   $env:FIREBASE_ACCESS_TOKEN = "<token from the oauth exchange>"
+  //
+  // Same token, same scope, one fewer hop that can time out.
+  if (process.env.FIREBASE_ACCESS_TOKEN) return process.env.FIREBASE_ACCESS_TOKEN;
   const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.config/configstore/firebase-tools.json'), 'utf8'));
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
