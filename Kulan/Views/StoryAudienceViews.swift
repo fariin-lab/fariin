@@ -100,6 +100,10 @@ struct StoryAudienceRow<Trailing: View>: View {
         case .everyone: return "globe"
         case .myFriends: return "person.2.fill"
         case .custom: return "rectangle.stack.fill"
+        // Never drawn: `StoryAudienceStore.all` excludes the hide list, because it is not an
+        // audience you can post to. Answered rather than trapped, so a future caller that does
+        // reach it gets a sensible icon instead of a crash.
+        case .hidden: return "eye.slash.fill"
         }
     }
     private var badgeTint: Color {
@@ -107,6 +111,7 @@ struct StoryAudienceRow<Trailing: View>: View {
         case .everyone: return .blue
         case .myFriends: return .orange
         case .custom: return .gray
+        case .hidden: return .gray
         }
     }
 }

@@ -256,7 +256,7 @@ final class StoryAudienceStore {
         saveMirror()
         write(StoryAudience(id: StoryAudience.hiddenId, kind: .hidden, name: "",
                             mode: .except, members: Array(hiddenFrom), allowReplies: true,
-                            createdAt: Self.sortsFirst))
+                            createdAt: StoryAudience.sortsFirst))
     }
 
     @discardableResult
