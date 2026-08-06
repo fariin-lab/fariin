@@ -158,6 +158,39 @@ public final class StoryCardMorph {
         CATransaction.commit()
     }
 
+    /// The card exactly as it looks right now, cropped to the story and no bigger than it needs to be.
+    ///
+    /// WHY THE CAROUSEL NEEDS THIS. The row draws its cards from `previewUrl`, and for a video that
+    /// url is the poster generated at post time — second zero. That is fine until the live card
+    /// steps aside for a swipe (`setHidden`), because at that instant the slot stops showing the
+    /// frame you were watching and starts showing the first frame of the clip. Same complaint this
+    /// whole file was written for, in the one place the transform does not reach: "swiping between
+    /// stories must not replace the background video cover."
+    ///
+    /// `drawHierarchy` rather than `layer.render(in:)`, because an AVPlayerLayer's frames are not in
+    /// the layer tree and `render(in:)` comes back with a hole where the video was. StoryPager's
+    /// dismiss backdrop has taken this same picture of this same view since it was written.
+    ///
+    /// The view's own `transform` is NOT baked in — it belongs to the card's place in its superview,
+    /// not to its contents — so this is the story at full size however far the morph has shrunk it.
+    public func snapshotCard(width targetW: CGFloat) -> UIImage? {
+        guard let card, card.bounds.width > 1, card.bounds.height > 1 else { return nil }
+        let rect = contentRect(in: card)
+        guard rect.width > 1, rect.height > 1 else { return nil }
+        // Rendered at the size it will be DRAWN at, not the size it is on screen. These are kept for
+        // the length of a viewing session and a full-screen bitmap is several megabytes each.
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = UIScreen.main.scale * max(0.1, min(1, targetW / rect.width))
+        fmt.opaque = true
+        return UIGraphicsImageRenderer(size: rect.size, format: fmt).image { _ in
+            // Shifted so `rect` lands at the origin: the card is a page-wide strip and only the
+            // story part of it is wanted.
+            card.drawHierarchy(in: CGRect(x: -rect.minX, y: -rect.minY,
+                                          width: card.bounds.width, height: card.bounds.height),
+                               afterScreenUpdates: false)
+        }
+    }
+
     /// Step the live card aside while the carousel row is being swiped.
     ///
     /// The story cannot follow a card that is mid-flight: it sits at the slot centre while the row

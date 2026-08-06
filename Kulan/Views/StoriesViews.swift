@@ -854,6 +854,19 @@ struct StoryViewer: View {
     /// crawled at half speed behind the panel: his "when I swipe sheet viewer the window card is
     /// not working like when I'm using my finger".
     @State private var sheetPageDrag: CGFloat = 0
+    /// The frame each of my VIDEO stories was actually showing the first time the sheet came up over
+    /// it, by story id. The carousel draws this instead of the poster.
+    ///
+    /// The live card only occupies the centre slot while nothing is being swiped; the moment a swipe
+    /// starts it steps aside (`StoryCardMorph.setHidden`) and the row draws its own card from
+    /// `previewUrl`. For a video that url is the poster, which is second zero — so the picture in the
+    /// slot jumped from the frame he was watching to the start of the clip at the first millimetre of
+    /// every swipe. His report, and the last corner of the app where a video story still showed
+    /// second zero.
+    ///
+    /// CAPTURED ONCE AND NEVER REFRESHED, which is his own instruction ("it should remain fixed and
+    /// stable… keep the original cover"). Cleared when the viewer goes away.
+    @State private var frozenCovers: [String: UIImage] = [:]
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
@@ -1172,11 +1185,26 @@ struct StoryViewer: View {
             // Unconditional — this must keep arriving while the morph is unavailable and after the
             // sheet's own early-return paths, or the caption stays stuck at whatever it last heard.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: p)
+            // Open enough that the card is showing the story properly: take its picture, once, so
+            // the carousel has a true cover to draw when the live card steps aside. See frozenCovers.
+            if p > 0.9 { captureFrozenCover() }
         }
         // The carousel row took over, or gave the centre back — by a finger on the row OR by the
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
         // See StoryCardMorph.setHidden.
-        .onChange(of: carouselInteracting || sheetPageDrag != 0) { _, on in StoryCardMorph.shared.setHidden(on) }
+        .onChange(of: carouselInteracting || sheetPageDrag != 0) { _, on in
+            StoryCardMorph.shared.setHidden(on)
+            // The swipe is over and the live card is back. Once the story underneath has finished
+            // landing on the card he stopped at (the same beat `sheetStoryId`'s handler waits for
+            // its re-freeze), photograph THIS story too, so the next swipe leaves a true cover
+            // behind as well. A story already photographed is left alone — see frozenCovers.
+            guard !on else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard showViewers, viewersProgress > 0.9,
+                      !carouselInteracting, sheetPageDrag == 0 else { return }
+                captureFrozenCover()
+            }
+        }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
@@ -1188,6 +1216,10 @@ struct StoryViewer: View {
             // must not hand the next one a caption that is already faded out.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: CGFloat(0))
             NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
+            // The frozen covers belong to ONE viewing session. Kept across sessions they would be
+            // bitmaps of frames nobody is watching any more, and the next open would show a cover
+            // from the last one.
+            frozenCovers.removeAll()
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
@@ -1477,6 +1509,18 @@ struct StoryViewer: View {
     ///
     /// The rectangle handed over is the SAME frame interpolation the deleted morph card used, so the
     /// motion the owner already signed off is unchanged; only the pixels inside it are real now.
+    /// Photograph the live card for the story the sheet is on, if it is a video and has not been
+    /// photographed already. See `frozenCovers` for why only videos and why only once.
+    private func captureFrozenCover() {
+        guard showViewers, frozenCovers[sheetStoryId] == nil, !sheetStoryId.isEmpty else { return }
+        let live = StoriesRepository.shared.mine?.stories ?? myStories
+        guard let s = live.first(where: { $0.id == sheetStoryId }), s.isVideo else { return }
+        // A photo's poster IS the photo, so the row's own card already matches and a snapshot would
+        // only be a second, staler copy of it.
+        guard let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w) else { return }
+        frozenCovers[sheetStoryId] = shot
+    }
+
     private func driveMorph(_ p: CGFloat) {
         guard showViewers else { StoryCardMorph.shared.reset(); return }
         // IF THERE IS NO CARD TO MOVE, HIDE THE STORY INSTEAD OF LEAVING IT FULL SIZE.
@@ -1549,7 +1593,8 @@ struct StoryViewer: View {
                               // underneath. Same size, same place, so the exchange is invisible.
                               hideActiveContent: !(carouselInteracting || sheetPageDrag != 0),
                               onInteracting: { carouselInteracting = $0 },
-                              pageDrag: sheetPageDrag)
+                              pageDrag: sheetPageDrag,
+                              frozenCovers: frozenCovers)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
@@ -2131,6 +2176,10 @@ struct MyStoriesCarousel: View {
     /// commit. Converted to card units below with `fullDist`, which is exactly what CarouselScroller
     /// divides a finger's own travel by — so both ways of moving the row move it the same distance.
     var pageDrag: CGFloat = 0
+    /// Frames photographed off the live card, by story id — see the host's `frozenCovers`. A story in
+    /// here draws THIS instead of its `previewUrl`, because for a video the previewUrl is the poster
+    /// and the poster is second zero.
+    var frozenCovers: [String: UIImage] = [:]
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
     // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
@@ -2162,7 +2211,9 @@ struct MyStoriesCarousel: View {
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
-         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: CGFloat = 0) {
+         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: CGFloat = 0,
+         frozenCovers: [String: UIImage] = [:]) {
+        self.frozenCovers = frozenCovers
         self.stories = stories
         self._activeId = activeId
         self.slotW = slotW
@@ -2274,6 +2325,21 @@ struct MyStoriesCarousel: View {
         .task { await loadAll() }
     }
 
+    /// The picture on a carousel card: the frame photographed off the live story if there is one,
+    /// otherwise the poster the way it has always been.
+    ///
+    /// The fill lives INSIDE an overlay of `Color.clear` for the same reason every other fill in this
+    /// file does: a bare `scaledToFill` reports its own oversized layout and the ZStack adopts it.
+    @ViewBuilder private func cardMedia(_ s: Story) -> some View {
+        if let shot = frozenCovers[s.id] {
+            Color.clear
+                .overlay(Image(uiImage: shot).resizable().scaledToFill())
+                .clipped()
+        } else {
+            StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false, cardFillThreshold: slotH / slotW)
+        }
+    }
+
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
@@ -2283,7 +2349,8 @@ struct MyStoriesCarousel: View {
         // fitBlur keeps the story exactly as full-screen (user rule: keep image + blur if it has
         // blur; fill with no blur if it doesn't). bakedBars:false = the real live material, so the
         // resting card's dark bars match the story's own bars (the baked copy read weaker).
-        return StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false, cardFillThreshold: slotH / slotW)
+        // A story with a frozen cover draws that instead — see cardMedia.
+        return cardMedia(s)
             .frame(width: slotW, height: slotH)
             .clipped()
             .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
