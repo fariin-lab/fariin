@@ -558,12 +558,31 @@ struct NewAudienceButton: UIViewRepresentable {
     var canAddCustom: Bool = true
 
     func makeUIView(context: Context) -> UIButton {
+        // SIZED FOR A SECTION HEADER, which is what it sits in.
+        //
+        // ⚠️ `buttonSize = .small` IS NOT ENOUGH and that was the bug he circled. It shrinks the
+        // padding and leaves the title on UIButton's default 17pt BODY font, so the capsule came out
+        // roughly as tall as a table row and towered over the "Stories" heading beside it.
+        //
+        // 15pt semibold for the word and 13pt for the plus, which is the proportion iOS uses for a
+        // header accessory and the proportion Signal's own "+ New" reads at. Scaled through
+        // UIFontMetrics so it still grows for anyone using larger text — a hardcoded 15 would be the
+        // one control on the screen that ignored the setting.
+        //
+        // (Said plainly: these are matched by eye and by iOS convention. I could not read Signal's
+        // source to copy their constants, and inventing numbers and calling them Signal's would be
+        // worse than saying so.)
         var cfg = UIButton.Configuration.gray()
-        cfg.title = "New"
-        cfg.image = UIImage(systemName: "plus")
+        let metrics = UIFontMetrics(forTextStyle: .subheadline)
+        var title = AttributeContainer()
+        title.font = metrics.scaledFont(for: .systemFont(ofSize: 15, weight: .semibold))
+        cfg.attributedTitle = AttributedString("New", attributes: title)
+        cfg.image = UIImage(systemName: "plus",
+                            withConfiguration: UIImage.SymbolConfiguration(
+                                font: metrics.scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))))
         cfg.imagePadding = 4
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         cfg.cornerStyle = .capsule
-        cfg.buttonSize = .small
         cfg.baseForegroundColor = .label
         let b = UIButton(configuration: cfg)
         b.showsMenuAsPrimaryAction = true   // one tap opens it; no long press, no dead first tap
