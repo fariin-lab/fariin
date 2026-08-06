@@ -19,6 +19,10 @@ enum SessionWipe {
         OfficialChannelStore.shared.reset()
         AdminStore.shared.reset()
         OfficialConfig.shared.stop()
+        // The story audiences are a list of the last person's friends by name, mirrored to disk so
+        // the share sheet can open instantly. Left behind, the next account's Share Story sheet
+        // would open holding a stranger's custom lists.
+        StoryAudienceStore.shared.clear()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         ProfileStore.shared.me = nil
         Drafts.shared.clear()                   // unsent plaintext

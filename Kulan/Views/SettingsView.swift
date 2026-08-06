@@ -992,9 +992,43 @@ struct StorySettingsView: View {
     @AppStorage("storyViewReceipts") private var viewReceipts = true
     @AppStorage("storiesOptedOut") private var optedOut = false
     @State private var confirmOff = false
+    @State private var audiences = StoryAudienceStore.shared
+    @State private var contacts: [StoryContact] = []
+    @State private var creating = false
 
     var body: some View {
         List {
+            // THE SAME LIST THE SHARE SHEET SHOWS, and deliberately the same rows: an audience you
+            // made while posting has to be findable afterwards, and one you make here has to be
+            // there the next time you post. One store, two doors.
+            if !optedOut {
+                Section {
+                    ForEach(audiences.all) { a in
+                        if a.kind == .everyone {
+                            // FIXED, and it does not pretend otherwise (owner's rule: "Everyone
+                            // cannot be edited"). No chevron, no destination, nothing to tap.
+                            StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                        } else if a.kind == .myFriends {
+                            NavigationLink { MyFriendsPrivacyView() } label: {
+                                StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                            }
+                        } else {
+                            NavigationLink { CustomStoryDetailView(audienceId: a.id) } label: {
+                                StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Stories")
+                        Spacer()
+                        NewAudienceButton { creating = true }
+                    }
+                    .textCase(nil)
+                } footer: {
+                    Text("Story updates automatically disappear after 24 hours. Choose who can view your story, or make a new one with specific viewers.")
+                }
+            }
             if !optedOut {
                 Section {
                     Toggle("View Receipts", isOn: $viewReceipts).tint(.green)
@@ -1018,6 +1052,11 @@ struct StorySettingsView: View {
         }
         .navigationTitle("Stories")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .sheet(isPresented: $creating) {
+            CreateCustomStoryFlow(onCreated: { _ in creating = false },
+                                  onCancel: { creating = false })
+        }
         .alert("Turn off stories?", isPresented: $confirmOff) {
             Button("Cancel", role: .cancel) {}
             Button("Turn Off", role: .destructive) { withAnimation { optedOut = true } }

@@ -186,6 +186,10 @@ struct RootView: View {
         OfficialChannelStore.shared.start()
         AdminStore.shared.start()
         OfficialConfig.shared.start()
+        // The story audiences, for the same reason: the share sheet opens on a tap and must already
+        // know what to draw. It starts from its own disk mirror, so this listener is a correction
+        // rather than a load — see StoryAudienceStore.
+        StoryAudienceStore.shared.start(uid: AuthService.shared.uid ?? "")
     }
 
     #if DEBUG

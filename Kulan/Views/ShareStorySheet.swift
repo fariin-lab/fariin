@@ -55,8 +55,21 @@ struct StoryBurnIn {
     var isEmpty: Bool { overlay == nil && cropRect == nil }
 }
 
-// "Share Story" audience sheet: choose who sees the story, then Post.
-// Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
+// MARK: - Share Story
+
+/// "Who can see your story", then Post.
+///
+/// REBUILT AROUND NAMED AUDIENCES (owner 2026-08-06, with his eight reference screens). It used to
+/// be three radio buttons over two loose uid sets kept in UserDefaults, answered fresh every time.
+/// It is a list of the audiences he owns now — Everyone, My Friends, and every custom story he has
+/// made — with a + New that builds another one without leaving the post.
+///
+/// WHAT MAKES "changes won't affect stories you've already sent" TRUE is not care here, it is the
+/// shape: `recipients(contacts:)` is resolved at this moment and written onto the story, and nothing
+/// on a posted story points back at the list it came from. Edit the list tomorrow, rename it, delete
+/// it — yesterday's story cannot notice. Signal is built the same way for the same reason.
+///
+/// Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
 struct ShareStorySheet: View {
     let image: Data
     var caption: String = ""
@@ -64,121 +77,70 @@ struct ShareStorySheet: View {
     /// Everything after the first item, in order. They post behind it and share this audience.
     var extras: [StoryExtra] = []
     var onPosted: () -> Void
+
     @Environment(\.dismiss) private var dismiss
-    @State private var repo = ConversationsRepository.shared
-    // Remember the last audience choice (as standard messengers do) instead of resetting each post.
-    // 3 was the removed "Everyone". Anybody who last posted publicly still has a 3 saved here, and
-    // without this clamp they would keep posting publicly forever with no option on screen to change
-    // it — the setting would be invisible AND stuck.
-    @State private var mode = min(UserDefaults.standard.integer(forKey: "storyAudMode"), 2)   // 0 friends, 1 except, 2 only
-    @State private var excluded = Set(UserDefaults.standard.stringArray(forKey: "storyAudExcluded") ?? [])
-    @State private var included = Set(UserDefaults.standard.stringArray(forKey: "storyAudIncluded") ?? [])
+    @State private var store = StoryAudienceStore.shared
+    @State private var contacts: [StoryContact] = []
+    @State private var creating = false
     @State private var emptyAudienceAlert = false
     @State private var posting = false   // one-shot guard so a double-tap can't double-post
-    private var me: String { AuthService.shared.uid ?? "" }
 
-    struct AudienceContact: Identifiable { let id: String; let name: String; let photo: String? }
-    private var contacts: [AudienceContact] {
-        // Exclude blocked contacts — postStory drops them from the real audience, so if the picker
-        // still showed/counted them a story could pass the "not empty" guard yet post to NO ONE.
-        repo.conversations.filter { !$0.isGroup && !$0.isBlockedByMe(me) }.compactMap {
-            let u = $0.otherUid(me)
-            return u.isEmpty ? nil : AudienceContact(id: u, name: $0.displayName(me), photo: $0.displayPhoto(me))
-        }
-    }
+    private var contactIds: Set<String> { StoryContact.ids(contacts) }
 
-    // Fully NATIVE structure (the old custom card's row taps were unreliable on device: the
-    // selection visibly never moved). Plain List rows select; the people picker is a PUSHED
-    // page (no nested sheet — those get recreated by iOS and can drop state).
     var body: some View {
         NavigationStack {
-            audienceList
-                .safeAreaInset(edge: .bottom) { postButton }
-                .navigationTitle("Share Story")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button { dismiss() } label: { Image(systemName: "xmark") }
+            List {
+                Section {
+                    ForEach(store.all) { a in
+                        Button { store.select(a.id) } label: {
+                            StoryAudienceRow(audience: a, contacts: contactIds) {
+                                StoryTick(on: store.selectedId == a.id)
+                            }
+                        }
                     }
+                } header: {
+                    HStack {
+                        Text("Who can see your story")
+                        Spacer()
+                        NewAudienceButton { creating = true }
+                    }
+                    // Sentence case, his reference. A section header uppercases its text by
+                    // default, and the + New button is not a header at all.
+                    .textCase(nil)
+                } footer: {
+                    Text(store.selected.isPublic
+                         ? "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories."
+                         : "Only the people in this list can watch it.")
                 }
-                // Persist every audience change IMMEDIATELY (not only on Post), so no recreation of
-                // this sheet's content can ever bounce the selection back.
-                .onChange(of: mode) { _, v in UserDefaults.standard.set(v, forKey: "storyAudMode") }
-                .onChange(of: excluded) { _, v in UserDefaults.standard.set(Array(v), forKey: "storyAudExcluded") }
-                .onChange(of: included) { _, v in UserDefaults.standard.set(Array(v), forKey: "storyAudIncluded") }
-                .alert("No one will see this", isPresented: $emptyAudienceAlert) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(mode == 2
-                         ? "Pick at least one person under \"Only share with,\" or choose \"My friends.\""
-                         : "Everyone you'd share with is excluded. Adjust the audience and try again.")
+            }
+            .safeAreaInset(edge: .bottom) { postButton }
+            .navigationTitle("Share Story")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
                 }
+            }
+            .alert("No one will see this", isPresented: $emptyAudienceAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Everyone in this list has been excluded or is no longer a chat. Pick another audience or add people to this one.")
+            }
         }
-        // 60% sheet: shows all 3 audience rows + the Post button comfortably. Drag up to .large.
+        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        // A new list is SELECTED the moment it is made: he built it in the middle of posting, so it
+        // is obviously the one he means. Signal does the same.
+        .sheet(isPresented: $creating) {
+            CreateCustomStoryFlow(
+                onCreated: { a in store.select(a.id); creating = false },
+                onCancel: { creating = false })
+        }
+        // 60% shows the built-ins plus a couple of custom lists and the Post button. Drag up for more.
         .presentationDetents([.fraction(0.6), .large])
         .presentationDragIndicator(.visible)
         // SOLID background — the default translucent material let the story photo show through the
         // sheet ("looks different"); this makes it a normal opaque grouped-list sheet.
         .presentationBackground(Color(.systemGroupedBackground))
-    }
-
-    @ViewBuilder private var audienceList: some View {
-        List {
-            Section {
-                // "EVERYONE" IS GONE, and it was the cause of two separate problems rather than a
-                // feature anybody was getting value from.
-                //
-                // It gave NO discovery. The only query for a public story is "show me this person's
-                // public stories", run when you are already standing on their profile — there is no
-                // browse, no explore, no feed. So it never helped anybody find anybody. All it did
-                // was let a stranger who had already found you watch your story.
-                //
-                // For that, it cost: every story in the app had to be stored unencrypted, because an
-                // audience with no recipient list has no key to seal it with; and it was the one
-                // surface where an App Store reviewer could be shown content posted by somebody else
-                // — the exact thing Apple pulled Telegram over on 2026-08-04.
-                //
-                // Signal has no public story either. Their four modes (default, blockList, explicit,
-                // disabled) are all recipient LISTS, which is why every Signal story can be sealed.
-                // We are matching that.
-                //
-                // "Friends", not "contacts" — there is no phone book behind this, only the people you
-                // chat with. See the Audience enum in PrivacyPages for the full reasoning.
-                optionRow(0, "person.fill", "My friends")
-                optionRow(1, "person.fill.xmark", "My friends except")
-                optionRow(2, "person.crop.circle.badge.checkmark", "Only share with")
-            } header: {
-                Text("Who can see your story")
-            } footer: {
-                Text("Only people you have chatted with can see your story. There is no public option, which is what lets a story be encrypted for the people you send it to.")
-            }
-            if mode == 1 {
-                Section {
-                    NavigationLink {
-                        AudiencePicker(title: "Exclude", contacts: contacts, selected: $excluded)
-                    } label: {
-                        pickerRowLabel("Excluded people", count: excluded.count)
-                    }
-                }
-            }
-            if mode == 2 {
-                Section {
-                    NavigationLink {
-                        AudiencePicker(title: "Only share with", contacts: contacts, selected: $included)
-                    } label: {
-                        pickerRowLabel("Selected people", count: included.count)
-                    }
-                }
-            }
-        }
-    }
-
-    private func pickerRowLabel(_ title: String, count: Int) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text("\(count)").foregroundStyle(.secondary)
-        }
     }
 
     private var postButton: some View {
@@ -190,71 +152,47 @@ struct ShareStorySheet: View {
         .buttonStyle(StoryPressStyle())
         .disabled(posting)
         .padding(.horizontal, 16).padding(.vertical, 10)
-        // Match the sheet background (was `.bar`, which showed as a grey strip behind the button).
         .background(Color(.systemGroupedBackground))
-    }
-
-    private func optionRow(_ m: Int, _ icon: String, _ title: String) -> some View {
-        Button { mode = m } label: {
-            HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 16)).foregroundStyle(.primary)
-                    .frame(width: 34, height: 34).background(Color.primary.opacity(0.08), in: Circle())
-                Text(title).foregroundStyle(.primary)
-                Spacer()
-                if mode == m {
-                    Image(systemName: "checkmark").foregroundStyle(.green).fontWeight(.semibold)
-                }
-            }
-            .contentShape(Rectangle())   // whole row taps, not just the icon/text
-        }
     }
 
     private func post() {
         guard !posting else { return }   // ignore a second tap while the first is in flight
-        // Compute the EFFECTIVE audience (intersect with current contacts) and block an empty one
-        // with a visible alert — not just a silent haptic. This catches both "only share with,
-        // nobody picked" AND the stale-list case (only-share with X, then X was deleted/blocked →
-        // recipientUids would be empty and the story would post to literally no one).
-        let contactIds = Set(contacts.map { $0.id })
-        let effective: Set<String>
-        if mode == 2 { effective = included.intersection(contactIds) }
-        else if mode == 1 { effective = contactIds.subtracting(excluded) }
-        else { effective = contactIds }
-        // Block ONLY when you HAVE contacts but narrowed the audience down to literally no one
-        // (excluded everyone / picked nobody). If you simply have NO contacts yet, posting is fine —
-        // it's still YOUR OWN story (always visible to you); it just has no other recipients until
-        // you add contacts. Without this, a brand-new user could never post their first story.
-        if effective.isEmpty && !contactIds.isEmpty {
+        let a = store.selected
+        let recipients = a.recipients(contacts: contactIds)
+        // Block ONLY when you HAVE chats but this audience narrows down to literally no one. With no
+        // chats at all, posting is still fine: it is YOUR OWN story and always visible to you, it
+        // just has no other recipients yet. Without that carve-out a brand-new user could never post
+        // their first story.
+        if recipients.isEmpty && !contactIds.isEmpty {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             emptyAudienceAlert = true
             return
         }
-        // Remember this audience for next time.
-        UserDefaults.standard.set(mode, forKey: "storyAudMode")
-        UserDefaults.standard.set(Array(excluded), forKey: "storyAudExcluded")
-        UserDefaults.standard.set(Array(included), forKey: "storyAudIncluded")
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         posting = true
+
+        // The service still speaks in excluded/included/everyone, and that is the right seam to keep:
+        // it resolves the audience against the LIVE chat list at upload time, which is what stops a
+        // list holding somebody you blocked five minutes ago from reaching them. Everything above is
+        // a nicer way of arriving at these three values.
+        let everyone = a.isPublic
+        let excluded: Set<String> = (a.kind == .myFriends && a.mode == .except) ? Set(a.members) : []
+        let included: Set<String> = {
+            if a.kind == .custom { return Set(a.members) }
+            if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
+            return []
+        }()
+        let replies = a.allowReplies
+
         if let video {
             StoriesService.shared.postVideoStoryBackground(
-                videoURL: video.url,
-                thumbnail: video.thumbnail,
-                muted: video.muted,
-                burn: video.burn,
-                trim: video.trim,
-                caption: caption,
-                excluded: mode == 1 ? excluded : [],
-                included: mode == 2 ? included : [],
-                everyone: false
-            )
+                videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
+                burn: video.burn, trim: video.trim, caption: caption,
+                excluded: excluded, included: included, everyone: everyone, allowsReplies: replies)
         } else {
             StoriesService.shared.postStoryBackground(
-                image: image,
-                caption: caption,
-                excluded: mode == 1 ? excluded : [],
-                included: mode == 2 ? included : [],
-                everyone: false
-            )
+                image: image, caption: caption,
+                excluded: excluded, included: included, everyone: everyone, allowsReplies: replies)
         }
         // The rest, in order, behind the first. The background posters already CHAIN rather than
         // cancel each other, so this queues instead of racing — which is what keeps a multi-item
@@ -265,53 +203,16 @@ struct ShareStorySheet: View {
         for extra in extras {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
-                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim, caption: "",
-                    excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
-                    everyone: false)
+                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
+                    caption: "", excluded: excluded, included: included, everyone: everyone,
+                    allowsReplies: replies)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
-                    image: p, caption: "",
-                    excluded: mode == 1 ? excluded : [], included: mode == 2 ? included : [],
-                    everyone: false)
+                    image: p, caption: "", excluded: excluded, included: included, everyone: everyone,
+                    allowsReplies: replies)
             }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
     }
 }
 
-// Multi-select contact list for the except/only audience lists.
-struct AudiencePicker: View {
-    let title: String
-    let contacts: [ShareStorySheet.AudienceContact]
-    @Binding var selected: Set<String>
-    @Environment(\.dismiss) private var dismiss
-
-    // Pushed inside the Share Story NavigationStack (NOT presented as its own sheet), so it must
-    // not wrap its own NavigationStack. Back or Done both pop.
-    var body: some View {
-        List {
-            if contacts.isEmpty {
-                ContentUnavailableView("No contacts", systemImage: "person.2",
-                                       description: Text("Start a chat to build your contact list."))
-            }
-            ForEach(contacts) { c in
-                Button {
-                    if selected.contains(c.id) { selected.remove(c.id) } else { selected.insert(c.id) }
-                } label: {
-                    HStack(spacing: 12) {
-                        AvatarView(name: c.name, photoUrl: c.photo, size: 36)
-                        Text(c.name).foregroundStyle(.primary)
-                        Spacer()
-                        if selected.contains(c.id) {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue)
-                        }
-                    }
-                    .contentShape(Rectangle())   // whole row taps, not just the avatar (Spacer was dead)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.fontWeight(.semibold) } }
-    }
-}

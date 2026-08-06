@@ -116,7 +116,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -141,7 +141,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included, everyone: everyone) }
+            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies) }
             catch is CancellationError { cancelled = true }   // user hit cancel → postStory removed the doc
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -188,7 +188,7 @@ final class StoriesService {
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", expiryHours: Double = 24,
-                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) async throws {
+                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
@@ -249,7 +249,7 @@ final class StoriesService {
                 // read rules gate on this flag. Contacts still get it in their tray via
                 // recipientUids below.
                 "public": everyone,
-                "allowsReplies": true,
+                "allowsReplies": allowsReplies,
                 "replyCount": 0,
                 "recipientUids": Array(recipients),
             ])
@@ -291,7 +291,7 @@ final class StoriesService {
     @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false,
                                              burn: StoryBurnIn? = nil,
                                              trim: ClosedRange<Double>? = nil, caption: String = "",
-                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) {
+                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         uploadingImage = UIImage(data: thumbnail)
@@ -309,7 +309,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, excluded: excluded, included: included, everyone: everyone) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -341,7 +341,7 @@ final class StoriesService {
     /// what this feature is for.
     func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil, burn: StoryBurnIn? = nil,
                         caption: String = "", expiryHours: Double = 24,
-                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false) async throws {
+                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true) async throws {
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
         // A hand trim decides where the material starts and how much of it there is; the split then
         // works on THAT, not on the original file. Trim to 20s and you get one story, not the first
@@ -357,7 +357,7 @@ final class StoriesService {
             // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
             try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
                                        expiryHours: expiryHours, excluded: excluded,
-                                       included: included, everyone: everyone)
+                                       included: included, everyone: everyone, allowsReplies: allowsReplies)
             return
         }
 
@@ -377,7 +377,7 @@ final class StoriesService {
                     try await postVideoSegment(videoURL: videoURL, range: range,
                                                caption: i == 0 ? caption : "", muted: muted, burn: burn,
                                                expiryHours: expiryHours, excluded: excluded,
-                                               included: included, everyone: everyone)
+                                               included: included, everyone: everyone, allowsReplies: allowsReplies)
                     lastError = nil
                     break
                 } catch is CancellationError {
@@ -402,7 +402,7 @@ final class StoriesService {
     // with an empty mediaUrl, so nobody sees a half-uploaded story).
     private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool, burn: StoryBurnIn? = nil,
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
-                                  everyone: Bool) async throws {
+                                  everyone: Bool, allowsReplies: Bool) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()
@@ -441,7 +441,7 @@ final class StoriesService {
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
             "public": everyone,
-            "allowsReplies": true,
+            "allowsReplies": allowsReplies,
             "replyCount": 0,
             "recipientUids": Array(recipients),
         ])

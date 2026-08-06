@@ -697,24 +697,24 @@ service cloud.firestore {
       );
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
-        // NO NEW PUBLIC STORIES, from any client. The app stopped offering the "Everyone" audience,
-        // and this is what makes that real rather than cosmetic — the app is the part an attacker
-        // replaces, so a rule has to say it too.
+        // PUBLIC STORIES ARE BACK, on the owner's explicit order of 2026-08-06, and the rule that
+        // refused them is gone with the audience option that was removed alongside it.
         //
-        // Why the audience went: it gave no discovery (the only public-story query is "show me this
-        // one person's", run from their profile — there is no browse or feed), while costing two
-        // serious things. An audience with no recipient list has no key to seal a story with, so its
-        // existence forced EVERY story in the app to be stored unencrypted. And it was the one place
-        // an App Store reviewer could be shown a stranger's content, which is what Apple pulled
-        // Telegram over on 2026-08-04.
+        // WHAT HE ASKED FOR, in his words: "Anyone on Fariin can view your story if they reach your
+        // profile, but only existing interactions/friends should get your story displayed directly
+        // in their Story List. It should not become a public story feed." That is exactly what this
+        // flag has always meant — the only query that reads it is `publicStoryGroup(for:)`, which
+        // asks for ONE named person's stories and is run from their profile. There is no browse and
+        // no feed to add it to, so the flag cannot become one.
         //
-        // Signal has no public story either. All four of their modes are recipient lists, which is
-        // exactly why every Signal story can be encrypted.
+        // WHAT IT COSTS, written down so the next reader does not think it was overlooked. An
+        // audience with no recipient list has no key to seal a story with, so story encryption, when
+        // it lands, will cover Friends and Custom lists and not this one. And this is the one
+        // surface where an App Store reviewer can be shown a stranger's content, which is what Apple
+        // pulled Telegram over on 2026-08-04 — so the report-and-ban path has to keep covering it.
+        // Both were put to him before this rule was changed and he chose to go ahead.
         //
-        // The READ rule below still honours `public == true` — stories already posted keep working
-        // until they expire, which is at most 24 hours.
-        && request.resource.data.get('public', false) == false
-        // A banned account cannot post anything anybody else can find.
+        // A banned account still cannot post anything anybody else can find.
         && !isBanned()
         && request.resource.data.recipientUids.size() <= 1000   // limit fan-out abuse
         // Kill "immortal stories": expiry must be within ~30h of now (client sets +24h; the
