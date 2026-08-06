@@ -681,14 +681,27 @@ struct RevealablePasswordField: UIViewRepresentable {
 
     /// ⚠️ The one UIKit trap in here. Switching secure entry ON while the field is being edited
     /// leaves it primed to replace its whole contents on the next keystroke, so the password
-    /// silently vanishes the moment somebody types after tapping the eye. Re-entering the same text
+    /// silently vanishes the moment somebody types after tapping the eye. Re-entering the text
     /// through the field's own editing path consumes that state. Assigning `.text` does not.
+    ///
+    /// NOT `selectAll` + `insertText`, which is the version everybody posts. On a live field
+    /// selectAll flashes the blue selection and can pop the Cut/Copy/Paste bar — the owner saw that
+    /// as a shake, and only with the keyboard up, which is exactly when this branch runs.
+    /// `deleteBackward` does the same job invisibly.
+    ///
+    /// It is written to survive either UIKit behaviour, because the quirk is that deleteBackward
+    /// sometimes removes the WHOLE contents here rather than one character, and which one you get
+    /// is not something to assume.
     private func applySecure(_ tf: UITextField) {
         guard tf.isSecureTextEntry != secure else { return }
         tf.isSecureTextEntry = secure
         guard secure, tf.isFirstResponder, let saved = tf.text, !saved.isEmpty else { return }
-        tf.selectAll(nil)
-        tf.insertText(saved)
+        tf.deleteBackward()
+        if (tf.text ?? "").isEmpty {
+            tf.insertText(saved)                      // it cleared everything
+        } else {
+            tf.insertText(String(saved.suffix(1)))    // it took one character
+        }
     }
 
     private static func placeholder(_ s: String) -> NSAttributedString {
