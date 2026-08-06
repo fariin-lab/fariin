@@ -895,7 +895,11 @@ final class StoriesRepository {
     }
 
     private func parse(_ docs: [QueryDocumentSnapshot]?) -> [Story] {
-        (docs ?? []).compactMap { d in
+        // WHOSE PHONE THIS IS, read once. `uid` is StoriesService's own private property and this is
+        // StoriesRepository, which is what the compiler caught; asking Auth inside the loop would
+        // also be one lookup per story rather than one per query.
+        let me = Auth.auth().currentUser?.uid ?? ""
+        return (docs ?? []).compactMap { d in
             let data = d.data()
             guard let author = data["authorUid"] as? String,
                   let url = data["mediaUrl"] as? String, !url.isEmpty,   // skip the pre-upload window (empty URL froze the viewer)
@@ -904,7 +908,7 @@ final class StoriesRepository {
             // one place every story list is built. The server is removing me from its recipients as
             // this runs; this is what makes "immediately" true on the tap rather than a beat later.
             // Never applied to my OWN stories — the author keeps theirs until it expires.
-            if data["oneTime"] as? Bool ?? false, author != uid, StoryPrefs.isOneTimeUsed(d.documentID) {
+            if (data["oneTime"] as? Bool ?? false), author != me, StoryPrefs.isOneTimeUsed(d.documentID) {
                 return nil
             }
             let created = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
