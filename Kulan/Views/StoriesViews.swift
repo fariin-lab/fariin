@@ -1154,6 +1154,12 @@ struct StoryViewer: View {
             // the drag that number is written by the finger and during the release by the
             // display-link spring, so the story tracks both without an animation of its own.
             driveMorph(p)
+            // ...and so is the caption, which fades out over the first third of the pull instead of
+            // riding the card down into the slot still drawn (his circle). Posted RAW: the library
+            // owns how its own chrome answers a pull, the same way it owns the caption's design.
+            // Unconditional — this must keep arriving while the morph is unavailable and after the
+            // sheet's own early-return paths, or the caption stays stuck at whatever it last heard.
+            NotificationCenter.default.post(name: .init("storySheetProgress"), object: p)
         }
         // The carousel row took over, or gave the centre back — by a finger on the row OR by the
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
@@ -1166,6 +1172,9 @@ struct StoryViewer: View {
             StoryCardMorph.shared.reset()   // never hand a transformed card to the next viewer
             NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
+            // Same reason the chrome is restored here: a viewer torn down with the sheet still up
+            // must not hand the next one a caption that is already faded out.
+            NotificationCenter.default.post(name: .init("storySheetProgress"), object: CGFloat(0))
             NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.

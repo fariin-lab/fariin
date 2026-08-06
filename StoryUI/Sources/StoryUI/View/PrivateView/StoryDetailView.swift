@@ -19,6 +19,55 @@ struct BottomRoundedShape: Shape {
     }
 }
 
+/// Fades the caption out as the viewers sheet is pulled up, 1:1 with the finger.
+///
+/// WHY IT IS A MODIFIER WITH ITS OWN STATE, and not another `@State` on StoryDetailView beside
+/// `chromeHidden`. The host writes the sheet's progress on every display-link tick, so this value
+/// changes ~60 times a second; a `@State` up in `StoryDetailView` would re-evaluate that whole body
+/// — the picture, the player, the bars — once per frame while the sheet is moving, which is exactly
+/// the "the story must never re-render" rule the chrome fades were written around. A ViewModifier is
+/// its own node in the view graph: `content` arrives already built by the parent, and a write here
+/// re-runs nothing but the opacity.
+///
+/// The header and the top scrim still flip on a boolean (`storyChromeHidden`) because they leave in
+/// one step and nobody has asked for anything else. The caption is the one the owner watched track
+/// the drag.
+private struct SheetCaptionFade: ViewModifier {
+    /// The pull is over well before the sheet is: the card is a third of the way into the slot by
+    /// then, and text that keeps drawing while it shrinks is what read as "still there".
+    private static let goneAt: CGFloat = 0.32
+
+    @State private var progress: CGFloat = 0
+
+    /// Linear, straight off the finger.
+    private var opacity: Double {
+        let t = min(1, max(0, progress / Self.goneAt))
+        return Double(1 - t)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            // No `.animation` anywhere near this: the value is already continuous, so an animation
+            // on top of a per-frame write only chases it a beat behind, and it stutters when the
+            // release spring changes speed.
+            .opacity(opacity)
+            // A faded caption must stop being a tap target too. The sheet hands touches in the card
+            // slot back to SwiftUI once it is open (the carousel band, progress > 0.95), and the
+            // caption's expand tap sits in the bottom-left corner of exactly that slot — invisible,
+            // and still swallowing taps meant for the card.
+            .allowsHitTesting(opacity > 0.01)
+            .onReceive(NotificationCenter.default.publisher(for: .init("storySheetProgress"))) { note in
+                // NSNumber, because the host's CGFloat goes through NotificationCenter's `id`.
+                let raw = (note.object as? NSNumber)?.doubleValue ?? 0
+                let p = min(1, max(0, CGFloat(raw)))
+                // Past the fade window there is nothing left to change; ignore the rest of the pull
+                // rather than invalidating this node on every frame of it.
+                guard p < Self.goneAt || progress < Self.goneAt else { return }
+                progress = p
+            }
+    }
+}
+
 struct StoryDetailView: View {
     // MARK: Public Properties
     @ObservedObject var viewModel: StoryViewModel
@@ -201,7 +250,11 @@ struct StoryDetailView: View {
                                     )
                             )
                             // Overlay caption: overlaid on the media (never baked into the photo).
-                            .overlay(captionView(story.caption, plain: story.config.storyType == .plain()), alignment: .bottom)
+                            // It fades with the viewers-sheet pull rather than flipping with the rest
+                            // of the chrome — see SheetCaptionFade.
+                            .overlay(captionView(story.caption, plain: story.config.storyType == .plain())
+                                        .modifier(SheetCaptionFade()),
+                                     alignment: .bottom)
                             // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
                             // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
                             // pixel-stable when the viewers sheet opens, so the scrim can't linger under
