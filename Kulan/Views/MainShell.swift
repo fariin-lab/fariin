@@ -1269,11 +1269,33 @@ struct ChatsView: View {
                                  // with no animation of its own — the card flying out of this row IS
                                  // the animation, and a cover sliding up behind it would be a second
                                  // one nobody asked for.
+                                 // ⚠️ THE CUSTOM OPEN/CLOSE IS OFF. His call, 2026-08-07, after a
+                                 // night of it: "put stories back on Apple's transition tonight".
+                                 //
+                                 // Flip this ONE line back to `true` to re-enable it — every other
+                                 // piece is still here and still compiles, because `heroDismiss`
+                                 // gates all of it: the hero pan is not installed, `stageHeroOpen`
+                                 // returns at its guard, and `libraryPresented` stops intercepting.
+                                 //
+                                 // WHY IT IS OFF, and it is not just the visual bugs. The flight
+                                 // moves the card by writing `transform` onto UIPageViewController's
+                                 // INTERNAL `_UIQueuingScrollView`, and his crash (build 481) is
+                                 // that class asserting from
+                                 // `queuingScrollView:didEndManualScroll:toRevealView:` while
+                                 // cleaning up a transition. We were transforming a private UIKit
+                                 // view that UIKit animates itself. No amount of fixing the geometry
+                                 // was going to make that safe.
+                                 //
+                                 // The replacement is a real `UIViewControllerAnimatedTransitioning`
+                                 // pair, which is what Signal (`StoryZoomAnimator`) and Telegram
+                                 // (`StoryContainerScreen.TransitionIn/Out`) both do: iOS hands it a
+                                 // container holding both screens and it flies a card in there,
+                                 // touching nothing private. Until that exists, this row opens the
+                                 // way every other door in the app does.
                                  onOpen: { g in
                                      viewerSourceID = g.isMine ? g.id : "story-\(g.id)"
-                                     viewerHero = true
-                                     var t = Transaction(); t.disablesAnimations = true
-                                     withTransaction(t) { viewerGroup = g }
+                                     viewerHero = false
+                                     viewerGroup = g
                                  },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
