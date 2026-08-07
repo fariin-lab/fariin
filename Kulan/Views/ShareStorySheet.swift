@@ -129,19 +129,32 @@ struct ShareStorySheet: View {
     /// width is taken narrower than the text really gets, so an estimate that is wrong is wrong in
     /// the direction that leaves room rather than the one that clips.
     private var footerHeight: CGFloat {
-        let text = oneTimeActive
-            ? "Each person can open this once. As soon as they do it is gone for them, and they cannot open it again."
-            : (store.selected.isPublic
-               ? "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories."
-               : "Only the people in this list can watch it.")
+        // ⚠️ THE TALLEST OF ALL THREE, NOT THE ONE CURRENTLY SHOWING, and that is not laziness.
+        //
+        // The footer changes with the selection: the public sentence is two lines, "Only the people
+        // in this list can watch it." is one. Measuring the CURRENT one would make the detent a
+        // function of which row is ticked — so tapping from Everyone to a custom story would resize
+        // the sheet under his finger, mid-tap. A sheet that moves while you are choosing is worse
+        // than one that is slightly tall, and it would have been my own regression rather than a bug
+        // I inherited.
+        //
+        // Sizing to the maximum costs at most one line of empty space on the shorter texts and makes
+        // the height depend only on the number of audiences, which is what he asked for.
+        let candidates = [
+            "Each person can open this once. As soon as they do it is gone for them, and they cannot open it again.",
+            "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories.",
+            "Only the people in this list can watch it."
+        ]
         // A grouped list footer is footnote, inset from both edges by the list AND the cell.
         let width = max(120, UIScreen.main.bounds.width - 72)
         let font = UIFont.preferredFont(forTextStyle: .footnote)
-        let box = (text as NSString).boundingRect(
-            with: CGSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font], context: nil)
-        return ceil(box.height) + 22   // the footer's own top and bottom padding
+        let tallest = candidates.map { text -> CGFloat in
+            (text as NSString).boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font], context: nil).height
+        }.max() ?? 40
+        return ceil(tallest) + 22   // the footer's own top and bottom padding
     }
 
     /// The home indicator's strip. `postButton` is a bottom safe-area inset, so it sits ABOVE this
