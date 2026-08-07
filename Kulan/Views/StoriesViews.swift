@@ -1957,8 +1957,14 @@ struct StoryViewer: View {
     /// Cheap to call as often as you like: `captureFrozenCover` already declines a story it has, and
     /// a stale timer lands on the guard below.
     private func scheduleFrozenCapture() {
+        // ⚠️ STILLNESS, NOT JUST OPENNESS. The old guard asked only whether the sheet was past 0.9,
+        // which a finger HOLDING it at 0.92 satisfies — and the caption's fade is driven by that same
+        // number, so the snapshot would still catch it part-drawn. Remembering the progress and
+        // requiring it to be UNCHANGED a beat later is what actually says "nothing is moving": a
+        // pull still under way cannot hold a number steady for a third of a second.
+        let at = viewersProgress
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            guard showViewers, viewersProgress > 0.9,
+            guard showViewers, viewersProgress > 0.9, viewersProgress == at,
                   !carouselInteracting, sheetPageDrag == 0 else { return }
             captureFrozenCover()
         }

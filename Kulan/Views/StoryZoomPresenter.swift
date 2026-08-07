@@ -112,6 +112,15 @@ enum StoryZoomPresenter {
     /// `isActive` stuck true would leave every story card dead until relaunch.
     static func noteDismissed(_ vc: StoryZoomContainerVC) {
         if container === vc { container = nil }
+        // ⚠️ AND GIVE THE SOURCE BACK. The open HIDES whatever it flew out of, so the row shows a
+        // waiting hole while the story is up, and every exit we drive reveals it again through
+        // `storyPresenterClosed`. This belt did not: it cleared the flag and left the hole.
+        //
+        // That was survivable while the only door was the stories row, where a missing card reads as
+        // a gap in a strip. It is not survivable now the CHAT LIST's ringed avatars use this: an
+        // exit we did not drive would leave a permanent blank circle in the main screen of the app,
+        // with no way back short of a relaunch. Idempotent, so calling it on every path is free.
+        MediaSourceVisibility.shared.reveal()
     }
 
     private static func topController() -> UIViewController? {
