@@ -74,29 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            DOWNLOADED STORIES SURVIVE AN APP UPDATE NOW. Story pictures and videos were being kept in the folder iOS empties whenever the phone runs low on space, and that folder is not carried across an app update - so everything you had already downloaded went back to needing the internet. They live in permanent storage with the rest of your media now, and anything already on your phone is moved across on first launch rather than lost. They delete themselves after two days, which is what Telegram uses for stories.
+            THE CAMERA / TEXT SWITCH IS APPLE'S OWN CONTROL NOW. Third try at this one, and the first two both missed the point: the material was Apple's but the control was still hand-built out of two buttons and a capsule I drew, and anything assembled by hand on a black background comes out looking like grey plastic. It is a real system segmented control, so Apple draws the glass, the sliding selection and the press.
 
-            THE CAMERA / TEXT SWITCH IS ONE PIECE OF GLASS. It was a glass track with a second glass pill on top of it, and two materials stacked on a black background both come out looking like grey plastic. Apple's own segmented glass has no track at all, just the selected word.
+            THE UPLOADING CARD LOOKS LIKE THE FINISHED STORY. A letterboxed video used to show black bars while uploading and then change to the gradient the moment it landed. Both pictures come from the same code now, so nothing changes colour at the hand-over. The story's own thumbnail was fixed the same way - it was made from the original clip, so the video carried the gradient and its thumbnail did not, which is why the same story showed a gradient on one card and black on the next.
 
-            SWIPING THE VIEWERS SHEET NO LONGER PILES THE CARDS UP. The sheet was handing the carousel a distance measured in points while the carousel was reading it as a number of cards, so a few millimetres threw the row sideways by tens of cards. Swiping the card itself was never affected, which is exactly why it only happened on the sheet.
+            TICKING SEVERAL PICTURES WORKS AFTER A VIDEO TOO. The + button offered multi-select after a photo but not after a video. It does both now, and a mix of clips and pictures is handled in one go instead of one at a time.
 
-            SQUARE AND LETTERBOXED VIDEOS GET A GRADIENT INSTEAD OF BLACK BARS. Posting one now fills the space above and below with a smooth gradient taken from the video's own colours, baked into the file so it looks the same for everyone. This replaces the blur, which had four separate ways to quietly produce nothing and fall back to black bars.
+            THE STORY YOU CANNOT REPLY TO NOW SAYS SO. Opening a story from someone you have no chat with left an empty strip where the reply bar goes, with no explanation. It shows a lock and a reason instead. Stories whose author turned replies off already did this; strangers were the case nobody had covered.
 
-            WHAT TO CHECK: post a square video and look at the top and bottom. Then open a story you have already watched with wifi off. Then swipe the viewers sheet sideways across several of your own stories.
+            THE BACKDROP FOLLOWS YOUR FINGER THE WHOLE WAY DOWN. The dimming behind a story held one fixed level for about 60 percent of the drag and only faded at the very end. It is continuous now, so the background gives way in step with the card.
 
-            ALSO IN THIS BUILD, from earlier today:
+            ALSO: the picker sheet no longer shows white in its top corners. The carousel card no longer catches the caption and its shadow. Chat-list story rings open on the new transition and the story lands back into the ring as a circle. Two data bugs fixed that could make a story you just deleted flicker back or one you just posted vanish for a beat.
 
-            THE STORY STAYS SOLID WHILE YOU PULL IT. It was going slightly see-through as you dragged, and with the chat list drawn right behind it even a few percent reads as glass. It is fully opaque now, the whole way down and the whole way back.
-
-            NOTHING IS CROPPED UNDER YOUR FINGER. The picture was being shaved from the top and bottom while you were still dragging. Now the drag is a pure scale-down of the whole picture, nothing removed, and the shape only settles into the row card's shape during the snap after you let go.
-
-            THE WHITE CORNERS ARE GONE. Our mask was drawing a plain circular corner while every card it has to line up with uses Apple's continuous curve. The sliver between those two curves was being filled with a piece of the chat list, which is what you saw as a white rind. Both shapes match now.
-
-            YOUR OWN STORY NO LONGER SHOWS BLACK TOP AND BOTTOM. Your story sits on a full-screen black layer that other people's stories do not have, which is exactly why theirs looked right and yours did not. That black now leaves on the first frame of a pull instead of fading out over the first three centimetres.
-
-            ROUNDED CORNERS THE WHOLE WAY, and the opening is quicker. The corner used to collapse to square whenever the card was near full screen, which is most of what you watch during an open. It now runs between the row card's corner and the story card's own, so it is round at every moment. The strip under the card that carries the reply bar is rounded too, instead of being a square shoulder under a round card.
-
-            ADD SEVERAL PICTURES AT ONCE. Tap + in the story editor and you can now tick as many as you want. Each tick is numbered so you can see the order they will land in, a preview strip along the bottom shows what you have chosen, tapping a preview removes it, and Add brings all of them straight back to the editor. Up to ten at a time.
-
-            WHAT TO CHECK: pull a story down slowly and hold. It must stay solid, nothing cropped, corners round from the start. Do the same on your OWN story and watch the top and bottom: no black over the chat list. Open a story and look at all four corners. Then tap + in the editor and add three pictures in one go.
+            WHAT TO CHECK: tap a story ring in the chat list, drag it down, and watch it land back into the round avatar. Post a letterboxed video and watch the uploading card and the finished story - they should look identical. Then open a story from a test account and look for the lock instead of an empty bar.
         run: fastlane beta
