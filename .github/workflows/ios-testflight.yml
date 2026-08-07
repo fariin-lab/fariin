@@ -74,15 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE CHAT LIST GOES DARK UNDER AN OPEN STORY.
+            THE WHITE AROUND A CLOSING STORY IS GONE, ALL OF IT THIS TIME.
 
-            You showed me the white above and below the story while you drag it down, and asked whether we set that white or iOS did. It is ours: it is the Chats screen, in light mode, showing through as the story shrinks. Your own Edit pill and toolbar icons are visible in it. Snapchat's looks different for one reason only, their whole app is dark behind.
+            The white you kept seeing while dragging a story down is our own Chats screen in light mode, showing through as the story shrinks. The last build darkened it, but I put that dark layer inside the Chats screen, so it missed the two places you photographed next: the strip along the bottom, which is the tab bar, and the sliver at the top. Both are drawn above the chat screen, so a layer inside it could never cover them.
 
-            So the chat list now sits under a dark layer while a story is open. The story pulls away from something dark, like theirs, instead of from a white page. You will only ever see it during the open and the close, because the rest of the time the story is covering that screen anyway.
+            It now sits over the whole window, tab bar included. Drag a story down and everything around it is dark.
 
-            It had to go on the chat screen rather than inside the story screen. Anything inside the story shrinks with the story, so it can never darken what is behind it.
+            Everything else is as it was: stories open and close with Apple's transition, which is stable and does not crash, and the black page around the card still clears the moment your finger goes down and comes back if you change your mind mid drag.
 
-            EVERYTHING ELSE IS AS IT WAS IN THE LAST BUILD: stories open and close with Apple's transition, which is stable and does not crash. The black page around the card already clears the instant you put your finger down, and comes back if you change your mind mid drag.
-
-            WHAT TO CHECK. Drag a story down slowly and look at what is around it: dark now, not white. Let go half way and it should spring back with everything normal. Then open and close twenty times, your own and a friend's, and nothing should freeze or crash.
+            WHAT TO CHECK. Drag a story down slowly and look at all four edges, top, bottom and both sides. Nothing white anywhere. Let go half way and it springs back to normal.
         run: fastlane beta

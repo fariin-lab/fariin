@@ -1,6 +1,17 @@
 import SwiftUI
 import UIKit
 
+/// "A story viewer is on screen." One bool, shared, because the two views that need it are not in a
+/// position to tell each other: the story is presented from the CHATS screen, and the surface it has
+/// to darken is `MainShell`, which owns the tab bar and sits above every tab.
+///
+/// @Observable rather than a notification so the overlay simply appears and disappears with it, and
+/// a stale one is impossible: the only writer sets it from the presentation state it already has.
+@Observable final class StoryPresentation {
+    static let shared = StoryPresentation()
+    var viewerOpen = false
+}
+
 // Native TabView keeps both tabs permanently mounted -> the header avatar never
 // unmounts/blinks on tab switch (the RN bug, solved structurally).
 struct MainShell: View {
@@ -58,6 +69,20 @@ struct MainShell: View {
                 modernTabView
             } else {
                 legacyTabView
+            }
+        }
+        // THE WHOLE WINDOW GOES DARK UNDER AN OPEN STORY, TAB BAR INCLUDED.
+        //
+        // My first attempt put this inside the Chats screen, and his next screenshot showed exactly
+        // what that misses: a white strip along the bottom, which is the tab bar, and a sliver at the
+        // top above the chat content. Both are drawn by THIS view, outside the Chats screen, so a dim
+        // living in there can never reach them.
+        //
+        // Here it is over the tab bar and every tab's content at once, which is what "the surface the
+        // story pulls away from" actually means.
+        .overlay {
+            if StoryPresentation.shared.viewerOpen {
+                Color.black.opacity(0.45).ignoresSafeArea().allowsHitTesting(false)
             }
         }
         // A pending chat (from a notification tap or the Calls "Go to Chat" menu) must
@@ -1371,10 +1396,10 @@ struct ChatsView: View {
             // Only while a viewer is up, which is the only time this screen is visible behind one.
             // Not animated on purpose — it appears under a cover that already covers it, so the
             // first frame anybody sees is during the transition.
-            .overlay {
-                if viewerGroup != nil || showUploadViewer {
-                    Color.black.opacity(0.45).ignoresSafeArea().allowsHitTesting(false)
-                }
+            // The dim itself lives on `MainShell`, over the tab bar too — see `StoryPresentation`.
+            // This only reports.
+            .onChange(of: viewerGroup != nil || showUploadViewer, initial: true) { _, open in
+                StoryPresentation.shared.viewerOpen = open
             }
             // Add Story opens the CAMERA, full screen (owner 2026-08-03). It was a bottom sheet
             // holding a picker; a camera in a card with the chat list showing behind it is not a
