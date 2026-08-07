@@ -3462,22 +3462,14 @@ struct MyStoriesCarousel: View {
                         // negative → effective scroll grows → the NEXT card slides toward the
                         // centre, in step with the panel under the same finger.
                         //
-                        // ⚠️ DIVIDED BY `fullDist`, AND THAT DIVISION WAS MISSING. `pageDrag` arrives
-                        // in POINTS (its own doc says so, and says it is "converted to card units
-                        // below with fullDist"), while `scroll` is in CARD UNITS. Subtracting one
-                        // from the other spent every point as a whole card, so a few millimetres of
-                        // sheet travel threw the row tens of cards sideways and the position formula
-                        // — which saturates past one card — piled them on top of each other at
-                        // assorted scales. That is his 2026-08-07 screenshot of the carousel with
-                        // five cards overlapping, and it only happens when the SHEET is the thing
-                        // being swiped, because a finger on the row itself goes through
-                        // `CarouselScroller`, which has always divided by `fullDist` — which is
-                        // exactly why he said the row alone "is working good".
-                        //
-                        // The comment that used to sit here claimed pageDrag was "already a
-                        // fraction". It was not, and the property's own doc four hundred lines up
-                        // said the opposite. Two comments disagreeing is what hid this.
-                        let cf = CGFloat(i) - (scroll - pageDrag / fullDist)
+                        // `pageDrag` IS ALREADY IN CARD UNITS — a fraction of the panel's journey,
+                        // and one panel journey is one card. See the long note at `onPageDrag` in
+                        // StoryViewersSheetUIKit for why this must not be divided by anything: I
+                        // divided it in build 493 and the row froze, then sent points instead and it
+                        // overshot fourfold. The commit snaps the row to exactly +1 card, so only a
+                        // value that reaches exactly 1.0 over a full panel travel lands where the
+                        // snap lands.
+                        let cf = CGFloat(i) - (scroll - pageDrag)
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist

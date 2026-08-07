@@ -536,7 +536,7 @@ final class StoryViewersSheetView: UIView {
             guard allowed else {
                 if pageDir != 0 { endPagePreview(restore: true) }
                 panel.transform = CGAffineTransform(translationX: tx * 0.25, y: 0)
-                onPageDrag?(tx * 0.25)   // points too — the rubber-band, at quarter strength
+                onPageDrag?(tx * 0.25 / max(bounds.width, 1))   // the rubber-band, same units
                 return
             }
             if pageDir != dir { beginPagePreview(dir) }
@@ -544,20 +544,24 @@ final class StoryViewersSheetView: UIView {
             // behind. One number, two views, no gap between them at any moment of the drag.
             pageGhost?.transform = CGAffineTransform(translationX: tx, y: 0)
             panel.transform = CGAffineTransform(translationX: tx + CGFloat(dir) * pageTravel, y: 0)
-            // ⚠️ RAW POINTS, and this line is the one that was lying. It sent `tx / bounds.width`,
-            // a fraction of the screen — while the carousel's own note says it receives POINTS and
-            // divides by `fullDist` to get card units, which is exactly what `CarouselScroller`
-            // does with a finger on the row itself.
+            // ⚠️ A FRACTION OF THE PANEL'S OWN JOURNEY, AND IT MUST STAY ONE. Twice now I have
+            // "corrected" this into a distance and both times it was wrong, so the reasoning is
+            // written down here rather than in a commit nobody re-reads.
             //
-            // In build 493 I made the carousel do that division and believed the two comments over
-            // this line, so a fraction of about 1 was divided by a distance of about 150 and the row
-            // moved by half a percent of what it should, then jumped when the swipe committed. That
-            // is his "erratic, jumps out of sync", and it was mine.
+            // The sheet commits exactly ONE story per full panel travel, and at that commit the row
+            // snaps to exactly one card. So the row has to cross exactly one card over that same
+            // full travel, or the snap is a jump. A fraction spent as card units does that by
+            // construction: 1 screen of panel = 1.0 card.
             //
-            // Sending points is the fix rather than removing the division, because points are what
-            // makes the two gestures the SAME gesture: a finger on the sheet now moves the row the
-            // same distance per point as a finger on the row, which is what he asked for.
-            onPageDrag?(tx)
+            // Measured on a 14 Pro, where fullDist is about 90pt: dividing this by fullDist (build
+            // 493, mine) moves the row 0.01 of a card and it looks frozen; sending raw points and
+            // dividing (my next attempt) moves it 4.4 cards and it overshoots by four to one. Only
+            // the fraction lands where the commit lands.
+            //
+            // It does mean the row travels slower than a finger ON the row, where one card is 90pt.
+            // That is not a bug: these two gestures are pacing different things. The row's own pan
+            // paces CARDS; this one paces PANELS, and the row is following the panel.
+            onPageDrag?(tx / max(bounds.width, 1))
         case .ended, .cancelled:
             onDragActive?(false)
             let tx = rawX - pageBaselineX
