@@ -13,12 +13,11 @@ import CryptoKit
 // Keyed by a STABLE hash of the URL path (String.hashValue is randomized per process, so unusable;
 // we ignore the volatile Firebase ?token query so the same file always maps to the same file on disk).
 enum StoryDiskCache {
-    static let dir: URL = {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let d = base.appendingPathComponent("StoryImageCache", isDirectory: true)
-        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        return d
-    }()
+    // Application Support, NOT Caches — see `StoryStorage`. It was under Caches, which iOS reclaims
+    // whenever the device is short of space and which is not carried across an app update, so every
+    // story he had already downloaded went back to needing the network. His report, and the same bug
+    // `DiskImageCache` was moved off Caches for long ago.
+    static let dir: URL = StoryStorage.directory("StoryImageCache")
     private static func key(_ url: URL) -> String {
         let base = (url.scheme ?? "") + (url.host ?? "") + url.path
         let digest = Insecure.MD5.hash(data: Data(base.utf8))

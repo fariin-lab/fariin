@@ -18,11 +18,10 @@ public enum Result<T> {
 /// target; CacheManager itself stays internal.
 public enum StoryVideoSeed {
     public static func seed(_ data: Data, for remoteURL: URL) {
-        guard data.count > 4096,   // below isUsableCacheFile's floor it would only wedge the cache
-              let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        else { return }
-        let dir = caches.appendingPathComponent("VideoCache", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard data.count > 4096 else { return }   // below isUsableCacheFile's floor it would only wedge the cache
+        // Same home as every other story file now — see `StoryStorage`. The seed and the reader have
+        // to agree on the directory or a just-posted story re-downloads its own upload.
+        let dir = StoryStorage.directory("VideoCache")
         let file = dir.appendingPathComponent(CacheManager.cacheFileName(for: remoteURL))
         try? data.write(to: file, options: .atomic)
     }
@@ -90,33 +89,14 @@ extension FileManager: @unchecked @retroactive Sendable {}
 
 private extension CacheManager {
 
+    /// `StoryStorage` owns the location now, along with the file protection, the backup exclusion and
+    /// the one-time move off `Caches`. The body this replaces created `Caches/VideoCache`, which iOS
+    /// reclaims under storage pressure and does not carry across an app update — his "when i update
+    /// the app story chache i loss". The seeder (`StoryVideoSeed`) asks the same helper for the same
+    /// name, because a seeder and a reader that disagree about the directory means a just-posted
+    /// story re-downloads its own upload.
     func createCacheDirectory() -> Result<URL> {
-        guard let cacheDirectory = fileManager.urls(
-            for: .cachesDirectory,
-            in: .userDomainMask
-        ).first
-        else {
-            return .failure("Unable to get cache directory")
-        }
-
-        let videoCacheDirectory = cacheDirectory.appendingPathComponent(
-            "VideoCache",
-            isDirectory: true
-        )
-
-        if !fileManager.fileExists(atPath: videoCacheDirectory.path) {
-            do {
-                try fileManager.createDirectory(
-                    at: videoCacheDirectory,
-                    withIntermediateDirectories: true,
-                    attributes: nil
-                )
-            } catch {
-                return .failure("Error creating video cache directory: \(error.localizedDescription)")
-            }
-        }
-
-        return .success(videoCacheDirectory)
+        .success(StoryStorage.directory("VideoCache"))
     }
 
     func downloadAndCacheVideo(from url: URL, speculative: Bool, completion: @escaping (Result<URL>) -> Void) {

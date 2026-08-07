@@ -1041,6 +1041,13 @@ final class StoriesRepository {
         #endif
         guard let me = Auth.auth().currentUser?.uid else { return }
         if listeningUid != me {
+            // ⚠️ THE OTHER HALF OF KEEPING STORY MEDIA PERMANENTLY. Its files moved out of `Caches`
+            // so the OS stops deleting them (his "when i update the app story chache i loss"), and a
+            // permanent directory with no lifetime rule is a leak. This is his "after Expired
+            // delete": anything past two days goes, which is the retention Telegram gives its own
+            // story category. Once per sign-in rather than per refresh — it walks two directories,
+            // and doing that on every pull-to-refresh would be work nobody asked for.
+            StoryStorage.purgeExpired()
             await MainActor.run {
                 seedFromDisk(me)   // last-known row paints NOW; the listeners reconcile it silently
                 start(me)          // first call, or the signed-in user changed
