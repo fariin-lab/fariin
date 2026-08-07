@@ -124,6 +124,14 @@ struct StoryDetailView: View {
     @State private var isPaused: Bool = false   // hold-to-pause
     @State private var isHolding: Bool = false  // TRUE only after the long-press engages → drives the
                                                 // chrome fade, so a quick tap doesn't flicker the header/bars
+    /// A hero open or close is in the air (host posts `storyFlightActive`).
+    ///
+    /// SEPARATE FROM `chromeHidden` ON PURPOSE, and the difference is the whole point. The bars and
+    /// the name live INSIDE the card, so they shrink with it — Snapchat keeps them there for the
+    /// whole pull, and it is what makes a story card read as a card rather than a photo sliding
+    /// about. The REPLY BAR does not: it is drawn below the card, it does not move, and it carries
+    /// its own solid black footer, so it has to leave. One flag for the sheet, one for the flight.
+    @State private var flightActive = false
     @State private var chromeHidden = false     // viewers sheet engaged (host posts storyChromeHidden):
                                                 // ONLY the chrome fades; the photo never animates
     @State private var scenePaused = false      // pause came from leaving the foreground, not a hold
@@ -348,6 +356,12 @@ struct StoryDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyChromeHidden"))) { note in
             let hidden = (note.object as? Bool) ?? false
             if hidden != chromeHidden { chromeHidden = hidden }
+        }
+        // A hero open or close is in the air: the reply bar and its black footer step aside, the
+        // card's own chrome stays on the card. See `flightActive`.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyFlightActive"))) { note in
+            let active = (note.object as? Bool) ?? false
+            if active != flightActive { flightActive = active }
         }
         // The player says whether it is waiting on bytes; the progress bar holds while it is. Only
         // the page that is actually current listens, or a neighbour's stall would freeze the story
@@ -574,6 +588,12 @@ private extension StoryDetailView {
         .padding()
         .padding(.bottom, winInsets.bottom)   // keep the reply bar above the home indicator (host no longer insets)
         .background(showBlackFooter ? AnyView(Color.black.ignoresSafeArea(edges: .bottom)) : AnyView(Color.clear))
+        // GONE FOR THE WHOLE FLIGHT. It sits below the card and does not move with it, and that black
+        // footer would be a bar of black across the bottom of the chat list while the story flew home.
+        // Snapchat's does the same: at rest there is a reply bar, and the instant the pull starts it
+        // is not there. See `flightActive`.
+        .opacity(flightActive ? 0 : 1)
+        .animation(.easeOut(duration: 0.15), value: flightActive)
         // Ride the keyboard's own timing (critically-damped spring keyed to the keyboard duration):
         // front-loaded like the keyboard, so the reply pill stays just above the keyboard's top edge
         // the whole way up instead of trailing behind it and popping in at the end (user: "bar comes

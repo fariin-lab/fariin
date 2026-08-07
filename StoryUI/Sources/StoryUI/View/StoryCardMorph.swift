@@ -187,13 +187,22 @@ public final class StoryCardMorph {
     ///     is what the viewers sheet still uses.
     ///   - alpha: the card's own opacity. 1 for the sheet; the hero close softens it slightly as it
     ///     is pulled away.
+    ///   - dim: how dark the surface BEHIND the card should be, 0…1. Snapchat darkens the list while
+    ///     the story is pulled away from it, and that darkening is most of why theirs reads as the
+    ///     story lifting off rather than a card sliding about on a bright white page. It is written
+    ///     onto the card's superview rather than a new view because that view is already the thing
+    ///     `prepareForHero` makes see-through, so there is exactly one answer to "what is behind the
+    ///     card". Nil leaves it alone, which is what the viewers sheet wants: it has its own canvas.
     public func apply(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
-                      centerOverride: CGPoint? = nil, alpha: CGFloat = 1) {
+                      centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil) {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
         guard !StoryPager.dismissActive, let card, let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
+        // The dim is written before the early-out: a drag that has begun but not yet moved is still a
+        // drag, and the surface behind should already be answering to it.
+        if let dim { superview.backgroundColor = UIColor.black.withAlphaComponent(max(0, min(1, dim))) }
         // A hero drag begins at fraction 0 and moves the card by translation alone for the first
         // few points, so "nothing to do" cannot be decided from the fraction on its own any more.
         guard f > 0.001 || centerOverride != nil else { reset(); return }

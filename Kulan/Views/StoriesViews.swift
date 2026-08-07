@@ -908,6 +908,22 @@ struct StoryViewer: View {
         private var current: CGFloat = 0
         private var write: ((CGFloat) -> Void)?
         private var completion: (() -> Void)?
+        /// PER ANIMATOR, because the sheet and the hero want different answers and used to share one.
+        ///
+        /// The sheet keeps 340 and its tight finish: it was tuned against Telegram's and he signed it
+        /// off. The HERO does not — he timed the open at 0.51s and the maths agrees exactly
+        /// (`t = 9.2 / sqrt(340) = 0.50s`), because a critically damped spring spends its last quarter
+        /// second delivering the final one percent. The eye is done at 0.25s and the rest reads as the
+        /// card hanging.
+        private let k: CGFloat
+        /// How close is close enough to stop. Chasing 0.001 is what made that tail; the hero stops at
+        /// a distance nobody can see on a card that size.
+        private let settleEpsilon: CGFloat
+
+        init(stiffness: CGFloat = 340, settleEpsilon: CGFloat = 0.001) {
+            self.k = stiffness
+            self.settleEpsilon = settleEpsilon
+        }
 
         /// `velocity` is the finger's release velocity in progress-units/sec (+ = opening), handed
         /// straight to the spring so a flick continues at the speed it was thrown instead of
@@ -926,11 +942,12 @@ struct StoryViewer: View {
         func cancel() { link?.invalidate(); link = nil; write = nil; completion = nil }
         @objc private func tick(_ l: CADisplayLink) {
             let dt = CGFloat(min(l.targetTimestamp - l.timestamp, 1.0 / 30.0))
-            // Critically-damped spring, feel-matched to interactiveSpring(response: ~0.34).
-            let k: CGFloat = 340
+            // Critically damped, so it arrives without overshooting. `k` is per animator now — see
+            // the property. 340 is interactiveSpring(response: ~0.34); 631 is Signal's own story
+            // transition spring, `response: 0.25, damping: 1`, which expands to stiffness (2π/0.25)².
             velocity += (k * (target - current) - 2 * sqrt(k) * velocity) * dt
             current += velocity * dt
-            if abs(target - current) < 0.001, abs(velocity) < 0.02 {
+            if abs(target - current) < settleEpsilon, abs(velocity) < settleEpsilon * 20 {
                 current = target
                 write?(current)
                 let done = completion
@@ -1016,9 +1033,12 @@ struct StoryViewer: View {
     /// Written ONCE per flight, at each end — never per frame. Everything that moves stays in
     /// `HeroBox` for the reason written on it.
     @State private var heroFlying = false
-    /// One scalar, 0 → 1, driving the hero's open, its landing and its spring-back. Reuses the
-    /// sheet's display-link spring so both transitions in this viewer settle with the same feel.
-    @State private var heroAnimator = SheetProgressAnimator()
+    /// One scalar, 0 → 1, driving the hero's open, its landing and its spring-back. Same display-link
+    /// spring the sheet uses, on SIGNAL'S numbers rather than the sheet's: `response 0.25, damping 1`
+    /// is stiffness (2π/0.25)² = 631, and it stops at a distance nobody can see. Together those take
+    /// the flight from the 0.51s he measured to about 0.3s, which is what Signal's own story
+    /// transition costs (0.2s grow + 0.1s cross fade).
+    @State private var heroAnimator = SheetProgressAnimator(stiffness: 631, settleEpsilon: 0.004)
     /// How far the finger has to travel for the card to be fully seated in the row card. Generous on
     /// purpose: the shrink has to read as gradual under a slow drag, and the close commits long
     /// before this is reached.
@@ -1026,6 +1046,9 @@ struct StoryViewer: View {
     /// How much the story itself dims as it is pulled away. Small: it is the background that is
     /// meant to give way, not the picture.
     private static let heroFade: CGFloat = 0.22
+    /// The darkest the chat list gets under a story in flight. Judged against his Snapchat shots,
+    /// where the list behind is dimmed well past half but never to black — you can still read it.
+    private static let heroDimMax: CGFloat = 0.45
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
@@ -1839,7 +1862,23 @@ struct StoryViewer: View {
                                     targetCenter: CGPoint(x: hero.anchor.midX, y: hero.anchor.midY),
                                     cornerRadius: 24,
                                     centerOverride: hero.center,
-                                    alpha: hero.alpha)
+                                    alpha: hero.alpha,
+                                    dim: heroDim(hero.f))
+    }
+
+    /// HOW DARK THE CHAT LIST IS WHILE THE STORY IS IN THE AIR. Snapchat's, from his screenshots: the
+    /// list behind is clearly greyed down the moment the card starts to move, which is what makes the
+    /// story read as lifting off it.
+    ///
+    /// It rises fast and then LETS GO before the landing. A dim held all the way home would still be
+    /// on the screen at the instant the cover is taken away, so the chat list would snap from grey to
+    /// white in one frame — a flash exactly where the eye is. Up over the first 60pt of travel, full
+    /// through the middle, back to nothing over the last quarter. Symmetric, so the open fades it in
+    /// and out the same way on its way to full screen.
+    private func heroDim(_ f: CGFloat) -> CGFloat {
+        let up = min(1, max(0, f) / 0.15)
+        let down = f > 0.75 ? max(0, (1 - f) / 0.25) : 1
+        return Self.heroDimMax * up * down
     }
 
     /// THE CARD THIS STORY BELONGS TO RIGHT NOW, which is not always the one it was opened from.
@@ -1941,6 +1980,9 @@ struct StoryViewer: View {
             // without this the open would be a small story growing on a full black screen instead of
             // growing out of the row over the chat list.
             StoryCardMorph.shared.prepareForHero?()
+            // Same on the way in as on the way out: no reply bar sitting at the bottom of the chat
+            // list while the card is still growing out of the row.
+            NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
             applyHero()
             // Hide the card underneath before revealing the one on top of it, or the same picture
             // is on screen twice for the length of the flight.
@@ -1949,6 +1991,7 @@ struct StoryViewer: View {
             runHero(to: 0, center: rest, alpha: 1, velocity: 0) {
                 hero.live = false
                 heroFlying = false                          // full screen again: the backing may return
+                NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
                 StoryCardMorph.heroDismissActive = false
                 StoryCardMorph.shared.reset()
                 StoryCardMorph.shared.restoreAfterHero?()   // the page is opaque black again at rest
@@ -2022,7 +2065,7 @@ struct StoryViewer: View {
         hero.alpha = 1
         StoryCardMorph.heroDismissActive = true
         StoryCardMorph.shared.prepareForHero?()
-        NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)
+        NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
         commitHero(velocity: 0)
         return true
     }
@@ -2046,9 +2089,14 @@ struct StoryViewer: View {
             hero.f = 0
             hero.center = rest
             hero.alpha = 1
-            // The chrome steps aside for the whole gesture: progress bars, header and reply bar are
-            // furniture around a story that is no longer where they are drawn.
-            NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)
+            // THE REPLY BAR STEPS ASIDE, THE CARD'S OWN CHROME STAYS ON THE CARD.
+            //
+            // This used to post `storyChromeHidden`, which took the progress bars and the name with
+            // it and left a bare photo sliding around. Snapchat keeps them: they are drawn inside the
+            // card, so they shrink with it and the thing in your hand still looks like a story. What
+            // has to go is the reply bar, which is drawn BELOW the card, does not move, and carries a
+            // solid black footer that would lie across the chat list. See `flightActive`.
+            NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
 
         case .changed:
             guard hero.live, !hero.committing else { return }
@@ -2121,7 +2169,7 @@ struct StoryViewer: View {
 
     private func cancelHero(velocity vy: CGFloat) {
         NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
-        NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
+        NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
         let remaining = max(1, hypot(hero.rest.x - hero.center.x, hero.rest.y - hero.center.y))
         runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining) {
             hero.live = false
