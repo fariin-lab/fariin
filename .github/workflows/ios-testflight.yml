@@ -74,17 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE CAMERA / TEXT SWITCH IS APPLE'S OWN CONTROL NOW. Third try at this one, and the first two both missed the point: the material was Apple's but the control was still hand-built out of two buttons and a capsule I drew, and anything assembled by hand on a black background comes out looking like grey plastic. It is a real system segmented control, so Apple draws the glass, the sliding selection and the press.
+            FAST REPEATED SWIPES ON THE VIEWERS SHEET.
 
-            THE UPLOADING CARD LOOKS LIKE THE FINISHED STORY. A letterboxed video used to show black bars while uploading and then change to the gradient the moment it landed. Both pictures come from the same code now, so nothing changes colour at the hand-over. The story's own thumbnail was fixed the same way - it was made from the original clip, so the video carried the gradient and its thumbnail did not, which is why the same story showed a gradient on one card and black on the next.
+            Swiping the sheet sideways to the next story takes about a third of a second to settle. If you started another swipe inside that window, the app tore the first one down the WRONG way round - it put the story you were leaving back over the one it had just moved to. So a normal swipe worked and a fast one appeared to do nothing.
 
-            TICKING SEVERAL PICTURES WORKS AFTER A VIDEO TOO. The + button offered multi-select after a photo but not after a video. It does both now, and a mix of clips and pictures is handled in one go instead of one at a time.
+            An interrupted swipe now finishes the way it was already going to finish.
 
-            THE STORY YOU CANNOT REPLY TO NOW SAYS SO. Opening a story from someone you have no chat with left an empty strip where the reply bar goes, with no explanation. It shows a lock and a reason instead. Stories whose author turned replies off already did this; strangers were the case nobody had covered.
+            THIS IS THE ONLY CHANGE IN THIS BUILD. Everything else you are testing is build 494.
 
-            THE BACKDROP FOLLOWS YOUR FINGER THE WHOLE WAY DOWN. The dimming behind a story held one fixed level for about 60 percent of the drag and only faded at the very end. It is continuous now, so the background gives way in step with the card.
-
-            ALSO: the picker sheet no longer shows white in its top corners. The carousel card no longer catches the caption and its shadow. Chat-list story rings open on the new transition and the story lands back into the ring as a circle. Two data bugs fixed that could make a story you just deleted flicker back or one you just posted vanish for a beat.
-
-            WHAT TO CHECK: tap a story ring in the chat list, drag it down, and watch it land back into the round avatar. Post a letterboxed video and watch the uploading card and the finished story - they should look identical. Then open a story from a test account and look for the lock instead of an empty bar.
+            WHAT TO CHECK: open your own story, pull the viewers sheet up, then swipe sideways across it as fast as you can several times in a row. Every swipe should land on the next story. If any of them still stick, a short screen recording would help - this one is a timing bug and I could not reproduce it here.
         run: fastlane beta
