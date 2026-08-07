@@ -1477,7 +1477,18 @@ struct StoryViewer: View {
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
         // black canvas and the light Chats list bleeds through as the "white" bug. Clear only at rest,
         // so the swipe-DOWN dismiss still reveals the Chats list sliding behind the story.
-        .presentationBackground { Color.black.opacity(showViewers ? 1 : 0) }
+        // BLACK ALWAYS, NOT ONLY WHILE THE SHEET IS UP.
+        //
+        // It was `Color.black.opacity(showViewers ? 1 : 0)`, clear at rest, and the reason given was
+        // that a see-through cover let the Chats list show behind a swipe-down. That was written for
+        // our own dismiss, which no longer runs here.
+        //
+        // What clear actually gets you now is his screenshot: a WHITE band along the top edge of the
+        // shrinking card. The library clears the page's black the instant a finger goes down, so only
+        // the card pulls away — and underneath that black is this backing, which when clear is the
+        // cover's default, white in light mode. Black is what the card already wears above the story
+        // at rest, so the strip stops being visible at all.
+        .presentationBackground(Color.black)
         // TELL THE PRESENTATION TO STAND DOWN, instead of arguing with its recogniser.
         //
         // His report: sometimes a downward drag over an OPEN sheet closes the whole viewer instead
