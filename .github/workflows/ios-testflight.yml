@@ -74,13 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            YOUR TWO BUILD-487 REPORTS, BOTH FIXED.
+            THREE OF YOUR REPORTS IN ONE BUILD.
 
-            THE LATE BLACK ON OPEN (your circled screenshots): the black above and below the card used to arrive only after the story finished opening, leaving white strips for a moment. The backdrop now turns black together with the arriving card, so there is nothing left to fill in late.
+            THE OPEN IS A CROSSFADE NOW. The row card previews the newest story, but the viewer opens on your first unwatched one. That switch used to be a one-frame pop; now the card lifts off showing exactly what the row showed and dissolves into the story it opens on, as part of the same motion. When they are the same story you see no change at all.
 
-            THE FLASH AT THE END OF THE CLOSE (your slow-motion find): the landing used to swap the live story for the row's still cover in a single frame. The row card now stays visible and the flying story melts into it, a real crossfade like Apple's and Telegram's, so no frame changes abruptly.
+            THE TAP DIPS THE CARD, like Snapchat: the card presses down to 92 percent under your finger, and the story flies out of the pressed card as it springs back. Hold your finger and it stays pressed until you let go.
 
-            Same custom story transition as 487 otherwise: stories row only, card on your finger, springs back early, flies home past the threshold, videos never restart.
+            SQUARE VIDEO STORIES KEEP THEIR BLUR. Fourth report, different fix: the blurred background is now baked into the video file when you post, exactly the picture the editor shows. Every viewer on every phone will show it, because it is part of the video now. The one trade: posting a square or landscape video takes a few extra seconds (it re-encodes). Tall 9:16 videos post fast as before.
 
-            WHAT TO CHECK. Open a story from the row and watch the top and bottom: black must arrive with the card, no white strips at the end. Close it and watch the landing, in slow motion if you like: the story should melt into its row card with no blink. Then the usual round: slow drag, let go half way, video story, viewers sheet, delete one of several stories.
+            WHAT TO CHECK. Tap a story card: dip, then one continuous lift, no content pop even when the viewer opens an older unwatched story. Post a 1:1 video with nothing drawn on it: the posted story must show the blurred bands, same as the editor. Then the usual close checks: drag down, let go half way, full close in slow motion.
         run: fastlane beta
