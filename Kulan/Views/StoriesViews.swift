@@ -1976,8 +1976,13 @@ struct StoryViewer: View {
     /// Run the single scalar from 0 to 1, interpolating every value in `hero` between the two ends
     /// stored on it. `velocity` is the finger's, in progress units per second, so a flick carries
     /// its own speed into the spring instead of restarting from rest.
+    /// `alphaCurve` reshapes TIME for the alpha alone (geometry stays on the spring's own t). The
+    /// landing hands `t³` so its fade is tail-heavy: the card stays solid while it travels and
+    /// melts only as it arrives — a whole-journey linear fade was the see-through flying card he
+    /// reported on an earlier build.
     private func runHero(to endF: CGFloat, center endC: CGPoint, alpha endA: CGFloat,
-                         velocity: CGFloat, done: @escaping () -> Void) {
+                         velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
+                         done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
         hero.fromA = hero.alpha;  hero.toA = endA
@@ -1985,7 +1990,7 @@ struct StoryViewer: View {
             hero.f = hero.fromF + (hero.toF - hero.fromF) * t
             hero.center = CGPoint(x: hero.fromC.x + (hero.toC.x - hero.fromC.x) * t,
                                   y: hero.fromC.y + (hero.toC.y - hero.fromC.y) * t)
-            hero.alpha = hero.fromA + (hero.toA - hero.fromA) * t
+            hero.alpha = hero.fromA + (hero.toA - hero.fromA) * alphaCurve(t)
             applyHero()
         }, completion: done)
     }
@@ -2228,10 +2233,15 @@ struct StoryViewer: View {
         // the same.
         NotificationCenter.default.post(name: .init("stopVideo"), object: nil)
         let anchorCentre = CGPoint(x: hero.anchor.midX, y: hero.anchor.midY)
-        // Blank the row card so the flying story lands on an empty slot and the two are never both
-        // drawn. Revealed by whoever tears this viewer down, not here: the cover is still on screen
-        // for a frame or two after the landing.
-        MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, heroKeyNow()))
+        // THE ROW CARD STAYS VISIBLE, AND THE FLYING STORY FADES INTO IT. This used to blank the
+        // slot so the two were "never both drawn", and the landing then swapped the live story for
+        // the row's still cover in a single frame. He filmed it and stepped through: a one-frame
+        // flash at the end of every close, "still picture pop", too fast for the eye and exactly
+        // visible in slow motion. Apple's zoom and Telegram's TransitionOut both land by
+        // CROSSFADING the moving picture into the resting one, and that is what the tail-heavy
+        // alpha on the landing spring below does — the card is solid for the flight and melts into
+        // the row card as it arrives. Nothing pops, because at every frame one continuous blend of
+        // the two pictures is on screen.
         // Distance left to travel, so the finger's speed enters the spring in the right units.
         // A hard flick is a strong "close this" and the landing should carry that speed. Capped
         // because the row card can be very close to where the finger let go, and a small `remaining`
@@ -2246,7 +2256,8 @@ struct StoryViewer: View {
             // raised would keep the NEXT story's cube flat for as long as that story was open.
             StoryCardMorph.heroDismissActive = false
         }
-        runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining), done: land)
+        runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
+                alphaCurve: { $0 * $0 * $0 }, done: land)
         // A FLIGHT THAT NEVER LANDS MUST NOT TRAP HIM IN THE VIEWER.
         //
         // `libraryPresented` swallows every close while `committing` is true, which is right — a
