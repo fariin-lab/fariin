@@ -74,13 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            NO WHITE LEFT ANYWHERE WHEN YOU DRAG A STORY DOWN. Two separate whites, both gone.
+            THE DRAG-DOWN IS CLEAN NOW: no white anywhere, and the trash bar gets out of the way.
 
-            THE ONE AROUND THE STORY was our own Chats screen, in light mode, showing as the story shrinks away from it. The whole window now goes dark while a story is open, tab bar included. The first attempt only darkened the chat list itself, which is why the strip along the bottom and the sliver at the top survived, and you photographed both.
+            NO WHITE, and there were two of them with different causes. The one AROUND the story was our own Chats screen in light mode, showing as the story shrinks away from it, so the whole window now darkens while a story is open, tab bar included. The one INSIDE the card, the band along its top edge, was the story screen's own backing: the library clears the black page the instant your finger lands so that only the card pulls away, and underneath that black sat a white backing. It is black now.
 
-            THE ONE INSIDE THE CARD, the band along its top edge, was the story screen's own backing. The moment your finger goes down the library clears the black page so that only the card pulls away, and what was underneath that black was a white backing. It is black now, which is what the card already wears above the picture when the story is open, so there is nothing to notice.
+            THE VIEWS AND TRASH BAR NO LONGER SITS THERE while the story is dragged away. It is drawn below the card and does not move with it, and it hides itself when the app is told your finger is moving. The gesture that runs during Apple's transition never told it: it handled the start and the end of your drag and nothing in between. It reports now, so the footer, the reply pill and the owner bar all step aside as the story shrinks, and come back if you let go half way.
 
-            Everything else is unchanged: Apple's transition, stable, no crash.
+            Everything else unchanged: Apple's transition, stable, no crash.
 
-            WHAT TO CHECK. Drag a story down slowly and look at all four edges and at the top of the card itself. Nothing white anywhere. Let go half way and it springs back to normal.
+            WHAT TO CHECK. Drag your own story down slowly. Nothing white at any edge, nothing white at the top of the card, and the Views and trash bar should fade out as soon as it starts moving. Let go half way and everything comes back.
         run: fastlane beta
