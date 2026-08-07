@@ -74,17 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE STORY OPEN AND CLOSE, second pass. Your two recordings found what the last build missed.
+            THE OPEN WAS RUNNING TWICE. That is the two shakes, the second flight starting from the row card, and the black behind it.
 
-            A FRIEND'S STORY GROWS NOW. The last build did not fix this and I told you the reason I gave was a guess. Your recording showed it was wrong. Your story and a friend's story use two different card views, and a friend's one starts at 390 instead of 0 because it is a page controller. The code that cuts the story out of the screen added that 390 twice, so the hole it cut sat one whole screen to the right of the story. That is why a friend's story showed nothing while it flew and left a sliver stuck at the right edge when you closed it. One line.
+            It was my mistake in the last build, both halves of it. The open waits for the card's real position on a ladder of attempts, and I stretched that ladder from a quarter second to just over half a second so a friend's story had time to lay out. In the same build I put the animation on Signal's spring, which took it from 0.5 seconds to about 0.3. The ladder was guarded on "is a flight running", and that goes false when the flight FINISHES. So from 0.3s onward every leftover attempt saw no flight and both rectangles, and started the whole open again. The second one ran over black because finishing is what puts the black backing back.
 
-            THE CARD KEEPS ITS BARS AND NAME WHILE YOU DRAG. They are drawn inside the card so they shrink with it, which is what Snapchat does and what makes it read as a story card instead of a photo sliding around. Only the reply bar leaves, because it sits below the card and carries a black footer that would lie across your chat list.
+            It is now guarded on "has one been started", which is the question that was always meant.
 
-            THE CHAT LIST DIMS UNDER IT, up to 45 percent, like Snapchat. It fades back out just before the landing, so there is no grey to white flash at the moment the story screen goes away.
+            A WATCHDOG ON THE CLOSE, because you filmed it freezing. The close button is deliberately ignored while the card is in the air, so a button press cannot yank it out mid flight. The cost is that an animation which never reports back leaves no way out of the screen. If it has not landed within 1.2 seconds, four times the flight, the close now happens by hand. This is a safety net and not a fix: if it still freezes, tell me, because then the cause is somewhere I have not looked yet.
 
-            IT IS FASTER. You timed the open at 0.51 seconds and you were right, the maths said 0.50. It was a spring chasing its last one percent long after the eye was done. It now runs Signal's own story spring and finishes in about 0.3 seconds, which is what Signal's transition costs. Opening and closing use the same spring, so they take the same time.
-
-            WHAT TO CHECK FIRST. Open a friend's story from the top row: it should grow out of the card now, not appear. Close it: it should shrink back into that same card, not leave anything at the right edge. Then drag one down slowly and watch three things at once - the bars and name stay on the card, the chat list behind goes darker, the reply bar is gone.
-
-            STILL OLD BEHAVIOUR ON PURPOSE: opening a story from a profile, from the ring next to a chat, or from the archived page. Those still use Apple's transition, which shrinks the whole screen instead of the card. They are next if you want them.
+            WHAT TO CHECK FIRST. Open a story and watch the landing: one movement, no second run, no shake. Then open and close ten or fifteen times in a row, which is what made it freeze for you. Then your own story, which should never show black behind the card at any point.
         run: fastlane beta
