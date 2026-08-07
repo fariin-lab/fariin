@@ -348,6 +348,20 @@ struct ContactInfoView: View {
         // the scroll view already animates for us.
         .onPreferenceChange(HeroOffsetKey.self) { heroOffset = $0 }
         .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
+        // ⚠️ THE REFUSAL IS SAID WHERE THE CALL WAS TRIED, AND THIS IS ONE OF THE PLACES IT IS
+        // TRIED. Same fix as ThreadView's, and the same report a screen later (owner, 2026-08-07:
+        // "you forget in profile — when I enter that user profile then I try to call, nothing
+        // happened, menu is coming late"). The alert was declared on the chat list and on the
+        // conversation; a profile sits ON TOP of both, and a SwiftUI alert cannot present from a
+        // view that is covered — so the tap set the state and the sentence waited for the profile
+        // to be dismissed. One `restrictedCallee`, bound wherever a call button lives.
+        .alert("Can't Call",
+               isPresented: Binding(get: { CallService.shared.restrictedCallee != nil },
+                                    set: { if !$0 { CallService.shared.restrictedCallee = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This person restricts who can call them.")
+        }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         // Keep the nav bar visible always: toggling it hidden while the photo viewer opens

@@ -137,11 +137,21 @@ final class StoriesService {
     /// misses every cache by construction. The path must vary, not a query — the disk cache's key
     /// ignores queries.
     private var uploadingURLString = "https://fariin.local/uploading-placeholder.jpg"
+    /// THE AUDIENCE THE POST IN FLIGHT WAS SENT TO. The placeholder used to be built with the
+    /// struct's defaults, which say "friends" — so a story posted to a custom list wore "My Friends"
+    /// in the header for the whole upload and then changed to "Custom" when the real document
+    /// arrived (his report, 2026-08-07). The header must say the same thing before and after,
+    /// because it is the same story.
+    private var uploadingTag: StoryAudienceTag = .friends
+    /// The custom list's device-local name, for the placeholder alone: the real story's name is
+    /// filed under its document id, which does not exist yet while it is uploading.
+    var uploadingAudienceName: String { uploadingTag.name }
     var uploadingStory: Story? {
         guard uploading, uploadingImage != nil else { return nil }
         return Story(id: Self.uploadingStoryId, authorUid: uid, createdAt: uploadStartedAt,
                      expiresAt: uploadStartedAt.addingTimeInterval(24 * 3600),
-                     mediaUrl: uploadingURLString, allowsReplies: false)
+                     mediaUrl: uploadingURLString, allowsReplies: false,
+                     audienceLabel: uploadingTag.label, oneTime: uploadingTag.oneTime)
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
@@ -150,6 +160,7 @@ final class StoriesService {
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
         uploadingImage = UIImage(data: image)
+        uploadingTag = tag          // the header must say the chosen audience from the first frame
         uploadStartedAt = Date()
         uploadingURLString = "https://fariin.local/uploading-\(UUID().uuidString).jpg"
         // Pre-store the picked bytes in URLCache under the synthetic URL so the injected uploading item
@@ -386,6 +397,7 @@ final class StoriesService {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         uploadingImage = UIImage(data: thumbnail)
+        uploadingTag = tag          // as above: the same story, the same audience line, throughout
         uploadStartedAt = Date()
         uploadingURLString = "https://fariin.local/uploading-\(UUID().uuidString).jpg"
         if let u = URL(string: uploadingURLString) {

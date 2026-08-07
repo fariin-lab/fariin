@@ -26,10 +26,13 @@ struct UserView: View {
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image)   // 38×38 circle
                 VStack(alignment: .leading, spacing: 2) {
-                    // NAME AND TIME ON ONE LINE, his layout: the time is a detail about the name,
-                    // not a line of its own, and stacking them left the audience nowhere to go
-                    // without pushing a three-line block into the picture.
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // TWO SHAPES, AND THE AUDIENCE DECIDES WHICH. With a line to fit underneath,
+                    // the name and the time share the top row: the time is a detail about the name,
+                    // and stacking all three pushed a block into the picture. With nothing
+                    // underneath — which is every story but my own — the header goes back to the
+                    // shape it had before the audience line existed: name, time under it (owner,
+                    // 2026-08-07: "show only name and time like before, name up time under name").
+                    if audience == nil {
                         Text(name)
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.white)
@@ -38,9 +41,20 @@ struct UserView: View {
                             .font(.system(size: 12, weight: .regular))
                             .foregroundColor(.white.opacity(0.7))
                             .lineLimit(1)
-                            // The name may be long; the time must not be the thing that gets cut,
-                            // because half a timestamp reads as a bug rather than as a shortage of room.
-                            .layoutPriority(1)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(name)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            Text(date)
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundColor(.white.opacity(0.7))
+                                .lineLimit(1)
+                                // The name may be long; the time must not be the thing that gets cut,
+                                // because half a timestamp reads as a bug rather than as a shortage of room.
+                                .layoutPriority(1)
+                        }
                     }
                     if let audience {
                         HStack(spacing: 5) {

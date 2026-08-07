@@ -1907,16 +1907,26 @@ struct StoryViewer: View {
     /// icon"). The audience row in the share sheet does wear it, and that is a different question:
     /// there it is a picture of who you are posting AS, here it is a statement of who can see it.
     private func audienceBadge(for s: Story, isMine: Bool) -> StoryAudienceBadge? {
+        // NOBODY BUT THE AUTHOR SEES THIS LINE AT ALL (owner, 2026-08-07: "only owner story can see
+        // that label… when I want to see other people story don't show that label, show only name
+        // and time like before"). It used to tell everybody else the TYPE — "My Friends", "Everyone"
+        // — which is a fact about the author's own audience settings and is nobody else's business
+        // on a screen they did not post to. The header falls back to its old stacked name-over-time
+        // shape when there is nothing here; see `UserView`.
+        guard isMine else { return nil }
         if s.oneTime { return StoryAudienceBadge(systemImage: "1.circle", text: "View once") }
         switch s.audienceLabel {
         case "everyone": return StoryAudienceBadge(systemImage: "globe", text: "Everyone")
         case "custom":
-            // The author's private name for the list, or the plain type for everybody else. A name
-            // this device happens not to have (posted from another phone, or reinstalled) also falls
-            // through to the type, which is the safe way round to be wrong.
-            let name = isMine ? StoryPrefs.audienceName(storyId: s.id) : nil
+            // The author's private name for the list. A name this device happens not to have
+            // (posted from another phone, or reinstalled) falls through to the plain type, which is
+            // the safe way round to be wrong. The story still UPLOADING has no document id to file
+            // a name under, so it reads the one the post in flight was given.
+            let name = s.id == StoriesService.uploadingStoryId
+                ? StoriesService.shared.uploadingAudienceName
+                : (StoryPrefs.audienceName(storyId: s.id) ?? "")
             return StoryAudienceBadge(systemImage: "person.crop.rectangle.stack",
-                                      text: name?.isEmpty == false ? name! : "Custom")
+                                      text: name.isEmpty ? "Custom" : name)
         default: return StoryAudienceBadge(systemImage: "person.2.fill", text: "My Friends")
         }
     }
