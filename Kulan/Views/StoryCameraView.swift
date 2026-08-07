@@ -294,7 +294,6 @@ struct StoryCameraView: View {
 
     @StateObject private var cam = StoryCamera()
     @State private var mode: Mode = .camera
-    @Namespace private var modePill      // lets the selected capsule SLIDE between the two words
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
     @State private var libraryThumb: UIImage?
@@ -734,58 +733,35 @@ struct StoryCameraView: View {
     /// is gone, the pill keeps the `GlassEffectContainer` + shared `glassEffectID` that lets it melt
     /// across, and the tint is gone with it — a tint is a wash, which is the exact thing he keeps
     /// calling custom.
-    @ViewBuilder private var modePicker: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 0) {
-                    modeLabel("CAMERA", .camera)
-                    modeLabel("TEXT", .text)
-                }
-                .padding(4)
-            }
-        } else {
-            HStack(spacing: 0) {
-                modeLabel("CAMERA", .camera)
-                modeLabel("TEXT", .text)
-            }
-            .padding(4)
-            .liquidGlass(Capsule(), interactive: true)
+    /// ⚠️ APPLE'S OWN CONTROL, NOT OURS WEARING APPLE'S MATERIAL. Fourth report on this switch:
+    /// "you are not using real liqud glass for apple design use native plz."
+    ///
+    /// He is right, and my previous two answers both missed it. The API was Apple's both times —
+    /// first a glass track with a glass pill on it, then a single glass pill — but the CONTROL was
+    /// still hand-built out of two Buttons, a Namespace and a capsule we drew. On the black strip
+    /// under the card, where a material has nothing behind it to refract, anything we assemble
+    /// resolves to flat grey no matter which modifier paints it. That is the moulded plastic he has
+    /// now photographed three times.
+    ///
+    /// A `Picker` with `.segmented` IS the Liquid Glass segmented control on iOS 26: Apple draws the
+    /// track, the moving selection, the press behaviour, the material and its fallback, and they
+    /// change when the system changes rather than when we remember to update a copy of them. There
+    /// is nothing left here for him to call custom because there is nothing left of ours.
+    ///
+    /// The uppercase and the kerning go with it. They were part of the hand-built look, and a
+    /// segmented control that restyles its own labels is a custom control again.
+    private var modePicker: some View {
+        Picker("", selection: $mode) {
+            Text("Camera").tag(Mode.camera)
+            Text("Text").tag(Mode.text)
         }
-    }
-
-    /// ONE highlight that MOVES, not two that light up in turn — see `modePicker` for which system
-    /// moves it. It travels for a swipe exactly as it does for a tap, because both go through the
-    /// same `withAnimation`.
-    private func modeLabel(_ title: String, _ target: Mode) -> some View {
-        let selected = mode == target
-        return Button {
-            guard mode != target else { return }
-            withAnimation(.snappy(duration: 0.25)) { mode = target }
-        } label: {
-            Text(title)
-                .font(.system(size: 13, weight: .bold))
-                .kerning(0.6)
-                .foregroundStyle(selected ? .white : .white.opacity(0.55))
-                .padding(.horizontal, 20).frame(height: 34)
-                .background { if selected { modeHighlight } }
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// The chosen segment, and now the ONLY material in the control. Plain `.regular` — no tint, no
-    /// fill, nothing of ours on top of Apple's. `.interactive()` stays because that is Apple's own
-    /// modifier for a glass element you can press, not a decoration.
-    @ViewBuilder private var modeHighlight: some View {
-        if #available(iOS 26.0, *) {
-            Capsule()
-                .fill(.clear)
-                .glassEffect(.regular.interactive(), in: .capsule)
-                .glassEffectID("modePill", in: modePill)
-        } else {
-            Capsule().fill(.white.opacity(0.22))
-                .matchedGeometryEffect(id: "modePill", in: modePill)
-        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        // Wide enough that the two words are not cramped, narrow enough to leave the library card
+        // and the flip button their room — the same footprint the hand-built capsule occupied.
+        .frame(width: 200)
+        // The swipe between modes still animates, because the swipe writes `mode` inside its own
+        // `withAnimation`; the tap is Apple's and animates itself.
     }
 
     // MARK: Pieces
