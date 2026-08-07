@@ -178,6 +178,9 @@ final class StoryViewersSheetView: UIView {
     /// Which way the live page drag is going: 1 = the next story is arriving, -1 = the previous one,
     /// 0 = no preview installed.
     private var pageDir = 0
+    /// TRUE while a committed page is still settling. Read by the next `.began`, so an interrupting
+    /// swipe lands the previous one the way it was already going to land instead of reversing it.
+    private var pageCommitted = false
     /// How far past the edge a departing panel is parked, so its shadow and corners clear the screen.
     private var pageTravel: CGFloat { bounds.width + 20 }
 
@@ -496,14 +499,26 @@ final class StoryViewersSheetView: UIView {
             suspendForeignPans()
             // A transition from the last swipe still settling: land it NOW. Otherwise the first
             // .changed snapshots a panel that is halfway across the screen and the photograph
-            // arrives crooked. Restoring is right either way — after a commit the host's story is
-            // already the one in the panel, so the restore resolves to nothing.
+            // arrives crooked.
+            //
+            // ⚠️ AND IT MUST BE LANDED THE WAY IT WAS GOING TO LAND. The comment here used to say
+            // "restoring is right either way"; it is not. A COMMITTED page ends with
+            // `endPagePreview(restore: false)` from the animation's completion — the preview IS the
+            // story now — and interrupting it with `restore: true` runs the opposite teardown and
+            // posts `onPagePreview?(0)`, putting the departing story's list back over the one the
+            // host has already switched to. So the same state got torn down two different ways
+            // depending only on whether a finger arrived within the 0.28s.
+            //
+            // That window is exactly what "fast fast" swiping lives in, which is his 2026-08-07
+            // report. `pageCommitted` remembers which way the last cycle went so an interruption
+            // finishes it the same way it would have finished itself.
             if pageDir != 0 {
                 panel.layer.removeAllAnimations()
                 pageGhost?.layer.removeAllAnimations()
-                endPagePreview(restore: true)
+                endPagePreview(restore: !pageCommitted)
                 panel.transform = .identity
             }
+            pageCommitted = false
             pageBaselineX = rawX
         case .changed:
             let tx = rawX - pageBaselineX
@@ -545,11 +560,13 @@ final class StoryViewersSheetView: UIView {
                 // two panels finish theirs — one motion. Nothing reloads: the preview already put
                 // this story's viewers in the panel, so the coordinator's load() is a no-op.
                 onPage?(dir)
+                pageCommitted = true
                 UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
                     self.pageGhost?.transform =
                         CGAffineTransform(translationX: -CGFloat(dir) * self.pageTravel, y: 0)
                     panel.transform = .identity
                 } completion: { _ in
+                    self.pageCommitted = false
                     self.endPagePreview(restore: false)   // the preview IS the story now
                 }
             } else {
