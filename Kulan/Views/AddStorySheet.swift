@@ -234,6 +234,18 @@ struct StoryLibraryPicker: View {
         // 2026-08-06 screenshot says otherwise: white bar, light segmented control, dark grid, all
         // at once. The bar and the control are UIKit and read the trait. See `storyAlwaysDark`.
         .storyAlwaysDark()
+        // ⚠️ THE SHEET'S OWN BACKDROP, which is NOT the content's background.
+        //
+        // His 2026-08-07 screenshot, both top corners circled: a white sliver in the rounded corners
+        // of the picker sheet. The grid and the bar are painted `systemBackground` and forced dark,
+        // so the CONTENT was black — but a sheet is a UIKit presentation with its own surface behind
+        // that content, and the rounded corners are exactly where it shows. In light mode that
+        // surface is white, so the only place it was visible was two little wedges at the top.
+        //
+        // On the picker itself rather than on its three call sites, for the same reason
+        // `storyAlwaysDark` lives here: every door that opens this thing should get it without
+        // remembering to.
+        .presentationBackground(.black)
     }
 
     // MARK: - Photos tab
