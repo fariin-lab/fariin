@@ -74,13 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE DRAG-DOWN IS CLEAN NOW: no white anywhere, and the trash bar gets out of the way.
+            THE STORY TRANSITION IS OURS NOW: stories from the top row open and close on a custom Telegram-style transition, on a screen the app fully owns.
 
-            NO WHITE, and there were two of them with different causes. The one AROUND the story was our own Chats screen in light mode, showing as the story shrinks away from it, so the whole window now darkens while a story is open, tab bar included. The one INSIDE the card, the band along its top edge, was the story screen's own backing: the library clears the black page the instant your finger lands so that only the card pulls away, and underneath that black sat a white backing. It is black now.
+            OPEN: tap a card in the stories row and the story grows out of that card over a darkening chat list.
 
-            THE VIEWS AND TRASH BAR NO LONGER SITS THERE while the story is dragged away. It is drawn below the card and does not move with it, and it hides itself when the app is told your finger is moving. The gesture that runs during Apple's transition never told it: it handled the start and the end of your drag and nothing in between. It reports now, so the footer, the reply pill and the owner bar all step aside as the story shrinks, and come back if you let go half way.
+            CLOSE: drag down anywhere and the card follows your finger, shrinking and fading as it goes. Let go early and it springs back. Pull a short distance, or flick, and it flies home into its card in the row in one continuous motion. The X button takes the same flight. Videos keep playing in place through all of it and never restart.
 
-            Everything else unchanged: Apple's transition, stable, no crash.
+            The build 481 crash cannot come back: the old transition moved one of Apple's internal views and this one never touches them.
 
-            WHAT TO CHECK. Drag your own story down slowly. Nothing white at any edge, nothing white at the top of the card, and the Views and trash bar should fade out as soon as it starts moving. Let go half way and everything comes back.
+            ONLY THE STORIES ROW opens this way. Chat-ring circles, archive, profile and story replies keep Apple's transition until this one is approved.
+
+            WHAT TO CHECK. Open your own story and a friend's story from the row. Drag down slowly: the card must track your finger with no lag and nothing white anywhere. Let go half way: it springs back and the buttons return. Drag and release: it lands on the right person's card, even after swiping to another person first. Same on a video story: it must not restart. Swipe up on your own story: the viewers sheet must work exactly as before, and dragging the sheet down must close the sheet, never the whole story. Delete one of several of your stories: the viewer swaps to the remaining ones without replaying the open. Repeat open, drag, cancel, drag, close many times: the row must stay responsive.
         run: fastlane beta
