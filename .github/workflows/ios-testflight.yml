@@ -74,15 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            STORIES ARE BACK ON APPLE'S OPEN AND CLOSE, and there is a crash fix in that.
+            THE CHAT LIST GOES DARK UNDER AN OPEN STORY.
 
-            You asked for this tonight and you were right to. The custom open and close is switched off with one line, so opening a story from the top row now behaves exactly like opening one from the ring next to a chat, which is the way it worked yesterday. It shrinks the whole screen instead of the card. It is less pretty and it works.
+            You showed me the white above and below the story while you drag it down, and asked whether we set that white or iOS did. It is ours: it is the Chats screen, in light mode, showing through as the story shrinks. Your own Edit pill and toolbar icons are visible in it. Snapchat's looks different for one reason only, their whole app is dark behind.
 
-            THE CRASH YOU SENT IS THE REAL REASON. Your crash log names it without any guessing: UIPageViewController throwing an assertion while cleaning up one of its own transitions. Our animation moved the story by writing a transform onto that class's private internal scroll view, while UIKit was animating that same view itself. Every fix I shipped tonight was downstream of that, which is why each one produced a new symptom instead of an ending. Switching it off removes the cause, not just the symptom.
+            So the chat list now sits under a dark layer while a story is open. The story pulls away from something dark, like theirs, instead of from a white page. You will only ever see it during the open and the close, because the rest of the time the story is covering that screen anyway.
 
-            TWO THINGS FROM TONIGHT ARE KEPT, because they are right either way. The story row now holds its order still while a story is open, instead of re-sorting under you and moving the card the close is aiming at. And where a story opens follows the proper rule: where you left that person, then their first unwatched story, then, if you have seen everything of theirs, their newest when you arrive going backwards and their oldest going forwards.
+            It had to go on the chat screen rather than inside the story screen. Anything inside the story shrinks with the story, so it can never darken what is behind it.
 
-            WHAT COMES NEXT. The real version, built as an actual iOS transition, the way Signal and Telegram both do it: iOS hands the animation a container holding both screens and the card flies inside it, touching nothing private. That is one piece of work, and you will see it when it is finished rather than every twenty minutes.
+            EVERYTHING ELSE IS AS IT WAS IN THE LAST BUILD: stories open and close with Apple's transition, which is stable and does not crash. The black page around the card already clears the instant you put your finger down, and comes back if you change your mind mid drag.
 
-            WHAT TO CHECK. Open and close stories, your own and a friend's, twenty times. Nothing should freeze and nothing should crash. The animation will look like yesterday's.
+            WHAT TO CHECK. Drag a story down slowly and look at what is around it: dark now, not white. Let go half way and it should spring back with everything normal. Then open and close twenty times, your own and a friend's, and nothing should freeze or crash.
         run: fastlane beta
