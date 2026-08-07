@@ -435,7 +435,14 @@ public final class StoryCardMorph {
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   outside: sheet ? 0 : chrome,
                   // The sheet has no surround to round: its `outside` is 0, a hard crop.
-                  outsideRadius: sheet ? 0 : flightRadius / scale)
+                  //
+                  // ⚠️ CAPPED, and the cap is what keeps a CIRCULAR landing from deforming the page.
+                  // The surround follows the card's radius so the two read as one card — but a door
+                  // that lands in a circle reports a radius of half its own width, and once that is
+                  // divided by a small scale it is large enough to bend the whole full-screen
+                  // container into a stadium. The card is allowed to become a circle; the page it
+                  // sits in is always a page.
+                  outsideRadius: sheet ? 0 : min(flightRadius / scale, 44))
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
         if abs(card.alpha - alpha) > 0.001 { card.alpha = alpha }
         CATransaction.commit()
