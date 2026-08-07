@@ -74,13 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THREE OF YOUR REPORTS IN ONE BUILD.
+            THE REAL SHARED-ELEMENT TRANSITION, built from your two frame-grabs against Snapchat.
 
-            THE OPEN IS A CROSSFADE NOW. The row card previews the newest story, but the viewer opens on your first unwatched one. That switch used to be a one-frame pop; now the card lifts off showing exactly what the row showed and dissolves into the story it opens on, as part of the same motion. When they are the same story you see no change at all.
+            OPEN: the app photographs the exact card you tap, and that photo is what flies - solid from the first pixel, never a transparent ghost. It dissolves into the live story while it grows, and the open now glides gently into full screen instead of stopping short.
 
-            THE TAP DIPS THE CARD, like Snapchat: the card presses down to 92 percent under your finger, and the story flies out of the pressed card as it springs back. Hold your finger and it stays pressed until you let go.
+            THE SLOT WAITS EMPTY, like Snapchat: the card you tapped leaves a hole in the row for as long as the story is open.
 
-            SQUARE VIDEO STORIES KEEP THEIR BLUR. Fourth report, different fix: the blurred background is now baked into the video file when you post, exactly the picture the editor shows. Every viewer on every phone will show it, because it is part of the video now. The one trade: posting a square or landscape video takes a few extra seconds (it re-encodes). Tall 9:16 videos post fast as before.
+            CLOSE: the card puts the row picture back on as it flies home and lands into the empty hole, fitting it pixel for pixel. No pop, no blink, nothing landing on top of an already-filled card. (Closing after swiping to another person melts into their card instead - their slot never emptied.)
 
-            WHAT TO CHECK. Tap a story card: dip, then one continuous lift, no content pop even when the viewer opens an older unwatched story. Post a 1:1 video with nothing drawn on it: the posted story must show the blurred bands, same as the editor. Then the usual close checks: drag down, let go half way, full close in slow motion.
+            WHAT TO CHECK, slow motion welcome: tap a card - dip, solid lift, picture dissolves to the story, background glides. While a story is open, peek at the row during a half drag: the tapped slot must be an empty hole. Full close: the card must land into that hole wearing the row picture, and the real card must take over with no visible change.
         run: fastlane beta
