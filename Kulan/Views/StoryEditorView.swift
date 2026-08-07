@@ -469,6 +469,22 @@ struct StoryEditorView: View {
                 onVideo: { url in
                     showAddPicker = false
                     Task { await appendPicked(video: url) }
+                },
+                // TICK SEVERAL, ADD ONCE. His 2026-08-07 report: adding one at a time is "soo hard".
+                // The batch lands in tap order, and each item goes through the SAME append the single
+                // path uses — so every one of them gets `restoreCurrent`'s clean tools rather than
+                // the previous picture's crop, which is the trap `759546c` was written for.
+                allowsMultiple: true,
+                onBatch: { picks in
+                    showAddPicker = false
+                    Task {
+                        for p in picks {
+                            switch p {
+                            case .image(let ui): await MainActor.run { appendPicked(image: ui) }
+                            case .video(let url): await appendPicked(video: url)
+                            }
+                        }
+                    }
                 })
         }
         .sheet(item: $pendingShare) { s in

@@ -144,15 +144,37 @@ struct AddStorySheet: View {
 /// Apple's Photo Picker"). It always offers BOTH photos and videos, whatever the post already holds,
 /// and it does not close itself when you pick (owner rule): the host decides what a pick does, and
 /// the X is the only thing that closes it.
+/// One resolved thing the picker hands back. The batch path returns these in the order they were
+/// TAPPED, which is the order they will appear in the editor's strip.
+enum StoryPick {
+    case image(UIImage)
+    case video(URL)
+}
+
 struct StoryLibraryPicker: View {
     var onImage: (UIImage) -> Void
     var onVideo: (URL) -> Void
+    /// TICK SEVERAL, THEN ADD THEM ALL AT ONCE (owner 2026-08-07: "i cant add one by one that soo
+    /// hard… make selete only when i click that button, after selete photo picker show preview
+    /// images i seleted and add button, when i add go direct"). Off by default so the CREATE flow in
+    /// `AddStorySheet` is untouched — there the first tap raises the editor, which is a different
+    /// intent. The two editors' + button turns it on.
+    var allowsMultiple: Bool = false
+    var onBatch: (([StoryPick]) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = PhotoGridStore()
     @State private var tab = 0                 // 0 = Photos, 1 = Albums
     @State private var openAlbum: AlbumInfo?
     @State private var loadingVideo = false   // brief spinner while a (possibly iCloud) video resolves
     @State private var tooLongVideo = false   // pick over the 10-minute ceiling
+    /// Chosen assets, in tap order. Identifiers rather than PHAssets so the same asset reached from
+    /// the Photos tab and from inside an Album is one selection, not two.
+    @State private var picked: [PHAsset] = []
+    @State private var resolving = false      // Add tapped: fetching the full images / video files
+    /// A ceiling on one batch. Nothing in the editor enforces a count, but each image is held at
+    /// full resolution and this is the one place that can add ten of them in a single tap.
+    private static let batchLimit = 10
+    @State private var tooMany = false
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -167,6 +189,7 @@ struct StoryLibraryPicker: View {
                 .padding(.horizontal, 16).padding(.vertical, 8)
 
                 if tab == 0 { photosTab } else { albumsTab }
+                if allowsMultiple, !picked.isEmpty { selectionBar }
             }
             // ONE BLACK, not two. The theme fix made the bar dark; it did not make it the SAME dark.
             //
@@ -188,6 +211,11 @@ struct StoryLibraryPicker: View {
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
             .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
+            .alert("That's a lot at once", isPresented: $tooMany) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("You can add up to \(Self.batchLimit) at a time. Add these first, then tap + again for more.")
+            }
             .alert("That video is too long", isPresented: $tooLongVideo) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -217,6 +245,96 @@ struct StoryLibraryPicker: View {
                 ForEach(store.assets, id: \.localIdentifier) { asset in tile(asset) }
             }
             .padding(.horizontal, 2)
+        }
+    }
+
+    // MARK: - The selection bar
+    //
+    // His spec in his own words: "after selete photo picker Show preview images i seleted and add
+    // button, when i add go direct". So the previews are the thing that tells him what he has, each
+    // one can be taken back off without hunting for it in the grid again, and Add is the only way
+    // out with them.
+    private var selectionBar: some View {
+        VStack(spacing: 0) {
+            Divider().overlay(Color.white.opacity(0.12))
+            HStack(spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(picked, id: \.localIdentifier) { asset in
+                            StoryThumb(asset: asset, store: store)
+                                .frame(width: 52, height: 52)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                // Tap a preview to drop it. The grid's own tick does the same, but
+                                // the picture he is looking at is the one he wants to remove.
+                                .overlay(alignment: .topTrailing) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 15))
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, .black.opacity(0.6))
+                                        .padding(2)
+                                }
+                                .onTapGesture { toggle(asset) }
+                        }
+                    }
+                    .padding(.vertical, 10)
+                }
+                Button {
+                    addPicked()
+                } label: {
+                    Text("Add \(picked.count)")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 10)
+                        .background(Color.accentColor, in: Capsule())
+                }
+                .disabled(resolving)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 6)
+        }
+        .background(Color(.systemBackground))
+    }
+
+    private func toggle(_ asset: PHAsset) {
+        if let i = picked.firstIndex(where: { $0.localIdentifier == asset.localIdentifier }) {
+            picked.remove(at: i)
+            return
+        }
+        // The 10-minute rule is checked HERE as well as on the single-tap path, so a clip that can
+        // never be posted is refused while he is choosing rather than after he has committed to a
+        // batch and waited for it to resolve.
+        if asset.mediaType == .video, asset.duration > Double(Limits.storyVideoPickSeconds) + 1 {
+            tooLongVideo = true
+            return
+        }
+        guard picked.count < Self.batchLimit else { tooMany = true; return }
+        picked.append(asset)
+    }
+
+    /// Resolve everything, IN TAP ORDER, then hand the batch over and close.
+    ///
+    /// Sequential rather than a task group on purpose: an iCloud fetch of ten originals in parallel
+    /// is how a picker runs the phone out of memory, and the spinner is already covering the wait.
+    /// A single item that fails to resolve is skipped rather than failing the batch.
+    private func addPicked() {
+        guard !resolving else { return }
+        resolving = true
+        let chosen = picked
+        Task {
+            var out: [StoryPick] = []
+            for asset in chosen {
+                if asset.mediaType == .video {
+                    if let url = await store.videoURL(asset) { out.append(.video(url)) }
+                } else if let ui = await store.fullImage(asset) {
+                    out.append(.image(ui))
+                }
+            }
+            await MainActor.run {
+                resolving = false
+                guard !out.isEmpty else { return }
+                onBatch?(out)
+                dismiss()
+            }
         }
     }
 
@@ -275,7 +393,26 @@ struct StoryLibraryPicker: View {
             // host raises an editor over this sheet; in the editors' add-more flow the host appends
             // the item and you can keep tapping. The resolve happens HERE with its spinner, because
             // an iCloud video can take a moment.
+            // THE TICK, numbered so the order he taps is visibly the order they will arrive in.
+            .overlay(alignment: .topTrailing) {
+                if allowsMultiple {
+                    let n = picked.firstIndex(where: { $0.localIdentifier == asset.localIdentifier })
+                    ZStack {
+                        Circle()
+                            .fill(n == nil ? Color.black.opacity(0.25) : Color.accentColor)
+                            .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 1.5))
+                        if let n { Text("\(n + 1)").font(.caption2.weight(.bold)).foregroundStyle(.white) }
+                    }
+                    .frame(width: 22, height: 22)
+                    .padding(5)
+                }
+            }
+            // Dim what is already chosen, so the grid reads at a glance from across the screen.
+            .opacity(allowsMultiple && picked.contains(where: { $0.localIdentifier == asset.localIdentifier }) ? 0.55 : 1)
             .onTapGesture {
+                // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
+                // the sheet does not move until Add.
+                if allowsMultiple { toggle(asset); return }
                 if asset.mediaType == .video {
                     guard !loadingVideo else { return }
                     // TEN MINUTES IS THE CEILING (owner's spec). Under it, any length is fine — a
