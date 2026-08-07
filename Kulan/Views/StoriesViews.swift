@@ -1055,6 +1055,13 @@ struct StoryViewer: View {
         /// from. False after swiping to somebody else: their card was never emptied and their
         /// picture is not on the cover, so that landing keeps the whole-card fade instead.
         var cover = false
+        /// How much of the row card's own picture the flying card is wearing THIS FRAME, 0…1.
+        ///
+        /// A STORED VALUE, NOT A FUNCTION OF `f`, and that is his 2026-08-07 correction. Bound to
+        /// the fraction, a long pull started the cross-fade under the finger — he wants the drag to
+        /// show story A and nothing else, and the exchange to belong entirely to the snap that runs
+        /// when he lets go. So the drag pins this at 0 and only a flight's own tick moves it.
+        var coverAlpha: CGFloat = 0
         /// What the world was last told about the chrome outside the card (`storyFlightActive`).
         /// Tracked here rather than read back off `heroFlying` so the notification is posted exactly
         /// once per crossing, from the one place that knows the fraction.
@@ -1958,15 +1965,10 @@ struct StoryViewer: View {
                                           alpha: hero.alpha,
                                           dim: heroDim(f),
                                           chrome: heroChrome(f))
-        // THE COVER IS A FUNCTION OF WHERE THE CARD IS, NOT OF HOW LONG THE ANIMATION HAS RUN, and
-        // that is what makes the two directions the same transition. It used to be driven by a
-        // per-run `tick` on the spring's own t, which meant the open dissolved the thumbnail away
-        // across the first half of the journey while the close brought it back inside the last
-        // tenth — the same exchange, done gently one way and snapped the other. That snap is his
-        // "the preview suddenly switches". One curve of `f` now serves the open, the close, a drag
-        // that is let go half way, and a drag that is dragged back up, because all four are the
-        // same question: how far into the row is the card?
-        StoryCardMorph.shared.setFlightCoverAlpha(hero.cover ? heroCoverAlpha(f) : 0)
+        // THE COVER BELONGS TO THE FLIGHT, NOT TO THE FINGER. Written by whichever run is going
+        // (see `HeroBox.coverAlpha`); the drag holds it at 0, so what is under the hand is story A,
+        // unaltered, all the way down.
+        StoryCardMorph.shared.setFlightCoverAlpha(hero.cover ? hero.coverAlpha : 0)
         // AND THE SURROUND LEAVES AND ARRIVES ON THE SAME FRACTION. `heroFlying` (my own footer, the
         // no-replies pill, the page's black) and `storyFlightActive` (the library's reply bar) used
         // to flip at the START of a flight and back at its END, so the bottom of the screen popped
@@ -1991,11 +1993,24 @@ struct StoryViewer: View {
         max(0, min(1, (Self.heroChromeSpan - f) / Self.heroChromeSpan))
     }
 
-    /// The thumbnail's own picture, worn while the card is close to the row and dissolved as it
-    /// grows: fully on from 0.8 of the way in, gone by 0.45. Symmetric by construction — see
-    /// `applyHero`.
-    private func heroCoverAlpha(_ f: CGFloat) -> CGFloat {
-        max(0, min(1, (f - 0.45) / 0.35))
+    /// THE EXCHANGE, ON THE SNAP'S OWN TIMELINE. `t` is the flight animation's progress, 0 at the
+    /// instant the finger lets go and 1 as the card touches down.
+    ///
+    /// Finished by 0.85 rather than at 1, and that is his requirement stated as a number: "by the
+    /// time the view lands, the cross-fade must be 100% complete… zero post-dismissal updates". A
+    /// curve that only reaches 1 exactly at the end leaves its last few percent to be finished by
+    /// the hand-over, which is the pop. Ending early means the last stretch of the flight is
+    /// already carrying the row card's own picture, avatar ring and all — so the teardown swaps two
+    /// identical rectangles.
+    private func heroCoverIn(_ t: CGFloat) -> CGFloat {
+        max(0, min(1, t / 0.85))
+    }
+
+    /// The same exchange on the way IN, reversed: the seat wears the thumbnail, and it dissolves
+    /// into the live story over the first half of the open so the glide to full screen is the story
+    /// itself. (The open's `t` runs the other way round — 0 at the row, 1 at full screen.)
+    private func heroCoverOut(_ t: CGFloat) -> CGFloat {
+        1 - max(0, min(1, (t - 0.2) / 0.35))
     }
 
     /// THE WALL'S ALPHA, AS A FUNCTION OF WHERE THE CARD IS — and the two ends are DIFFERENT.
@@ -2077,12 +2092,18 @@ struct StoryViewer: View {
     /// main path — the card stays solid end to end and the COVER dissolves instead. The curve is
     /// still what the close to a DIFFERENT person uses; if a caller ever needs it again, never make
     /// it whole-journey linear — that was the see-through flying card he reported on an earlier
-    /// build. There is deliberately no per-run `tick` any more: everything that used to need one is
-    /// a function of `hero.f` inside `applyHero`, which is the only way the open and the close can
-    /// be guaranteed to be the same transition run backwards.
+    /// build.
+    ///
+    /// `cover` is the thumbnail's alpha as a function of THIS RUN's progress, and it is a per-run
+    /// curve rather than a function of `f` on purpose: the exchange must belong to the snap that
+    /// follows the release, not to the drag (his 2026-08-07 spec, in as many words — "bind the
+    /// transition progress directly to the destination snap animation timeline rather than the
+    /// interactive gesture drag value"). It is written BEFORE `applyHero` so the value it sets is
+    /// the one that frame paints, not the one after.
     private func runHero(to endF: CGFloat, center endC: CGPoint, alpha endA: CGFloat,
                          velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
                          stiffness: CGFloat? = nil, settle: CGFloat? = nil,
+                         cover: ((CGFloat) -> CGFloat)? = nil,
                          done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
@@ -2092,6 +2113,7 @@ struct StoryViewer: View {
             hero.center = CGPoint(x: hero.fromC.x + (hero.toC.x - hero.fromC.x) * t,
                                   y: hero.fromC.y + (hero.toC.y - hero.fromC.y) * t)
             hero.alpha = hero.fromA + (hero.toA - hero.fromA) * alphaCurve(t)
+            if let cover { hero.coverAlpha = cover(t) }
             applyHero()
         }, completion: done)
     }
@@ -2157,6 +2179,7 @@ struct StoryViewer: View {
             // nothing is ever transparent.
             hero.alpha = 1
             hero.cover = true          // the tapped card is the one on the cover, by definition
+            hero.coverAlpha = 1        // the seat is the thumbnail; the flight dissolves it away
             // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
@@ -2184,12 +2207,12 @@ struct StoryViewer: View {
             // settle keeps the lift-off just as immediate (80% of the travel still lands inside
             // ~0.15s) and spends the difference on the landing: ~0.45s of visible motion.
             //
-            // The cover's dissolve and the surround's arrival are functions of the fraction now, so
-            // this run carries no tick of its own — see `applyHero`.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
-                    stiffness: 450, settle: 0.0008) {
+                    stiffness: 450, settle: 0.0008,
+                    cover: heroCoverOut) {
                 hero.live = false
                 hero.cover = false
+                hero.coverAlpha = 0
                 // Belt only: `applyHero` has already crossed both of these on the way in, at 0.18.
                 if heroFlying { heroFlying = false }
                 if hero.chromeHidden {
@@ -2277,6 +2300,7 @@ struct StoryViewer: View {
         hero.f = 0
         hero.center = rest
         hero.alpha = 1
+        hero.coverAlpha = 0        // starts on the live story, exactly as a released drag does
         StoryCardMorph.heroDismissActive = true
         StoryCardMorph.shared.prepareForHero?()
         // The surround leaves on the fraction, exactly as it does under a finger — a button close
@@ -2303,9 +2327,12 @@ struct StoryViewer: View {
             hero.f = 0
             hero.center = rest
             hero.alpha = 1
-            // A finger seizing the card mid-open no longer needs a special case: the cover is a
-            // function of the fraction, and this drag starts at 0, where it is 0.
+            // NOTHING CROSS-FADES UNDER THE FINGER (his spec: "keep rendering story A exactly as it
+            // is… do not trigger any cross-fade during the drag"). Taking the cover off here also
+            // answers the finger that seizes a card mid-open, which would otherwise be dragging a
+            // half-dissolved thumbnail. It comes back only if this drag commits.
             hero.cover = heroKeyNow() == heroSourceKey
+            hero.coverAlpha = 0
             // THE REPLY BAR STEPS ASIDE ON THE FRACTION, THE CARD'S OWN CHROME STAYS ON THE CARD.
             //
             // This used to post `storyChromeHidden`, which took the progress bars and the name with
@@ -2398,10 +2425,11 @@ struct StoryViewer: View {
         // the visible card as it arrives.
         hero.cover = heroKeyNow() == heroSourceKey
         if hero.cover {
-            // No tick: the cover comes back on as the card comes home, on the fraction, over the
-            // same stretch it dissolved away on the way out. See `applyHero`.
+            // THE WHOLE EXCHANGE HAPPENS HERE, in the snap that follows the release: the flying
+            // card cross-fades from the story he was watching into the row card's own picture —
+            // avatar ring, border and all — and is finished before it touches down.
             runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining),
-                    done: land)
+                    cover: heroCoverIn, done: land)
         } else {
             runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
                     alphaCurve: { $0 * $0 * $0 }, done: land)
@@ -2425,7 +2453,10 @@ struct StoryViewer: View {
         // used to be told to return on the first frame of the spring-back, which put the reply bar
         // on screen while the story was still small and travelling.
         let remaining = max(1, hypot(hero.rest.x - hero.center.x, hero.rest.y - hero.center.y))
-        runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining) {
+        // No cover on a spring-back: there is nothing to exchange, the story is going back to being
+        // the whole screen. It was already 0 through the drag and stays there.
+        runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining,
+                cover: { _ in 0 }) {
             hero.live = false
             hero.cover = false
             if heroFlying { heroFlying = false }     // belt: applyHero crossed this at 0.18
