@@ -163,9 +163,11 @@ struct StoryDetailView: View {
         // has to be answered here as well as in `.onChange` — otherwise going back far enough still
         // restarted the person. Split into named steps rather than a chain of `??`: this file has
         // twice cost a CI round to the type-checker.
+        let count = model.stories.count
         let resume = viewModel.lastIndex[model.id]
         let firstUnseen = model.stories.firstIndex(where: { !$0.isSeen })
-        let start = min(max(0, resume ?? firstUnseen ?? 0), max(0, model.stories.count - 1))
+        let fullyRead = viewModel.startIndexForFullyRead(bucketId: model.id, count: count)
+        let start = min(max(0, resume ?? firstUnseen ?? fullyRead), max(0, count - 1))
         _timerProgress = State(initialValue: CGFloat(start))
     }
 
@@ -878,17 +880,28 @@ private extension StoryDetailView {
         return model.stories[index]
     }
 
-    // First UNSEEN item index (open-at-newest). All seen → 0 (replay from the start).
-    func firstUnseenIndex() -> Int {
-        model.stories.firstIndex(where: { !$0.isSeen }) ?? 0
-    }
+    // DELETED HERE: `firstUnseenIndex()`. It was the viewer's only answer to "where does this
+    // person open", and its `?? 0` was the restart-from-the-beginning the owner reported. Every
+    // caller now asks `resumeIndex`, which still starts with the first unwatched item and only
+    // differs once there isn't one. Left as a note rather than deleted silently, because a function
+    // that still exists is a function somebody will call again.
 
-    /// WHERE THIS PERSON OPENS. The place they were left in this session if there is one, otherwise
-    /// their first unseen item, otherwise the start. See `StoryViewModel.lastIndex` for why the
-    /// memory lives there and why it is not persisted.
+    /// WHERE THIS PERSON OPENS, in the order the answer is looked for:
+    ///
+    ///   1. where they were left in this viewing session (Signal keeps the item on a context it has
+    ///      already built — `resetForPresentation`'s `if let currentItemMediaView` branch),
+    ///   2. their first unwatched item,
+    ///   3. everything watched: their NEWEST if we arrived going backwards, their oldest going
+    ///      forwards — see `StoryViewModel.startIndexForFullyRead`.
+    ///
+    /// See `StoryViewModel.lastIndex` for why the memory lives there and why it is not persisted.
     func resumeIndex() -> Int {
-        let idx = viewModel.lastIndex[model.id] ?? firstUnseenIndex()
-        return min(max(0, idx), max(0, model.stories.count - 1))
+        let count = model.stories.count
+        if let saved = viewModel.lastIndex[model.id] {
+            return min(max(0, saved), max(0, count - 1))
+        }
+        if let firstUnseen = model.stories.firstIndex(where: { !$0.isSeen }) { return firstUnseen }
+        return viewModel.startIndexForFullyRead(bucketId: model.id, count: count)
     }
 
     /// Remember where this person was left, on the way out. `timerProgress` counts items with the

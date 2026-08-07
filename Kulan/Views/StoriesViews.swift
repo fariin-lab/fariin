@@ -1111,13 +1111,14 @@ struct StoryViewer: View {
                         previewURL: s.previewUrl,
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
-                        // Where the viewer opens (firstUnseenIndex = first item with isSeen == false,
-                        //  else 0):
-                        //  • MY OWN story: purely the real per-item seen flag (own items ARE marked seen
-                        //    as I watch them). So: any unread
-                        //    item -> opens on the FIRST unread (e.g. a just-posted D); everything read ->
-                        //    firstUnseenIndex falls back to 0 -> opens from A again (NOT the last one I
-                        //    watched). No watermark here so it tracks exactly what I actually viewed.
+                        // This flag decides WHERE THE VIEWER OPENS. The rule that reads it lives in
+                        // the library now (`StoryDetailView.resumeIndex`): where the person was left
+                        // in this session, else their first item with `isSeen == false`, else — for
+                        // somebody fully watched — their newest when arriving backwards and their
+                        // oldest when arriving forwards.
+                        //  • MY OWN story: purely the real per-item seen flag (own items ARE marked
+                        //    seen as I watch them), so a just-posted D opens on D. No watermark here,
+                        //    so it tracks exactly what I actually viewed.
                         //  • A FRIEND's story: first genuinely unseen item, honoring the synced watermark
                         //    too (so after a reinstall it doesn't replay from item 0 — split brain).
                         isSeen: g.isMine

@@ -9,8 +9,15 @@ import Foundation
 
 final class StoryViewModel: ObservableObject {
 
-    @Published var currentStoryUser: String = ""
+    @Published var currentStoryUser: String = "" {
+        didSet { if oldValue != currentStoryUser { previousStoryUser = oldValue } }
+    }
     @Published var stories: [StoryUIModel] = []
+
+    /// WHO WE CAME FROM. Set in `currentStoryUser`'s didSet, so it is already correct by the time any
+    /// page's `onChange` runs — a page cannot work out the direction of travel on its own, and asking
+    /// each page to publish it would be a race between two views observing the same value.
+    var previousStoryUser: String = ""
 
     /// WHERE EACH PERSON WAS LEFT, FOR THIS VIEWING SESSION ONLY. Keyed by bucket id.
     ///
@@ -42,6 +49,29 @@ final class StoryViewModel: ObservableObject {
         return max(0.1, seconds * 0.1) // convert any second to between 0 - 1 second
     }
     
+    /// WHERE A FULLY-WATCHED PERSON OPENS, when nothing is remembered about them.
+    ///
+    /// Signal's rule, read from their source rather than guessed
+    /// (StoryContextViewController.didTapLeft / didTapRight):
+    ///
+    ///     didTapLeft():  transitionToPreviousItem(previousContextLoadPositionIfRead: .newest)
+    ///     didTapRight(): transitionToNextItem(nextContextLoadPositionIfRead: .oldest)
+    ///
+    /// Going BACKWARDS lands on their newest item, so reversing walks the timeline back item by item
+    /// instead of dumping you at the oldest thing they posted. Going FORWARDS lands on their oldest,
+    /// so a replay runs in the order it was posted. It only applies when everything of theirs is
+    /// read: an unwatched item always wins, in both directions.
+    ///
+    /// The owner asked for exactly this without knowing it had a name: "it need to land me where [I
+    /// left] or [the] last [one]".
+    func startIndexForFullyRead(bucketId: String, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        guard let to = stories.firstIndex(where: { $0.id == bucketId }),
+              let from = stories.firstIndex(where: { $0.id == previousStoryUser })
+        else { return 0 }   // opened straight from the row: no direction, start at the beginning
+        return to < from ? count - 1 : 0
+    }
+
     func getStoryModel() -> StoryUIModel? {
         if let i = stories.firstIndex(where: { $0.id == currentStoryUser }) {
             return stories[i]
