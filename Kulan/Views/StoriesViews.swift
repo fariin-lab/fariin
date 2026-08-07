@@ -399,7 +399,13 @@ struct StoriesRow: View {
     var freezeOrder: Bool = false
     /// The live answer to "whose story is on screen": the row scrolls to it while a viewer is up, so
     /// the card he came in on is never the one he lands back on. See `StoryDoorState.activeSourceKey`.
-    private var doorState = StoryDoorState.shared
+    ///
+    /// ⚠️ `let`, NOT `var`, AND THAT IS NOT A STYLE CHOICE. A struct's memberwise initialiser takes
+    /// the access level of its least visible stored property, so a `private var` here made
+    /// `StoriesRow.init` private and MainShell could no longer construct the row at all. A `let` with
+    /// a default value is left out of the memberwise init entirely, which is what a shared singleton
+    /// wants anyway — nobody should be passing this in.
+    private let doorState = StoryDoorState.shared
     var onCompose: () -> Void
     var onOpen: (StoryGroup) -> Void
     var onMessage: (StoryGroup) -> Void = { _ in }
