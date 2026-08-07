@@ -5,8 +5,39 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── ANONYMOUS SIGN-IN IS CLOSED, EXCEPT FOR THE SEEDED TEST ACCOUNTS ──
+    //
+    // The Anonymous provider is still ENABLED in Firebase Auth, which means anybody can mint a
+    // session straight against the REST API (`accounts:signUp?key=<API_KEY>`) without ever touching
+    // the app, and then reach whatever these rules let a signed-in user reach. The app itself stopped
+    // creating anonymous sessions long ago; the provider stayed on for one reason only, and this is
+    // it: the seeded story accounts ARE anonymous accounts, so switching the provider off would lock
+    // them out and empty the stories row.
+    //
+    // Measured before writing this rather than assumed (2026-08-06): 504 Auth accounts, 494 of them
+    // anonymous, and only SIX of those have a profile — the four Test story accounts and DemoA/DemoB.
+    // The other 488 are empty shells. No real person is riding an anonymous session, so denying the
+    // provider costs nothing and closes the surface for every one of them plus any new one.
+    //
+    // This is the rules half. The console half (turning the provider off) is still worth doing, and
+    // it needs the seeded accounts retired first. Until then this holds the door.
+    function isAnonymous() {
+      return request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+    // The seeded accounts, by uid, and nothing else. Named in comments so the next person can delete
+    // the right ones: they are what `firebase auth:export` shows as anonymous WITH a profile.
+    function isSeededTestAccount() {
+      return request.auth.uid in [
+        'TuAVsimc3KMU7rWsXwASRCzPjwl2',   // Test Amina
+        'utU5NHXqRiUDCPMAP5sHyotp29C3',   // Test Omar
+        'XV2jI60yVTbMJPPi5QLBs5RdpYW2',   // Test Ali
+        'fgbSdG4hooQeSi6ILjPf8QX53Eg2',   // Test Zahra
+        'CjBtLXJMRtfkuIB5eYWqCcvhGyn1',   // DemoB
+        'fB55R4wHmThmcMFEYAutJImyDaO2'    // DemoA
+      ];
+    }
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null && (!isAnonymous() || isSeededTestAccount());
     }
 
     // ── OFFICIAL CHANNEL PERMISSIONS ──

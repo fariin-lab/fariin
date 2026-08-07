@@ -1010,7 +1010,17 @@ struct StoryViewer: View {
     /// pass, no re-inset, nothing for SwiftUI to do at all.
     final class HeroBox {
         var live = false                 // a drag or one of its animations owns the card
+        /// The open has been STARTED, once, ever. Not the same as `live`, and that difference is a
+        /// bug he filmed: `live` goes false when the flight FINISHES, so once the flight (0.3s) grew
+        /// shorter than the ladder that starts it (0.55s), every remaining attempt saw "not flying,
+        /// and I have both rectangles" and ran the whole open again. Two shakes, a second flight from
+        /// the row card, and over black, because the first flight had already put the backing back.
+        var staged = false
         var committing = false           // the close is running; nothing may cancel it now
+        /// The close has actually handed the viewer off. Read by the watchdog in `commitHero`, which
+        /// is there because `libraryPresented` swallows every close while `committing` is true: a
+        /// flight that never lands would otherwise leave no way out of the screen at all.
+        var closed = false
         var f: CGFloat = 0               // 0 = full screen, 1 = seated in the row card
         var center: CGPoint = .zero      // the card's centre this frame, window coords
         var alpha: CGFloat = 1
@@ -1958,6 +1968,10 @@ struct StoryViewer: View {
         // the two paths that turn out not to (no rectangle, or the ladder running out) put it back.
         heroFlying = true
         let start: () -> Void = {
+            // ONCE, EVER. See `HeroBox.staged`. Every path out of here counts as having started,
+            // including the one that finds nothing to fly from, or the ladder would keep asking.
+            guard !hero.staged else { return }
+            hero.staged = true
             guard let (rest, anchor) = heroEndpoints() else {
                 // Nothing to fly from. Show the story rather than hold it hostage to an animation.
                 heroFlying = false
@@ -2019,7 +2033,8 @@ struct StoryViewer: View {
         let noHostPatience = 15     // ~0.25s with no card attached at all = nothing is coming
         for i in 0..<ceiling {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) / 60.0) {
-                guard !hero.live else { return }
+                // `staged`, not `live`: a finished flight is still a flight that happened.
+                guard !hero.staged, !hero.live else { return }
                 if heroEndpoints() != nil { start(); return }
                 if i == ceiling - 1 || (i == noHostPatience && !StoryCardMorph.shared.isAvailable) { start() }
             }
@@ -2158,12 +2173,26 @@ struct StoryViewer: View {
         // because the row card can be very close to where the finger let go, and a small `remaining`
         // would otherwise turn an ordinary flick into a spring nobody can see.
         let remaining = max(1, hypot(anchorCentre.x - hero.center.x, anchorCentre.y - hero.center.y))
-        runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining)) {
+        let land: () -> Void = {
+            guard !hero.closed else { return }
+            hero.closed = true
             // The card is home. Take the cover away with no animation of its own — see onHeroClose.
             if let onHeroClose { onHeroClose() } else { isPresented = false }
             // Cleared here rather than on teardown: this is a static, so a viewer that left it
             // raised would keep the NEXT story's cube flat for as long as that story was open.
             StoryCardMorph.heroDismissActive = false
+        }
+        runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining), done: land)
+        // A FLIGHT THAT NEVER LANDS MUST NOT TRAP HIM IN THE VIEWER.
+        //
+        // `libraryPresented` swallows every close while `committing` is true, which is right — a
+        // button press must not yank the card out of the air. But it also means a spring that never
+        // reports back leaves no way out of the screen at all, and he has filmed the viewer freezing.
+        // 1.2s is four times the flight; if it has not landed by then it is not going to.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard !hero.closed else { return }
+            heroAnimator.cancel()
+            land()
         }
     }
 
