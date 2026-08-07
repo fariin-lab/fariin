@@ -678,31 +678,27 @@ struct NewAudienceButton: UIViewRepresentable {
         // NEW GROUP STORY IS STILL GONE (owner 2026-08-06: "plz hide new group story that feature").
         // One-Time Story takes the slot it used to hold, and unlike Group Story it exists.
         //
-        // THE MENU IS BACK ONLY WHERE THERE ARE TWO THINGS TO CHOOSE BETWEEN. On the Settings page
-        // there is still exactly one action, and a menu that opens to a single item is two taps for
-        // one decision — the reason `da53a71` took the menu away in the first place.
-        guard onOneTime != nil else {
-            guard canAddCustom else {
-                // At the ceiling there is nothing to open and nothing to do. Disabled says why
-                // better than a button that opens a menu whose only item is dimmed.
-                b.menu = nil
-                b.isEnabled = false
-                return
-            }
-            b.isEnabled = true
-            b.menu = nil
-            b.showsMenuAsPrimaryAction = false
-            b.removeTarget(nil, action: nil, for: .touchUpInside)
-            b.addTarget(context.coordinator, action: #selector(Coordinator.fire), for: .touchUpInside)
-            return
-        }
-
+        // ⚠️ THE MENU IS ALWAYS BOTH ITEMS NOW, EVEN WHERE ONE OF THEM CANNOT BE USED — his
+        // 2026-08-07 instruction: "one-time story when user stay in setting disable, user can see
+        // but cant click, make it like that".
+        //
+        // The Settings page used to get no menu at all, on the reasoning that a menu opening to a
+        // single item is two taps for one decision. That reasoning was about a menu with ONE item in
+        // it. A menu with two items where one is dimmed is a different thing: it tells you the
+        // feature exists and that this is not where it lives, which a button that silently does
+        // something else cannot. So the shape of this control no longer changes between the two
+        // screens; only what is enabled does.
+        //
         // UIKit, NOT SwiftUI's `Menu`, and that is the whole reason this view is a representable.
         // His reference shows two-line items, and SwiftUI renders a menu item on ONE line whatever
         // view you hand it. `UIAction.subtitle` has existed since iOS 15 and does it properly.
+        //
+        // The custom item wears HIS OWN folder drawing rather than `person.2` — the same outline
+        // weight the audience rows and the viewer's pill use, so one custom story looks like the
+        // same idea everywhere it appears.
         let custom = UIAction(title: "New Custom Story",
                               subtitle: "Visible only to specific people.",
-                              image: UIImage(systemName: "person.2")) { _ in
+                              image: UIImage(named: "ic_story_folder")) { _ in
             context.coordinator.onCustom()
         }
         // Dimmed rather than absent at the ceiling: an item that vanishes leaves you wondering
@@ -713,6 +709,8 @@ struct NewAudienceButton: UIViewRepresentable {
                                image: UIImage(systemName: "flame")) { _ in
             context.coordinator.onOneTime?()
         }
+        // Nil handler == this screen cannot post, only manage audiences. Visible, and dimmed.
+        oneTime.attributes = onOneTime == nil ? [.disabled] : []
         b.removeTarget(nil, action: nil, for: .touchUpInside)
         b.menu = UIMenu(children: [custom, oneTime])
         b.showsMenuAsPrimaryAction = true   // one tap opens it; there is no other action to lose
