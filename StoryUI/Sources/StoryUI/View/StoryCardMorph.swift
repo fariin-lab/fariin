@@ -95,6 +95,14 @@ public final class StoryCardMorph {
         cardCornerRadius + (rowRadius - cardCornerRadius) * min(1, f / 0.12)
     }
 
+    /// How much of a CIRCULAR flight is spent growing the circle out to cover the whole card, measured
+    /// from the avatar end. Past this the circle is bigger than the card and nothing more is cut —
+    /// which is exactly where the host starts fading the surround back in (`heroChromeSpan`, 0.18 from
+    /// the other end). The two numbers are the same event seen from opposite ends and must stay that
+    /// way: a circle still cutting corners while the reply bar is arriving would show the page's black
+    /// shoulders through the gap.
+    static let circleCoverSpan: CGFloat = 0.82
+
     public func setFlightCoverAlpha(_ a: CGFloat) {
         guard let flightCover else { return }
         CATransaction.begin()
@@ -399,9 +407,38 @@ public final class StoryCardMorph {
         // (Snapchat's zoom-out), and the snap that follows the release converges it to 1 over the
         // same window the cover fades in on. At the landing it is 1, so the card is the slot's shape
         // and the pixel identity the hand-over depends on is untouched.
-        let tightH = min(restH, visibleH / scale)
-        let cropH = restH + (tightH - restH) * max(0, min(1, crop))
-        let cropRect = CGRect(x: content.minX, y: content.midY - cropH / 2, width: restW, height: cropH)
+        // ⚠️ A CIRCULAR LANDING IS A DIFFERENT JOURNEY, NOT A BIGGER CORNER RADIUS.
+        //
+        // The first version of the chat-ring door assumed the two were the same thing: the ring reports
+        // its radius as half its width, so the interpolation would "reach a circle on its own". It does
+        // not, and his Snapchat reference is what it does not do. Two things stop it. The crop above is
+        // always the CARD'S FULL WIDTH by a shrinking height, so it is a rectangle at every fraction
+        // except the very last one — a circle inscribed in it would be a stadium. And `flightRadius`
+        // below is capped at the story card's own rendered corner (`cardCornerRadius * scale`), which
+        // near the row end is a couple of points: the mask was very nearly SQUARE for the whole flight.
+        // The only circle anybody saw was the cover snapshot lying on top of it, and the cover dissolves
+        // away at about a third of the journey — so what actually grew out of a ringed avatar was a
+        // rounded rectangle, which is the report.
+        //
+        // So a circular door crops to a SQUARE and rounds it fully, at every fraction. The side runs
+        // from the card's own DIAGONAL (a circle that contains the whole card, so nothing is cut while
+        // the story is still near full screen) down to the card's width at the landing, where the scale
+        // has already taken it to the avatar's diameter. It reaches the diagonal at `circleCoverSpan`,
+        // which is where the host starts fading the surround back in — so the corners the circle cuts
+        // are filled by the same arrival that brings the reply bar, and the two never disagree.
+        let circular = !sheet && cornerRadius >= min(targetSize.width, targetSize.height) / 2 - 0.5
+        let cropRect: CGRect
+        if circular {
+            let diag = (restW * restW + restH * restH).squareRoot()
+            let open = 1 - f                     // 0 at the avatar, 1 at full screen
+            let side = restW + (diag - restW) * min(1, open / Self.circleCoverSpan)
+            cropRect = CGRect(x: content.midX - side / 2, y: content.midY - side / 2,
+                              width: side, height: side)
+        } else {
+            let tightH = min(restH, visibleH / scale)
+            let cropH = restH + (tightH - restH) * max(0, min(1, crop))
+            cropRect = CGRect(x: content.minX, y: content.midY - cropH / 2, width: restW, height: cropH)
+        }
 
         // CATransaction: the mask's geometry is implicitly ANIMATED, so without this it chases the
         // transform by a quarter second and the crop visibly lags the card under the finger. A
@@ -449,8 +486,13 @@ public final class StoryCardMorph {
         // So the cover clips itself at the radius the mask wanted before the cap. Divided by `scale`
         // for the same reason the mask's is: the transform multiplies it back.
         if !sheet, let cover = flightCover {
-            cover.layer.cornerCurve = .continuous   // every card it meets is a SwiftUI squircle
-            cover.layer.cornerRadius = max(0, wantedRadius(f: f, rowRadius: cornerRadius)) / scale
+            // A circle is a CIRCULAR curve, not a squircle. `.continuous` at exactly half the width
+            // degenerates into something that is neither, and against a real avatar ring underneath it
+            // that mismatch is a visible seam at the hand-over.
+            cover.layer.cornerCurve = circular ? .circular : .continuous
+            cover.layer.cornerRadius = circular
+                ? cropRect.width / 2
+                : max(0, wantedRadius(f: f, rowRadius: cornerRadius)) / scale
             cover.layer.masksToBounds = true
         }
         // THE RADIUS RUNS BETWEEN TWO REAL CARDS AND NEVER REACHES ZERO.
@@ -490,8 +532,12 @@ public final class StoryCardMorph {
         // than the thing inside it. The row end keeps its larger radius through the interpolation
         // below, by which point the card's clip has shrunk so far that the cap is what governs and
         // the cover is carrying the corner anyway.
-        let wanted = wantedRadius(f: f, rowRadius: cornerRadius)
-        let flightRadius = min(wanted, cardCornerRadius * scale)
+        // A circular door skips the cap entirely, and it is allowed to: the cap exists because a mask
+        // rounder than the story card inside it opens a crescent at the CARD'S OWN CORNERS, where
+        // there is nothing to show but the dimming wall. The circle never goes near those corners —
+        // its widest points touch the card's edges at their MIDDLE, where the card's clip is straight.
+        let wanted = circular ? cropRect.width / 2 : wantedRadius(f: f, rowRadius: cornerRadius)
+        let flightRadius = circular ? wanted * scale : min(wanted, cardCornerRadius * scale)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   outside: sheet ? 0 : chrome,

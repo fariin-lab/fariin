@@ -1,16 +1,17 @@
 import SwiftUI
 import UIKit
 
-/// "A story viewer is on screen." One bool, shared, because the two views that need it are not in a
-/// position to tell each other: the story is presented from the CHATS screen, and the surface it has
-/// to darken is `MainShell`, which owns the tab bar and sits above every tab.
-///
-/// @Observable rather than a notification so the overlay simply appears and disappears with it, and
-/// a stale one is impossible: the only writer sets it from the presentation state it already has.
-@Observable final class StoryPresentation {
-    static let shared = StoryPresentation()
-    var viewerOpen = false
-}
+// ⚠️ `StoryPresentation` IS GONE, AND SO IS THE FLAT WINDOW DIM IT DROVE (2026-08-07).
+//
+// It was one bool that switched a `Color.black.opacity(0.45)` over this whole shell — tab bar
+// included — for as long as a story cover was up. It existed because a cover cannot darken what is
+// behind it: anything inside the cover shrinks with the cover. Every door is on `StoryZoomPresenter`
+// now, and that screen paints its own wall on the flight's own fraction (`heroDim`), so the backdrop
+// answers to the finger continuously instead of snapping to grey on the first frame and back to
+// white on the last. That snap is what the owner called "not fluid, not bound to the story frame".
+//
+// Do not reintroduce a boolean dim to "help" a door. Two dims on one flight is two curves fighting
+// over the same pixels, and only one of them can be the one his finger is drawing.
 
 // Native TabView keeps both tabs permanently mounted -> the header avatar never
 // unmounts/blinks on tab switch (the RN bug, solved structurally).
@@ -71,20 +72,9 @@ struct MainShell: View {
                 legacyTabView
             }
         }
-        // THE WHOLE WINDOW GOES DARK UNDER AN OPEN STORY, TAB BAR INCLUDED.
-        //
-        // My first attempt put this inside the Chats screen, and his next screenshot showed exactly
-        // what that misses: a white strip along the bottom, which is the tab bar, and a sliver at the
-        // top above the chat content. Both are drawn by THIS view, outside the Chats screen, so a dim
-        // living in there can never reach them.
-        //
-        // Here it is over the tab bar and every tab's content at once, which is what "the surface the
-        // story pulls away from" actually means.
-        .overlay {
-            if StoryPresentation.shared.viewerOpen {
-                Color.black.opacity(0.45).ignoresSafeArea().allowsHitTesting(false)
-            }
-        }
+        // (The window dim that used to live here is gone — see the note above `MainShell`. The
+        // presenter's own wall covers the tab bar and every tab's content, because it IS a screen
+        // over them, and it is driven by the flight's fraction rather than by a bool.)
         // A pending chat (from a notification tap or the Calls "Go to Chat" menu) must
         // foreground the Chats tab — otherwise it opens on a hidden tab and looks like a no-op.
         .onChange(of: AppRouter.shared.pendingChatId) { _, id in
@@ -646,23 +636,20 @@ struct ChatsView: View {
     @State private var showCompose = false
     @State private var showMyQR = false   // welcome empty-state → My QR Code sheet
     @State private var welcomeGreet = 0   // one-shot greeting bounce on the welcome glyph
-    @State private var viewerGroup: StoryGroup?
-    // WHERE the story was opened from — the zoom grows out of (and closes back into) the
-    // exact circle the user tapped: a top stories-row card (its group id) or a chat-row
-    // ring ("row-<cid>"). Set BEFORE viewerGroup at every open site.
-    @State private var viewerSourceID: String = ""
-    /// VESTIGIAL SINCE THE PRESENTER DOOR (2026-08-07): the stories row no longer opens the cover
-    /// at all — it presents through `StoryZoomPresenter` (see `openStoryFromRow`). Nothing sets
-    /// this true any more, so the cover below always runs Apple's zoom; the hero branches it gates
-    /// are kept for one release in case the new door has to be walked back to the cover quickly.
-    @State private var viewerHero = false
-    /// The stories-row door, on OUR OWN presentation (`StoryZoomPresenter`) — the owner's
-    /// 2026-08-07 spec. Non-nil while that screen is up; it holds the row order still (freezeOrder)
-    /// and nothing else. The cover (`viewerGroup`) keeps serving every other door on Apple's zoom.
-    @State private var presenterGroup: StoryGroup?
-    @State private var showUploadViewer = false   // live viewer for the still-uploading story
+    /// ⚠️ THE COVER IS GONE, AND SO ARE `viewerSourceID` AND `viewerHero` (2026-08-07, migration
+    /// complete). Every story door in the app — this row, the chat-row rings, the archive, both
+    /// profiles, a reply quote and the uploading card — now opens through `StoryDoor`, which is our
+    /// own presentation, our own gesture and our own animation end to end. There is no
+    /// `fullScreenCover` and no `.navigationTransition(.zoom(...))` left on any of them.
+    ///
+    /// Do not bring one back to "fix" a door. Two presentations for one interaction is what made the
+    /// scroll-down feel like a different gesture depending on which circle you had tapped, and it is
+    /// what build 481's crash cost. `StoryDoor` is the one way in.
     @State private var profileGroup: StoryGroup?
-    @Namespace private var storyNS   // zoom transition: story card ⇄ full-screen viewer
+    /// Whether a story viewer is up, so the row can hold its order still while one is. Read from the
+    /// door rather than mirrored here — a second copy of this was how the row froze on a viewer that
+    /// had already closed.
+    private var storyDoorState = StoryDoorState.shared
     // Stories row scrolls WITH the chat list: the row stays OUTSIDE the List (per-card
     // long-press dies inside a List row — build 147) but is offset 1:1 by the list's
     // scroll, and the List gets a matching top margin so rows start below it.
@@ -674,118 +661,33 @@ struct ChatsView: View {
 
     // MARK: - The stories-row door (our own presentation — owner's spec 2026-08-07)
 
-    /// Open a story from the top stories row through `StoryZoomPresenter`: our screen, our gesture,
-    /// our animation, nothing of Apple's presentation machinery in the interaction. Every other
-    /// door still presents the cover with Apple's zoom, deliberately, until this surface is proven
-    /// on a real phone (spec §9).
+    /// Open a story from the top stories row through `StoryDoor`: our screen, our gesture, our
+    /// animation, nothing of Apple's presentation machinery in the interaction.
+    ///
+    /// `pinned: false` is what makes this door different from every other one: the viewer pages
+    /// person to person, and the row has a card for whoever you paged to, so the anchor follows.
     private func openStoryFromRow(_ g: StoryGroup) {
-        openStory(g, sourceKey: g.id, pinned: false)
-    }
-
-    /// THE CHAT LIST'S RINGED AVATAR, on the same presentation as the row (migration 2/7).
-    ///
-    /// It used to raise the cover with Apple's zoom (`viewerSourceID` + `viewerHero = false`). It now
-    /// goes through the presenter like everything else, and because the ring reports its radius as
-    /// half its width, the story lands back into a CIRCLE — the owner's Snapchat reference.
-    ///
-    /// `pinned`, unlike the row: the viewer pages person to person, and there is no ring in this list
-    /// for "whoever you paged to" — or if there is, it is somewhere else on a list that has not
-    /// scrolled. The anchor is the one that was tapped, which is exactly what the zoom did with
-    /// `viewerSourceID`.
-    private func openStoryFromRing(_ conv: Conversation, _ g: StoryGroup) {
-        openStory(g, sourceKey: "row-\(conv.id)", pinned: true)
-    }
-
-    /// One door for every story open. `sourceKey` is the `MediaOpenRects` key of the thing that was
-    /// tapped, and it decides both what the flight lands on and what shape it lands in.
-    private func openStory(_ g: StoryGroup, sourceKey: String, pinned: Bool) {
-        guard !StoryZoomPresenter.isActive else { return }   // one viewer at a time
-        presenterGroup = g                                    // holds the row order still
-        // The tapped view: the presenter photographs it and the flight wears the snapshot — the
-        // shared-element open (thumbnail expands, dissolves to the story), and the close's
-        // pixel-matched landing into the emptied slot.
-        StoryZoomPresenter.present(rowViewer(for: g, sourceKey: sourceKey, pinned: pinned),
-                                   coverFrom: MediaOpenRects.liveView(MediaOpenRects.key(.storyRow, sourceKey)))
-    }
-
-    /// Presenter teardown shared by every exit: reveal the row card, release the row order, and
-    /// reload the rings only AFTER the landing has settled — the just-seen bucket moves when the
-    /// repo reloads, and re-sorting while the card is still settling makes the landing look like it
-    /// missed. Same two rules the cover's closes follow, from the same filmed reports.
-    private func storyPresenterClosed() {
-        presenterGroup = nil
-        MediaSourceVisibility.shared.reveal()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            Task { await StoriesRepository.shared.load(force: true) }
-        }
-    }
-
-    /// `refeed: true` builds the replacement viewer for a delete-with-stories-remaining swap: the
-    /// screen is already up, so the new viewer must not replay the open flight (`heroStageOpen`).
-    @ViewBuilder
-    private func rowViewer(for g: StoryGroup, refeed: Bool = false,
-                           sourceKey: String? = nil, pinned: Bool = false) -> some View {
-        // The row's own key by default, so the refeed path and every existing caller are unchanged.
-        let key = sourceKey ?? g.id
-        // Match the row: don't let swiping land on a HIDDEN person's story — same rule as the cover.
         let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-        // THE HERO CLOSE'S EXIT: the card has already flown home by the time this runs, so the
-        // screen leaves with no animation of its own — anything else would play a second close
-        // over the one the finger just drew.
-        let heroClose: () -> Void = {
-            // THE SOURCE COMES BACK BEFORE THE COPY GOES AWAY, which is the order every shared
-            // element has to use and the one this door was missing. The card had been landing on
-            // an EMPTY slot and the slot was refilled in the same breath as the screen was torn
-            // down — two changes in one frame, and whichever landed second was a visible swap.
-            // Revealing first is free: the flying card is sitting exactly on top of the slot,
-            // wearing its picture, so the row card comes back underneath where nobody can see it,
-            // and a frame later the copy is lifted off something already identical.
-            MediaSourceVisibility.shared.reveal()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-                StoryZoomPresenter.finish()
-                storyPresenterClosed()
-            }
-        }
-        // The close with no flight in it (nowhere to fly, or the viewers sheet was up): the
-        // presenter answers with its short drift-away, then the same teardown.
-        let close: () -> Void = {
-            StoryZoomPresenter.closeWithDrift()
-            storyPresenterClosed()
-        }
-        // The profile sheet presents from MainShell, and MainShell cannot present a sheet while our
-        // screen sits on top of it: leave first, open on the next tick. (The viewer's own header
-        // tap uses its INTERNAL profile sheet and never reaches this closure; this is the belt.)
-        let profile: (StoryGroup) -> Void = { grp in
-            StoryZoomPresenter.finish()
-            storyPresenterClosed()
-            DispatchQueue.main.async { profileGroup = grp }
-        }
-        if let idx = others.firstIndex(where: { $0.id == g.id }) {
-            // `deliveredToMe`: these came out of `StoriesRepository.others`, whose query is
-            // "recipientUids contains me" — so being here IS the author's audience choice, and the
-            // reply bar follows it rather than testing my chat list a second time. See the property.
-            StoryViewer(groups: others, startIndex: idx,
-                        heroDismiss: true, heroSourceKey: key, heroSourcePinned: pinned,
-                        deliveredToMe: true,
-                        onHeroClose: heroClose,
-                        onClose: close,
-                        onProfile: profile)
-        } else {
-            StoryViewer(group: g,
-                        heroDismiss: true, heroSourceKey: key, heroSourcePinned: pinned,
-                        deliveredToMe: true,
-                        heroStageOpen: !refeed,
-                        onHeroClose: heroClose,
-                        onClose: close,
-                        onProfile: profile,
-                        onDeletedRemaining: { fresh in
-                            // A story was deleted but more of mine remain: swap the viewer for one
-                            // fed the remaining bucket, in place. `replaceContent` forces a fresh
-                            // identity, which is what the cover's nil→fresh dance existed to do.
-                            presenterGroup = fresh
-                            StoryZoomPresenter.replaceContent(rowViewer(for: fresh, refeed: true))
-                        })
-        }
+        StoryDoor.open(g, among: others, from: g.id, pinned: false,
+                       // These came out of `StoriesRepository.others`, whose query is "recipientUids
+                       // contains me" — so being here IS the author's audience choice, and the reply
+                       // bar follows it rather than testing my chat list a second time.
+                       deliveredToMe: true,
+                       onProfile: { grp in profileGroup = grp })
+    }
+
+    /// THE CHAT LIST'S RINGED AVATAR. Same door, same flight, and because the ring reports its
+    /// radius as half its width the story grows out of it and lands back into it as a CIRCLE —
+    /// Snapchat's shape, the owner's reference. See StoryCardMorph's circular branch.
+    ///
+    /// `pinned` (the door's default), unlike the row: the ring is the only anchor this list has for
+    /// the person who was tapped, and paging on to somebody else does not produce a second one.
+    ///
+    /// One person's story alone (`among:` left empty). The list is sorted by conversation, not by
+    /// story, so paging out of a ring would walk an order nothing on screen is showing.
+    private func openStoryFromRing(_ conv: Conversation, _ g: StoryGroup) {
+        StoryDoor.open(g, from: "row-\(conv.id)", deliveredToMe: true,
+                       onProfile: { grp in profileGroup = grp })
     }
 
     // Welcome empty state: icon + copy + the three ways to get a first chat going.
@@ -992,15 +894,12 @@ struct ChatsView: View {
                 onStoryTap: {   // open this person's story in the same viewer the stories row uses
                     // The ring has its own tap gesture, which would beat the row's selection toggle.
                     if selecting { toggleSelection(conv.id); return }
-                    // MIGRATION 2/7: this ring is on the new presentation now. It used to raise the
-                    // cover with Apple's zoom (`viewerSourceID` + `viewerHero = false` +
-                    // `viewerGroup = g`); it goes through the presenter, and lands back into the
-                    // ring as a CIRCLE.
+                    // On the app's own presentation, and it lands back into the ring as a CIRCLE —
+                    // see `openStoryFromRing`.
                     if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
                         openStoryFromRing(conv, g)
                     }
                 },
-                storyNS: storyNS,
                 draft: Drafts.shared.text(conv.id),
                 voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
             .equatable()   // skip rebuild when this conversation is unchanged
@@ -1404,34 +1303,32 @@ struct ChatsView: View {
                       // own. Inside a List, the whole row lifts as one cell (the bug). (Build 147.)
                       if !storiesOptedOut {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
-                                 storyNS: storyNS,
                                  // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
                                  // unseen story re-sorts the row live, so their card slid out from
                                  // under the close before it could land on it — his story leaving
                                  // sideways towards the screen edge. See `StoriesRow.displayedOthers`.
-                                 freezeOrder: viewerGroup != nil || presenterGroup != nil || showUploadViewer,
+                                 freezeOrder: storyDoorState.isOpen,
                                  onCompose: { showCompose = true },
-                                 // THE ONE SURFACE ON OUR OWN TRANSITION (owner's spec, 2026-08-07:
-                                 // the story list first, spread it only once proven). The viewer is
-                                 // presented by `StoryZoomPresenter` — a screen we own, added and
-                                 // removed with no system animation — and the card flying out of
-                                 // this row IS the open. The drag-down close is the same flight in
-                                 // reverse, on the same view.
+                                 // EVERY SURFACE IS ON OUR OWN TRANSITION NOW (migration finished
+                                 // 2026-08-07). The viewer is presented by `StoryZoomPresenter` — a
+                                 // screen we own, added and removed with no system animation — and
+                                 // the card flying out of this row IS the open. The drag-down close
+                                 // is the same flight in reverse, on the same view. `StoryDoor` is
+                                 // the only way in, from here and from the other five doors alike.
                                  //
                                  // THE 481 LESSON THIS IS BUILT ON: the previous custom transition
                                  // flew UIPageViewController's INTERNAL scroll view and UIKit
                                  // asserted while animating it. The flight now transforms only the
                                  // presenter's own container (`StoryCardMorph.flightCard`); nothing
                                  // private is ever touched, so that crash is structurally gone.
-                                 //
-                                 // TO WALK THIS BACK IN A HURRY: open the cover instead, the way the
-                                 // chat-ring door below does (`viewerSourceID` + `viewerHero=false`
-                                 // + `viewerGroup = g`) — that is the whole difference between the
-                                 // two doors.
                                  onOpen: { g in openStoryFromRow(g) },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
-                                 onOpenUploading: { showUploadViewer = true })
+                                 onOpenUploading: {
+                                     StoryDoor.openUploading(meName: profile.me?.name ?? "You",
+                                                             mePhoto: profile.me?.photoUrl,
+                                                             onProfile: { grp in profileGroup = grp })
+                                 })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
                         // NO clip and NO mask on the stories row (user's 3-stage proof, build 225):
@@ -1489,135 +1386,11 @@ struct ChatsView: View {
             .onChange(of: path.count) {
                 showHeaderIcons = path.isEmpty
             }
-            // THE CHAT LIST DARKENS WHILE A STORY IS OPEN.
-            //
-            // His shot of the drag-down close: white above and below the shrinking story. That white
-            // is this screen, at full size, in light mode — the Edit pill and the toolbar icons are
-            // visible in it. Nothing was drawing white; our app is simply light and Snapchat's is
-            // dark, so their story pulls away from a dark surface and ours pulled away from a white
-            // one.
-            //
-            // It has to live HERE rather than in the cover, and that is the whole point: anything
-            // inside the cover shrinks with the cover, so it can never darken what is behind it.
-            //
-            // Only while a viewer is up, which is the only time this screen is visible behind one.
-            // Not animated on purpose — it appears under a cover that already covers it, so the
-            // first frame anybody sees is during the transition.
-            // The dim itself lives on `MainShell`, over the tab bar too — see `StoryPresentation`.
-            // This only reports.
-            .onChange(of: viewerGroup != nil || showUploadViewer, initial: true) { _, open in
-                StoryPresentation.shared.viewerOpen = open
-            }
             // Add Story opens the CAMERA, full screen (owner 2026-08-03). It was a bottom sheet
             // holding a picker; a camera in a card with the chat list showing behind it is not a
             // camera, and the sheet's own drag-to-dismiss would fight the preview.
             .fullScreenCover(isPresented: $showCompose) {
                 AddStorySheet { Task { await StoriesRepository.shared.load(force: true) } }
-            }
-            .fullScreenCover(item: $viewerGroup) { g in
-                // Match the row: don't let swiping land on a HIDDEN person's story (M1).
-                let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-                let close: () -> Void = {
-                    // Snappier zoom-back into the ring (user: the default felt sluggish): the
-                    // cover dismissal follows the transaction's animation.
-                    //
-                    // A HERO PRESENTATION HAS NO ZOOM TO BACK OUT OF, so there is nothing for a
-                    // spring to animate except the cover itself sliding away — which is not a close
-                    // anybody designed. This path is only reached on a hero when the card cannot be
-                    // flown home (the row scrolled away, no rect), and an instant exit is the honest
-                    // answer to that: no animation beats the wrong animation.
-                    let t: Transaction = viewerHero
-                        ? { var x = Transaction(); x.disablesAnimations = true; return x }()
-                        : Transaction(animation: .spring(response: 0.28, dampingFraction: 0.92))
-                    withTransaction(t) { viewerGroup = nil }
-                    viewerHero = false
-                    MediaSourceVisibility.shared.reveal()
-                    // Defer the reload so the hero shrink animation lands BEFORE the row re-sorts (the
-                    // just-seen bucket moves, which would otherwise make the zoom shrink toward a moving card).
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        Task { await StoriesRepository.shared.load(force: true) }   // refresh seen rings
-                    }
-                }
-                // THE HERO CLOSE'S EXIT. The card has already flown home by the time this runs, so
-                // the cover leaves with no animation of its own: anything else plays a second close
-                // over the top of the one the finger just drew. The row card is revealed on the far
-                // side of that, once the cover is gone and the story cannot be seen landing on top
-                // of a card that is already showing the same picture.
-                let heroClose: () -> Void = {
-                    var t = Transaction(); t.disablesAnimations = true
-                    withTransaction(t) { viewerGroup = nil }
-                    viewerHero = false
-                    MediaSourceVisibility.shared.reveal()
-                    // Same reason the zoom close defers its reload: the just-seen bucket moves to a
-                    // different place in the row, and re-sorting while the card is still settling
-                    // makes the landing look like it missed.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        Task { await StoriesRepository.shared.load(force: true) }
-                    }
-                }
-                // A friend's story opens the whole ordered list (swipe person to person);
-                // My Story (not in `others`) opens on its own.
-                let viewerBody = Group {
-                    if let idx = others.firstIndex(where: { $0.id == g.id }) {
-                        StoryViewer(groups: others, startIndex: idx,
-                                    heroDismiss: viewerHero, heroSourceKey: viewerHero ? g.id : "",
-                                    onHeroClose: heroClose,
-                                    onClose: close,
-                                    onProfile: { grp in profileGroup = grp })
-                    } else {
-                        StoryViewer(group: g,
-                                    heroDismiss: viewerHero, heroSourceKey: viewerHero ? g.id : "",
-                                    onHeroClose: heroClose,
-                                    onClose: close,
-                                    onProfile: { grp in profileGroup = grp },
-                                    onDeletedRemaining: { fresh in
-                                        // A story was deleted but I still have others — re-feed the viewer the
-                                        // remaining bucket instead of closing (animations off = instant swap,
-                                        // no slide-down/up bounce to the chat list).
-                                        var t = Transaction(); t.disablesAnimations = true
-                                        withTransaction(t) { viewerGroup = nil }
-                                        DispatchQueue.main.async { withTransaction(t) { viewerGroup = fresh } }
-                                    })
-                    }
-                }
-                // ONE TRANSITION PER PRESENTATION, NEVER BOTH.
-                //
-                // The zoom transition does not just animate — it brings its own interactive
-                // dismissal, which is the thing being replaced. So a hero presentation cannot merely
-                // ignore it, it has to not have it: they would be two close gestures on one screen,
-                // which is the arrangement every note in this area warns about.
-                //
-                // Everything that is NOT the stories row still gets the zoom, unchanged. That is the
-                // owner's instruction, not an accident of scope: the chat-row rings, the archive and
-                // the reply-quote openings keep working exactly as they do today until this one
-                // surface has been proven on a real phone.
-                //
-                // The zoom's own history, kept for whoever reads this next: its fast-flick
-                // "explosions" were the CUBE folding while the system moved the pages (getAngle
-                // reads global minX), which is gated to real horizontal page swipes now.
-                if viewerHero {
-                    viewerBody
-                } else {
-                    // Zoom from WHEREVER the story was opened: a top stories-row card or a chat-row
-                    // ring — viewerSourceID is set at every open site (falls back to the card).
-                    viewerBody
-                        .navigationTransition(.zoom(sourceID: viewerSourceID.isEmpty ? (g.isMine ? g.id : "story-\(g.id)") : viewerSourceID, in: storyNS))
-                }
-            }
-            // Live viewer for the still-uploading story. When the upload finishes, the handoff swaps
-            // to the real story viewer IN-PLACE inside this same cover — dismissing and re-presenting
-            // (the old flow) flashed the chat list between the two covers.
-            .fullScreenCover(isPresented: $showUploadViewer) {
-                UploadingStoryHandoff(
-                    meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
-                    onClose: {
-                        showUploadViewer = false
-                        Task { await StoriesRepository.shared.load(force: true) }   // refresh seen rings
-                    },
-                    onProfile: { grp in profileGroup = grp })
-                // Same native zoom close as every other story (user: uploading story used the custom
-                // scroll-down pan — use Apple's zoom dismiss instead). Heroes from the uploading card.
-                .navigationTransition(.zoom(sourceID: "my-story", in: storyNS))
             }
             // ONE ANSWER, EVERYWHERE, and it is this alert.
             //
@@ -1705,8 +1478,9 @@ struct ChatsView: View {
         showArchived = false
         showNew = false
         showCompose = false
-        viewerGroup = nil
-        showUploadViewer = false
+        // The story viewer is not a cover any more, so it cannot be dismissed by clearing a binding:
+        // it is a presented screen and the door takes it away. Same job, one call.
+        StoryDoor.dismiss()
         profileGroup = nil
         // Navigate even if the conv isn't cached yet (e.g. a brand-new 1:1 opened from a
         // group member sheet) — fall back to the name/photo the caller supplied.
@@ -1733,9 +1507,7 @@ struct ArchivedChatsView: View {
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var showDeleteSelected = false
-    @State private var viewerGroup: StoryGroup?   // tap an archived story card → view it
     @State private var prefsTick = 0              // re-render after Unhide
-    @Namespace private var storyNS                // hero zoom: archived card ⇄ viewer
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
@@ -1783,7 +1555,12 @@ struct ArchivedChatsView: View {
                 // rebuilt the row it could hand a card's context menu to the neighbour it thought was
                 // the same view. One key, declared once, and there is nothing left to disagree.
                 ForEach(archivedStories, id: \.authorUid) { g in
-                    Button { viewerGroup = g } label: {
+                    Button {
+                        // Archived stories are a drawer of ONE person each — no paging out of the
+                        // card you tapped into somebody else's, which the row does and this must not.
+                        StoryDoor.open(g, from: "arch-\(g.id)", deliveredToMe: true,
+                                       onClosed: { prefsTick += 1 })
+                    } label: {
                         VStack(spacing: 6) {
                             ZStack(alignment: .bottomLeading) {
                                 StoryImage(url: g.stories.last?.previewUrl ?? "")
@@ -1800,7 +1577,10 @@ struct ArchivedChatsView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .matchedTransitionSource(id: "arch-\(g.id)", in: storyNS)   // hero source for the zoom close
+                    // The flight's source. Same 24 the card is actually drawn with, so the story
+                    // lands as a CARD here rather than the circle a ringed avatar gets — the shape
+                    // is read from this number and nowhere else.
+                    .modifier(MediaRectReporter(id: "arch-\(g.id)", scope: .storyRow, cornerRadius: 24))
                     .contextMenu {
                         Button { StoryPrefs.toggleHidden(g.authorUid); prefsTick += 1 } label: {
                             Label("Unhide Story", systemImage: "tray.and.arrow.up")
@@ -1898,19 +1678,9 @@ struct ArchivedChatsView: View {
                     ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
                 }
             }
-            // THE SAME VIEWER, AND THE SAME WAY OUT, as every other story in the app.
-            //
-            // It used to run with `ownSwipeDismiss: true`, which hands the close to the story
-            // library's own pan — a different gesture with different physics from the one the chat
-            // list and the profile use. `false` plus the zoom transition is the app's close: drag
-            // down, hold it part way, let go and it springs back into the card it grew out of. The
-            // card carries the matching hero source, which is what that comment said this cover did
-            // not have.
-            .fullScreenCover(item: $viewerGroup) { g in
-                StoryViewer(group: g, ownSwipeDismiss: false,
-                            onClose: { viewerGroup = nil }, onProfile: { _ in viewerGroup = nil })
-                    .navigationTransition(.zoom(sourceID: "arch-\(g.id)", in: storyNS))
-            }
+            // (No story cover here any more: the archived card opens through `StoryDoor`, which is
+            // the same presentation, the same flight and the same drag-down close as every other
+            // door in the app. See the Button above.)
             .toolbar {
                 if selecting {
                     ToolbarItem(placement: .topBarLeading) {
@@ -1993,20 +1763,8 @@ private struct StoryRowHeightKey: PreferenceKey {
 }
 
 
-// Registers the ringed avatar as a zoom-transition anchor when a namespace is provided —
-// the story viewer grows out of, and closes back into, this exact circle. The namespace is
-// constant for the view's lifetime, so the branch never changes identity.
-private struct RowStoryAnchor: ViewModifier {
-    let ns: Namespace.ID?
-    let id: String
-    func body(content: Content) -> some View {
-        if let ns {
-            content.matchedTransitionSource(id: id, in: ns)
-        } else {
-            content
-        }
-    }
-}
+// (`RowStoryAnchor` is gone with the zoom it fed. The ringed avatar registers itself with
+// `MediaOpenRects` instead — see the ChatRow avatar — which is what the flight actually reads.)
 
 // Adds a high-priority tap ONLY when the avatar has a story, so it opens the story instead of the
 // chat; otherwise the row's normal open-chat tap is untouched.
@@ -2034,7 +1792,6 @@ struct ChatRow: View, Equatable {
     let dark: Bool
     var storySeen: [Bool] = []      // per-segment seen flags for this person's stories ([] = no active story)
     var onStoryTap: (() -> Void)? = nil   // tap the ringed avatar → open their story (not the chat)
-    var storyNS: Namespace.ID? = nil      // zoom namespace: the ringed avatar anchors the story open/close
     var draft: String = ""          // unsent composer text (local-only) → "Draft:" preview
     var voiceUnplayed: Bool = false // newest incoming voice note not played yet → accent mic
 
@@ -2283,18 +2040,16 @@ struct ChatRow: View, Equatable {
                                size: storySeen.isEmpty ? 56 : 49)
                 }
             }
-                // This circle is the story's zoom anchor: opening from here grows the viewer out
-                // of THIS ring, and closing shrinks back into it (the standard behavior).
-                // Anchored on the PHOTO ONLY — with the ring inside the anchor, the hero
-                // stretched the grey ring segments during the zoom (user glitch screenshot).
-                .modifier(RowStoryAnchor(ns: storyNS, id: "row-\(conv.id)"))
-                // AND THE SAME CIRCLE, REGISTERED FOR THE FLIGHT. `RowStoryAnchor` above is Apple's
-                // zoom anchor; this is ours, and it is what the story card flies home into now.
+                // THIS CIRCLE IS THE STORY'S DOOR: opening from here grows the viewer out of it, and
+                // the drag-down flies home into it. (Apple's `matchedTransitionSource` that used to
+                // sit beside this is gone with the zoom it belonged to.)
                 //
-                // The radius is HALF THE SIDE, which is the whole trick: the flight interpolates to
-                // whatever radius its source reports, so a photo reporting half its width lands as a
-                // circle without a single per-site branch. Reported on the PHOTO, not the ring, for
-                // the same reason the zoom anchor is — with the ring inside it the transition
+                // The radius is HALF THE SIDE, which is the whole trick: `StoryCardMorph` reads what
+                // its source reports, and a source reporting half its short side gets a CIRCULAR
+                // flight — square crop, round mask, all the way rather than only at the landing.
+                // Snapchat's shape, no per-site branch.
+                //
+                // Reported on the PHOTO, not the ring: with the ring inside the anchor the transition
                 // stretched the grey ring segments, which the owner screenshotted.
                 .modifier(MediaRectReporter(id: "row-\(conv.id)", scope: .storyRow,
                                             cornerRadius: (storySeen.isEmpty ? 56 : 49) / 2))

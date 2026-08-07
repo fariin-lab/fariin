@@ -250,7 +250,6 @@ struct SettingsView: View {
 struct MyProfileView: View {
     private var profile = ProfileStore.shared
     @State private var stories = StoriesRepository.shared
-    @State private var viewerGroup: StoryGroup?
     @State private var showEdit = false
     @Environment(\.colorScheme) private var scheme
 
@@ -278,9 +277,9 @@ struct MyProfileView: View {
         }
         .sheet(isPresented: $showEdit) { EditProfileView() }
         .task { await stories.load() }
-        .fullScreenCover(item: $viewerGroup) { g in
-            StoryViewer(group: g, ownSwipeDismiss: true) { viewerGroup = nil; Task { await stories.load(force: true) } }
-        }
+        // (No story cover here any more. This screen ran `ownSwipeDismiss: true`, which handed the
+        // close to the story library's own pan — a different gesture with different physics from
+        // the one the chat list uses, on the same app. It opens through `StoryDoor` now.)
     }
 
     private var hero: some View {
@@ -315,8 +314,17 @@ struct MyProfileView: View {
                             }
                             .frame(width: 92, height: 150)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            // The flight's source, at the radius this tile is actually drawn with —
+                            // 16, not the row's 24, so the story lands on the shape that is there.
+                            // Keyed per STORY: each tile is its own rectangle and the close has to
+                            // fly back to the one that was tapped.
+                            .modifier(MediaRectReporter(id: "mine-\(s.id)", scope: .storyRow,
+                                                        cornerRadius: 16))
                             .contentShape(Rectangle())
-                            .onTapGesture { viewerGroup = mine }
+                            .onTapGesture {
+                                StoryDoor.open(mine, from: "mine-\(s.id)",
+                                               onClosed: { Task { await stories.load(force: true) } })
+                            }
                         }
                     }
                 }

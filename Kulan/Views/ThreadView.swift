@@ -82,7 +82,6 @@ struct ThreadView: View {
     @State private var albumViewer: AlbumViewerWrap?   // tapped album photo → swipeable album gallery
     @State private var albumScreen: Message?           // tapped a photo GROUP → the album list screen
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
-    @State private var storyToOpen: StoryGroup?      // tapped a status reply → open that status
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
     @State private var sendError: String?
     @State private var showCamera = false
@@ -220,8 +219,10 @@ struct ThreadView: View {
     }
     @State private var settled = false   // suppress animated auto-scroll until the open transition + first load finish
     @State private var revealed = false  // list hidden until the first chunk has laid out — the chunked build was visible mid-push (user video)
-    @Namespace private var replyStoryNS                       // native zoom hero for reply-opened stories
-    @State private var replyStoryAnchorId = ""                // the tapped quote's anchor (per-message unique)
+    // (`replyStoryNS`, the zoom namespace a reply-opened story used to hero from, is gone with the
+    // cover it belonged to. The quote thumbnail registers a rect for the flight instead — one flag
+    // says whether this bubble's quote is a door at all, which is all the namespace was really
+    // doing for the last few builds.)
     @State private var newWhileAway = 0
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
@@ -725,14 +726,9 @@ struct ThreadView: View {
     // First half of the picker chain (story/image/video viewers, camera source, etc.).
     private var threadPickersA: some View {
         threadCovers
-        .fullScreenCover(item: $storyToOpen) { g in
-            // FULLY NATIVE (user's final call): the zoom hero anchors on the tapped reply-quote
-            // thumbnail, so Apple's interactive scroll-down-to-close works here exactly like
-            // the main story flow — the custom pan is gone from this cover.
-            StoryViewer(group: g,
-                        onClose: { storyToOpen = nil }, onProfile: { _ in storyToOpen = nil })
-                .navigationTransition(.zoom(sourceID: replyStoryAnchorId, in: replyStoryNS))
-        }
+        // (No story cover here any more: a reply quote opens through `StoryDoor`, on the app's own
+        // presentation, so the scroll-down close is the same gesture here as everywhere else. It was
+        // the last of the six doors still running Apple's zoom.)
         .alert("Status no longer available", isPresented: $statusUnavailable) {
             Button("OK", role: .cancel) {}
         } message: { Text("This status has expired.") }
@@ -1614,7 +1610,7 @@ struct ThreadView: View {
                 onJumpTo: { id in jumpTo(id) },
                 resolveReplyOriginal: { id in repo.items.first { $0.id == id } },
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
-                replyStoryNS: replyStoryNS,
+                storyQuoteOpens: true,
                 isHighlighted: msg.id == highlightId,
                 searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
                 isFirstInCluster: isFirstInCluster(at: index),
@@ -3606,7 +3602,6 @@ struct ThreadView: View {
     // Tapped a "Status" reply quote → open that status if it's still live, else say it's gone.
     // The repo only holds unexpired stories, so "found" == still viewable.
     private func openStory(_ storyId: String, _ authorId: String, anchorId: String = "") {
-        replyStoryAnchorId = anchorId
         let repo = StoriesRepository.shared
         let active = (repo.others + [repo.mine].compactMap { $0 })
             .first { $0.authorUid == authorId && $0.stories.contains { $0.id == storyId } }
@@ -3618,7 +3613,10 @@ struct ThreadView: View {
         if let one = group.stories.first(where: { $0.id == storyId }) {
             group.stories = [one]
         }
-        storyToOpen = group
+        // The quote thumbnail is the flight's source. `deliveredToMe: true` — a reply quote only
+        // exists because this story was sent to me and I answered it, which is a stronger proof of
+        // audience than the chat list.
+        StoryDoor.open(group, from: anchorId, deliveredToMe: true)
     }
 
     private func sendPicked(_ item: PhotosPickerItem?) async {
@@ -4961,7 +4959,10 @@ struct MessageBubble: View, Equatable {
     // Returns nil if the original isn't loaded → the quote falls back to the text snippet.
     var resolveReplyOriginal: (String) -> Message? = { _ in nil }
     var onTapStory: (_ storyId: String, _ authorId: String, _ anchorId: String) -> Void = { _, _, _ in }
-    var replyStoryNS: Namespace.ID? = nil   // native zoom anchor for the story-quote thumbnail
+    /// This bubble's story-quote thumbnail is a door: register it as the flight's source. False for
+    /// the bubble kinds that draw a quote but never open one, which must not file a rectangle the
+    /// close could then fly home to.
+    var storyQuoteOpens: Bool = false
     var isHighlighted: Bool = false
     var searchTerm: String = ""           // in-chat search: highlight this term inside the text
     var isFirstInCluster: Bool = true
@@ -6533,9 +6534,10 @@ struct MessageBubble: View, Equatable {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
-                        // Unique per MESSAGE (two replies can quote the same story — duplicate
-                        // hero ids glitch the transition).
-                        .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
+                        // Unique per MESSAGE (two replies can quote the same story — two rectangles
+                        // under one key would let the story fly home to the wrong bubble).
+                        .modifier(ReplyStoryAnchor(active: storyQuoteOpens, id: "reply-\(message.id)",
+                                                   cornerRadius: 14))
                         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .onTapGesture { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }
                 }
@@ -6567,9 +6569,10 @@ struct MessageBubble: View, Equatable {
                     StoryImage(url: thumb)
                         .frame(width: 30, height: 38)
                         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        // Unique per MESSAGE (two replies can quote the same story — duplicate
-                        // hero ids glitch the transition).
-                        .modifier(ReplyStoryAnchor(ns: replyStoryNS, id: "reply-\(message.id)"))
+                        // Unique per MESSAGE (two replies can quote the same story — two rectangles
+                        // under one key would let the story fly home to the wrong bubble).
+                        .modifier(ReplyStoryAnchor(active: storyQuoteOpens, id: "reply-\(message.id)",
+                                                   cornerRadius: 5))
                 } else if let o = original, !o.deleted {
                     // Photo / GIF / video / album reply → real thumbnail (reference-style preview).
                     // Never for a deleted original: its thumbnail is gone from Storage, so this would
@@ -6662,14 +6665,23 @@ struct MessageBubble: View, Equatable {
     }
 }
 
-// Marks a reply-quote thumbnail as the story cover's zoom hero source (optional ns so
-// bubbles without the namespace are untouched).
+/// Marks a reply-quote thumbnail as the story flight's source.
+///
+/// It used to declare a `matchedTransitionSource` for Apple's zoom. The quote opens through
+/// `StoryDoor` now, so what it has to publish is a rectangle and a corner radius — `cornerRadius` is
+/// the one the caller actually draws the thumbnail with (14 on the big quote, 5 on the small one), so
+/// the story lands on the shape that is there rather than on a number this modifier guessed.
+///
+/// `active` is what the optional namespace used to be: a bubble that was not given one is a bubble
+/// whose thumbnail is not a door, and it must not register a rect any more than it should have
+/// claimed a hero id. It is constant for the view's lifetime, so the branch never changes identity.
 private struct ReplyStoryAnchor: ViewModifier {
-    let ns: Namespace.ID?
+    let active: Bool
     let id: String
+    var cornerRadius: CGFloat = 14
     func body(content: Content) -> some View {
-        if let ns {
-            content.matchedTransitionSource(id: id, in: ns)
+        if active {
+            content.modifier(MediaRectReporter(id: id, scope: .storyRow, cornerRadius: cornerRadius))
         } else {
             content
         }

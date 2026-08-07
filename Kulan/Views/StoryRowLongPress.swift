@@ -68,9 +68,42 @@ struct StoryMenuTarget {
 /// photographing the anchor returns a transparent image. The story flight's cover was blank for its
 /// whole life for exactly that reason. Cropping the window takes the pixels the eye is looking at.
 enum StoryCardShot {
-    static func crop(_ rect: CGRect, in window: UIWindow) -> UIImage? {
+    /// - Parameter cornerRadius: the radius the SOURCE is drawn with. Anything outside that corner is
+    ///   cut out of the picture and comes back transparent. 0 keeps the full rectangle.
+    ///
+    /// ⚠️ THIS IS WHERE THE WHITE CORNERS DIE, AND IT HAS TO BE HERE.
+    ///
+    /// The shot is a crop of the WINDOW at the card's rectangle. The card is rounded, so the four
+    /// corners of that rectangle are not card at all — they are the chat list behind it, photographed
+    /// BEFORE the flight's dim went on. In light mode that is very nearly white (measured off his
+    /// screenshot: 247,244,245 against a list that by then reads 226,226,226). Those pixels are part
+    /// of the image, so every attempt to fix this downstream has been an attempt to cover them up:
+    /// the container mask cannot cut them (it is capped at the story card's own corner, which near
+    /// the row end is a couple of points), and rounding the cover LAYER only trades one curve for
+    /// another — that fix is what he watched make the rind bigger rather than smaller.
+    ///
+    /// Cut here, they do not exist. Nothing downstream has to agree with anything, at any scale, at
+    /// any fraction, and the corner the flight actually shows is drawn by the cover's own layer as
+    /// before — the shape is untouched, only the pixels that were never the card are gone.
+    ///
+    /// SLIGHTLY ROUNDER THAN ASKED (`* 1.12`), because the source is a SwiftUI continuous squircle
+    /// and this path is a circular arc: at the same radius the two enclose different areas, and the
+    /// crescent between them is what was left showing. Over-cutting puts that crescent on the
+    /// transparent side, where what shows through is the dimmed list the card is flying over — which
+    /// is what is behind the card anyway. Under-cutting puts it on the white side, which is the bug.
+    static func crop(_ rect: CGRect, in window: UIWindow, cornerRadius: CGFloat = 0) -> UIImage? {
         guard rect.width > 1, rect.height > 1, rect.maxX > 0, rect.maxY > 0 else { return nil }
-        return UIGraphicsImageRenderer(size: rect.size).image { _ in
+        // Not opaque: the corners must come out CLEAR, and an opaque format would fill them black —
+        // a dark rind in place of a light one is not a fix.
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: rect.size, format: format).image { ctx in
+            if cornerRadius > 0.5 {
+                let r = min(cornerRadius * 1.12, min(rect.width, rect.height) / 2)
+                UIBezierPath(roundedRect: CGRect(origin: .zero, size: rect.size),
+                             cornerRadius: r).addClip()
+            }
+            _ = ctx
             // Shifted so the card lands at the origin. `afterScreenUpdates: false`: the last
             // rendered frame is exactly what is on screen, and a flush would cost the press a frame.
             window.drawHierarchy(in: CGRect(x: -rect.minX, y: -rect.minY,
@@ -81,9 +114,9 @@ enum StoryCardShot {
     }
 
     /// The same picture, taken of a registered view wherever it is now.
-    static func crop(_ view: UIView) -> UIImage? {
+    static func crop(_ view: UIView, cornerRadius: CGFloat = 0) -> UIImage? {
         guard let window = view.window else { return nil }
-        return crop(view.convert(view.bounds, to: window), in: window)
+        return crop(view.convert(view.bounds, to: window), in: window, cornerRadius: cornerRadius)
     }
 }
 
@@ -186,7 +219,11 @@ struct StoryRowLongPress: UIViewRepresentable {
                 guard overlay == nil,
                       let window = g.view?.window,
                       let t = target(p),
-                      let shot = StoryCardShot.crop(t.rect, in: window) else { return }
+                      // Cut to the card's own 24 for the same reason the flight's cover is: the
+                      // corners of a window crop are the chat list, and a lifted card wearing four
+                      // white chips is the same artifact standing still.
+                      let shot = StoryCardShot.crop(t.rect, in: window, cornerRadius: 24)
+                else { return }
                 let image = UIImageView(image: shot)
                 image.frame = CGRect(origin: .zero, size: t.rect.size)
                 image.autoresizingMask = [.flexibleWidth, .flexibleHeight]

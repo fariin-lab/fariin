@@ -393,7 +393,6 @@ struct StoriesRow: View {
     @State private var seenBy: SeenByTarget?             // "Seen by" sheet target
     var meName: String
     var mePhoto: String?
-    var storyNS: Namespace.ID    // zoom transition: card ⇄ full-screen viewer
     /// A story viewer is open — hold the row's order still until it closes. Declared HERE, with the
     /// other inputs, because the memberwise initializer takes its arguments in declaration order and
     /// the call site reads better with the row's inputs together. See `displayedOthers`.
@@ -504,7 +503,6 @@ struct StoriesRow: View {
                                     // A press that raised the menu must not also open the story when
                                     // the finger lifts — see `StoryRowPress`.
                                     onOpen: { guard !StoryRowPress.swallowsTap else { return }; onOpen(g) },
-                                    storyNS: storyNS,
                                     groupID: g.id)
                         .equatable()
                         .id(g.authorUid)   // explicit stable identity → its menu stays bound to this person
@@ -604,7 +602,12 @@ struct StoriesRow: View {
                     // posted stories, that viewer offers a "‹" / swipe-right to step back into them
                     // while the upload keeps running in the background.
                     .onTapGesture { onOpenUploading() }
-                    .matchedTransitionSource(id: "my-story", in: storyNS)   // hero source for the native zoom close
+                    // The flight's source, the same as every other card in this row. It used to be
+                    // a `matchedTransitionSource` for Apple's zoom, which is the one door that had
+                    // not migrated — so a story you had just posted closed with a different gesture
+                    // from every other story in the app.
+                    .modifier(MediaRectReporter(id: StoryDoor.uploadingSourceKey,
+                                                scope: .storyRow, cornerRadius: 24))
             } else {
                 // Cover = last story, else the profile photo fills the card (user rollback
                 // 2026-07-22: they prefer the full-photo look). No photo at all → centered circle.
@@ -620,7 +623,6 @@ struct StoriesRow: View {
                 // The menu is the ROW's now, in UIKit, lifting this card's own pixels — see
                 // `menuTarget(at:)` and `StoryRowLongPress`. The `.contextMenu` that used to sit
                 // here rebuilt the card from scratch to lift it.
-                .matchedTransitionSource(id: repo.mine?.id ?? "my-story", in: storyNS)   // hero grow source
                 .transition(.opacity)
             }
         }
@@ -843,7 +845,6 @@ private struct StoryFriendCard: View, Equatable {
     // `onMessage` / `onProfile` / `onHide` used to hang off this card's own `.contextMenu`. The row
     // owns one UIKit press for every card now (`StoryRowLongPress`), and it builds each menu from
     // the group it hit, so the card carries only its tap.
-    let storyNS: Namespace.ID    // hero zoom: card ⇄ viewer
     let groupID: String          // matches the viewer's zoom sourceID
 
     static func == (l: StoryFriendCard, r: StoryFriendCard) -> Bool {
@@ -892,7 +893,6 @@ private struct StoryFriendCard: View, Equatable {
         // story viewer's destination identity). Without the prefix, SwiftUI's zoom auto-matched the
         // destination to this card even when it was scrolled off-screen, overriding the explicit
         // chat-row source ("row-<cid>") and anchoring the zoom to the wrong (top, hidden) avatar.
-        .matchedTransitionSource(id: "story-\(groupID)", in: storyNS)   // hero grow source
     }
 
     @ViewBuilder private var coverView: some View {
@@ -1182,6 +1182,14 @@ struct StoryViewer: View {
     /// purpose: the shrink has to read as gradual under a slow drag, and the close commits long
     /// before this is reached.
     private static let heroDragSpan: CGFloat = 420
+    /// THE SMALLEST THE STORY IS ALLOWED TO GET WHILE THE FINGER IS STILL DOWN, as a fraction of its
+    /// own full-screen width. Measured off his Snapchat screenshot: their card bottoms out at just
+    /// under a third and stops there. See the note in `onHeroDrag`.
+    private static let heroDragMinScale: CGFloat = 0.34
+    /// How much further the card drifts after it has bottomed out, however far the finger keeps
+    /// going. Small on purpose: it exists so the gesture still answers at the bottom, not so the card
+    /// can keep travelling.
+    private static let heroDragTail: CGFloat = 64
     // (`heroFade`, how much the story itself softened as it was pulled away, is GONE — 2026-08-07.
     // It was 0.22 and it is what he saw as the chat list showing through the story like glass. The
     // background giving way is `heroDimMax`'s job; the picture stays opaque.)
@@ -2180,7 +2188,23 @@ struct StoryViewer: View {
     /// into the live story over the first half of the open so the glide to full screen is the story
     /// itself. (The open's `t` runs the other way round — 0 at the row, 1 at full screen.)
     private func heroCoverOut(_ t: CGFloat) -> CGFloat {
-        1 - max(0, min(1, (t - 0.2) / 0.35))
+        // ⚠️ A CIRCLE HANDS OVER SOONER, and it has to. The cover is a photograph of the thing that
+        // was tapped, and for a circular door that thing is a 49pt avatar — by the point a card's
+        // crossfade is still half on, the circle has already grown past 250pt and the cover is a
+        // four-times enlargement of a thumbnail lying over a story that is sharp underneath it. His
+        // Snapchat reference shows the picture inside the circle almost from the first frame.
+        let start: CGFloat = heroLandingIsCircle ? 0.05 : 0.2
+        let span: CGFloat = heroLandingIsCircle ? 0.25 : 0.35
+        return 1 - max(0, min(1, (t - start) / span))
+    }
+
+    /// TRUE when the door this story came out of is a circle (a chat-row ring, a profile avatar)
+    /// rather than a card. The same test `StoryCardMorph.applyCore` makes, asked of the same two
+    /// numbers, so the cover and the mask cannot disagree about which journey is running.
+    private var heroLandingIsCircle: Bool {
+        let key = MediaOpenRects.key(.storyRow, heroKeyNow())
+        guard let r = MediaOpenRects.liveRect(key), r.width > 1 else { return false }
+        return MediaOpenRects.cornerRadius(key) >= min(r.width, r.height) / 2 - 0.5
     }
 
     /// THE WALL'S ALPHA, AS A FUNCTION OF WHERE THE CARD IS — and the two ends are DIFFERENT.
@@ -2536,6 +2560,44 @@ struct StoryViewer: View {
     }
 
     /// THE CLOSE. The pan reports; this decides. See `StoryPager.handleHeroDrag`.
+    /// The largest `f` a DRAG may reach, so the card stops shrinking at `heroDragMinScale`.
+    ///
+    /// Derived from the anchor rather than written down, because `f` is a journey between two real
+    /// sizes and those are not the same distance apart at every door: a chat-row ring is 49pt and a
+    /// story card is about 90, so the same fraction leaves the card at two different sizes. Asking
+    /// the geometry keeps one number ("a third of the screen") true everywhere instead of one number
+    /// per door, which is how this area accumulates copies that drift.
+    private func heroDragCeiling() -> CGFloat {
+        guard let rect = StoryCardMorph.shared.flightRestRect, rect.width > 1 else { return 1 }
+        let ratio = max(0, min(0.99, hero.anchor.width / rect.width))
+        // An anchor already bigger than the floor has nothing to clamp: the whole journey is shorter
+        // than the limit, so let it run.
+        guard ratio < Self.heroDragMinScale else { return 1 }
+        return max(0.05, min(1, (1 - Self.heroDragMinScale) / (1 - ratio)))
+    }
+
+    /// Where the card's centre goes for a finger that has travelled `ty` down.
+    private func heroDragY(_ ty: CGFloat, ceiling: CGFloat) -> CGFloat {
+        // 1:1 for as long as the card is still shrinking — his spec, and the part of this gesture he
+        // has always said feels right.
+        let free = Self.heroDragSpan * ceiling
+        var y = hero.rest.y + (ty <= free
+            ? ty
+            // Past it: a rubber band onto a fixed tail, asymptotic, so the card never quite reaches
+            // the end of it however hard he pulls and the gesture never goes dead under his finger.
+            : free + Self.heroDragTail * (1 - 1 / ((ty - free) / Self.heroDragTail + 1)))
+        // AND THE BOTTOM EDGE STAYS ON THE DISPLAY. The band alone would still let a card that
+        // bottoms out early drift under the tab bar, which is the half of his screenshot the floor
+        // does not answer. The card's rendered height at this instant is what decides where that is,
+        // so the stop moves with the shrink instead of being a second guess at it.
+        if let rect = StoryCardMorph.shared.flightRestRect, rect.width > 1 {
+            let scaleNow = 1 + (hero.anchor.width / rect.width - 1) * hero.f
+            let floorY = UIScreen.main.bounds.height - rect.height * scaleNow / 2 - 10
+            y = min(y, max(hero.rest.y, floorY))
+        }
+        return y
+    }
+
     private func onHeroDrag(_ phase: StoryHeroPhase, _ t: CGPoint, _ v: CGPoint) {
         switch phase {
         case .began:
@@ -2582,7 +2644,17 @@ struct StoryViewer: View {
             // reversibility is behaviour the owner asked for and liked, and it is why the commit
             // test below reads the raw translation rather than this clamped one.
             let ty = max(0, t.y)
-            hero.f = min(1, ty / Self.heroDragSpan)
+            // ⚠️ THE PULL HAS A FLOOR NOW, and his 2026-08-07 pair of screenshots is where it comes
+            // from. Snapchat's card bottoms out at just under a third of the screen and will not go
+            // further however long you keep pulling. Ours had no floor at all: `f` ran to 1, which is
+            // the ANCHOR'S own size — a 49pt ring — and once there the card simply kept sliding down
+            // at that size until it was sitting under the tab bar. That is his "theres no limit", and
+            // his shot of a story the size of a tab-bar icon is what it looks like.
+            //
+            // Only the part the finger owns is bounded. A committed close still flies all the way to
+            // `f = 1` and lands in the slot exactly as before — the landing is not a drag.
+            let ceiling = heroDragCeiling()
+            hero.f = min(ceiling, ty / Self.heroDragSpan)
             // VERTICAL ONLY (owner, 2026-08-06: "only scroll up and down… block left right").
             //
             // The x is deliberately dropped rather than damped or clamped. The card followed the
@@ -2593,7 +2665,11 @@ struct StoryViewer: View {
             //
             // The LANDING still travels sideways, and that is a different thing: the card it flies
             // home to sits wherever it sits in the row. What is locked is the part the finger owns.
-            hero.center = CGPoint(x: hero.rest.x, y: hero.rest.y + ty)
+            // AND THE TRAVEL IS BOUNDED TOO, or the card would go on falling at its floor size —
+            // which is the same screenshot from the other direction. 1:1 with the finger for the
+            // whole stretch that is still shrinking the card, then a rubber band onto a short tail,
+            // then a hard stop that keeps the card's bottom edge on the display.
+            hero.center = CGPoint(x: hero.rest.x, y: heroDragY(ty, ceiling: ceiling))
             // OPAQUE ALL THE WAY DOWN. This used to be `1 - heroFade * f`, softening the story to
             // about 94% across a normal pull and 78% at the end of the span, and his report is that
             // the chat list shows THROUGH the story like glass. It does: there is a dimmed but fully
@@ -3261,7 +3337,11 @@ struct UploadingStoryViewer: View {
 struct UploadingStoryHandoff: View {
     var meName: String
     var mePhoto: String?
-    var onClose: () -> Void                       // dismiss the cover (both phases)
+    /// The uploading card this flew out of, so the close can fly back into it. Empty degrades to the
+    /// presenter's drift-away, which is what any door with nowhere to land gets.
+    var heroSourceKey: String = ""
+    var onHeroClose: (() -> Void)? = nil          // the flight has landed: take the screen away
+    var onClose: () -> Void                       // no flight (nowhere to land, or a sheet was up)
     var onProfile: (StoryGroup) -> Void = { _ in }
     @State private var repo = StoriesRepository.shared
     @State private var svc = StoriesService.shared
@@ -3283,9 +3363,14 @@ struct UploadingStoryHandoff: View {
         ZStack {
             Color.black.ignoresSafeArea()   // constant backdrop so the re-feed never blinks
             if let g = group {
-                // ownSwipeDismiss:false → the library's custom pan is OFF; the cover's native zoom
-                // transition owns the scroll-down-to-close, same as every other story.
-                StoryViewer(group: g, ownSwipeDismiss: false, onClose: onClose, onProfile: onProfile)
+                // The app's own flight, same as every other story: it grows out of the uploading
+                // card and the drag-down flies back into it. `heroSourcePinned` because there is
+                // exactly one card in the row for a story that has not finished posting.
+                StoryViewer(group: g,
+                            heroDismiss: !heroSourceKey.isEmpty,
+                            heroSourceKey: heroSourceKey, heroSourcePinned: true,
+                            onHeroClose: onHeroClose,
+                            onClose: onClose, onProfile: onProfile)
                     // Re-feed identity when the upload flips done → open on the real just-posted story
                     // (image already URLCache-warm from postStory, so the swap is seamless).
                     .id(svc.uploading)

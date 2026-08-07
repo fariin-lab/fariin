@@ -563,6 +563,18 @@ struct PosterActionIcon: View {
 struct StoryStackBadge: View {
     let group: StoryGroup
     var textColor: Color = .white
+    /// `MediaOpenRects` key for the story flight, or empty for none.
+    ///
+    /// ⚠️ IT GOES ON THE FIRST CIRCLE, NOT ON THE BADGE. The badge is a row of overlapping circles
+    /// PLUS a "3 Stories" label, so its own rectangle is wide and short — registering that would tell
+    /// the flight to land the story in a 130x30 stadium and call it a circle, because the radius test
+    /// only sees half the SHORT side. The leftmost circle is both a true circle and the story that
+    /// actually opens first, which makes it the honest anchor twice over.
+    var rectKey: String = ""
+
+    /// The diameter of one circle in the stack. Public because the flight's landing shape is derived
+    /// from it and a second copy of this number is how a shape drifts.
+    static let circleSize: CGFloat = 30
 
     /// The first three in play order: tapping opens the story, and the leftmost circle on top is the
     /// one that opens first.
@@ -577,8 +589,10 @@ struct StoryStackBadge: View {
         HStack(spacing: 7) {
             HStack(spacing: -11) {   // overlap; each circle covers the left edge of the next
                 ForEach(Array(shown.enumerated()), id: \.element.id) { i, s in
-                    AvatarView(name: group.name, photoUrl: s.previewUrl, size: 30)
+                    AvatarView(name: group.name, photoUrl: s.previewUrl, size: Self.circleSize)
                         .overlay { Circle().strokeBorder(ring(for: s), lineWidth: 2) }
+                        .modifier(MediaRectReporter(id: i == 0 ? rectKey : "", scope: .storyRow,
+                                                    cornerRadius: Self.circleSize / 2))
                         .zIndex(Double(shown.count - i))
                 }
             }

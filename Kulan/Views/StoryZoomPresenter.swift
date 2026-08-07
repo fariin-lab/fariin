@@ -46,7 +46,11 @@ enum StoryZoomPresenter {
     /// the shared-element look he named from Snapchat: the thumbnail itself expands, opaque from
     /// the first pixel, and dissolves into the live story mid-flight. Nil (card scrolled away, or
     /// capture failed) degrades to the open without a cover, which is the pre-cover behaviour.
-    static func present<Content: View>(_ content: Content, coverFrom source: UIView? = nil) {
+    /// - Parameter coverRadius: the radius `source` is drawn with. The shot is cut to it, so the
+    ///   corners of the crop — which are the chat list, not the card — never ride the flight. See
+    ///   `StoryCardShot.crop`, which is where his white corners are actually removed.
+    static func present<Content: View>(_ content: Content, coverFrom source: UIView? = nil,
+                                       coverRadius: CGFloat = 0) {
         guard container == nil else { return }
         guard let top = topController() else { return }
         let vc = StoryZoomContainerVC()
@@ -63,7 +67,9 @@ enum StoryZoomPresenter {
         // ONE copy of that crop, in `StoryCardShot` — the row's long-press lift needs exactly the
         // same picture of exactly the same card, and two functions that have to agree pixel for
         // pixel is the mistake this area keeps writing down.
-        if let source, let shot = StoryCardShot.crop(source) { vc.setCoverImage(shot) }
+        if let source, let shot = StoryCardShot.crop(source, cornerRadius: coverRadius) {
+            vc.setCoverImage(shot)
+        }
         vc.setContent(AnyView(content))
         container = vc
         // animated:false is the whole design: the card flying out of the row IS the open animation

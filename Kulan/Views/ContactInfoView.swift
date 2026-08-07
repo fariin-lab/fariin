@@ -134,7 +134,16 @@ struct ContactInfoView: View {
     @State private var posterRect: CGRect = .zero    // poster photo's global square — the modern morph's start/end
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
-    @State private var storyViewerGroup: StoryGroup?   // ring tapped → play it (item-driven, like every other story cover)
+    /// Their story, from whichever of this screen's two circles was tapped: the hero avatar's ring or
+    /// the toolbar's story stack. Both are circles, so both land the story back as a circle.
+    ///
+    /// `deliveredToMe: false` — a profile story was found by looking somebody up, not by them
+    /// choosing an audience I am in, so the reply bar stays off. That is the same rule the old cover
+    /// followed by leaving the flag at its default; it is written down now because the door asks.
+    private func openProfileStory(_ g: StoryGroup, from key: String) {
+        StoryDoor.open(g, from: key, onClosed: { refreshStorySeen() })
+    }
+
     @State private var showAvatarChoice = false     // has BOTH a story and a photo → ask which to open
     // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
     // drag-down close shrinks back into it.
@@ -402,14 +411,16 @@ struct ContactInfoView: View {
                     // between Back and Edit. It hands over to the name as the header leaves, so the
                     // middle of the bar is never empty and never holds two things at once.
                     if useModernHeader, !showProfilePhoto, let g = publicStory, !g.stories.isEmpty {
-                        Button { storyViewerGroup = g } label: {
-                            StoryStackBadge(group: g, textColor: toolbarOnPhoto)
+                        // The flight's source when the header has scrolled away and this badge is
+                        // what is on screen. A DIFFERENT key from the hero avatar's, deliberately:
+                        // they are two rectangles in two places, only one is ever visible, and one
+                        // key for both would let the story fly home to whichever had reported last.
+                        // The badge puts it on its first circle — see `StoryStackBadge.rectKey`.
+                        Button { openProfileStory(g, from: "profile-story-badge") } label: {
+                            StoryStackBadge(group: g, textColor: toolbarOnPhoto,
+                                            rectKey: "profile-story-badge")
                         }
                         .buttonStyle(.plain)
-                        // Same zoom hero the classic avatar declared, moved to whatever is actually
-                        // on screen: the story grows out of these circles and the drag-down rides
-                        // back into them. The two never coexist, so the id is never claimed twice.
-                        .matchedTransitionSource(id: "profile-story", in: mediaNS)
                         .opacity(1 - collapse)
                         // Dead once it has faded, so a name scrolled into its place can never be
                         // tapped into somebody's story.
@@ -496,23 +507,10 @@ struct ContactInfoView: View {
             .fullScreenCover(item: $viewerVideo) { msg in
                 VideoPlayerScreen(message: msg, cid: cid, clipProvider: { nil }, rectScope: .profile)
             }
-            // Their story, opened from the ring on the hero avatar. Presented EXACTLY like every other
-            // story cover (item-driven, ownSwipeDismiss: true because this cover has no zoom hero, and
-            // NO extra background wrapper) — the previous isPresented + nested `if let` + black
-            // `.background(...ignoresSafeArea())` version couldn't be closed cleanly: that wrapper sat
-            // over the library's swipe-down pan, which is the gesture that dismisses it.
-            .fullScreenCover(item: $storyViewerGroup) { g in
-                // ownSwipeDismiss:FALSE + the native zoom transition = the identical close to a story
-                // opened from the chat list: drag down, hold it part way, release and it springs back
-                // into the avatar it came from. With `true` the library's own pan ran instead, which
-                // is why closing here felt like a different (and worse) gesture.
-                // Viewing here counts exactly like viewing from the chat list. For a non-contact the
-                // server write may be refused by rules; that's non-fatal and the local watermark
-                // still updates.
-                StoryViewer(group: g, ownSwipeDismiss: false,
-                            onClose: { storyViewerGroup = nil; refreshStorySeen() })
-                    .navigationTransition(.zoom(sourceID: "profile-story", in: mediaNS))
-            }
+            // (No story cover here any more: the ring opens through `StoryDoor`, the same
+            // presentation and the same drag-down close as the chat list — and because the hero
+            // avatar reports its radius as half its width, the story grows out of that circle and
+            // lands back into it as a CIRCLE. See `openProfileStory`.)
             .navigationDestination(isPresented: $showAllMedia) {
                 MediaGalleryView(cid: cid, title: shownName, photoUrl: photoUrl)
             }
@@ -951,9 +949,17 @@ struct ContactInfoView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
             }
             .contentShape(Circle())
-            // Hero source for the story's native zoom close, exactly like the story row in the chat
-            // list: the viewer grows out of this avatar and the drag-down rides back into it.
-            .matchedTransitionSource(id: "profile-story", in: mediaNS)
+            // ⚠️ THE FLIGHT'S SOURCE, AND THE REASON THIS PROFILE GETS SNAPCHAT'S CIRCLE.
+            //
+            // The radius is HALF THE SIDE, which is the whole shape system: `StoryCardMorph` reads
+            // the number its source reports and runs a circular flight when it is half the short
+            // side — a square crop, a fully round mask, at every fraction rather than only at the
+            // landing. Report anything smaller here and the story grows out of this circle as a
+            // rounded rectangle, which is exactly what the chat-row ring did before the morph
+            // learned the difference.
+            //
+            // 88 is `AvatarView(size: 88)` below. One number, stated once.
+            .modifier(MediaRectReporter(id: "profile-story", scope: .storyRow, cornerRadius: 44))
             .onTapGesture {
                 // What the eye sees, not what the url says — no picture means nothing to open.
                 let hasPhoto = heroHasPhoto
@@ -961,7 +967,7 @@ struct ContactInfoView: View {
                 // tap can't serve both, and silently preferring the story is what made the profile
                 // photo unreachable. With only one of them available, go straight there.
                 if publicStory != nil, hasPhoto { showAvatarChoice = true }
-                else if let s = publicStory { storyViewerGroup = s }
+                else if let s = publicStory { openProfileStory(s, from: "profile-story") }
                 else if hasPhoto { showProfilePhoto = true }
             }
             // Attached HERE, on the hero, not on the outer chain that already carries three alerts:
@@ -970,7 +976,9 @@ struct ContactInfoView: View {
             // avatar as a little callout bubble, and the user wants a sheet from the bottom.
             .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
                 SheetAction("View profile photo") { showProfilePhoto = true },
-                SheetAction("View story") { storyViewerGroup = publicStory },
+                SheetAction("View story") {
+                    if let s = publicStory { openProfileStory(s, from: "profile-story") }
+                },
             ])
             // TAPPABLE HERE, and only here. A profile is the one screen where a tap on the mark
             // cannot have meant something else, and it is where somebody goes when they actually
