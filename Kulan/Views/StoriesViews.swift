@@ -1910,8 +1910,11 @@ struct StoryViewer: View {
     /// be registered and still be nowhere near the screen; flying to it would send the story off the
     /// edge, which reads as the story being thrown away rather than put back.
     private func onScreenRect(for key: String) -> CGRect? {
+        // `liveRect`, not `rect`: it asks the card's own view where it is at this instant, the way
+        // Telegram's TransitionIn carries a `sourceView` rather than a remembered rectangle. A
+        // written-down rect is only as true as the last layout pass that wrote it.
         guard !key.isEmpty,
-              let r = MediaOpenRects.rect(MediaOpenRects.key(.storyRow, key)),
+              let r = MediaOpenRects.liveRect(MediaOpenRects.key(.storyRow, key)),
               r.width > 1, r.height > 1,
               UIScreen.main.bounds.insetBy(dx: -r.width / 2, dy: -r.height / 2).contains(CGPoint(x: r.midX, y: r.midY))
         else { return nil }

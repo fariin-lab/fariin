@@ -34,6 +34,41 @@ import UIKit
         radii[key] = cornerRadius
     }
     static func rect(_ key: String) -> CGRect? { rects[key] }
+
+    // MARK: - The live view behind the rectangle (Telegram's shape)
+
+    /// THE VIEW, NOT A NUMBER SOMEBODY WROTE DOWN EARLIER.
+    ///
+    /// Telegram hands its story screen a `sourceView` alongside the rect
+    /// (`StoryContainerScreen.TransitionIn`: `weak var sourceView: UIView?`, `sourceRect`,
+    /// `sourceCornerRadius`) and converts at the moment it flies. We stored only the rectangle, in
+    /// window coordinates, worked out by a SwiftUI GeometryReader at some earlier layout pass — and a
+    /// written-down rectangle can be stale (the row scrolled, the row re-sorted, the list moved under
+    /// it) or simply in a coordinate space that no longer means what it meant.
+    ///
+    /// Both of the story bugs he filmed tonight were that class of mistake. So the row now also
+    /// registers the real backing view, and the hero asks IT where it is, at the instant it needs to
+    /// know. The rectangle stays as the fallback for anything not backed by a view.
+    ///
+    /// Weak, and deliberately: a card scrolled out of the row is deallocated, and holding it would
+    /// answer with the position of a view that is not on screen any more.
+    private final class WeakView { weak var value: UIView?; init(_ v: UIView?) { value = v } }
+    private static var views: [String: WeakView] = [:]
+
+    static func captureView(_ key: String, _ view: UIView?) {
+        guard !key.isEmpty else { return }
+        views[key] = WeakView(view)
+    }
+
+    /// Where that card is RIGHT NOW, asked of the view itself. Falls back to the last written
+    /// rectangle when there is no live view (a screen that reports rects but has no anchor).
+    static func liveRect(_ key: String) -> CGRect? {
+        if let v = views[key]?.value, v.window != nil {
+            let r = v.convert(v.bounds, to: nil)
+            if r.width > 1, r.height > 1 { return r }
+        }
+        return rects[key]
+    }
     /// The bubble's own corner radius, so a transition interpolates from the REAL shape instead of a
     /// hardcoded guess. The close used a flat 14 and the open had no radius at all, so media with a
     /// different bubble radius visibly changed shape at the moment the copy took over.
@@ -64,6 +99,34 @@ import UIKit
 
 // Continuously reports a bubble media view's global frame (one dict write per layout pass — no state),
 // and hides itself while a transition is flying to or from it.
+/// Registers the real UIView behind a reported rectangle. See `MediaOpenRects.liveRect`.
+///
+/// A `.background` of the same content, so its frame IS the content's frame, and it draws nothing.
+/// Only the story hero reads these: every other caller still uses the written-down rect, so the
+/// chat media pipeline is untouched.
+private struct MediaViewAnchor: UIViewRepresentable {
+    let key: String
+    func makeUIView(context: Context) -> UIView {
+        let v = Anchor()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        v.key = key
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) { (uiView as? Anchor)?.key = key }
+
+    final class Anchor: UIView {
+        var key: String = "" { didSet { register() } }
+        // Registered on every window change too: SwiftUI reuses these views as the row re-orders, so
+        // "it was registered once at birth" is not good enough.
+        override func didMoveToWindow() { super.didMoveToWindow(); register() }
+        private func register() {
+            guard !key.isEmpty, window != nil else { return }
+            MediaOpenRects.captureView(key, self)
+        }
+    }
+}
+
 struct MediaRectReporter: ViewModifier {
     let id: String
     var scope: MediaOpenRects.Scope = .chat
@@ -75,6 +138,8 @@ struct MediaRectReporter: ViewModifier {
             // Hiding is keyed the same scoped way, so hiding the gallery tile can never blank the
             // chat bubble behind it (they share an id but not a key).
             .opacity(visibility.hiddenId == key ? 0 : 1)
+            // An empty id identifies nothing — the same guard the rect reporter below applies.
+            .background { if !id.isEmpty { MediaViewAnchor(key: key) } }
             .background(
                 GeometryReader { g in
                     Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
