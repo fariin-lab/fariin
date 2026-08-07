@@ -408,6 +408,21 @@ struct StoriesRow: View {
     /// The order the row had when the viewer opened, by group id. Latched on the way in, dropped on
     /// the way out, so nothing here survives to stale a later row.
     @State private var frozenOrder: [String] = []
+    /// ⚠️ AND THE RINGS, LATCHED THE SAME WAY AND FOR THE SAME REASON AS THE ORDER.
+    ///
+    /// The flight photographs the tapped card at TAP time, ring included, and lands that photograph
+    /// back onto the live card at the end of the close. Watch somebody's last unseen story and the
+    /// live ring greys out WHILE YOU ARE INSIDE — so the two rectangles the hand-over swaps are no
+    /// longer identical, and the ring visibly changes colour at the moment of the swap.
+    ///
+    /// The order was frozen for the same class of problem: the row rearranging under an open story.
+    /// This is the same freeze one property further in. It is the ring only. Covers stay live, so a
+    /// card whose picture updates still updates, which is what `displayedOthers`' note means by
+    /// freezing identity rather than value.
+    ///
+    /// The re-sort and the greying then both play after the story is gone, which is when the big
+    /// apps do it.
+    @State private var frozenSeen: [String: [Bool]] = [:]
 
     private let storySpacing: CGFloat = 10
     private let storyHPad: CGFloat = 12
@@ -443,6 +458,13 @@ struct StoriesRow: View {
     /// covers update as they always did. Only the ORDER is held, and only while a viewer is up.
     /// Anyone who posts while you are watching joins the end rather than being dropped. The re-sort
     /// then plays after the story is gone, which is when the big apps do it anyway.
+    /// The ring a card draws: the latched one while a viewer is up, the live one otherwise. One door,
+    /// so the row and my own card cannot answer this differently. See `frozenSeen`.
+    private func displayedSeen(_ g: StoryGroup) -> [Bool] {
+        if freezeOrder, let latched = frozenSeen[g.id] { return latched }
+        return StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt)
+    }
+
     private var displayedOthers: [StoryGroup] {
         let live = orderedOthers
         guard freezeOrder, !frozenOrder.isEmpty else { return live }
@@ -477,7 +499,7 @@ struct StoriesRow: View {
                     StoryFriendCard(cover: g.stories.last?.previewUrl,
                                     name: g.name.isEmpty ? "User" : g.name,
                                     avatar: g.photoUrl,
-                                    seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt),
+                                    seen: displayedSeen(g),
                                     cardW: cardW,
                                     onOpen: { onOpen(g) },
                                     storyNS: storyNS,
@@ -502,6 +524,13 @@ struct StoriesRow: View {
         // beyond that, so a later row can never inherit a stale one. See `displayedOthers`.
         .onChange(of: freezeOrder) { _, frozen in
             frozenOrder = frozen ? orderedOthers.map(\.id) : []
+            // Same latch, same moment, same release — see `frozenSeen`. My own card is in here too:
+            // watching my own last story greys my own ring mid-visit exactly the same way.
+            guard frozen else { frozenSeen = [:]; return }
+            var flags: [String: [Bool]] = [:]
+            for g in orderedOthers { flags[g.id] = StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt) }
+            if let m = repo.mine { flags[m.id] = StoryPrefs.seenFlags(m.stories, upTo: m.lastViewedAt) }
+            frozenSeen = flags
         }
         // WARM THE FRONT OF EACH RING WHILE THE ROW IS ON SCREEN.
         //
@@ -579,7 +608,7 @@ struct StoriesRow: View {
                 // 2026-07-22: they prefer the full-photo look). No photo at all → centered circle.
                 card(cover: repo.mine?.stories.last?.previewUrl ?? mePhoto,
                      name: "My Story", avatarName: meName, avatar: mePhoto,
-                     seen: StoryPrefs.seenFlags(repo.mine?.stories ?? [], upTo: repo.mine?.lastViewedAt),
+                     seen: repo.mine.map(displayedSeen) ?? [],
                      heroKey: repo.mine?.id, onBadge: onCompose) {
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
                 }
