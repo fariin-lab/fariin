@@ -131,6 +131,9 @@ struct StoryPager: UIViewControllerRepresentable {
         private let dismissBackdrop = UIImageView()
         private let dismissBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
         private var didInstallPan = false
+        /// Whether the passive watcher has already told the host it is past the fade threshold. One
+        /// report per crossing, not one per frame — see `handleDismissWatch`.
+        private var watchDragPastThreshold = false
         private weak var dismissPan: DirectionalPanGestureRecognizer?   // ours — system pans defer to it
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
         // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
@@ -449,9 +452,28 @@ struct StoryPager: UIViewControllerRepresentable {
                 // downward drag, which is exactly the moment the see-through look must start.
                 pager.view.backgroundColor = .clear
                 NotificationCenter.default.post(name: .pauseStory, object: nil)
+            case .changed:
+                // AND IT HAS TO TELL THE HOST, which it never did.
+                //
+                // The host hides its own furniture on `dragDown > 6` — my story's Views/trash footer,
+                // the "can't reply" pill, the owner bar. All of them sit BELOW the card and do not
+                // move with it. This watcher had `.began`, `.ended` and `.cancelled` and no
+                // `.changed`, so `dragDown` never left 0 and that furniture stayed on screen while
+                // the story shrank away from it. His report: the trash still showing, on its own
+                // dark bar, the moment he starts to drag.
+                //
+                // Reported on the THRESHOLD CROSSING, not per frame: the host only ever asks whether
+                // it is past 6, and a per-frame write would invalidate the whole viewer sixty times a
+                // second to answer a question whose answer changed once.
+                let dy = max(0, g.translation(in: pager.view).y)
+                if (dy > 6) != watchDragPastThreshold {
+                    watchDragPastThreshold = dy > 6
+                    parent.onDragChanged(dy)
+                }
             case .ended:
                 let ty = g.translation(in: pager.view).y
                 let vy = g.velocity(in: pager.view).y
+                watchDragPastThreshold = false
                 if ty > 20, vy > 800 {
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
@@ -461,10 +483,13 @@ struct StoryPager: UIViewControllerRepresentable {
                     // cover springs back to full screen — solid black behind the card again.
                     pager.view.backgroundColor = .black
                     NotificationCenter.default.post(name: .resumeStory, object: nil)
+                    parent.onCancel()   // furniture comes back with it
                 }
             case .cancelled, .failed:
+                watchDragPastThreshold = false
                 pager.view.backgroundColor = .black
                 NotificationCenter.default.post(name: .resumeStory, object: nil)
+                parent.onCancel()
             default: break
             }
         }

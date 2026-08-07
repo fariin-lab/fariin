@@ -82,6 +82,9 @@ struct StorySoloPager: UIViewControllerRepresentable {
         // the sheet engaged (the ~5% snap the owner measured with a red border). Zeroing at
         // engagement makes the card track from full size. Same fix as StoryPager's.
         private var swipeUpBaselineY: CGFloat?
+        /// Whether the passive watcher has already told the host it is past the fade threshold. One
+        /// report per crossing, not one per frame — see `handleDismissWatch`.
+        private var watchDragPastThreshold = false
 
         init(_ parent: StorySoloPager) { self.parent = parent }
 
@@ -215,19 +218,33 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 // pager's watcher; see the note there.
                 host.view.backgroundColor = .clear
                 NotificationCenter.default.post(name: .pauseStory, object: nil)
+            case .changed:
+                // Tell the host the finger is moving — see the same case in StoryPager. THIS host is
+                // the one it matters most on: my own story is the one with the Views/trash footer
+                // sitting under the card, and it stayed on screen for the whole drag because
+                // `dragDown` never moved. Threshold crossing only, never per frame.
+                let dy = max(0, g.translation(in: host.view).y)
+                if (dy > 6) != watchDragPastThreshold {
+                    watchDragPastThreshold = dy > 6
+                    parent.onDragChanged(dy)
+                }
             case .ended:
                 let ty = g.translation(in: host.view).y
                 let vy = g.velocity(in: host.view).y
+                watchDragPastThreshold = false
                 if ty > 20, vy > 800 {
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
                 } else {
                     host.view.backgroundColor = .black
                     NotificationCenter.default.post(name: .resumeStory, object: nil)
+                    parent.onCancel()   // furniture comes back with it
                 }
             case .cancelled, .failed:
+                watchDragPastThreshold = false
                 host.view.backgroundColor = .black
                 NotificationCenter.default.post(name: .resumeStory, object: nil)
+                parent.onCancel()
             default: break
             }
         }
