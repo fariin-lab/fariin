@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import UIKit
 
 // Prepares a picked gallery video for sending: transcodes to 720p H.264 mp4 (bounded
@@ -53,19 +54,45 @@ enum VideoTranscoder {
         return Poster(jpeg: jpeg, duration: duration, width: Double(cg.width), height: Double(cg.height))
     }
 
+    /// `storyBackdrop`: THIS IS A STORY, so a clip that does not fill the story canvas must carry
+    /// its blurred backdrop IN THE FILE — the editor shows blurred bands above and below a square
+    /// clip, and the posted story must look like the editor ("the final published story should
+    /// match the editor exactly", 2026-08-07, his fourth report of the black bars). Baked at post
+    /// time like the photo path (`flattenBackdrop`), because THREE viewer-side attempts have
+    /// shipped and failed on his phone — see the kulan-square-video-blur note. The accepted cost,
+    /// put to him with the fix: a square/landscape story video stops being a fast copy and becomes
+    /// a re-encode. Tall 9:16 clips still pass through untouched.
     static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false,
                         hd: Bool = false, range: CMTimeRange? = nil,
                         overlay: UIImage? = nil, cropRect: CGRect? = nil,
-                        canvasAspect: CGFloat? = nil) async -> Prepared? {
+                        canvasAspect: CGFloat? = nil, storyBackdrop: Bool = false) async -> Prepared? {
         let asset = AVURLAsset(url: url)
         guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
         var duration = fullTime.seconds
         let composing = overlay != nil || cropRect != nil
 
+        // Does this clip need the baked backdrop? Only a story asks, only when nothing else is
+        // being burned in (an edited clip goes down `burnIn`, whose canvas rules already own that
+        // frame), and only when the clip's shape actually differs from the canvas — a 9:16 clip
+        // fills it and keeps the fast path.
+        var backdropAspect: CGFloat? = nil
+        if storyBackdrop, !composing {
+            let target = canvasAspect ?? (9.0 / 16.0)
+            if let track = try? await asset.loadTracks(withMediaType: .video).first,
+               let natural = try? await track.load(.naturalSize),
+               let tf = try? await track.load(.preferredTransform) {
+                let d = natural.applying(tf)
+                let clipAspect = abs(d.width) / max(1, abs(d.height))
+                if abs(clipAspect - target) > 0.02 { backdropAspect = target }
+            }
+        }
+
         // FAST PATH. When the clip already obeys every rule we were about to impose, copy it instead
         // of re-encoding it. The encode IS the wait before a video starts uploading, and spending
         // several seconds to produce a slightly worse copy of an already-fine file buys nothing.
-        if let copied = await passthrough(url: url, stripAudio: stripAudio, hd: hd, composing: composing,
+        // A clip that needs the backdrop is never eligible: the whole point is frames it does not have.
+        if backdropAspect == nil,
+           let copied = await passthrough(url: url, stripAudio: stripAudio, hd: hd, composing: composing,
                                           range: range, maxSeconds: maxSeconds, duration: duration),
            let quick = await finish(data: copied, asset: asset, duration: duration) {
             return quick
@@ -106,7 +133,8 @@ enum VideoTranscoder {
         // size is the thing deciding the output here, and two things deciding it is one too many.
         // (`composing` is decided at the top, because the passthrough check needs it too.)
         guard let session = AVAssetExportSession(asset: exportAsset,
-                                                 presetName: composing ? AVAssetExportPresetHighestQuality : preset)
+                                                 presetName: (composing || backdropAspect != nil)
+                                                     ? AVAssetExportPresetHighestQuality : preset)
         else { return nil }
         session.shouldOptimizeForNetworkUse = true
         // A HARD CEILING ON THE OUTPUT. This is the thing that was missing, and its absence cost a
@@ -138,6 +166,12 @@ enum VideoTranscoder {
             session.videoComposition = await burnIn(asset: exportAsset, overlay: overlay,
                                                     cropRect: cropRect, canvasAspect: canvasAspect,
                                                     hd: hd)
+        } else if let ba = backdropAspect {
+            // A failed backdrop build falls through to the plain export (black bars) rather than
+            // failing the post: a story with the old look still beats an error nobody can act on.
+            if let comp = await backdropComposition(asset: exportAsset, aspect: ba, hd: hd) {
+                session.videoComposition = comp
+            }
         }
         // A requested slice wins; the cap then trims whatever that slice turned out to be. Clamped
         // to the real duration, because a range past the end exports nothing at all rather than
@@ -309,6 +343,9 @@ enum VideoTranscoder {
             let parent = CALayer(); parent.frame = CGRect(origin: .zero, size: render)
             let video = CALayer(); video.frame = parent.frame
             let art = CALayer()
+            // (The story's blurred backdrop does NOT ride this path — see `backdropComposition`.
+            // An edited clip keeps its black letterbox for now; the plain square/landscape story,
+            // which is the reported case, gets the blur.)
             // Core Animation composes video with the origin at the BOTTOM left, so the overlay's
             // rectangle is converted into that space and its contents flipped about its own centre.
             // Flipping the parent instead would turn the video upside down with it, which is the
@@ -323,6 +360,89 @@ enum VideoTranscoder {
             comp.animationTool = AVVideoCompositionCoreAnimationTool(
                 postProcessingAsVideoLayer: video, in: parent)
         }
+        return comp
+    }
+
+    /// THE STORY'S BLURRED CANVAS, BAKED INTO THE FILE. The editor previews a square/landscape clip
+    /// sitting on a blurred still of itself; this reproduces that frame in the export, so the
+    /// posted file looks like the editor in every viewer that will ever play it — ours, a
+    /// recipient's, the row card, anything. Core Image per frame rather than the CoreAnimation
+    /// tool, because a composition instruction paints its empty areas OPAQUE black (documented:
+    /// background colors must be opaque), so a layer behind the video can never show through it.
+    ///
+    /// The backdrop itself is rendered ONCE (poster frame, aspect-filled, Gaussian-blurred, baked
+    /// to a bitmap); each video frame is then fitted and composited over that bitmap on the GPU.
+    private static func backdropComposition(asset: AVAsset, aspect: CGFloat, hd: Bool) async -> AVVideoComposition? {
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let natural = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform) else { return nil }
+        let displayed = natural.applying(transform)
+        let shown = CGSize(width: abs(displayed.width), height: abs(displayed.height))
+        guard shown.width > 1, shown.height > 1 else { return nil }
+
+        // The canvas, same sizing rule as `burnIn`, forced to even H.264-friendly dimensions.
+        let longSide: CGFloat = hd ? 1920 : 1280
+        var canvas = aspect >= 1
+            ? CGSize(width: longSide, height: (longSide / aspect).rounded())
+            : CGSize(width: (longSide * aspect).rounded(), height: longSide)
+        canvas.width -= canvas.width.truncatingRemainder(dividingBy: 2)
+        canvas.height -= canvas.height.truncatingRemainder(dividingBy: 2)
+        guard canvas.width >= 16, canvas.height >= 16 else { return nil }
+
+        // The still the blur is built from: same just-after-zero instant every poster uses,
+        // because frame zero is very often black — and a blurred black canvas IS the bug.
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 800, height: 800)
+        let dur = ((try? await asset.load(.duration))?.seconds) ?? 1
+        let at = CMTime(seconds: min(0.1, dur / 2), preferredTimescale: 600)
+        guard let posterCG = try? await gen.image(at: at).image else { return nil }
+
+        // Aspect-FILL the canvas with the poster, clamp so the blur has no dark vignette at the
+        // edges, blur, crop — then BAKE it: a CIImage is a recipe, and an unbaked recipe would
+        // re-run the Gaussian on every single frame of the export.
+        var still = CIImage(cgImage: posterCG)
+        let fill = max(canvas.width / still.extent.width, canvas.height / still.extent.height)
+        still = still.transformed(by: CGAffineTransform(scaleX: fill, y: fill))
+        still = still.transformed(by: CGAffineTransform(
+            translationX: (canvas.width - still.extent.width) / 2 - still.extent.minX,
+            y: (canvas.height - still.extent.height) / 2 - still.extent.minY))
+        let recipe = still.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 50])
+            .cropped(to: CGRect(origin: .zero, size: canvas))
+        guard let bakedCG = CIContext().createCGImage(recipe, from: CGRect(origin: .zero, size: canvas))
+        else { return nil }
+        let backdrop = CIImage(cgImage: bakedCG)
+
+        let comp: AVMutableVideoComposition
+        do {
+            comp = try await AVMutableVideoComposition.videoComposition(with: asset) { request in
+                var frame = request.sourceImage
+                // ⚠️ ORIENTATION, DECIDED BY MEASUREMENT, because the documentation does not
+                // decide it: whether this handler receives frames with the track's
+                // preferredTransform already applied has changed across OS versions and is the
+                // classic way this API ships sideways video. So the frame is measured: if its
+                // extent already matches the displayed size, the rotation happened; if it still
+                // matches the natural size, it has not, and it is applied here. (A square clip
+                // carrying rotation metadata is undecidable this way and extremely rare — a
+                // square frame is fitted identically either way, only its pixels could differ.)
+                let ext = frame.extent.size
+                let alreadyRotated = abs(ext.width - shown.width) < 2 && abs(ext.height - shown.height) < 2
+                if !alreadyRotated {
+                    frame = frame.transformed(by: transform)
+                    frame = frame.transformed(by: CGAffineTransform(
+                        translationX: -frame.extent.minX, y: -frame.extent.minY))
+                }
+                // Fit and centre on the canvas, measured from the frame actually in hand.
+                let s = min(canvas.width / frame.extent.width, canvas.height / frame.extent.height)
+                frame = frame.transformed(by: CGAffineTransform(scaleX: s, y: s))
+                frame = frame.transformed(by: CGAffineTransform(
+                    translationX: (canvas.width - frame.extent.width) / 2 - frame.extent.minX,
+                    y: (canvas.height - frame.extent.height) / 2 - frame.extent.minY))
+                request.finish(with: frame.composited(over: backdrop), context: nil)
+            }
+        } catch { return nil }
+        comp.renderSize = canvas
         return comp
     }
 }
