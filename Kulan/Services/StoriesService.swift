@@ -439,14 +439,24 @@ final class StoriesService {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         // Its own entry in the queue, exactly as a photo post takes one — see `PendingUpload`.
+        // THE PLACEHOLDER WEARS THE CANVAS THE EXPORT IS ABOUT TO BAKE. His report: "when is
+        // uploading it's showing blur, when upload finished it's showing different color… use one is
+        // better". The uploading card drew the raw poster, which letterboxes BLACK, while the file
+        // that lands carries the gradient — so the story visibly changed colour at the hand-over.
+        // Same sampler, same gradient, one function; a 9:16 clip is returned untouched.
+        let placeholder = UIImage(data: thumbnail).map { VideoTranscoder.storyCanvasPoster($0) }
         let pending = PendingUpload(id: "\(Self.uploadingStoryId).\(UUID().uuidString)",
-                                    image: UIImage(data: thumbnail),
+                                    image: placeholder,
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
                                     tag: tag)
+        // ⚠️ THE SAME BYTES, or the composed picture above is wasted. StoryUI's ImageLoader reads
+        // URLCache FIRST, so seeding the raw poster here would win over `pending.image` and put the
+        // black-letterboxed frame back on screen.
         if let u = URL(string: pending.url) {
-            let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: thumbnail.count, textEncodingName: nil)
-            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: thumbnail), for: URLRequest(url: u))
+            let bytes = placeholder?.jpegData(compressionQuality: 0.9) ?? thumbnail
+            let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: bytes.count, textEncodingName: nil)
+            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: bytes), for: URLRequest(url: u))
         }
         inFlight.append(pending)
         uploading = true

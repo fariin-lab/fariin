@@ -449,6 +449,43 @@ enum VideoTranscoder {
         return comp
     }
 
+    /// THE SAME CANVAS, AS A STILL, for the placeholder shown while a video uploads.
+    ///
+    /// His 2026-08-07 report: "when is uploading it's showing blur, when upload finished it's showing
+    /// different color… use one is better". He is right, and the cause is that the two pictures were
+    /// made by different code. The uploading card drew the raw poster, which letterboxes BLACK, while
+    /// the finished file carries the gradient this file bakes — so the story visibly changed colour
+    /// the moment it landed.
+    ///
+    /// This runs the identical sampler and the identical gradient over the poster frame, so the
+    /// placeholder is the same picture the export will produce. Same functions, not a second
+    /// implementation of the same idea: two implementations would agree today and drift later.
+    ///
+    /// Returns the poster untouched when it already fits the canvas, which is every 9:16 clip.
+    static func storyCanvasPoster(_ poster: UIImage, aspect: CGFloat = 9.0 / 16.0) -> UIImage {
+        guard let cg = poster.cgImage else { return poster }
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        guard w > 1, h > 1 else { return poster }
+        guard abs(w / h - aspect) > 0.02 else { return poster }   // already the right shape
+        let longSide: CGFloat = 1280
+        var canvas = aspect >= 1
+            ? CGSize(width: longSide, height: (longSide / aspect).rounded())
+            : CGSize(width: (longSide * aspect).rounded(), height: longSide)
+        canvas.width -= canvas.width.truncatingRemainder(dividingBy: 2)
+        canvas.height -= canvas.height.truncatingRemainder(dividingBy: 2)
+        guard canvas.width >= 16, canvas.height >= 16 else { return poster }
+        let colours = gradientColours(of: cg)
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
+        return UIGraphicsImageRenderer(size: canvas, format: fmt).image { ctx in
+            drawGradient(in: ctx.cgContext, size: canvas, top: colours.top, bottom: colours.bottom)
+            // Fitted and centred, the same placement the export's per-frame handler uses.
+            let s = min(canvas.width / w, canvas.height / h)
+            let box = CGRect(x: (canvas.width - w * s) / 2, y: (canvas.height - h * s) / 2,
+                             width: w * s, height: h * s)
+            poster.draw(in: box)
+        }
+    }
+
     /// The two colours the story canvas is filled with, read off the clip's own first frame.
     ///
     /// TOTAL BY CONSTRUCTION — it always returns a usable pair, because the whole point of this
@@ -470,6 +507,16 @@ enum VideoTranscoder {
         let dur = ((try? await asset.load(.duration))?.seconds) ?? 1
         let at = CMTime(seconds: min(0.1, max(0, dur / 2)), preferredTimescale: 600)
         guard let cg = try? await gen.image(at: at).image else { return fallback }
+        return gradientColours(of: cg)
+    }
+
+    /// The same sampling, from a frame already in hand. Split out so the uploading placeholder and
+    /// the export read their colours through ONE function — two implementations would agree today
+    /// and drift the first time either is touched, and "it changes colour when it lands" is the
+    /// report that produced this.
+    static func gradientColours(of cg: CGImage) -> (top: CIColor, bottom: CIColor) {
+        let fallback = (top: CIColor(red: 0.13, green: 0.13, blue: 0.15),
+                        bottom: CIColor(red: 0.05, green: 0.05, blue: 0.06))
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
         guard w >= 1, h >= 1 else { return fallback }
         // A band rather than a line: one row of pixels can land on a caption, a letterbox edge or a
@@ -533,31 +580,39 @@ enum VideoTranscoder {
     /// is the exact bug this whole rewrite exists to end.
     private static func gradientBackdrop(size: CGSize, top: CIColor, bottom: CIColor) -> CIImage {
         let canvas = CGRect(origin: .zero, size: size)
-        let topUI = UIColor(red: top.red, green: top.green, blue: top.blue, alpha: 1)
-        let bottomUI = UIColor(red: bottom.red, green: bottom.green, blue: bottom.blue, alpha: 1)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = 1
         fmt.opaque = true
         let ui = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
-            let cg = ctx.cgContext
-            // The flat fill goes down FIRST, so even if the gradient cannot be built the bitmap is
-            // still a full, opaque canvas rather than a transparent one.
-            topUI.setFill()
-            cg.fill(canvas)
-            guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                        colors: [topUI.cgColor, bottomUI.cgColor] as CFArray,
-                                        locations: [0, 1])
-            else { return }
-            // UIGraphicsImageRenderer hands out a FLIPPED context (origin top-left, y downwards), so
-            // y = 0 is the TOP and the top colour starts there. Drawing this the other way up is the
-            // classic way a gradient ships upside down, and it would be invisible in testing on any
-            // clip whose two sampled colours happen to be similar.
-            cg.drawLinearGradient(grad,
-                                  start: CGPoint(x: size.width / 2, y: 0),
-                                  end: CGPoint(x: size.width / 2, y: size.height),
-                                  options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            drawGradient(in: ctx.cgContext, size: size, top: top, bottom: bottom)
         }
         if let cg = ui.cgImage { return CIImage(cgImage: cg) }
         return CIImage(color: top).cropped(to: canvas)
+    }
+
+    /// The gradient stroke itself, shared by the export's backdrop and the uploading placeholder.
+    ///
+    /// The flat fill goes down FIRST, so even if the gradient cannot be built the result is still a
+    /// full, opaque canvas rather than a transparent one — the invariant the whole rewrite rests on
+    /// is that nothing here may leave part of the frame uncovered, because uncovered composites as
+    /// black.
+    ///
+    /// ⚠️ `UIGraphicsImageRenderer` hands out a FLIPPED context (origin top-left, y downwards), so
+    /// y = 0 is the TOP and the top colour starts there. Drawing it the other way up is the classic
+    /// way a gradient ships upside down, and on a clip whose two sampled colours are similar nobody
+    /// would notice until it shipped.
+    private static func drawGradient(in cg: CGContext, size: CGSize, top: CIColor, bottom: CIColor) {
+        let topUI = UIColor(red: top.red, green: top.green, blue: top.blue, alpha: 1)
+        let bottomUI = UIColor(red: bottom.red, green: bottom.green, blue: bottom.blue, alpha: 1)
+        topUI.setFill()
+        cg.fill(CGRect(origin: .zero, size: size))
+        guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                    colors: [topUI.cgColor, bottomUI.cgColor] as CFArray,
+                                    locations: [0, 1])
+        else { return }
+        cg.drawLinearGradient(grad,
+                              start: CGPoint(x: size.width / 2, y: 0),
+                              end: CGPoint(x: size.width / 2, y: size.height),
+                              options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
     }
 }
