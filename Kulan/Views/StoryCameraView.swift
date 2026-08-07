@@ -722,6 +722,18 @@ struct StoryCameraView: View {
     /// and the glass one is the one that carries the material with it.
     ///
     /// Below iOS 26 nothing here exists, so the old wash stays exactly as it was.
+    /// ⚠️ 2026-08-07, HIS THIRD TIME ON THIS CONTROL: "plz dont use custom liquid glas, use real
+    /// apple liquid glass, no custom, i said real apple." The API was already Apple's. What was
+    /// custom was the SHAPE OF THE DESIGN: a glass track with a second glass pill sitting on it, so
+    /// two materials were stacked and, on the black strip under the card where neither has anything
+    /// to refract, both resolved to flat grey. That is the moulded-plastic look in his screenshot,
+    /// and no amount of correct API fixes it while there are two of them.
+    ///
+    /// Apple's own segmented glass is ONE piece of glass: the track carries no material at all, and
+    /// the selected segment is the single glass element that slides between positions. So the track
+    /// is gone, the pill keeps the `GlassEffectContainer` + shared `glassEffectID` that lets it melt
+    /// across, and the tint is gone with it — a tint is a wash, which is the exact thing he keeps
+    /// calling custom.
     @ViewBuilder private var modePicker: some View {
         if #available(iOS 26.0, *) {
             GlassEffectContainer(spacing: 6) {
@@ -730,7 +742,6 @@ struct StoryCameraView: View {
                     modeLabel("TEXT", .text)
                 }
                 .padding(4)
-                .glassEffect(.regular, in: .capsule)
             }
         } else {
             HStack(spacing: 0) {
@@ -762,14 +773,14 @@ struct StoryCameraView: View {
         .buttonStyle(.plain)
     }
 
-    /// The chosen segment. Clear glass with the faintest white lift in it: enough to be legible on
-    /// the black strip under the card, where there is nothing behind the material to refract, and
-    /// still a material rather than a fill on the camera frame, where there is.
+    /// The chosen segment, and now the ONLY material in the control. Plain `.regular` — no tint, no
+    /// fill, nothing of ours on top of Apple's. `.interactive()` stays because that is Apple's own
+    /// modifier for a glass element you can press, not a decoration.
     @ViewBuilder private var modeHighlight: some View {
         if #available(iOS 26.0, *) {
             Capsule()
                 .fill(.clear)
-                .glassEffect(.regular.tint(.white.opacity(0.10)).interactive(), in: .capsule)
+                .glassEffect(.regular.interactive(), in: .capsule)
                 .glassEffectID("modePill", in: modePill)
         } else {
             Capsule().fill(.white.opacity(0.22))
