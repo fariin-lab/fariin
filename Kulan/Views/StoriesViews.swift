@@ -628,10 +628,6 @@ struct StoriesRow: View {
                            addBadge: (onBadge != nil && seen.isEmpty) ? onBadge : nil)
                     .frame(width: cardW, height: cardH)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    // See the note on StoryFriendCard's reporter: the hero flies to and from THIS
-                    // rectangle. Absent for a card with nothing posted (there is no story to open,
-                    // so tapping it composes instead).
-                    .modifier(MediaRectReporter(id: heroKey ?? "", scope: .storyRow, cornerRadius: 24))
                 if let onBadge, cover?.isEmpty == false {
                     // My Story with a filled cover (story preview OR profile photo): small avatar +
                     // ring + green + badge. With no stories the story ring is absent, so a clean white
@@ -700,6 +696,10 @@ struct StoriesRow: View {
                         .padding(8)
                 }
             }
+            // The hero flies to and from THIS rectangle — the card with its circle on it, the same
+            // rule as a friend's card (see the note there). Absent for a card with nothing posted
+            // (there is no story to open, so tapping it composes instead).
+            .modifier(MediaRectReporter(id: heroKey ?? "", scope: .storyRow, cornerRadius: 24))
             Text(name).font(.system(size: 12)).lineLimit(1).frame(width: cardW)
         }
         .frame(width: cardW)
@@ -793,18 +793,22 @@ private struct StoryFriendCard: View, Equatable {
                     coverView
                         .frame(width: cardW, height: cardH)
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                        // THE RECTANGLE THE STORY FLIES OUT OF AND LANDS BACK ON. Reported off the
-                        // COVER, not off the enclosing VStack, or the landing would aim at a
-                        // rectangle that includes the name underneath and the story would seat
-                        // itself low and too tall. The reporter also blanks this card while the
-                        // transition is converging on it, so the same picture is never on screen
-                        // twice at the moment of the hand-over.
-                        .modifier(MediaRectReporter(id: groupID, scope: .storyRow, cornerRadius: 24))
                     AvatarView(name: name, photoUrl: avatar, size: 32)
                         .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
                         .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
                         .padding(8)
                 }
+                // THE RECTANGLE THE STORY FLIES OUT OF AND LANDS BACK ON. On the card, not on the
+                // enclosing VStack, or the landing would aim at a rectangle that includes the name
+                // underneath and the story would seat itself low and too tall — the ZStack is
+                // exactly the cover's frame, because the circle sits inside it.
+                //
+                // ON THE WHOLE CARD, CIRCLE INCLUDED, and that is the avatar half of his report. It
+                // used to be on the photo alone, so the slot the story flies out of kept its little
+                // avatar floating over an empty hole, and the flying card — which covers that slot
+                // for the whole journey — took the circle away at the tap and gave it back at the
+                // teardown. One rectangle leaves, the same rectangle comes home.
+                .modifier(MediaRectReporter(id: groupID, scope: .storyRow, cornerRadius: 24))
                 Text(name).font(.system(size: 12)).lineLimit(1).frame(width: cardW)
             }
             .frame(width: cardW)
@@ -1047,6 +1051,14 @@ struct StoryViewer: View {
     /// pass, no re-inset, nothing for SwiftUI to do at all.
     final class HeroBox {
         var live = false                 // a drag or one of its animations owns the card
+        /// The row card this flight is going to (or came from) is the one the cover was photographed
+        /// from. False after swiping to somebody else: their card was never emptied and their
+        /// picture is not on the cover, so that landing keeps the whole-card fade instead.
+        var cover = false
+        /// What the world was last told about the chrome outside the card (`storyFlightActive`).
+        /// Tracked here rather than read back off `heroFlying` so the notification is posted exactly
+        /// once per crossing, from the one place that knows the fraction.
+        var chromeHidden = false
         /// The open has been STARTED, once, ever. Not the same as `live`, and that difference is a
         /// bug he filmed: `live` goes false when the flight FINISHES, so once the flight (0.3s) grew
         /// shorter than the ladder that starts it (0.55s), every remaining attempt saw "not flying,
@@ -1925,13 +1937,53 @@ struct StoryViewer: View {
     /// card still belongs to the viewers sheet; the flight now has a view of its own.
     private func applyHero() {
         guard StoryCardMorph.shared.isFlightAvailable else { return }
-        StoryCardMorph.shared.applyFlight(fraction: hero.f,
+        let f = hero.f
+        StoryCardMorph.shared.applyFlight(fraction: f,
                                           targetSize: hero.anchor.size,
                                           targetCenter: CGPoint(x: hero.anchor.midX, y: hero.anchor.midY),
                                           cornerRadius: 24,
                                           centerOverride: hero.center,
                                           alpha: hero.alpha,
-                                          dim: heroDim(hero.f))
+                                          dim: heroDim(f),
+                                          chrome: heroChrome(f))
+        // THE COVER IS A FUNCTION OF WHERE THE CARD IS, NOT OF HOW LONG THE ANIMATION HAS RUN, and
+        // that is what makes the two directions the same transition. It used to be driven by a
+        // per-run `tick` on the spring's own t, which meant the open dissolved the thumbnail away
+        // across the first half of the journey while the close brought it back inside the last
+        // tenth — the same exchange, done gently one way and snapped the other. That snap is his
+        // "the preview suddenly switches". One curve of `f` now serves the open, the close, a drag
+        // that is let go half way, and a drag that is dragged back up, because all four are the
+        // same question: how far into the row is the card?
+        StoryCardMorph.shared.setFlightCoverAlpha(hero.cover ? heroCoverAlpha(f) : 0)
+        // AND THE SURROUND LEAVES AND ARRIVES ON THE SAME FRACTION. `heroFlying` (my own footer, the
+        // no-replies pill, the page's black) and `storyFlightActive` (the library's reply bar) used
+        // to flip at the START of a flight and back at its END, so the bottom of the screen popped
+        // into place after the card had already stopped moving — his "the reply bar comes late… it
+        // must be there at 85, 90 percent". They now cross where the mask's own surround begins to
+        // let light through, so the fade they run and the crop that reveals them are the same event.
+        let hide = f > Self.heroChromeSpan
+        if hero.chromeHidden != hide {
+            hero.chromeHidden = hide
+            if heroFlying != hide { heroFlying = hide }
+            NotificationCenter.default.post(name: .init("storyFlightActive"), object: hide)
+        }
+    }
+
+    /// How much of the viewer's surround (reply bar, footers, the page's own black) is let through
+    /// the flight's mask: nothing while the card is out in the room, everything by the time it is
+    /// home at full screen. The window is the last sixth of the journey, which on the open's spring
+    /// is its long settle — a real fade of about a fifth of a second, ending exactly as the card
+    /// stops. Read with `heroDim`: the black behind and the furniture in front arrive together.
+    private static let heroChromeSpan: CGFloat = 0.18
+    private func heroChrome(_ f: CGFloat) -> CGFloat {
+        max(0, min(1, (Self.heroChromeSpan - f) / Self.heroChromeSpan))
+    }
+
+    /// The thumbnail's own picture, worn while the card is close to the row and dissolved as it
+    /// grows: fully on from 0.8 of the way in, gone by 0.45. Symmetric by construction — see
+    /// `applyHero`.
+    private func heroCoverAlpha(_ f: CGFloat) -> CGFloat {
+        max(0, min(1, (f - 0.45) / 0.35))
     }
 
     /// THE WALL'S ALPHA, AS A FUNCTION OF WHERE THE CARD IS — and the two ends are DIFFERENT.
@@ -2009,15 +2061,16 @@ struct StoryViewer: View {
     /// stored on it. `velocity` is the finger's, in progress units per second, so a flick carries
     /// its own speed into the spring instead of restarting from rest.
     /// `alphaCurve` reshapes TIME for the whole-card alpha alone (geometry stays on the spring's
-    /// own t). Since the shared-element cover arrived, NEITHER flight fades the card itself — the
-    /// card stays solid end to end and the COVER dissolves instead, driven by `tick`. The curve
-    /// stays for the day a caller needs a whole-card fade again; if one does, never make it
-    /// whole-journey linear — that was the see-through flying card he reported on an earlier build.
-    /// `tick` runs after each `applyHero`, so the cover's frame is already laid when it fires.
+    /// own t). Since the shared-element cover arrived, NEITHER flight fades the card itself on the
+    /// main path — the card stays solid end to end and the COVER dissolves instead. The curve is
+    /// still what the close to a DIFFERENT person uses; if a caller ever needs it again, never make
+    /// it whole-journey linear — that was the see-through flying card he reported on an earlier
+    /// build. There is deliberately no per-run `tick` any more: everything that used to need one is
+    /// a function of `hero.f` inside `applyHero`, which is the only way the open and the close can
+    /// be guaranteed to be the same transition run backwards.
     private func runHero(to endF: CGFloat, center endC: CGPoint, alpha endA: CGFloat,
                          velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
                          stiffness: CGFloat? = nil, settle: CGFloat? = nil,
-                         tick: ((CGFloat) -> Void)? = nil,
                          done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
@@ -2028,7 +2081,6 @@ struct StoryViewer: View {
                                   y: hero.fromC.y + (hero.toC.y - hero.fromC.y) * t)
             hero.alpha = hero.fromA + (hero.toA - hero.fromA) * alphaCurve(t)
             applyHero()
-            tick?(t)   // after applyHero: the cover's frame is laid by the apply, its alpha by this
         }, completion: done)
     }
 
@@ -2092,6 +2144,7 @@ struct StoryViewer: View {
             // cover dissolves into the live story while the card grows. Nothing can pop, and
             // nothing is ever transparent.
             hero.alpha = 1
+            hero.cover = true          // the tapped card is the one on the cover, by definition
             // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
@@ -2102,12 +2155,9 @@ struct StoryViewer: View {
             // without this the open would be a small story growing on a full black screen instead of
             // growing out of the row over the chat list.
             StoryCardMorph.shared.prepareForHero?()
-            // Same on the way in as on the way out: no reply bar sitting at the bottom of the chat
-            // list while the card is still growing out of the row.
-            NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
-            // The cover goes on BEFORE the first painted frame of the seat, in the same transaction
-            // family as the apply below — the seat must never paint the fitted mini-layout bare.
-            StoryCardMorph.shared.setFlightCoverAlpha(1)
+            // The seat, the cover it wears and the crop that hides the surround are all written by
+            // this one call, in one transaction — the seat must never paint the fitted mini-layout
+            // bare, and it cannot, because the cover's alpha is part of the same apply.
             applyHero()
             // THE SLOT EMPTIES, Snapchat's way, on his frame-grabs (2026-08-07): "the card goes
             // [to] the empty place it comes from... [the] place is empty and waiting to fill it
@@ -2122,17 +2172,18 @@ struct StoryViewer: View {
             // settle keeps the lift-off just as immediate (80% of the travel still lands inside
             // ~0.15s) and spends the difference on the landing: ~0.45s of visible motion.
             //
-            // The tick is the cover's dissolve: worn fully for the first fifth of the flight (the
-            // lift reads as the thumbnail itself moving), gone by just past half, so the live story
-            // owns the glide into full screen.
+            // The cover's dissolve and the surround's arrival are functions of the fraction now, so
+            // this run carries no tick of its own — see `applyHero`.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
-                    stiffness: 450, settle: 0.0008,
-                    tick: { t in
-                        StoryCardMorph.shared.setFlightCoverAlpha(1 - min(1, max(0, (t - 0.2) / 0.35)))
-                    }) {
+                    stiffness: 450, settle: 0.0008) {
                 hero.live = false
-                heroFlying = false                          // full screen again: the backing may return
-                NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
+                hero.cover = false
+                // Belt only: `applyHero` has already crossed both of these on the way in, at 0.18.
+                if heroFlying { heroFlying = false }
+                if hero.chromeHidden {
+                    hero.chromeHidden = false
+                    NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
+                }
                 StoryCardMorph.heroDismissActive = false
                 // `resetFlight`: identity, unmasked, cover off, and the presenter's wall opaque
                 // again. The sheet's own `reset` has no business here — the flight never touched
@@ -2208,7 +2259,6 @@ struct StoryViewer: View {
     private func beginHeroCloseFromRest() -> Bool {
         guard !hero.live, let (rest, anchor) = heroEndpoints() else { return false }
         heroAnimator.cancel()
-        heroFlying = true          // the black backing steps aside — see `storyLayer`
         hero.live = true
         hero.rest = rest
         hero.anchor = anchor
@@ -2217,7 +2267,8 @@ struct StoryViewer: View {
         hero.alpha = 1
         StoryCardMorph.heroDismissActive = true
         StoryCardMorph.shared.prepareForHero?()
-        NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
+        // The surround leaves on the fraction, exactly as it does under a finger — a button close
+        // and a drag close must not be two animations. See `applyHero`.
         commitHero(velocity: 0)
         return true
     }
@@ -2234,25 +2285,23 @@ struct StoryViewer: View {
             guard !(showViewers && viewersProgress > 0.02) else { return }
             heroAnimator.cancel()
             guard !hero.committing, let (rest, anchor) = heroEndpoints() else { return }
-            // A finger seizing the card mid-open kills the open's tick above, which was mid-way
-            // through dissolving the cover — take it off outright, or the drag flies a half-ghost
-            // of the row card over the live story.
-            StoryCardMorph.shared.setFlightCoverAlpha(0)
-            heroFlying = true      // the black backing steps aside — see `storyLayer`
             hero.live = true
             hero.rest = rest
             hero.anchor = anchor
             hero.f = 0
             hero.center = rest
             hero.alpha = 1
-            // THE REPLY BAR STEPS ASIDE, THE CARD'S OWN CHROME STAYS ON THE CARD.
+            // A finger seizing the card mid-open no longer needs a special case: the cover is a
+            // function of the fraction, and this drag starts at 0, where it is 0.
+            hero.cover = heroKeyNow() == heroSourceKey
+            // THE REPLY BAR STEPS ASIDE ON THE FRACTION, THE CARD'S OWN CHROME STAYS ON THE CARD.
             //
             // This used to post `storyChromeHidden`, which took the progress bars and the name with
             // it and left a bare photo sliding around. Snapchat keeps them: they are drawn inside the
             // card, so they shrink with it and the thing in your hand still looks like a story. What
             // has to go is the reply bar, which is drawn BELOW the card, does not move, and carries a
-            // solid black footer that would lie across the chat list. See `flightActive`.
-            NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
+            // solid black footer that would lie across the chat list — and it now goes gradually, as
+            // the finger travels, instead of blinking out on the first millimetre. See `applyHero`.
 
         case .changed:
             guard hero.live, !hero.committing else { return }
@@ -2275,11 +2324,11 @@ struct StoryViewer: View {
             hero.center = CGPoint(x: hero.rest.x, y: hero.rest.y + ty)
             hero.alpha = 1 - Self.heroFade * hero.f
             applyHero()
-            // ONE SwiftUI WRITE PER GESTURE, NOT ONE PER FRAME. `dragDown` only ever feeds a
-            // `> 6` test that fades the owner bar, so writing the live value every frame would
-            // invalidate the whole viewer sixty times a second to answer a question whose answer
-            // changed once. That re-render is exactly the lag this transition exists to avoid.
-            if (ty > 6) != (dragDown > 6) { dragDown = ty }
+            // NOTHING ELSE IS WRITTEN HERE. `dragDown` used to be set on the first six points so the
+            // owner bar could hide itself, which made the same piece of chrome answer to two rules —
+            // a 6pt switch and, since the mask, a fraction. It answers to the fraction alone now
+            // (`applyHero`); `dragDown` still serves the LIBRARY's own dismiss pan, which is the
+            // path where there is no hero at all.
 
         case .ended:
             guard hero.live, !hero.committing else { return }
@@ -2335,11 +2384,12 @@ struct StoryViewer: View {
         // lands on their still-visible card, where a wrong-picture cover would be worse than none —
         // that case keeps the proven crossfade landing: solid while it travels (t³), melting into
         // the visible card as it arrives.
-        if heroKeyNow() == heroSourceKey {
+        hero.cover = heroKeyNow() == heroSourceKey
+        if hero.cover {
+            // No tick: the cover comes back on as the card comes home, on the fraction, over the
+            // same stretch it dissolved away on the way out. See `applyHero`.
             runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining),
-                    tick: { t in
-                        StoryCardMorph.shared.setFlightCoverAlpha(min(1, max(0, (t - 0.45) / 0.35)))
-                    }, done: land)
+                    done: land)
         } else {
             runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
                     alphaCurve: { $0 * $0 * $0 }, done: land)
@@ -2359,12 +2409,18 @@ struct StoryViewer: View {
 
     private func cancelHero(velocity vy: CGFloat) {
         NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
-        NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
+        // The surround comes back the way it left — on the fraction, as the card springs home. It
+        // used to be told to return on the first frame of the spring-back, which put the reply bar
+        // on screen while the story was still small and travelling.
         let remaining = max(1, hypot(hero.rest.x - hero.center.x, hero.rest.y - hero.center.y))
         runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining) {
             hero.live = false
-            heroFlying = false     // back at full screen: the backing may return
-            dragDown = 0
+            hero.cover = false
+            if heroFlying { heroFlying = false }     // belt: applyHero crossed this at 0.18
+            if hero.chromeHidden {
+                hero.chromeHidden = false
+                NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
+            }
             // Full screen, square, unmasked, and the wall behind opaque again. `resetFlight` is
             // what puts the container back exactly, rather than an `applyFlight(fraction: 0)` that
             // leaves a mask covering the whole card for every frame the story renders from here on.

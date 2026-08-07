@@ -710,8 +710,18 @@ struct ChatsView: View {
         // screen leaves with no animation of its own — anything else would play a second close
         // over the one the finger just drew.
         let heroClose: () -> Void = {
-            StoryZoomPresenter.finish()
-            storyPresenterClosed()
+            // THE SOURCE COMES BACK BEFORE THE COPY GOES AWAY, which is the order every shared
+            // element has to use and the one this door was missing. The card had been landing on
+            // an EMPTY slot and the slot was refilled in the same breath as the screen was torn
+            // down — two changes in one frame, and whichever landed second was a visible swap.
+            // Revealing first is free: the flying card is sitting exactly on top of the slot,
+            // wearing its picture, so the row card comes back underneath where nobody can see it,
+            // and a frame later the copy is lifted off something already identical.
+            MediaSourceVisibility.shared.reveal()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+                StoryZoomPresenter.finish()
+                storyPresenterClosed()
+            }
         }
         // The close with no flight in it (nowhere to fly, or the viewers sheet was up): the
         // presenter answers with its short drift-away, then the same teardown.

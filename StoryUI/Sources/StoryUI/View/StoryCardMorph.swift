@@ -223,12 +223,22 @@ public final class StoryCardMorph {
     /// two copies of geometry that must agree to the pixel is the mistake this file keeps warning
     /// about, so there is exactly one. No `dismissActive` guard: the library's own dismiss pan is
     /// never installed on a hero presentation, so the two cannot contest this view.
+    /// - Parameter chrome: how much of what lies OUTSIDE the card strip may show through, 0…1.
+    ///   The crop is not a switch any more. Everything the viewer draws around the card — the reply
+    ///   bar and its black footer, my own story's Views/trash footer, the page's own black — was
+    ///   cropped away for the WHOLE flight and then arrived in one frame when `resetFlight` took the
+    ///   mask off. That is his "the top and bottom sections pop into place" and his "the reply bar
+    ///   comes late": there was no state between hidden and there. Now the mask's outside region is
+    ///   drawn at this alpha, so the surround fades in with the card's last stretch home and out
+    ///   again with the first of a drag — one continuous arrival, driven by the same fraction as
+    ///   everything else. 0 is the old hard crop, which is what the viewers sheet still wants.
     public func applyFlight(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
-                            centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil) {
+                            centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil,
+                            chrome: CGFloat = 0) {
         guard let flightCard else { return }
         applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim)
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome)
     }
 
     /// Flight over: container back to identity, unmasked — and the wall behind it opaque again. The
@@ -296,14 +306,15 @@ public final class StoryCardMorph {
         guard !StoryPager.dismissActive, let card else { return }
         applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim)
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0)
     }
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
     /// reset that runs on the early-out, nothing else differs.
     private func applyCore(on card: UIView, sheet: Bool,
                            fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
-                           cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?) {
+                           cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?,
+                           chrome: CGFloat) {
         guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
@@ -352,24 +363,32 @@ public final class StoryCardMorph {
         let dx = wantX - card.center.x - offset.x * scale
         let dy = wantY - card.center.y - offset.y * scale
 
-        // CATransaction: a CAShapeLayer path change is an implicitly ANIMATED property, so without
-        // this the mask chases the transform by a quarter second and the crop visibly lags the card
-        // under the finger. A UIView transform is not implicitly animated; the mask is, which is why
-        // both live inside the same disabled-actions block.
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        // The open's cover rides the card strip exactly, framed on every apply because the strip's
-        // metrics arrive with layout. Alpha is not touched here — the flight's own tick owns it.
-        if !sheet { flightCover?.frame = content }
         // The crop, in the view's own untransformed coordinates: the card's width, and whatever
         // height renders as `visibleH` once the scale is applied, centred on the CARD. This is also
         // what hides the black above and below the card once the sheet is open.
-        applyMask(on: card, sheet: sheet,
-                  rect: CGRect(x: content.minX,
-                               y: content.midY - min(restH, visibleH / scale) / 2,
-                               width: restW,
-                               height: min(restH, visibleH / scale)),
-                  cornerRadius: cornerRadius * f / scale)
+        let cropH = min(restH, visibleH / scale)
+        let crop = CGRect(x: content.minX, y: content.midY - cropH / 2, width: restW, height: cropH)
+
+        // CATransaction: a CAShapeLayer path change is an implicitly ANIMATED property, so without
+        // this the mask chases the transform by a quarter second and the crop visibly lags the card
+        // under the finger. A UIView transform is not implicitly animated; the mask is, which is why
+        // both live inside the same disabled-actions block. The mask's background colour — the
+        // surround's fade — is implicitly animated too, and is here for the same reason.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // ⚠️ THE COVER IS FRAMED TO THE CROP, NOT TO THE WHOLE STRIP, and that is a pixel identity
+        // rather than a preference. The strip is 9:16; the row card is not (the slot is deliberately
+        // shorter, and the crop above is what takes the difference out of the story). A cover framed
+        // to the STRIP was therefore aspect-filled into 9:16 and then cropped AGAIN by that same
+        // mask — the row card's own picture, zoomed by about a fifth, landing on top of the row card
+        // it was supposed to be identical to. Framed to the crop, the rectangle it fills has exactly
+        // the row card's aspect (restW / (targetH/scale) == targetW/targetH), so at fraction 1 the
+        // cover IS the row card, pixel for pixel, and the hand-over at either end cannot pop.
+        // Alpha is not touched here — the flight's own fraction owns it.
+        if !sheet { flightCover?.frame = crop }
+        applyMask(on: card, sheet: sheet, rect: crop,
+                  cornerRadius: cornerRadius * f / scale,
+                  outside: sheet ? 0 : chrome)
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
         if abs(card.alpha - alpha) > 0.001 { card.alpha = alpha }
         CATransaction.commit()
@@ -510,7 +529,13 @@ public final class StoryCardMorph {
     /// `rect` is already centred on the card by the caller: the crop takes equal bites off its top
     /// and bottom, which keeps the subject of the photo where the eye left it. A top-anchored crop is
     /// the same mistake the reverted scaleEffect versions made in a different form.
-    private func applyMask(on card: UIView, sheet: Bool, rect: CGRect, cornerRadius: CGFloat) {
+    ///
+    /// `outside` is the alpha everything BEYOND `rect` renders at — a mask layer is composited by its
+    /// own alpha channel, so a background colour under the path is a real, per-frame fade of the
+    /// surround with no second view, no SwiftUI write and no animation of its own. 0 is the hard crop
+    /// this has always done.
+    private func applyMask(on card: UIView, sheet: Bool, rect: CGRect, cornerRadius: CGFloat,
+                           outside: CGFloat = 0) {
         let layer: CAShapeLayer
         let existing = sheet ? maskLayer : flightMask
         if let existing, card.layer.mask === existing {
@@ -546,5 +571,8 @@ public final class StoryCardMorph {
         // does not, and this is the only line that can tell them apart.
         let local = rect.offsetBy(dx: -card.bounds.origin.x, dy: -card.bounds.origin.y)
         layer.path = UIBezierPath(roundedRect: local, cornerRadius: max(0, cornerRadius)).cgPath
+        // The surround. Black is arbitrary — only the alpha reaches the mask.
+        let o = max(0, min(1, outside))
+        layer.backgroundColor = o > 0.001 ? UIColor.black.withAlphaComponent(o).cgColor : nil
     }
 }

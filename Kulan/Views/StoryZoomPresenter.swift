@@ -50,11 +50,30 @@ enum StoryZoomPresenter {
         guard container == nil else { return }
         guard let top = topController() else { return }
         let vc = StoryZoomContainerVC()
-        if let source, source.bounds.width > 1, source.bounds.height > 1 {
-            let shot = UIGraphicsImageRenderer(bounds: source.bounds).image { _ in
-                source.drawHierarchy(in: source.bounds, afterScreenUpdates: false)
+        // ⚠️ THE WINDOW IS PHOTOGRAPHED AND CROPPED, NOT THE REGISTERED VIEW, and the difference is
+        // the whole cover. `MediaOpenRects` registers an ANCHOR: a `.background` view whose frame is
+        // the card's frame and which draws NOTHING — the SwiftUI card is its sibling, not its
+        // subtree. `drawHierarchy` renders the receiver's own hierarchy, so photographing the anchor
+        // returned a fully transparent image, and the shared element has been an invisible cover
+        // ever since it was written. That is his B-pops-to-A report arriving from the direction
+        // nobody looked: the seat and the landing had nothing to wear, so the row card's picture was
+        // swapped for the live story in one frame at both ends. Cropping the window at the card's
+        // rectangle takes the pixels that are actually on screen — the photo AND the avatar ring
+        // drawn over it — which is what the row card is.
+        if let source, let window = source.window {
+            let r = source.convert(source.bounds, to: window)
+            if r.width > 1, r.height > 1, r.maxX > 0, r.maxY > 0 {
+                let shot = UIGraphicsImageRenderer(size: r.size).image { _ in
+                    // Shifted so the card lands at the origin. `afterScreenUpdates: false`: the last
+                    // rendered frame is exactly what the eye is looking at, and a flush here would
+                    // cost the tap a frame.
+                    window.drawHierarchy(in: CGRect(x: -r.minX, y: -r.minY,
+                                                    width: window.bounds.width,
+                                                    height: window.bounds.height),
+                                         afterScreenUpdates: false)
+                }
+                vc.setCoverImage(shot)
             }
-            vc.setCoverImage(shot)
         }
         vc.setContent(AnyView(content))
         container = vc
@@ -169,7 +188,10 @@ final class StoryZoomContainerVC: UIViewController {
 
     func setCoverImage(_ image: UIImage) {
         let iv = UIImageView(image: image)
-        iv.contentMode = .scaleAspectFill   // the strip is taller than the row card; crop, never stretch
+        // Framed by `applyCore` to the flight's CROP, whose aspect is the row card's exactly, so at
+        // the row end this fills it with nothing spare. Aspect-fill (never stretch) for the frames
+        // in between, where the crop opens towards 9:16 while the cover is already dissolving out.
+        iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
         iv.alpha = 0
         coverView = iv
