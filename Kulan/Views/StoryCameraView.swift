@@ -707,24 +707,44 @@ struct StoryCameraView: View {
         .contentShape(Rectangle())
     }
 
-    private var modePicker: some View {
-        HStack(spacing: 0) {
-            modeLabel("CAMERA", .camera)
-            modeLabel("TEXT", .text)
+    /// THE SELECTED SEGMENT IS A PIECE OF GLASS, NOT A WHITE CAPSULE DRAWN ON GLASS (owner
+    /// 2026-08-07: "this bar looks like custom, please use real Apple liquid glass, follow
+    /// guidelines"). He is right about what it was. The track was real `glassEffect`, but the thing
+    /// that marks the chosen word was `Capsule().fill(.white.opacity(0.22))` — an opaque wash, which
+    /// is the one thing Apple's material never is, and it is what made the whole control read as
+    /// moulded plastic.
+    ///
+    /// Apple's own moving-highlight pattern is a `GlassEffectContainer` with a shared
+    /// `glassEffectID`: the highlight is a glass element in its own right, the container is what
+    /// lets it MELT out of one position and into the other rather than fading in place, and it
+    /// merges with the track it sits in instead of stacking a second material on top of it. That is
+    /// also why `matchedGeometryEffect` is gone — two systems animating the same puck would fight,
+    /// and the glass one is the one that carries the material with it.
+    ///
+    /// Below iOS 26 nothing here exists, so the old wash stays exactly as it was.
+    @ViewBuilder private var modePicker: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 0) {
+                    modeLabel("CAMERA", .camera)
+                    modeLabel("TEXT", .text)
+                }
+                .padding(4)
+                .glassEffect(.regular, in: .capsule)
+            }
+        } else {
+            HStack(spacing: 0) {
+                modeLabel("CAMERA", .camera)
+                modeLabel("TEXT", .text)
+            }
+            .padding(4)
+            .liquidGlass(Capsule(), interactive: true)
         }
-        .padding(4)
-        // REAL GLASS (owner 2026-08-06: "that bar plz make it real liquid glass"). It was a flat
-        // 14% white wash, which on a bright camera frame reads as grey plastic — the material has
-        // to sample what is behind it or it is just a tint. `liquidGlass` is the app's own wrapper
-        // and it degrades to the same wash below iOS 26, so nothing regresses on an older phone.
-        .liquidGlass(Capsule(), interactive: true)
     }
 
-    /// ONE capsule that MOVES, not two that light up in turn. `matchedGeometryEffect` hands the same
-    /// highlight from word to word, so it slides across the way a real segmented control does — and
-    /// it slides for a swipe exactly as it does for a tap, because both go through the same
-    /// `withAnimation`. Drawing a separate background per label is what made this pop instead of
-    /// travel, and popping is most of why it did not read as a tab.
+    /// ONE highlight that MOVES, not two that light up in turn — see `modePicker` for which system
+    /// moves it. It travels for a swipe exactly as it does for a tap, because both go through the
+    /// same `withAnimation`.
     private func modeLabel(_ title: String, _ target: Mode) -> some View {
         let selected = mode == target
         return Button {
@@ -736,15 +756,25 @@ struct StoryCameraView: View {
                 .kerning(0.6)
                 .foregroundStyle(selected ? .white : .white.opacity(0.55))
                 .padding(.horizontal, 20).frame(height: 34)
-                .background {
-                    if selected {
-                        Capsule().fill(.white.opacity(0.22))
-                            .matchedGeometryEffect(id: "modePill", in: modePill)
-                    }
-                }
+                .background { if selected { modeHighlight } }
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    /// The chosen segment. Clear glass with the faintest white lift in it: enough to be legible on
+    /// the black strip under the card, where there is nothing behind the material to refract, and
+    /// still a material rather than a fill on the camera frame, where there is.
+    @ViewBuilder private var modeHighlight: some View {
+        if #available(iOS 26.0, *) {
+            Capsule()
+                .fill(.clear)
+                .glassEffect(.regular.tint(.white.opacity(0.10)).interactive(), in: .capsule)
+                .glassEffectID("modePill", in: modePill)
+        } else {
+            Capsule().fill(.white.opacity(0.22))
+                .matchedGeometryEffect(id: "modePill", in: modePill)
+        }
     }
 
     // MARK: Pieces

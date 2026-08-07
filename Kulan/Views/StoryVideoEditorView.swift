@@ -92,6 +92,10 @@ struct StoryVideoEditorView: View {
     @State private var trimOpenedEnd: Double = 0
     @State private var showAddPicker = false
     @State private var canvasSize: CGSize = .zero
+    /// How far the card's bottom edge sits above the bottom of the screen — the photo editor's own
+    /// measurement, kept here for the same reason it exists there: the caption pill hangs off the
+    /// CARD, and a card that is shorter than the room available ends higher than any constant knows.
+    @State private var cardBottomGap: CGFloat = StoryEditorView.toolZoneHeight
     /// The post, packed for StoryEditorView, when a picture joins a video-first post. See the
     /// picker sheet below for why the composer takes over at that moment.
     @State private var handOff: HandOffPost?
@@ -291,8 +295,16 @@ struct StoryVideoEditorView: View {
             // THE CARD IS THE CANVAS, not the whole screen. Same correction the photo editor got:
             // the flatten and the burn-in measure against `canvasSize`, so handing them a rectangle
             // bigger than the one on screen means the posted frame is not the seen frame.
-            .onAppear { canvasSize = StoryEditorView.cardSize(in: geo.size, top: 8) }
-            .onChange(of: geo.size) { _, sz in canvasSize = StoryEditorView.cardSize(in: sz, top: 8) }
+            .onAppear {
+                let c = StoryEditorView.cardSize(in: geo.size, top: 8)
+                canvasSize = c
+                cardBottomGap = max(StoryEditorView.toolZoneHeight, geo.size.height - 8 - c.height)
+            }
+            .onChange(of: geo.size) { _, sz in
+                let c = StoryEditorView.cardSize(in: sz, top: 8)
+                canvasSize = c
+                cardBottomGap = max(StoryEditorView.toolZoneHeight, sz.height - 8 - c.height)
+            }
             .overlay {
                 if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
                     TextEditorOverlay(draft: $overlays[idx],
@@ -410,12 +422,19 @@ struct StoryVideoEditorView: View {
     /// jump the owner reported. The PEN bar keeps ignoring the keyboard because a drawing screen has
     /// none, and a canvas that shifted under a stroke would put the line off the finger.
     private var bottomStack: some View {
-        VStack {
-            Spacer()
+        ZStack {
             if isDrawing {
-                penBar.ignoresSafeArea(.keyboard, edges: .bottom)
+                VStack { Spacer(); penBar.ignoresSafeArea(.keyboard, edges: .bottom) }
             } else {
-                bottomBar
+                // TWO LAYERS, NOT ONE STACK, and that is the photo editor's arrangement rather than
+                // a resemblance to it (owner 2026-08-07: "in story editor video the caption bar,
+                // please small bit up like story image editor"). Held in one stack, the caption sat
+                // on top of the tool row and therefore on the BLACK BAND under the card; the photo
+                // editor's hangs off the CARD's bottom edge and sits inside the picture. On his
+                // phone that is 173pt off the floor against this screen's 72 — the drop he
+                // photographed. Two layers, each measured from what it belongs to.
+                captionLayer
+                toolRowLayer
             }
         }
         .opacity(strokeInFlight ? 0 : 1)
@@ -537,8 +556,12 @@ struct StoryVideoEditorView: View {
         }
     }
 
-    private var bottomBar: some View {
+    /// The clip strip and the caption pill, riding the card. Pinned 14pt above the card's bottom
+    /// edge exactly as the photo editor's is — see `bottomStack` — so the two screens put the same
+    /// control in the same place. Focused, the keyboard is the floor and 8 is enough.
+    private var captionLayer: some View {
         VStack(spacing: 12) {
+            Spacer()
             if !captionFocused { clipStrip }
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 6) {
@@ -573,53 +596,53 @@ struct StoryVideoEditorView: View {
 
                 if captionFocused { compactSendButton }
             }
-            // ⚠️ 14, AND THE ARITHMETIC IS THE POINT — this is the second attempt at it.
-            //
-            // The two editors stack differently. The photo editor's caption is its OWN layer with
-            // `cardBottomGap + 14` under it, which lands its bottom edge 72pt above the safe area
-            // when the 9:16 card fits (58 + 14). THIS editor keeps the caption and the tool row in
-            // one stack pinned to the bottom, so the tool row (46) and the stack's spacing (12)
-            // already lift it 58 — and the pill needs the remaining 14 to reach the same 72.
-            //
-            // Last round I gave it `toolZoneHeight + 14` here, which is the photo editor's WHOLE
-            // number added on top of a 58 this layout had already supplied. That double-count is the
-            // gap under the caption he photographed. Copying the number was wrong because the two
-            // layouts do not measure from the same place; copying the RESULT is what he asked for.
-            //
-            // Focused, the tool row is gone and the keyboard is the floor, so 8 — the photo
-            // editor's focused value, not the 10 this file used to carry.
-            .padding(.bottom, captionFocused ? 8 : 14)
-
-            if !captionFocused {
-                HStack(spacing: 14) {
-                    // THREE TOOLS: text, pen, trim. Two went on the owner's word, 2026-08-04.
-                    //
-                    // CROP is gone from the VIDEO editor and stays in the photo one ("Remove Crop
-                    // feature in video story editor… only video").
-                    //
-                    // THE SECOND + is gone. It did the same job as the + inside the caption bar,
-                    // which he keeps: "one is working same plz remove buttom one. Dont tuch ine in
-                    // side caption bar".
-                    HStack(spacing: 20) {
-                        tool("textformat") { addTextOverlay() }
-                        // THE VIDEO HOLDS STILL WHILE YOU DRAW, the way it already does for trim
-                        // (owner 2026-08-04: "plz play and pause fix"). It used to keep playing and
-                        // looping under your hand, and you could not stop it, because every tap on
-                        // the picture belongs to the pen while the pen is out. Tapping the tick
-                        // gives you the video back, running, where you left it.
-                        tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
-                             active: isDrawing) { setDrawing(!isDrawing) }
-                        tool("scissors", active: isTrimmed) { openTrim() }
-                    }
-                    .padding(.horizontal, 18).frame(height: 46)
-                    .liquidGlass(Capsule())
-
-                    Spacer(minLength: 8)
-                    sendButton
-                }
-            }
         }
         .padding(.horizontal, 16)
+        // ⚠️ MEASURED FROM THE CARD, NOT FROM THE FLOOR — the photo editor's line, verbatim, and
+        // the third attempt at this number. Twice before it was a constant chosen to LAND where the
+        // photo editor's lands "when the 9:16 card fits", and on his phone it does not: the card is
+        // 765 tall on a 932 screen, so its bottom edge is 159 off the floor and the pill belongs at
+        // 173, not at the 72 an arithmetic-matched constant produced. A gap that is read from the
+        // card cannot drift from it.
+        .padding(.bottom, captionFocused ? 8 : cardBottomGap + 14)
+    }
+
+    /// The three tools and NEXT, on the black band UNDER the card. Pinned to the floor and deaf to
+    /// the keyboard, exactly as the photo editor's is: it hides while typing rather than moving.
+    private var toolRowLayer: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 14) {
+                // THREE TOOLS: text, pen, trim. Two went on the owner's word, 2026-08-04.
+                //
+                // CROP is gone from the VIDEO editor and stays in the photo one ("Remove Crop
+                // feature in video story editor… only video").
+                //
+                // THE SECOND + is gone. It did the same job as the + inside the caption bar,
+                // which he keeps: "one is working same plz remove buttom one. Dont tuch ine in
+                // side caption bar".
+                HStack(spacing: 20) {
+                    tool("textformat") { addTextOverlay() }
+                    // THE VIDEO HOLDS STILL WHILE YOU DRAW, the way it already does for trim
+                    // (owner 2026-08-04: "plz play and pause fix"). It used to keep playing and
+                    // looping under your hand, and you could not stop it, because every tap on
+                    // the picture belongs to the pen while the pen is out. Tapping the tick
+                    // gives you the video back, running, where you left it.
+                    tool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
+                         active: isDrawing) { setDrawing(!isDrawing) }
+                    tool("scissors", active: isTrimmed) { openTrim() }
+                }
+                .padding(.horizontal, 18).frame(height: 46)
+                .liquidGlass(Capsule())
+
+                Spacer(minLength: 8)
+                sendButton
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .opacity(captionFocused ? 0 : 1)
     }
 
     private var compactSendButton: some View {
