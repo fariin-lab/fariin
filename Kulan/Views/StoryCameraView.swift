@@ -743,25 +743,52 @@ struct StoryCameraView: View {
     /// resolves to flat grey no matter which modifier paints it. That is the moulded plastic he has
     /// now photographed three times.
     ///
-    /// A `Picker` with `.segmented` IS the Liquid Glass segmented control on iOS 26: Apple draws the
-    /// track, the moving selection, the press behaviour, the material and its fallback, and they
-    /// change when the system changes rather than when we remember to update a copy of them. There
-    /// is nothing left here for him to call custom because there is nothing left of ours.
+    /// ⚠️ FIFTH REPORT. READ SIGNAL'S SOURCE BEFORE TOUCHING THIS AGAIN — I did, and it is short.
     ///
-    /// The uppercase and the kerning go with it. They were part of the hand-built look, and a
-    /// segmented control that restyles its own labels is a custom control again.
+    /// `Signal/src/ViewControllers/Photos/MediaControls.swift`, `ComposerTypeSelectionControl`. It is
+    /// the same control on the same screen for the same two words, so there is no interpretation
+    /// left to do:
+    ///
+    /// ```swift
+    /// final class ComposerTypeSelectionControl: UISegmentedControl {
+    ///     init() {
+    ///         super.init(frame: .zero)
+    ///         insertSegment(withTitle: titleText.uppercased(), at: 0, animated: false)
+    ///         insertSegment(withTitle: titleCamera.uppercased(), at: 0, animated: false)
+    ///         if #unavailable(iOS 26) { backgroundColor = .clear; ...clear bg + divider images... }
+    ///         ...rounded 14pt font, bold when selected, secondaryLabel / label...
+    ///     }
+    ///     override var intrinsicContentSize: CGSize {
+    ///         var size = super.intrinsicContentSize
+    ///         size.width += CGFloat(8 * 2 * numberOfSegments)
+    ///         size.height = 40
+    ///         return size
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// THE ANSWER IS THE `#unavailable(iOS 26)`. Every piece of styling they do to the track is
+    /// fenced OFF on 26 and later. On 26 they hand UIKit a bare `UISegmentedControl` and let it draw
+    /// its own Liquid Glass, and the only things they set at all are the font and the two title
+    /// colours. That is the whole difference between their bar and the moulded grey plastic he has
+    /// now photographed five times.
+    ///
+    /// So why was a SwiftUI `Picker(.segmented)` not enough, given it is documented as the same
+    /// control. Because it is not the same control: SwiftUI drives it through its own appearance
+    /// path and on this screen it came out with the flat legacy track anyway. The previous note here
+    /// claimed "there is nothing left of ours", and his screenshot says otherwise. UIKit is native
+    /// too, and [[kulan-prefer-native-not-custom]] says to reach for it and decide rather than ask.
+    ///
+    /// The uppercase comes BACK, because it is Signal's, not ours: they uppercase both titles. The
+    /// previous note removed it as a hand-built flourish, which was the wrong call for the same
+    /// reason the rest of this was.
     private var modePicker: some View {
-        Picker("", selection: $mode) {
-            Text("Camera").tag(Mode.camera)
-            Text("Text").tag(Mode.text)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        // Wide enough that the two words are not cramped, narrow enough to leave the library card
-        // and the flip button their room — the same footprint the hand-built capsule occupied.
-        .frame(width: 200)
-        // The swipe between modes still animates, because the swipe writes `mode` inside its own
-        // `withAnimation`; the tap is Apple's and animates itself.
+        ComposerTypeSwitch(isText: Binding(get: { mode == .text },
+                                           set: { mode = $0 ? .text : .camera }))
+            // Its own intrinsic size, Signal's: the padding and the 40pt height come from the
+            // control, not from a frame we impose. A width we choose is a width that has to be
+            // re-chosen every time the font metric changes.
+            .fixedSize()
     }
 
     // MARK: Pieces
@@ -816,5 +843,57 @@ struct StoryCameraView: View {
                                               options: req) { img, _ in
             if let img { DispatchQueue.main.async { libraryThumb = img } }
         }
+    }
+}
+
+/// CAMERA | TEXT, built the way Signal builds it, because five attempts at building it ourselves
+/// all came out as grey plastic.
+///
+/// `ComposerTypeSelectionControl` in `Signal/src/ViewControllers/Photos/MediaControls.swift` is the
+/// same control on the same screen for the same two words. What it does on iOS 26 is nothing: every
+/// line that touches the track is fenced behind `#unavailable(iOS 26)`, so on 26 a bare
+/// `UISegmentedControl` draws its own Liquid Glass and the only things set are the font and the two
+/// title colours. Anything painted on the track is what turns it into a flat grey capsule, which is
+/// what he has photographed five times.
+///
+/// The app is iOS 26 only, so their `#unavailable` branch has no equivalent here — this is their
+/// iOS 26 path and nothing else.
+private struct ComposerTypeSwitch: UIViewRepresentable {
+    @Binding var isText: Bool
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        // Titles UPPERCASED, which is Signal's, not a flourish of ours.
+        let control = UISegmentedControl(items: ["CAMERA", "TEXT"])
+        control.selectedSegmentIndex = isText ? 1 : 0
+        // ⚠️ NOTHING IS SET ON THE TRACK. No backgroundColor, no background image, no divider image,
+        // no tint. That is the entire reason this reads as glass and the last five did not.
+        //
+        // Rounded 14, bold when selected — their two lines, and their two colours. The composer is
+        // always dark, and these are trait colours, so the trait is pinned rather than hardcoding
+        // white: a hardcoded white is a restyle, and a restyled segmented control is a custom one.
+        control.overrideUserInterfaceStyle = .dark
+        var descriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
+        if let rounded = descriptor.withDesign(.rounded) { descriptor = rounded }
+        let normal = UIFont(descriptor: descriptor, size: 14)
+        let selected = descriptor.withSymbolicTraits(.traitBold).map { UIFont(descriptor: $0, size: 14) } ?? normal
+        control.setTitleTextAttributes([.font: normal, .foregroundColor: UIColor.secondaryLabel], for: .normal)
+        control.setTitleTextAttributes([.font: selected, .foregroundColor: UIColor.label], for: .selected)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.onChange = { isText = $0 }
+        let want = isText ? 1 : 0
+        // Only when it actually differs: writing the same index back mid-update restarts the
+        // selection animation, so a swipe between modes would fight the tap that started it.
+        if control.selectedSegmentIndex != want { control.selectedSegmentIndex = want }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var onChange: (Bool) -> Void = { _ in }
+        @objc func changed(_ sender: UISegmentedControl) { onChange(sender.selectedSegmentIndex == 1) }
     }
 }
