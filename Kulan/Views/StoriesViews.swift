@@ -1734,6 +1734,15 @@ struct StoryViewer: View {
                 handle(storyId: story.id, message: message, emoji: emoji, isLiked: isLiked)
             },
             onProfile: { user in
+                // ⚠️ NOT MY OWN. Tapping the header on my own story opened MY profile over my story,
+                // which is a screen nobody navigated towards — his 2026-08-07 report, with the sheet
+                // half-raised over his own face. The header is there to say WHO this is, and on my
+                // own story I already know; the tap only means something when it is somebody else.
+                //
+                // Tested against the signed-in uid rather than `g.isMine`, because a mixed feed can
+                // page onto my own bucket mid-visit and the tap has to answer for the story that is
+                // on screen at that moment, not the one the viewer was opened with.
+                guard user.id != AuthService.shared.uid else { return }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
