@@ -54,7 +54,7 @@ public final class StoryCardMorph {
     /// The pager's own horizontal scroll view, which is the moving card. Registered by StoryPager
     /// when it installs its pans, cleared when SwiftUI dismantles the pager.
     private weak var card: UIView?
-    private var maskLayer: CAShapeLayer?
+    private var maskLayer: CALayer?
 
     /// THE FLIGHT CARD — the second transform target, and the reason there are two.
     ///
@@ -74,7 +74,7 @@ public final class StoryCardMorph {
     /// begging-layers-to-step-aside choreography: anything outside the strip is simply cropped,
     /// black backings included.
     private weak var flightCard: UIView?
-    private var flightMask: CAShapeLayer?
+    private var flightMask: CALayer?
 
     /// THE COVER THE OPEN WEARS. His frame-grab of the open showed the problem exactly: the flying
     /// card faded in as a half-transparent ghost of the full-screen layout over a row card that
@@ -389,11 +389,11 @@ public final class StoryCardMorph {
         let cropH = restH + (tightH - restH) * max(0, min(1, crop))
         let cropRect = CGRect(x: content.minX, y: content.midY - cropH / 2, width: restW, height: cropH)
 
-        // CATransaction: a CAShapeLayer path change is an implicitly ANIMATED property, so without
-        // this the mask chases the transform by a quarter second and the crop visibly lags the card
-        // under the finger. A UIView transform is not implicitly animated; the mask is, which is why
-        // both live inside the same disabled-actions block. The mask's background colour — the
-        // surround's fade — is implicitly animated too, and is here for the same reason.
+        // CATransaction: the mask's geometry is implicitly ANIMATED, so without this it chases the
+        // transform by a quarter second and the crop visibly lags the card under the finger. A
+        // UIView transform is not implicitly animated; a bare CALayer's frame, cornerRadius and
+        // backgroundColor all are, which is why they live inside the same disabled-actions block.
+        // (Was a CAShapeLayer path, same hazard, same reason — see `applyMask`.)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // ⚠️ THE COVER IS FRAMED TO THE CROP, NOT TO THE WHOLE STRIP, and that is a pixel identity
@@ -564,12 +564,39 @@ public final class StoryCardMorph {
     /// this has always done.
     private func applyMask(on card: UIView, sheet: Bool, rect: CGRect, cornerRadius: CGFloat,
                            outside: CGFloat = 0) {
-        let layer: CAShapeLayer
+        // ⚠️ A LAYER WITH A CORNER RADIUS, NOT A BEZIER PATH, AND THE REASON IS HIS WHITE CORNERS.
+        //
+        // This was a CAShapeLayer whose path came from `UIBezierPath(roundedRect:cornerRadius:)`,
+        // which draws a CIRCULAR corner. Every card this thing has to agree with — the row card, the
+        // story card — is a SwiftUI `RoundedRectangle(style: .continuous)`, an Apple squircle. Two
+        // different curves at the same radius do not enclose the same area, and the crescent between
+        // them is a few points wide at r = 24. What fills that crescent is the cover snapshot's own
+        // corner pixels, which are the chat list photographed BEFORE the dim went on — so it reads as
+        // a bright white rind hugging each corner, against a list that is by then dimmed.
+        //
+        // MEASURED, not reasoned: in his screenshot the rind samples (239,246,244) while the list two
+        // pixels further out samples (190,188,189). Undimmed background sitting inside the mask. And
+        // it is corner-only — a horizontal cut across the middle of the same edge shows the picture
+        // meeting the list with nothing between them, which is what rules out a white parent view.
+        //
+        // `cornerCurve = .continuous` on a plain CALayer is the same curve SwiftUI draws, so the two
+        // shapes now coincide and there is no crescent to fill. The surround still needs the layer
+        // BEHIND the hole to carry `outside`'s alpha, hence a container plus one sublayer rather than
+        // a single shape.
+        let layer: CALayer
+        let hole: CALayer
         let existing = sheet ? maskLayer : flightMask
-        if let existing, card.layer.mask === existing {
+        if let existing, card.layer.mask === existing, let h = existing.sublayers?.first {
             layer = existing
+            hole = h
         } else {
-            layer = CAShapeLayer()
+            layer = CALayer()
+            let h = CALayer()
+            // Opaque: only the alpha channel reaches the mask, the colour is arbitrary.
+            h.backgroundColor = UIColor.black.cgColor
+            h.cornerCurve = .continuous
+            layer.addSublayer(h)
+            hole = h
             if sheet { maskLayer = layer } else { flightMask = layer }
             card.layer.mask = layer
         }
@@ -598,7 +625,10 @@ public final class StoryCardMorph {
         // a sliver of itself parked against the right edge on the close. One host works and the other
         // does not, and this is the only line that can tell them apart.
         let local = rect.offsetBy(dx: -card.bounds.origin.x, dy: -card.bounds.origin.y)
-        layer.path = UIBezierPath(roundedRect: local, cornerRadius: max(0, cornerRadius)).cgPath
+        hole.frame = local
+        // Capped at half the short side: a continuous curve asked for more than that degenerates,
+        // and the crop gets very short at the end of a close.
+        hole.cornerRadius = max(0, min(cornerRadius, min(local.width, local.height) / 2))
         // The surround. Black is arbitrary — only the alpha reaches the mask.
         let o = max(0, min(1, outside))
         layer.backgroundColor = o > 0.001 ? UIColor.black.withAlphaComponent(o).cgColor : nil

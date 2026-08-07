@@ -1067,6 +1067,12 @@ struct StoryViewer: View {
         /// Same rule as `coverAlpha` and for the same reason: the drag pins it at 0 so what is in his
         /// hand is the whole picture, uniformly scaled and uncropped, and only a flight moves it.
         var crop: CGFloat = 0
+        /// TRUE while the card is on its way OUT: a live drag, or a close that has committed.
+        ///
+        /// The surround (my own story's full-screen black, the owner footer, the reply bar) is taken
+        /// away at once when this is set, instead of fading over the first 18% of the journey. False
+        /// for an open and cleared by a cancel, both of which are arrivals and keep the fade.
+        var exiting = false
         /// What the world was last told about the chrome outside the card (`storyFlightActive`).
         /// Tracked here rather than read back off `heroFlying` so the notification is posted exactly
         /// once per crossing, from the one place that knows the fraction.
@@ -1981,7 +1987,21 @@ struct StoryViewer: View {
         // into place after the card had already stopped moving — his "the reply bar comes late… it
         // must be there at 85, 90 percent". They now cross where the mask's own surround begins to
         // let light through, so the fade they run and the crop that reveals them are the same event.
-        let hide = f > Self.heroChromeSpan
+        // ⚠️ AN EXIT HIDES THE SURROUND AT ONCE; ONLY AN ARRIVAL IS ALLOWED TO TAKE ITS TIME.
+        //
+        // His 2026-08-07 report, with the top and bottom circled: "when i scroll down my owner story
+        // i see black top header and buttom, other story is working good". Both halves of that are
+        // this line. `heroChrome` draws the surround at up to full alpha for the first 18% of the
+        // journey, and for MY OWN story the surround contains a full-screen `Color.black` (the
+        // `storyLayer` backing, which a friend's story does not have — that asymmetry IS his "other
+        // story works"). So the first 76pt of a pull painted his black page over the chat list, top
+        // and bottom, and only then dropped it.
+        //
+        // A fade is right for the surround ARRIVING — that fix is his too ("the reply bar comes late,
+        // it must be there at 85, 90 percent") and the open keeps it exactly. It is wrong for the
+        // surround LEAVING, because the thing being faded out is an opaque wall standing between him
+        // and the list he is pulling towards. So an exit takes it away on the first frame.
+        let hide = hero.exiting || f > Self.heroChromeSpan
         if hero.chromeHidden != hide {
             hero.chromeHidden = hide
             if heroFlying != hide { heroFlying = hide }
@@ -2192,6 +2212,9 @@ struct StoryViewer: View {
             // whole 9:16 picture on the same curve that dissolves the cover, which is what keeps
             // the unfolding hidden under the thumbnail while it happens.
             hero.crop = 1
+            // An ARRIVAL. The surround comes back on the fraction over the last 18%, which is the
+            // fix he asked for by number, and it is the only direction that should ever fade.
+            hero.exiting = false
             // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
@@ -2315,6 +2338,7 @@ struct StoryViewer: View {
         hero.alpha = 1
         hero.coverAlpha = 0        // starts on the live story, exactly as a released drag does
         hero.crop = 0              // and on the whole picture, so a button close is the same flight
+        hero.exiting = true        // and the surround leaves at once, as it does under a finger
         StoryCardMorph.heroDismissActive = true
         StoryCardMorph.shared.prepareForHero?()
         // The surround leaves on the fraction, exactly as it does under a finger — a button close
@@ -2347,6 +2371,7 @@ struct StoryViewer: View {
             // half-dissolved thumbnail. It comes back only if this drag commits.
             hero.cover = heroKeyNow() == heroSourceKey
             hero.coverAlpha = 0
+            hero.exiting = true        // a pull is an exit: the black page goes now, not over 76pt
             // AND NOTHING IS SHAVED OFF IT EITHER (his spec: "uniform scale only… preserving the
             // full video/image visibility without cropping any edges"). A finger seizing the card
             // mid-open gets the same deal, which is why this is written here rather than only on
@@ -2482,6 +2507,10 @@ struct StoryViewer: View {
         // used to be told to return on the first frame of the spring-back, which put the reply bar
         // on screen while the story was still small and travelling.
         let remaining = max(1, hypot(hero.rest.x - hero.center.x, hero.rest.y - hero.center.y))
+        // A spring-back is an ARRIVAL, so the surround stops being taken away at once and goes back
+        // to fading in over the last 18% with the card. Cleared BEFORE the run, or the first frame
+        // would still be an exit.
+        hero.exiting = false
         // No cover on a spring-back: there is nothing to exchange, the story is going back to being
         // the whole screen. It was already 0 through the drag and stays there.
         runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining,
