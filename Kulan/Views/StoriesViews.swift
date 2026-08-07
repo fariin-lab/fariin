@@ -867,6 +867,11 @@ struct StoryViewer: View {
     var heroDismiss: Bool = false
     /// The key of the rectangle this was opened from, in `MediaOpenRects` (`.storyRow` scope).
     var heroSourceKey: String = ""
+    /// False for a REFEED — the delete-with-stories-remaining swap, where the presenter replaces
+    /// the viewer while the screen is already up and at rest. There is nothing to fly and no wall
+    /// to paint: `stageHeroOpen` marks the open spent and shows the story where it stands, instead
+    /// of replaying a grow-out-of-the-row nobody's finger asked for.
+    var heroStageOpen: Bool = true
     /// Take the cover away with NO dismissal animation of its own. The card has already flown home
     /// by the time this runs; letting the cover animate as well would play a second, different
     /// close over the top of the one the finger just drew.
@@ -1092,17 +1097,20 @@ struct StoryViewer: View {
     private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil }
 
     init(group: StoryGroup, ownSwipeDismiss: Bool = false,
-         heroDismiss: Bool = false, heroSourceKey: String = "", onHeroClose: (() -> Void)? = nil,
+         heroDismiss: Bool = false, heroSourceKey: String = "", heroStageOpen: Bool = true,
+         onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
         self.init(groups: [group], startIndex: 0, ownSwipeDismiss: ownSwipeDismiss,
-                  heroDismiss: heroDismiss, heroSourceKey: heroSourceKey, onHeroClose: onHeroClose,
+                  heroDismiss: heroDismiss, heroSourceKey: heroSourceKey, heroStageOpen: heroStageOpen,
+                  onHeroClose: onHeroClose,
                   onClose: onClose, onProfile: onProfile,
                   onDeletedRemaining: onDeletedRemaining)
     }
     init(groups: [StoryGroup], startIndex: Int = 0, ownSwipeDismiss: Bool = false,
-         heroDismiss: Bool = false, heroSourceKey: String = "", onHeroClose: (() -> Void)? = nil,
+         heroDismiss: Bool = false, heroSourceKey: String = "", heroStageOpen: Bool = true,
+         onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
@@ -1111,6 +1119,7 @@ struct StoryViewer: View {
         self.ownSwipeDismiss = ownSwipeDismiss
         self.heroDismiss = heroDismiss
         self.heroSourceKey = heroSourceKey
+        self.heroStageOpen = heroStageOpen
         self.onHeroClose = onHeroClose
         self.onClose = onClose
         self.onProfile = onProfile
@@ -1876,15 +1885,21 @@ struct StoryViewer: View {
     // answer rather than a second copy of its rule) and where the row card is (`MediaOpenRects`).
 
     /// Put the card where `hero` currently says it is. The only place that talks to the morph.
+    ///
+    /// `applyFlight`, NOT `apply`: the flight moves the presenter's own full-screen container
+    /// (`StoryZoomPresenter`'s flightView) and masks it down to the card. It used to move the same
+    /// inner view the sheet shrinks — for a friend's story that is UIPageViewController's private
+    /// scroll view, and transforming it while UIKit animated it is the build-481 crash. The inner
+    /// card still belongs to the viewers sheet; the flight now has a view of its own.
     private func applyHero() {
-        guard StoryCardMorph.shared.isAvailable else { return }
-        StoryCardMorph.shared.apply(fraction: hero.f,
-                                    targetSize: hero.anchor.size,
-                                    targetCenter: CGPoint(x: hero.anchor.midX, y: hero.anchor.midY),
-                                    cornerRadius: 24,
-                                    centerOverride: hero.center,
-                                    alpha: hero.alpha,
-                                    dim: heroDim(hero.f))
+        guard StoryCardMorph.shared.isFlightAvailable else { return }
+        StoryCardMorph.shared.applyFlight(fraction: hero.f,
+                                          targetSize: hero.anchor.size,
+                                          targetCenter: CGPoint(x: hero.anchor.midX, y: hero.anchor.midY),
+                                          cornerRadius: 24,
+                                          centerOverride: hero.center,
+                                          alpha: hero.alpha,
+                                          dim: heroDim(hero.f))
     }
 
     /// HOW DARK THE CHAT LIST IS WHILE THE STORY IS IN THE AIR. Snapchat's, from his screenshots: the
@@ -1937,7 +1952,12 @@ struct StoryViewer: View {
     /// nowhere to fly: the caller falls back to a plain open/close rather than flying to `.zero`,
     /// which is the top-left corner of the screen and looks like a bug because it is one.
     private func heroEndpoints() -> (rest: CGPoint, anchor: CGRect)? {
-        guard let card = StoryCardMorph.shared.cardWindowRect,
+        // `flightRestRect`, not `cardWindowRect`: the flight transforms the presenter's container,
+        // so its rest geometry must be resolved against THAT view. Same published metrics, same
+        // card strip, a view whose bounds origin is structurally zero. Still nil until
+        // StoryDetailView has laid out and published a height — which is exactly what the open's
+        // ladder waits for.
+        guard let card = StoryCardMorph.shared.flightRestRect,
               let src = onScreenRect(for: heroKeyNow()) else { return nil }
         return (CGPoint(x: card.midX, y: card.midY), src)
     }
@@ -1964,6 +1984,13 @@ struct StoryViewer: View {
     /// already the size of the card it came out of rather than full screen.
     private func stageHeroOpen() {
         guard heroDismiss else { return }
+        guard heroStageOpen else {
+            // A refeed: the screen is already up and at rest, the wall already opaque. Mark the
+            // open spent so the ladder never runs, and show the story where it stands.
+            hero.staged = true
+            StoryCardMorph.shared.revealAfterHeroOpen?()
+            return
+        }
         // WAITING FOR REAL GEOMETRY, NOT JUST FOR A CARD.
         //
         // A card is attached in `viewDidLoad` on one host and in an async pass on the other, and in
@@ -1988,7 +2015,11 @@ struct StoryViewer: View {
             hero.staged = true
             guard let (rest, anchor) = heroEndpoints() else {
                 // Nothing to fly from. Show the story rather than hold it hostage to an animation.
+                // `resetFlight` here is what paints the presenter's wall opaque: it is born
+                // transparent so the tap never blacks the screen out before a flight, and this is
+                // the one arrival at rest that no flight ends.
                 heroFlying = false
+                StoryCardMorph.shared.resetFlight()
                 StoryCardMorph.shared.revealAfterHeroOpen?()
                 return
             }
@@ -2021,7 +2052,9 @@ struct StoryViewer: View {
                 heroFlying = false                          // full screen again: the backing may return
                 NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
                 StoryCardMorph.heroDismissActive = false
-                StoryCardMorph.shared.reset()
+                // `resetFlight`: identity, unmasked, and the presenter's wall opaque again. The
+                // sheet's own `reset` has no business here — the flight never touched its view.
+                StoryCardMorph.shared.resetFlight()
                 StoryCardMorph.shared.restoreAfterHero?()   // the page is opaque black again at rest
                 MediaSourceVisibility.shared.reveal()
             }
@@ -2073,7 +2106,13 @@ struct StoryViewer: View {
                         // take the card away mid-air, which is the failure this binding exists to
                         // prevent, just arriving from a different direction.
                         if hero.live || hero.committing { return }
-                        if beginHeroCloseFromRest() { return }
+                        // WITH THE VIEWERS SHEET ENGAGED THE CARD IS NOT AT REST — it is morphed
+                        // into the sheet's slot, and a "from rest" flight would crop and fly a
+                        // screen that does not look like the card it claims to be (the sheet panel
+                        // rides inside the crop). The one close that arrives this way is the
+                        // sheet's own "Send Message"; it falls through to the plain close instead,
+                        // which the presenter answers with its drift-away.
+                        if !(showViewers && viewersProgress > 0.02), beginHeroCloseFromRest() { return }
                     }
                     isPresented = shown
                 })
@@ -2218,10 +2257,10 @@ struct StoryViewer: View {
             hero.live = false
             heroFlying = false     // back at full screen: the backing may return
             dragDown = 0
-            // Full screen, square, unmasked. `reset` is what puts the card back exactly, rather than
-            // an `apply(fraction: 0)` that leaves a mask covering the whole card for every frame the
-            // story renders from here on.
-            StoryCardMorph.shared.reset()
+            // Full screen, square, unmasked, and the wall behind opaque again. `resetFlight` is
+            // what puts the container back exactly, rather than an `applyFlight(fraction: 0)` that
+            // leaves a mask covering the whole card for every frame the story renders from here on.
+            StoryCardMorph.shared.resetFlight()
             StoryCardMorph.heroDismissActive = false
             StoryCardMorph.shared.restoreAfterHero?()
         }
