@@ -506,6 +506,29 @@ enum VideoTranscoder {
         }
     }
 
+    /// THE CANVAS ALONE, with no clip drawn on it, for the EDITOR to show behind its live preview.
+    ///
+    /// The editor used to wash its card with a blurred, desaturated, darkened copy of the poster,
+    /// which is what the export used to bake too. The export bakes Telegram's gradient now, so the
+    /// two stopped agreeing: he framed a clip against a blur and got back a gradient. This screen's
+    /// whole contract is that what you see is what is posted.
+    ///
+    /// Same sampler, same gradient drawer, same numbers as `storyCanvasPoster` and the export
+    /// composition — deliberately not a second implementation of the same idea, which is how the two
+    /// would agree today and drift the first time either is touched.
+    ///
+    /// A gradient has no detail, so it is rendered small and stretched: nothing about it is sharper
+    /// at card size, and this is called from a layout path.
+    static func storyCanvasBackdrop(_ poster: UIImage) -> UIImage? {
+        guard let cg = poster.cgImage else { return nil }
+        let colours = gradientColours(of: cg)
+        let size = CGSize(width: 36, height: 64)
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            drawGradient(in: ctx.cgContext, size: size, top: colours.top, bottom: colours.bottom)
+        }
+    }
+
     /// The two colours the story canvas is filled with, read off the clip's own first frame.
     ///
     /// TOTAL BY CONSTRUCTION — it always returns a usable pair, because the whole point of this

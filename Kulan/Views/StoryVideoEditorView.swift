@@ -20,6 +20,9 @@ struct StoryVideoEditorView: View {
     @State private var duration: Double = 0
     @State private var thumbnail: UIImage?
     @State private var thumbnailData: Data?
+    /// The gradient the EXPORT will bake, sampled off this clip's own poster. Held rather than
+    /// derived in `canvas` because that runs on every layout pass and this reads pixels.
+    @State private var canvasBackdrop: UIImage?
     @State private var pendingShare: StoryVideoShare?
     @State private var pendingExtras: [StoryExtra] = []
     @State private var loadFailed = false
@@ -192,6 +195,8 @@ struct StoryVideoEditorView: View {
         duration = c.duration
         thumbnail = c.poster
         thumbnailData = c.posterData
+        // Every clip carries its own colours, so switching one brings its own canvas with it.
+        canvasBackdrop = c.poster.flatMap { VideoTranscoder.storyCanvasBackdrop($0) }
         zoom = c.zoom
         baseZoom = max(1, c.zoom)
         selectedID = nil; editingID = nil; isDrawing = false; strokeInFlight = false
@@ -472,13 +477,19 @@ struct StoryVideoEditorView: View {
     /// many, and the cure is to name a piece of it rather than to simplify what it draws.
     @ViewBuilder private func canvas(geo: GeometryProxy, cardTop: CGFloat, cardH: CGFloat) -> some View {
         if cardH > 0 {
-            // Muted wash behind the video — poster frame, same recipe as the photo editor.
-            if let thumbnail {
-                Image(uiImage: thumbnail).resizable().scaledToFill()
+            // ⚠️ THE CANVAS THE EXPORT WILL BAKE, not a blur of the poster.
+            //
+            // This wash used to be a heavily blurred, desaturated, darkened copy of the poster, which
+            // matched what the export baked at the time. The export bakes Telegram's gradient now
+            // (see VideoTranscoder.gradientComposition, his call after four black-bar reports), and
+            // this screen was never changed with it — so he framed a clip against a blur and got a
+            // gradient back. WYSIWYG is the whole contract of this editor.
+            //
+            // Same sampler and same gradient drawer as the export and as the uploading placeholder,
+            // through one function, so they cannot drift apart again.
+            if let canvasBackdrop {
+                Image(uiImage: canvasBackdrop).resizable()
                     .frame(width: geo.size.width, height: cardH)
-                    .blur(radius: 90, opaque: true)
-                    .saturation(0.4)
-                    .overlay(Color.black.opacity(0.4))
                     .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
                     .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
                     .allowsHitTesting(false)
@@ -1161,6 +1172,7 @@ struct StoryVideoEditorView: View {
             let ui = UIImage(cgImage: cg)
             thumbnail = ui
             thumbnailData = ui.jpegData(compressionQuality: 0.72)
+            canvasBackdrop = VideoTranscoder.storyCanvasBackdrop(ui)
         } else {
             loadFailed = true
             return
