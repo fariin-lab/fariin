@@ -477,67 +477,40 @@ public final class StoryCardMorph {
     /// whole file was written for, in the one place the transform does not reach: "swiping between
     /// stories must not replace the background video cover."
     ///
-    /// `drawHierarchy` rather than `layer.render(in:)`, because an AVPlayerLayer's frames are not in
-    /// the layer tree and `render(in:)` comes back with a hole where the video was. StoryPager's
-    /// dismiss backdrop has taken this same picture of this same view since it was written.
+    /// ⚠️ THE PLAYER IS THE ONLY SOURCE, AND THAT IS WHAT KEEPS THE CAPTION OUT.
     ///
-    /// The view's own `transform` is NOT baked in — it belongs to the card's place in its superview,
-    /// not to its contents — so this is the story at full size however far the morph has shrunk it.
+    /// This used to fall back to `card.drawHierarchy` when the player had no frame to give. A card is
+    /// the story AND everything drawn over it — caption, its scrim, the header, the progress bars —
+    /// so that fallback photographed the chrome along with the picture, and the carousel then showed
+    /// a cover with a caption baked into it. His report, twice, with the bottom of the card circled:
+    /// "sometimes appear caption and shadow". SOMETIMES, because the caption's fade is driven by the
+    /// pull's own progress and whether the capture caught its tail depended on how fast he pulled.
+    ///
+    /// Two timing fixes were aimed at this before (move the capture off the pull, then require the
+    /// progress to be UNCHANGED for a beat). Both narrowed the window and neither closed it, because
+    /// a window is the wrong thing to narrow: as long as the picture CAN contain chrome, some timing
+    /// puts chrome in it. A decoded video frame cannot contain chrome at any timing, so there is no
+    /// window left to get wrong.
+    ///
+    /// The cost is nil instead of a screenshot when the player has no frame, and nil already had a
+    /// meaning here — the caller keeps the poster, which is second-zero rather than wrong. That is
+    /// the same answer the old black-picture rejection gave, and this is only ever called for a video
+    /// that is being watched, where `frameSource` is registered and decoding.
     public func snapshotCard(width targetW: CGFloat) -> UIImage? {
-        guard let card, card.bounds.width > 1, card.bounds.height > 1 else { return nil }
-        let rect = contentRect(in: card)
-        guard rect.width > 1, rect.height > 1 else { return nil }
-        // ASK THE PLAYER FIRST. For a video this is the only answer that cannot come back black, and
-        // the black-picture rejection below exists precisely because the fallback sometimes does.
-        // A photo has no frame source, so it goes straight past this to the screen capture, which is
-        // reliable for everything that is not a video layer.
-        if let frame = frameSource?.currentVideoFrame() { return frame }
-        // Rendered at the size it will be DRAWN at, not the size it is on screen. These are kept for
-        // the length of a viewing session and a full-screen bitmap is several megabytes each.
+        guard card != nil, let frame = frameSource?.currentVideoFrame() else { return nil }
+        // Down to the size it will be DRAWN at. A decoded frame is the clip's full resolution, and
+        // these are held for the length of a viewing session — one per video story — so keeping
+        // 1080x1920 bitmaps around to draw them a third of that wide is megabytes for nothing. The
+        // old screen-capture path sized itself the same way and this keeps that.
+        guard targetW > 1, frame.size.width > targetW else { return frame }
+        let h = frame.size.height * (targetW / frame.size.width)
         let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = UIScreen.main.scale * max(0.1, min(1, targetW / rect.width))
+        fmt.scale = UIScreen.main.scale
         fmt.opaque = true
-        let shot = UIGraphicsImageRenderer(size: rect.size, format: fmt).image { _ in
-            // Shifted so `rect` lands at the origin: the card is a page-wide strip and only the
-            // story part of it is wanted.
-            card.drawHierarchy(in: CGRect(x: -rect.minX, y: -rect.minY,
-                                          width: card.bounds.width, height: card.bounds.height),
-                               afterScreenUpdates: false)
+        let size = CGSize(width: targetW, height: h)
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            frame.draw(in: CGRect(origin: .zero, size: size))
         }
-        // ⚠️ A BLACK PICTURE IS A FAILED PICTURE, AND IT MUST NOT BE KEPT.
-        //
-        // `drawHierarchy` does not reliably capture an AVPlayerLayer. Sometimes it does and
-        // sometimes it hands back a black rectangle, and the caller had no way to tell — so a
-        // failed capture was cached as though it were the frame he had been watching, and every
-        // carousel card for that video went black for the rest of the session. His report, and only
-        // ever on videos, because videos are the only thing this is taken for.
-        //
-        // Rejecting it costs nothing: the caller falls back to the poster, which is the behaviour
-        // that existed before any of this and is merely second-zero rather than broken.
-        return isBlank(shot) ? nil : shot
-    }
-
-    /// Nine points across the image; if every one of them is essentially black, the capture failed.
-    /// A real story frame that is uniformly black at all nine is possible and would simply keep its
-    /// poster, which is the safe way round to be wrong.
-    private func isBlank(_ image: UIImage) -> Bool {
-        guard let cg = image.cgImage else { return true }
-        let w = cg.width, h = cg.height
-        guard w > 2, h > 2 else { return true }
-        var pixel = [UInt8](repeating: 0, count: 4)
-        let space = CGColorSpaceCreateDeviceRGB()
-        for fx in [0.15, 0.5, 0.85] {
-            for fy in [0.15, 0.5, 0.85] {
-                guard let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8,
-                                          bytesPerRow: 4, space: space,
-                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-                else { return true }
-                ctx.translateBy(x: -CGFloat(w) * fx, y: -CGFloat(h) * (1 - fy))
-                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-                if Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2]) > 24 { return false }
-            }
-        }
-        return true
     }
 
     /// Step the live card aside while the carousel row is being swiped.
