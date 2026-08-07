@@ -74,13 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE REAL SHARED-ELEMENT TRANSITION, built from your two frame-grabs against Snapchat.
+            THE PICTURE THAT FLIES WAS BLANK, AND NOW IT IS NOT. That is why the preview only ever changed after the card had landed: the app was photographing an empty frame instead of the card, so there was nothing to cross-fade with and the real card had to snap in at the very end. It photographs the card itself now.
 
-            OPEN: the app photographs the exact card you tap, and that photo is what flies - solid from the first pixel, never a transparent ghost. It dissolves into the live story while it grows, and the open now glides gently into full screen instead of stopping short.
+            THE EXCHANGE HAPPENS ON THE WAY HOME, not under your finger. Three clean phases: while you drag, the story you were watching stays exactly as it is, nothing swaps. The moment you let go, the flying card cross-fades into the row picture, avatar ring and border and all, over the snap. It is finished at four-fifths of the way down, so the last stretch is already wearing the row card and the hand-over at the end swaps two identical pictures.
 
-            THE SLOT WAITS EMPTY, like Snapchat: the card you tapped leaves a hole in the row for as long as the story is open.
+            THE TOP AND BOTTOM STOPPED POPPING IN. The black above and below the card, the reply bar and the footers now fade with the card's own travel instead of switching on when it stops.
 
-            CLOSE: the card puts the row picture back on as it flies home and lands into the empty hole, fitting it pixel for pixel. No pop, no blink, nothing landing on top of an already-filled card. (Closing after swiping to another person melts into their card instead - their slot never emptied.)
+            VIEW ONCE ACTUALLY ENDS NOW. The server piece that was meant to drop you from a one-time story after you finished it did not exist, so those stories stayed in the tray and could be reopened. Fixed on the phone in this build; the server half goes up separately.
 
-            WHAT TO CHECK, slow motion welcome: tap a card - dip, solid lift, picture dissolves to the story, background glides. While a story is open, peek at the row during a half drag: the tapped slot must be an empty hole. Full close: the card must land into that hole wearing the row picture, and the real card must take over with no visible change.
+            POSTING THREE PICTURES SHOWS THREE. Each post in the air gets its own card with its own progress, so you can page between them instead of seeing one upload repeated.
+
+            ALSO: the audience line (My Friends, Everyone, a custom list) is yours alone now and nobody else sees it, and a story posted to a custom list no longer says My Friends while it uploads. Video captions sit inside the picture like photo captions do. The CAMERA / TEXT switch is real glass that melts from word to word. Can't Call now speaks straight away when you press call on a profile.
+
+            WHAT TO CHECK, slow motion welcome: pull a story down slowly and hold. Nothing at all should change while your finger is down. Let go, and watch the picture become the row card during the flight. When it lands there must be zero change: no jump, no flash, no avatar appearing late. Then post one story to a custom list and watch what the uploading card says, and finish a view-once story and try to open it again.
         run: fastlane beta
