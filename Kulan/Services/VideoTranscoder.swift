@@ -207,20 +207,40 @@ enum VideoTranscoder {
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
         try? FileManager.default.removeItem(at: out)
-        return await finish(data: data, asset: asset, duration: duration)
+        // `backdropAspect` is non-nil exactly when the gradient canvas was baked into this export, so
+        // it is also exactly when the poster has to be composed onto the same canvas. The passthrough
+        // call above never passes it, and cannot: a clip needing the canvas is never eligible for it.
+        return await finish(data: data, asset: asset, duration: duration, canvasAspect: backdropAspect)
     }
 
     /// The half both paths share: the poster frame. Taken just after the start, because frame 0 is
     /// very often black, and rotation-corrected so a portrait clip does not land sideways.
-    private static func finish(data: Data, asset: AVAsset, duration: Double) async -> Prepared? {
+    /// ⚠️ `canvasAspect` NON-NIL MEANS THE EXPORT WEARS THE STORY CANVAS, AND SO MUST THE POSTER.
+    ///
+    /// The poster is generated from the SOURCE asset, which is right for every other use and wrong
+    /// for a story that just had a gradient baked into it: the video would carry the gradient and
+    /// its own thumbnail would not. His 2026-08-07 report, with two screenshots of the same story
+    /// seconds apart — one card showing the gradient, one showing black — because the carousel draws
+    /// a photograph of the LIVE card for some cards and `previewUrl` for others, and those two had
+    /// stopped being the same picture.
+    ///
+    /// Everything that renders `previewUrl` is affected: row cards, chat rings, reply thumbnails,
+    /// the carousel. So the poster is composed onto the same canvas by the same function the
+    /// placeholder uses, and the three pictures agree by construction.
+    private static func finish(data: Data, asset: AVAsset, duration: Double,
+                               canvasAspect: CGFloat? = nil) async -> Prepared? {
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)
         let t = CMTime(seconds: min(0.1, duration / 2), preferredTimescale: 600)
-        guard let cg = try? await gen.image(at: t).image,
-              let thumb = UIImage(cgImage: cg).jpegData(compressionQuality: 0.72) else { return nil }
+        guard let cg = try? await gen.image(at: t).image else { return nil }
+        var poster = UIImage(cgImage: cg)
+        if let canvasAspect { poster = storyCanvasPoster(poster, aspect: canvasAspect) }
+        guard let thumb = poster.jpegData(compressionQuality: 0.72) else { return nil }
+        // The reported size is the POSTER's, because that is what the bubble and the card shape
+        // themselves against — and once it is on the canvas, the canvas is its shape.
         return Prepared(data: data, thumbnail: thumb, duration: duration,
-                        width: Double(cg.width), height: Double(cg.height))
+                        width: Double(poster.size.width), height: Double(poster.size.height))
     }
 
     /// COPY INSTEAD OF RE-ENCODE, when the clip already obeys every rule we would have imposed.
