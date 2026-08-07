@@ -1976,10 +1976,11 @@ struct StoryViewer: View {
     /// Run the single scalar from 0 to 1, interpolating every value in `hero` between the two ends
     /// stored on it. `velocity` is the finger's, in progress units per second, so a flick carries
     /// its own speed into the spring instead of restarting from rest.
-    /// `alphaCurve` reshapes TIME for the alpha alone (geometry stays on the spring's own t). The
-    /// landing hands `t³` so its fade is tail-heavy: the card stays solid while it travels and
-    /// melts only as it arrives — a whole-journey linear fade was the see-through flying card he
-    /// reported on an earlier build.
+    /// `alphaCurve` reshapes TIME for the alpha alone (geometry stays on the spring's own t). Both
+    /// crossfades use it: the landing hands `t³` (tail-heavy — solid while it travels, melting only
+    /// as it arrives) and the open hands its mirror `1-(1-t)³` (head-heavy — in within the first
+    /// third of the lift). A whole-journey linear fade is the one shape neither may use: that was
+    /// the see-through flying card he reported on an earlier build.
     private func runHero(to endF: CGFloat, center endC: CGPoint, alpha endA: CGFloat,
                          velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
                          done: @escaping () -> Void) {
@@ -2044,7 +2045,16 @@ struct StoryViewer: View {
             hero.anchor = anchor
             hero.f = 1
             hero.center = CGPoint(x: anchor.midX, y: anchor.midY)
-            hero.alpha = 1
+            // BORN INVISIBLE, EXACTLY OVER THE ROW CARD. The viewer does not necessarily open on
+            // the story the row card is showing: the card previews the NEWEST story, the viewer
+            // opens where the resume rule says (his example: the card shows B, the viewer opens on
+            // unseen A). Seating the card at full alpha swapped B for A in one frame at lift-off —
+            // his report, with the required feel spelled out: "it should look like Story B is
+            // smoothly transitioning into Story A". So the open is a crossfade too, the mirror of
+            // the landing: the flying card fades IN over the still-visible row card during the
+            // first stretch of the growth, and whatever it contains dissolves out of the picture
+            // the row was showing.
+            hero.alpha = 0
             // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
@@ -2059,11 +2069,15 @@ struct StoryViewer: View {
             // list while the card is still growing out of the row.
             NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
             applyHero()
-            // Hide the card underneath before revealing the one on top of it, or the same picture
-            // is on screen twice for the length of the flight.
-            MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, heroKeyNow()))
+            // The row card is NOT hidden any more, on either end of the flight. The open needs it
+            // as the crossfade's bottom layer (see `hero.alpha` above), and the close lands on it
+            // the same way. "The same picture twice" cannot happen: at the seat the flying card is
+            // fully transparent, and by the time it is opaque it has left the slot.
             StoryCardMorph.shared.revealAfterHeroOpen?()
-            runHero(to: 0, center: rest, alpha: 1, velocity: 0) {
+            // Head-heavy alpha: mostly in within the first third of the growth, so the dissolve
+            // reads as part of the lift instead of a slow ghost riding the whole flight.
+            runHero(to: 0, center: rest, alpha: 1, velocity: 0,
+                    alphaCurve: { let u = 1 - $0; return 1 - u * u * u }) {
                 hero.live = false
                 heroFlying = false                          // full screen again: the backing may return
                 NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
