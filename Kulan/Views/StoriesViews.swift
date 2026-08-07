@@ -760,8 +760,13 @@ private struct StoryCardDipStyle: ButtonStyle {
 
 /// The beat between the tap and the open: long enough for the dip to be seen, short enough to
 /// read as response rather than lag.
+///
+/// 0.1 → 0.06 on his "when i click story opening add slightly speed" (2026-08-07). This beat is
+/// dead time — nothing moves except the 0.92 press, which the ButtonStyle is already animating on
+/// its own spring and goes on animating underneath the open. Four hundredths is the cheapest speed
+/// in the whole gesture, because it costs no motion at all, only waiting.
 private func afterStoryDip(_ open: @escaping () -> Void) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: open)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: open)
 }
 
 // One friend's story card in the row. Its own Equatable view so the long-press context menu stays
@@ -2238,12 +2243,18 @@ struct StoryViewer: View {
             StoryCardMorph.shared.revealAfterHeroOpen?()
             // THE OPEN'S OWN SPRING — softer than the close's, on his Snapchat frame-scrub
             // (2026-08-07): what reads as "smoother" there is not the total time, it is the long
-            // gentle glide into full screen, where Signal's 631 arrives and stops. 450 with a finer
-            // settle keeps the lift-off just as immediate (80% of the travel still lands inside
-            // ~0.15s) and spends the difference on the landing: ~0.45s of visible motion.
+            // gentle glide into full screen, where Signal's 631 arrives and stops. Still softer than
+            // the close, so the glide he asked for is intact.
             //
+            // TIGHTENED ON HIS WORD, 2026-08-07 ("when i click story opening add slightly speed"):
+            // 450 → 530 and the settle 0.0008 → 0.0015. The stiffness is the smaller half of it —
+            // spring time goes as 1/√k, so that alone is only about 8%. The epsilon is where the
+            // waiting actually was: it is the distance from target at which the run is allowed to
+            // stop, and at 0.0008 of a 0…1 fraction the last stretch is sub-pixel motion nobody can
+            // see but everybody can feel. 0.0015 is still well under a pixel at this card's size.
+            // Read with the dip beat in `afterStoryDip`, trimmed in the same breath.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
-                    stiffness: 450, settle: 0.0008,
+                    stiffness: 530, settle: 0.0015,
                     cover: heroCoverOut, crop: heroCoverOut) {
                 hero.live = false
                 hero.cover = false

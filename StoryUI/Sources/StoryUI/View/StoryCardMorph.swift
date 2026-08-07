@@ -107,12 +107,18 @@ public final class StoryCardMorph {
     private var cardTop: CGFloat = 0
     private var cardHeight: CGFloat = 0
 
-    public func setCardMetrics(top: CGFloat, height: CGFloat) {
+    /// The full-screen story card's OWN corner radius, published by `StoryDetailView`. The flight's
+    /// mask interpolates to this at the full-screen end rather than to a square corner — see
+    /// `applyCore`.
+    private var cardCornerRadius: CGFloat = 0
+
+    public func setCardMetrics(top: CGFloat, height: CGFloat, radius: CGFloat = 0) {
         // Ignore a card that has not been laid out yet rather than storing a degenerate one and
         // dividing by it on the next frame of a drag.
         guard height > 1 else { return }
         cardTop = max(0, top)
         cardHeight = height
+        cardCornerRadius = max(0, radius)
     }
 
     /// TRUE while the host's own hero open/close owns this card.
@@ -406,16 +412,27 @@ public final class StoryCardMorph {
         // cover IS the row card, pixel for pixel, and the hand-over at either end cannot pop.
         // Alpha is not touched here — the flight's own fraction owns it.
         if !sheet { flightCover?.frame = cropRect }
-        // THE RADIUS ARRIVES WITH THE GESTURE, NOT WITH THE JOURNEY. It used to be `cornerRadius * f`,
-        // which on a drag means square corners for the first inch: the thing under the finger read as
-        // a rectangle of screen rather than a card being lifted out. His spec asks for a fixed radius
-        // "as soon as the interactive drag gesture starts". Ramped over the first twelfth rather than
-        // switched on, so it cannot pop, and still resolved to 0 at f = 0 — which is what keeps the
-        // END of an open square-cornered against the phone's own bezel instead of snapping there.
+        // THE RADIUS RUNS BETWEEN TWO REAL CARDS AND NEVER REACHES ZERO.
+        //
+        // It used to be `cornerRadius * f`, which means square corners whenever the card is anywhere
+        // near full screen — his 2026-08-07 screenshot of an opening story with all four corners
+        // circled, "when i click story to open, plz give small rounded corners". It also read as a
+        // rectangle of screen rather than a card for the first inch of a drag, which is the other
+        // half of the same number.
+        //
+        // Both ends are now the radius of the thing actually being matched: `cornerRadius` at the row
+        // (the row card's 24) and `cardCornerRadius` at full screen (StoryDetailView's own 12, which
+        // it publishes). So the corner is rounded at every moment of the journey, and at BOTH ends
+        // the hand-over is exact — at the row the mask agrees with the row card, and at full screen
+        // it agrees with the card's own `.clipShape`, so `resetFlight` taking the mask away changes
+        // nothing. Ramped over the first twelfth so the drag reaches the full 24 almost at once,
+        // which is the "fixed 20-24pt as soon as the drag starts" his earlier spec asked for.
         // Divided by `scale` because the transform will multiply it back.
-        let radiusRamp = min(1, f / 0.12)
+        // The SHEET keeps its own `cornerRadius * f` exactly as it was: it is a different journey
+        // (full screen into the viewers panel) and nobody has reported anything about it.
+        let flightRadius = cardCornerRadius + (cornerRadius - cardCornerRadius) * min(1, f / 0.12)
         applyMask(on: card, sheet: sheet, rect: cropRect,
-                  cornerRadius: cornerRadius * (sheet ? f : radiusRamp) / scale,
+                  cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   outside: sheet ? 0 : chrome)
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
         if abs(card.alpha - alpha) > 0.001 { card.alpha = alpha }

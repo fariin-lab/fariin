@@ -235,7 +235,12 @@ struct StoryDetailView: View {
     private func publishCardRect(proxy: GeometryProxy, footerH: CGFloat) {
         StoryCardMorph.shared.setCardMetrics(
             top: winInsets.top,
-            height: cardHeight(width: proxy.size.width, containerH: proxy.size.height, footerH: footerH))
+            height: cardHeight(width: proxy.size.width, containerH: proxy.size.height, footerH: footerH),
+            // The flight's mask lands ON this number at the full-screen end instead of running down
+            // to a square corner, so the moment the mask is taken away and this card's own
+            // `.clipShape` takes over, the corner does not change. Published from here because this
+            // is the one place that knows it.
+            radius: cardRadius)
     }
 
     var body: some View {
