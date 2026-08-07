@@ -480,9 +480,6 @@ struct StoriesRow: View {
                                     seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt),
                                     cardW: cardW,
                                     onOpen: { onOpen(g) },
-                                    onMessage: { onMessage(g) },
-                                    onProfile: { onProfile(g) },
-                                    onHide: { hideTarget = g },
                                     storyNS: storyNS,
                                     groupID: g.id)
                         .equatable()
@@ -491,6 +488,11 @@ struct StoriesRow: View {
             }
             .padding(.horizontal, storyHPad)
             .padding(.vertical, 10)
+            // THE ROW'S LONG PRESS LIVES HERE NOW, once, in UIKit — see `StoryRowLongPress` for
+            // why it is one recogniser on the scroll view rather than something per card. Inside
+            // the scrolling content on purpose: that is what puts its view under the scroll view
+            // it needs to attach to.
+            .background { StoryRowLongPress { p in menuTarget(at: p) } }
             // Smoothly slide cards to their new spots when a story moves unviewed -> viewed-front (no reload).
             // Keyed on what is DRAWN, not on the live sort: while a viewer holds the order still there is
             // nothing to animate, and the re-sort plays once — after the story has gone.
@@ -529,6 +531,36 @@ struct StoriesRow: View {
         .task { await repo.load() }
     }
 
+    /// WHICH CARD IS UNDER THE FINGER, and what its menu says. Asked at press time by
+    /// `StoryRowLongPress`, so it describes the row as it stands rather than as it stood at layout.
+    ///
+    /// The rectangles come from the same registry the story flight flies to, which means the lift
+    /// and the flight can never disagree about where a card is — one answer, one source.
+    private func menuTarget(at p: CGPoint) -> StoryMenuTarget? {
+        func hit(_ id: String) -> CGRect? {
+            guard !id.isEmpty,
+                  let r = MediaOpenRects.liveRect(MediaOpenRects.key(.storyRow, id)),
+                  r.contains(p) else { return nil }
+            return r
+        }
+        // My own card first: it is drawn first and nothing overlaps it.
+        if let m = repo.mine, !m.stories.isEmpty, let r = hit(m.id) {
+            return StoryMenuTarget(key: MediaOpenRects.key(.storyRow, m.id), rect: r, actions: [
+                CMAction(title: "Add Story", icon: "ic_stories") { onCompose() },
+                CMAction(title: "Posted Stories", icon: "circle.dashed") { onOpen(m) },
+            ])
+        }
+        for g in displayedOthers {
+            guard let r = hit(g.id) else { continue }
+            return StoryMenuTarget(key: MediaOpenRects.key(.storyRow, g.id), rect: r, actions: [
+                CMAction(title: "Send Message", icon: "message") { onMessage(g) },
+                CMAction(title: "Open Profile", icon: "person.crop.circle") { onProfile(g) },
+                CMAction(title: "Hide Stories", icon: "archivebox", destructive: true) { hideTarget = g },
+            ])
+        }
+        return nil
+    }
+
     @ViewBuilder private var myCard: some View {
         // ZStack + crossfade so the "Uploading…" placeholder morphs straight into the final card in the
         // same frame (no jump). The reload happens before `uploading` flips, so there's no stale image.
@@ -551,19 +583,9 @@ struct StoriesRow: View {
                      heroKey: repo.mine?.id, onBadge: onCompose) {
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
                 }
-                // NATIVE context menu (build 181 look): My Story menu, lifting just the rounded card.
-                .contextMenu {
-                    Button { onCompose() } label: {
-                        Label { Text("Add Story") } icon: { MenuIcon("ic_stories") }
-                    }
-                    Button { if let m = repo.mine, !m.stories.isEmpty { onOpen(m) } }
-                        label: { Label("Posted Stories", systemImage: "circle.dashed") }
-                } preview: {
-                    coverImage(repo.mine?.stories.last?.previewUrl ?? mePhoto, name: "My Story",
-                               avatarName: meName, avatar: mePhoto)
-                        .frame(width: cardW, height: cardH)
-                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                }
+                // The menu is the ROW's now, in UIKit, lifting this card's own pixels — see
+                // `menuTarget(at:)` and `StoryRowLongPress`. The `.contextMenu` that used to sit
+                // here rebuilt the card from scratch to lift it.
                 .matchedTransitionSource(id: repo.mine?.id ?? "my-story", in: storyNS)   // hero grow source
                 .transition(.opacity)
             }
@@ -784,9 +806,9 @@ private struct StoryFriendCard: View, Equatable {
     let seen: [Bool]
     let cardW: CGFloat
     let onOpen: () -> Void
-    let onMessage: () -> Void
-    let onProfile: () -> Void
-    let onHide: () -> Void
+    // `onMessage` / `onProfile` / `onHide` used to hang off this card's own `.contextMenu`. The row
+    // owns one UIKit press for every card now (`StoryRowLongPress`), and it builds each menu from
+    // the group it hit, so the card carries only its tap.
     let storyNS: Namespace.ID    // hero zoom: card ⇄ viewer
     let groupID: String          // matches the viewer's zoom sourceID
 
@@ -826,43 +848,12 @@ private struct StoryFriendCard: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(StoryCardDipStyle())
-        // NATIVE iOS context menu (build 181 look). Each card owns its menu built from its OWN
-        // props, and the explicit `preview:` lifts just the rounded photo. The row is OUTSIDE the
-        // chat List now (which was what collapsed per-card menus into one), so per-card native menus
-        // work; the stable `.id(authorUid)` at the call site keeps each menu bound to its person.
-        .contextMenu {
-            Button { onMessage() } label: { Label("Send Message", systemImage: "message") }
-            Button { onProfile() } label: { Label("Open Profile", systemImage: "person.crop.circle") }
-            Button(role: .destructive) { onHide() } label: { Label("Hide Stories", systemImage: "archivebox") }
-        } preview: {
-            // Lift the card AS IT LOOKS — avatar ring included. A bare photo made the small
-            // circle visibly vanish during the lift (user report).
-            ZStack(alignment: .bottomLeading) {
-                coverView
-                    .frame(width: cardW, height: cardH)
-                // WHOSE STORY THIS IS. The lift showed a photo and a ring and no name, so a long
-                // press on the chat list told you less than the card you were pressing — the name
-                // sits under the card normally, and the preview leaves the card behind. The archived
-                // row's lift names the person and that is the one he wants.
-                //
-                // Over the picture rather than under it, because a preview is the card itself
-                // enlarged and must not grow a caption the card never had. Scrim so a bright cover
-                // cannot swallow the text.
-                HStack(spacing: 8) {
-                    AvatarView(name: name, photoUrl: avatar, size: 32)
-                        .overlay { if !seen.isEmpty { StoryRingView(seen: seen).frame(width: 37, height: 37) } }
-                        .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
-                    Text(name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
-                }
-                .padding(8)
-            }
-            .frame(width: cardW, height: cardH)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        }
+        // NO `.contextMenu` HERE ANY MORE. It did not lift this card, it built a SECOND one from a
+        // `preview:` closure — a copy whose picture started loading again and whose avatar sat
+        // somewhere else, kept in step with the real card by hand. The row owns one UIKit press
+        // now and lifts the card's own pixels; see `StoryRowLongPress` and `menuTarget(at:)`.
+        // Hide Stories is built by the row from the group it hit, so it lands on the same
+        // confirmation alert it always did.
         // "story-" prefix so the top card's source id is NOT the raw group id (which is ALSO the
         // story viewer's destination identity). Without the prefix, SwiftUI's zoom auto-matched the
         // destination to this card even when it was scrolled off-screen, overriding the explicit

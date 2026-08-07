@@ -60,21 +60,10 @@ enum StoryZoomPresenter {
         // swapped for the live story in one frame at both ends. Cropping the window at the card's
         // rectangle takes the pixels that are actually on screen — the photo AND the avatar ring
         // drawn over it — which is what the row card is.
-        if let source, let window = source.window {
-            let r = source.convert(source.bounds, to: window)
-            if r.width > 1, r.height > 1, r.maxX > 0, r.maxY > 0 {
-                let shot = UIGraphicsImageRenderer(size: r.size).image { _ in
-                    // Shifted so the card lands at the origin. `afterScreenUpdates: false`: the last
-                    // rendered frame is exactly what the eye is looking at, and a flush here would
-                    // cost the tap a frame.
-                    window.drawHierarchy(in: CGRect(x: -r.minX, y: -r.minY,
-                                                    width: window.bounds.width,
-                                                    height: window.bounds.height),
-                                         afterScreenUpdates: false)
-                }
-                vc.setCoverImage(shot)
-            }
-        }
+        // ONE copy of that crop, in `StoryCardShot` — the row's long-press lift needs exactly the
+        // same picture of exactly the same card, and two functions that have to agree pixel for
+        // pixel is the mistake this area keeps writing down.
+        if let source, let shot = StoryCardShot.crop(source) { vc.setCoverImage(shot) }
         vc.setContent(AnyView(content))
         container = vc
         // animated:false is the whole design: the card flying out of the row IS the open animation

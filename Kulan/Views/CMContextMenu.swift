@@ -252,9 +252,21 @@ final class CMOverlay: UIView {
 
     // MARK: Dismiss
 
+    /// Fired the instant a dismissal STARTS, before the return spring — for a caller whose source
+    /// cannot be un-hidden synchronously.
+    ///
+    /// The chat unhides its real bubble in `onDismissed`, and that is exactly right there: it is a
+    /// `UIView.isHidden` write in the same runloop as `removeFromSuperview`, so the two land in one
+    /// transaction and nothing can blink between them. A SwiftUI source cannot do that — its reveal
+    /// is a published change that paints on the NEXT pass, which would leave one frame with the
+    /// lift already gone and the card not yet back. Revealing as the return spring begins costs
+    /// nothing, because the preview is on its way to that exact rectangle.
+    var onWillDismiss: (() -> Void)?
+
     func dismiss(animated: Bool, then: (() -> Void)? = nil) {
         guard !dismissing else { return }
         dismissing = true
+        onWillDismiss?()
         guard animated else {
             removeFromSuperview()
             onDismissed(); then?()
