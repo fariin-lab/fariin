@@ -136,7 +136,9 @@ struct StoryVideoEditorView: View {
     /// the caption rides along, and the new picture lands at the end, selected. Nothing here is
     /// mutated — if the composer is X-closed without posting, this screen is still exactly as it
     /// was, clips intact, under the picker.
-    @MainActor private func beginHandOff(adding ui: UIImage) {
+    /// Takes a LIST, because the + button is multi-pick here now too (his 2026-08-07 report: the
+    /// picker offers ticking after a photo but not after a video). One image is a list of one.
+    @MainActor private func beginHandOff(adding images: [UIImage]) {
         stashCurrent()
         player.pause(); playing = false
         var seed: [StoryEditorView.DraftItem] = clips.map { c in
@@ -163,7 +165,7 @@ struct StoryVideoEditorView: View {
             d.zoom = zoom
             seed.append(d)
         }
-        seed.append(StoryEditorView.DraftItem(image: ui))
+        for ui in images { seed.append(StoryEditorView.DraftItem(image: ui)) }
         handOff = HandOffPost(items: seed, caption: caption)
     }
 
@@ -350,7 +352,7 @@ struct StoryVideoEditorView: View {
         // clip's trim, mute, drawing and text, plus the caption, plus the new picture.
         .sheet(isPresented: $showAddPicker) {
             StoryLibraryPicker(
-                onImage: { ui in beginHandOff(adding: ui) },
+                onImage: { ui in beginHandOff(adding: [ui]) },
                 // A VIDEO pick closes the picker and lands back HERE with the new clip selected
                 // and playing (owner 2026-08-05: "the app should return directly to the Story
                 // Editor... not back to the Photo Picker"). It used to stay open — picking an
@@ -358,6 +360,29 @@ struct StoryVideoEditorView: View {
                 onVideo: { url in
                     showAddPicker = false
                     Task { await appendClip(url) }
+                },
+                // TICKING WORKS HERE TOO NOW. His report: after a photo the + offers multi-select,
+                // after a video it does not. That was mine — I turned it on for the photo editor
+                // only, because a MIXED batch has to change editors half way and I would not
+                // half-build that.
+                //
+                // This is the whole of it: clips are appended first, in tap order, and stay in this
+                // editor. If the batch also holds pictures, the hand-off to the photo editor then
+                // runs ONCE with every clip and every picture in it, rather than once per item —
+                // which would have rebuilt the editor n times and kept only the last.
+                allowsMultiple: true,
+                onBatch: { picks in
+                    showAddPicker = false
+                    Task {
+                        var images: [UIImage] = []
+                        for p in picks {
+                            switch p {
+                            case .video(let url): await appendClip(url)
+                            case .image(let ui): images.append(ui)
+                            }
+                        }
+                        if !images.isEmpty { await MainActor.run { beginHandOff(adding: images) } }
+                    }
                 })
             .fullScreenCover(item: $handOff) { post in
                 StoryEditorView(source: post.items.first?.image ?? UIImage(),
