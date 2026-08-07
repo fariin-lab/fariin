@@ -293,11 +293,21 @@ struct StoryLibraryPicker: View {
                 Button {
                     addPicked()
                 } label: {
+                    // ⚠️ WHITE ON WHITE, AND THIS IS WHY. The app is monochrome: `KulanApp` sets
+                    // `.tint(.primary)` so there is no system blue anywhere, which makes
+                    // `Color.accentColor` here exactly `Color.primary`. This sheet is forced DARK
+                    // (`DarkPresentation`), and `.primary` in the dark is white — so the pill was a
+                    // white capsule carrying white text. His screenshot: a blank white lozenge with
+                    // three items waiting in the tray and no way to see what the button says.
+                    //
+                    // A filled pill in a monochrome app takes the BACKGROUND colour as its label,
+                    // never a hardcoded white. That is what every other filled control in the app
+                    // does, and it stays legible whichever way the sheet is themed.
                     Text("Add \(picked.count)")
                         .font(.callout.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(.systemBackground))
                         .padding(.horizontal, 18).padding(.vertical, 10)
-                        .background(Color.accentColor, in: Capsule())
+                        .background(Color.primary, in: Capsule())
                 }
                 .disabled(resolving)
             }
@@ -411,9 +421,16 @@ struct StoryLibraryPicker: View {
                     let n = picked.firstIndex(where: { $0.localIdentifier == asset.localIdentifier })
                     ZStack {
                         Circle()
-                            .fill(n == nil ? Color.black.opacity(0.25) : Color.accentColor)
+                        // Same trap as the Add pill below: `accentColor` is `.primary` in this app,
+                        // and `.primary` in this dark sheet is white — so a ticked circle was a
+                        // white disc with a white number on it, unreadable exactly when it has
+                        // something to say. Filled with the tint, numbered in the background colour.
+                            .fill(n == nil ? Color.black.opacity(0.25) : Color.primary)
                             .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 1.5))
-                        if let n { Text("\(n + 1)").font(.caption2.weight(.bold)).foregroundStyle(.white) }
+                        if let n {
+                            Text("\(n + 1)").font(.caption2.weight(.bold))
+                                .foregroundStyle(Color(.systemBackground))
+                        }
                     }
                     .frame(width: 22, height: 22)
                     .padding(5)

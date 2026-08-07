@@ -1174,6 +1174,19 @@ struct StoryViewer: View {
         /// away at once when this is set, instead of fading over the first 18% of the journey. False
         /// for an open and cleared by a cancel, both of which are arrivals and keep the fade.
         var exiting = false
+        /// HOW MUCH OF THE DIM'S FLOOR IS IN EFFECT, 0…1.
+        ///
+        /// The backdrop has a floor now (`heroDimFloor`) so it cannot wash out to nothing under a
+        /// long pull — his Snapchat note, and the reason ours read lighter than Telegram's. But a
+        /// floor that is simply clamped on would still be painted at the two moments the dim MUST be
+        /// zero: the first frame of an open, when the card is sitting on the row and nothing should
+        /// be darkened yet, and the last frame of a landing, when the screen is removed and a wall
+        /// still 36% black is the grey flash this file has warned about since it was written.
+        ///
+        /// So it is MIXED rather than clamped, and a flight owns the mix: the open fades it in as
+        /// the story grows, a committed close fades it out as the card lands, and a drag holds it at
+        /// 1. Every crossing is continuous, so there is no frame where the backdrop steps.
+        var dimFloor: CGFloat = 0
         /// What the world was last told about the chrome outside the card (`storyFlightActive`).
         /// Tracked here rather than read back off `heroFlying` so the notification is posted exactly
         /// once per crossing, from the one place that knows the fraction.
@@ -1234,7 +1247,30 @@ struct StoryViewer: View {
     // background giving way is `heroDimMax`'s job; the picture stays opaque.)
     /// The darkest the chat list gets under a story in flight. Judged against his Snapchat shots,
     /// where the list behind is dimmed well past half but never to black — you can still read it.
-    private static let heroDimMax: CGFloat = 0.45
+    /// THE DARKEST THE LIST GETS ONCE A PULL IS PROPERLY UNDER WAY.
+    ///
+    /// Set from his 2026-08-07 comparison, with Telegram's own source read for the other end of the
+    /// range. Telegram paints a solid black layer at
+    /// `max(0.5, 1.0*(1 - dismissFraction) + 0.2*dismissFraction)` — 1.0 at rest, and floored so it
+    /// never gets lighter than half while your finger is down. Ours peaked at 0.45 and then decayed
+    /// all the way to zero, so our CEILING was below their FLOOR and the gap widened the further he
+    /// pulled: at half way we were 0.27 against their 0.60.
+    ///
+    /// His call: Telegram too dark, ours too light, aim between them and nearer Snapchat. So 0.58
+    /// here and a 0.36 floor — the list stays clearly readable, which is the Snapchat look this file
+    /// has been judged against from the start, and it never washes out.
+    ///
+    ///        drag     ours (was)   now    Telegram
+    ///          0%        1.00      1.00     1.00
+    ///         25%        0.40      0.55     0.80
+    ///         50%        0.27      0.48     0.60
+    ///         75%        0.13      0.42     0.50
+    ///        100%        0.00      0.36     0.50
+    private static let heroDimMax: CGFloat = 0.58
+    /// The lightest the backdrop is allowed to get while the finger is down. Mixed in through
+    /// `hero.dimFloor` rather than clamped, so a flight can still take the dim to a true zero at
+    /// either end — see that property for why clamping it would be the grey flash.
+    private static let heroDimFloor: CGFloat = 0.36
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var currentIsMine: Bool { groups.first { $0.authorUid == currentBucketUid }?.isMine ?? false }
@@ -2295,10 +2331,17 @@ struct StoryViewer: View {
         if f < Self.heroDimSolid {
             return 1 - (1 - Self.heroDimMax) * (f / Self.heroDimSolid)
         }
-        // Everything else: straight down to nothing, proportional to how far the card has travelled.
+        // Everything else: down towards the FLOOR, proportional to how far the card has travelled.
         // Linear on purpose — "proportional to the user's drag distance" is what he asked for, and an
         // eased curve would put the change somewhere other than where his finger is.
-        return Self.heroDimMax * (1 - (f - Self.heroDimSolid) / (1 - Self.heroDimSolid))
+        //
+        // ⚠️ THE FLOOR IS MIXED IN, NOT CLAMPED ON. `hero.dimFloor` is 1 while his finger is down and
+        // is faded out by a committed landing (and in by an open), so the backdrop stays dark through
+        // the whole pull and still reaches exactly zero at both ends of a flight. Clamping instead
+        // would paint a 36% wall on the frame the screen is removed, which is the grey flash.
+        let travelled = (f - Self.heroDimSolid) / (1 - Self.heroDimSolid)
+        let floor = Self.heroDimFloor * max(0, min(1, hero.dimFloor))
+        return floor + (Self.heroDimMax - floor) * (1 - travelled)
     }
     /// How much of the journey nearest full screen is spent turning the wall solid.
     private static let heroDimSolid: CGFloat = 0.15
@@ -2408,6 +2451,7 @@ struct StoryViewer: View {
                          stiffness: CGFloat? = nil, settle: CGFloat? = nil,
                          cover: ((CGFloat) -> CGFloat)? = nil,
                          crop: ((CGFloat) -> CGFloat)? = nil,
+                         dimFloor: ((CGFloat) -> CGFloat)? = nil,
                          done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
@@ -2419,6 +2463,7 @@ struct StoryViewer: View {
             hero.alpha = hero.fromA + (hero.toA - hero.fromA) * alphaCurve(t)
             if let cover { hero.coverAlpha = cover(t) }
             if let crop { hero.crop = crop(t) }
+            if let dimFloor { hero.dimFloor = dimFloor(t) }
             applyHero()
         }, completion: done)
     }
@@ -2525,9 +2570,13 @@ struct StoryViewer: View {
             // stop, and at 0.0008 of a 0…1 fraction the last stretch is sub-pixel motion nobody can
             // see but everybody can feel. 0.0015 is still well under a pixel at this card's size.
             // Read with the dip beat in `afterStoryDip`, trimmed in the same breath.
+            // The floor fades IN as the story grows, so the open's first frame — the card still
+            // sitting on the row — darkens nothing, and the list is already dim by the time the card
+            // is out in the room. Matching his Snapchat reference, where the page behind the growing
+            // circle is clearly dimmed.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
                     stiffness: 530, settle: 0.0015,
-                    cover: heroCoverOut, crop: heroCoverOut) {
+                    cover: heroCoverOut, crop: heroCoverOut, dimFloor: { $0 }) {
                 hero.live = false
                 hero.cover = false
                 hero.coverAlpha = 0
@@ -2693,6 +2742,9 @@ struct StoryViewer: View {
             hero.cover = heroKeyNow() == heroSourceKey
             hero.coverAlpha = 0
             hero.exiting = true        // a pull is an exit: the black page goes now, not over 76pt
+            // THE FINGER OWNS THE FLOOR. Held at full for the whole drag, so the backdrop cannot
+            // wash out however far he pulls; a committed landing fades it back out. See `dimFloor`.
+            hero.dimFloor = 1
             // AND NOTHING IS SHAVED OFF IT EITHER (his spec: "uniform scale only… preserving the
             // full video/image visibility without cropping any edges"). A finger seizing the card
             // mid-open gets the same deal, which is why this is written here rather than only on
@@ -2829,14 +2881,19 @@ struct StoryViewer: View {
             // THE WHOLE EXCHANGE HAPPENS HERE, in the snap that follows the release: the flying
             // card cross-fades from the story he was watching into the row card's own picture —
             // avatar ring, border and all — and is finished before it touches down.
+            // AND THE FLOOR LEAVES WITH THE CARD. The dim runs to a true zero as the landing
+            // completes, so the frame the screen is removed has no wall left on it — the grey-to-
+            // white flash this file has warned about since it was written. The floor is the DRAG's,
+            // not the landing's.
             runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining),
-                    cover: heroCoverIn, crop: heroCoverIn, done: land)
+                    cover: heroCoverIn, crop: heroCoverIn, dimFloor: { 1 - $0 }, done: land)
         } else {
             // No cover on this one, but the SHAPE still has to converge: it is landing on somebody
             // else's card and a 9:16 rectangle would overhang their slot top and bottom. Same curve,
             // so it too is the row's shape before it touches down.
             runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
-                    alphaCurve: { $0 * $0 * $0 }, crop: heroCoverIn, done: land)
+                    alphaCurve: { $0 * $0 * $0 }, crop: heroCoverIn,
+                    dimFloor: { 1 - $0 }, done: land)
         }
         // A FLIGHT THAT NEVER LANDS MUST NOT TRAP HIM IN THE VIEWER.
         //
