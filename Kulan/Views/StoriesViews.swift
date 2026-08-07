@@ -3401,6 +3401,32 @@ struct MyStoriesCarousel: View {
     /// number. A CGFloat animates, so position and scale now move together for the whole glide.
     @State private var scroll: CGFloat = 0
 
+    /// A finger or the native glide owns the row — reported by `CarouselScroller`.
+    @State private var scrollerBusy = false
+    /// OUR OWN spring is carrying the row to a card somebody else chose (`onChange(of: activeId)`).
+    /// The scroller knows nothing about this one, which is exactly how the hole below opened.
+    @State private var retargeting = false
+
+    /// ⚠️ THE ONE ANSWER TO "IS THE ROW STILL MOVING", and the reason the centre card stopped ending
+    /// up UNDERNEATH its neighbours.
+    ///
+    /// The live story is not drawn by this carousel. It is the real story view, parked at the slot
+    /// centre by `driveMorph`, and the host hides it (`StoryCardMorph.setHidden`) from exactly this
+    /// signal so the carousel can draw its own centre card while the row slides. The carousel is a
+    /// SwiftUI layer ABOVE the story, so the moment this says "at rest" while the row is in fact
+    /// off-centre, the story is revealed in the middle and the neighbour cards — which are directly
+    /// over it and overlap the slot at any fractional position — cover it. That is his report: the
+    /// active centre picture behind the ones that should be behind IT.
+    ///
+    /// It used to be the scroller's word alone, and the scroller only knows about fingers. A sheet
+    /// paged sideways retargets `activeId`, which springs `scroll` for 0.30s with no finger anywhere
+    /// — the whole glide ran with the story exposed. `retargeting` closes that path and the
+    /// fractional test is the belt for any path neither of them knows about: whatever the reason, a
+    /// row that is not sitting on a whole card has not finished moving.
+    private var rowBusy: Bool {
+        scrollerBusy || retargeting || abs(scroll - scroll.rounded()) > 0.002
+    }
+
     /// The card the carousel considers centred. Derived, never stored: with `scroll` continuous
     /// there is exactly one answer and it cannot drift from what is on screen.
     private var index: Int {
@@ -3500,7 +3526,10 @@ struct MyStoriesCarousel: View {
             // stopped, not a guessed 0.58s later.
             .overlay {
                 CarouselScroller(count: n, fullDist: fullDist, scroll: $scroll,
-                                 onInteracting: { on in onInteracting(on) },
+                                 // Into the local flag, not straight out to the host: `rowBusy` is
+                                 // what the host hears, and the scroller is only one of its three
+                                 // reasons to be true.
+                                 onInteracting: { on in scrollerBusy = on },
                                  onSettled: { i in
                                      if stories.indices.contains(i) { activeId = stories[i].id }
                                  },
@@ -3518,12 +3547,25 @@ struct MyStoriesCarousel: View {
             guard stories.indices.contains(i), stories[i].id != activeId else { return }
             activeId = stories[i].id
         }
-        // External retarget (rare) → recentre. The scroller ignores pushed positions while a
-        // finger is down (its sync checks isTracking), so this cannot fight a live drag.
+        // External retarget → recentre. The scroller ignores pushed positions while a finger is down
+        // (its sync checks isTracking), so this cannot fight a live drag.
+        //
+        // ⚠️ IT ANNOUNCES ITSELF. This is not rare — every sideways page of the viewers sheet lands
+        // here — and for the length of the spring the row is off-centre with no finger on it. Told
+        // nothing, the host gave the live story back at the first frame of the glide and the
+        // neighbour cards spent 0.30s sliding over the top of it. See `rowBusy`.
         .onChange(of: activeId) { _, v in
             guard let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
-            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) { scroll = CGFloat(ni) }
+            retargeting = true
+            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) {
+                scroll = CGFloat(ni)
+            } completion: {
+                retargeting = false
+            }
         }
+        // ONE writer to the host. A finger, our own spring and the belt all speak through here, so
+        // the live story is hidden for as long as any of them says the row has not landed.
+        .onChange(of: rowBusy) { _, on in onInteracting(on) }
         // Re-seed from the opened-on story in case `stories` was still loading at init.
         .onAppear {
             if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { scroll = CGFloat(ni) }
