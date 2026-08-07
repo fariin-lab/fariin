@@ -1119,7 +1119,7 @@ struct StoryViewer: View {
     @State private var uploadSvc = StoriesService.shared   // observed → the "Uploading…" bar tracks the upload
     // The current item is the still-uploading synthetic placeholder → show the "Uploading…" bar (both
     // buttons cancel the upload), suppress the Views footer + delete (there's no real story doc yet).
-    private var isUploadingItem: Bool { currentStoryId == StoriesService.uploadingStoryId && uploadSvc.uploading }
+    private var isUploadingItem: Bool { StoriesService.isPending(currentStoryId) && uploadSvc.uploading }
     // Home-indicator inset (the story ignoresSafeArea, so overlays must add it back themselves).
     private var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
@@ -1680,7 +1680,7 @@ struct StoryViewer: View {
                 prefetchAhead(currentId: id)
                 // The synthetic still-uploading item has no real doc — don't persist it as "seen"
                 // (junk entry) or fetch its (non-existent) viewers.
-                guard id != StoriesService.uploadingStoryId else { return }
+                guard !StoriesService.isPending(id) else { return }
                 StoryPrefs.markStorySeen(id)
                 markSeenItem(id); loadBarViewers()
             },
@@ -1695,6 +1695,8 @@ struct StoryViewer: View {
                 // currentBucketUid, which is only set AFTER the library's onUserChanged fires — so on a
                 // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
                 guard currentIsMine || mineOnly else { return }
+                // Same gate as `openViewers`: an uploading placeholder has no viewers to show.
+                guard !isUploadingItem else { return }
                 sheetAnimator.cancel()   // the finger owns progress; kill any in-flight snap
                 let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
                 if !showViewers {
@@ -1922,8 +1924,8 @@ struct StoryViewer: View {
             // (posted from another phone, or reinstalled) falls through to the plain type, which is
             // the safe way round to be wrong. The story still UPLOADING has no document id to file
             // a name under, so it reads the one the post in flight was given.
-            let name = s.id == StoriesService.uploadingStoryId
-                ? StoriesService.shared.uploadingAudienceName
+            let name = StoriesService.isPending(s.id)
+                ? StoriesService.shared.uploadingAudienceName(for: s.id)
                 : (StoryPrefs.audienceName(storyId: s.id) ?? "")
             return StoryAudienceBadge(systemImage: "person.crop.rectangle.stack",
                                       text: name.isEmpty ? "Custom" : name)
@@ -2621,6 +2623,11 @@ struct StoryViewer: View {
         // to 1 cancels the close animator (and with it the unmount completion) — no more
         // "swipe up does nothing for 0.42s after closing".
         guard currentIsMine else { return }
+        // NOT ON A STORY THAT DOES NOT EXIST YET. The item on screen while a post is uploading is a
+        // synthetic placeholder with no document behind it, so the viewers sheet would come up over
+        // it asking the server who has seen a story id that has never been written — an empty list
+        // and a carousel with nothing in its slot. It opens the moment the real story lands.
+        guard !isUploadingItem else { return }
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
         NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)   // keep the exact pre-pull blur
         NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)   // chrome-only exit
@@ -2967,13 +2974,17 @@ struct UploadingStoryHandoff: View {
     @State private var repo = StoriesRepository.shared
     @State private var svc = StoriesService.shared
 
-    // My stories + the synthetic uploading item (newest). Once `uploadingStory` goes nil (upload done),
+    // My stories + one synthetic item per post still in the air. Once they finish (the list empties),
     // this is just my real stories, which now include the just-posted one.
     private var group: StoryGroup? {
-        guard let s = svc.uploadingStory else { return repo.mine }
-        if var g = repo.mine { g.stories.append(s); return g }
-        return StoryGroup(authorUid: s.authorUid, name: meName, photoUrl: mePhoto,
-                          stories: [s], lastViewedAt: nil, isMine: true)
+        // EVERY post in the air, not just the newest (owner 2026-08-07: "I need to see all, when I
+        // click right or left each one must be uploading"). Posts have always queued; only the
+        // state describing them was single, so two of three uploads had no item to be drawn as.
+        let pending = svc.uploadingStories
+        guard let first = pending.first else { return repo.mine }
+        if var g = repo.mine { g.stories.append(contentsOf: pending); return g }
+        return StoryGroup(authorUid: first.authorUid, name: meName, photoUrl: mePhoto,
+                          stories: pending, lastViewedAt: nil, isMine: true)
     }
 
     var body: some View {

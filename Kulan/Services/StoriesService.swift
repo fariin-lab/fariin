@@ -127,39 +127,60 @@ final class StoriesService {
     /// with no capture question at all.
     @MainActor private func markSending() { uploadPhase = .sending }
 
-    var uploadingImage: UIImage?
     var uploadError: String?   // set when a post fails so the UI can show it (was swallowed → "dead silent")
     private var uploadTask: Task<Void, Never>?
-    private var uploadStartedAt = Date()
 
-    // Synthetic "newest" story item shown while an upload runs, so the uploading photo appears INSIDE
-    // the real story viewer (real progress bars, header, swipe to my older posted stories) instead of a
-    // separate placeholder screen. Its image is served from URLCache (pre-stored on upload start); its
-    // fixed id marks it so the viewer shows the "Uploading…" bar and blocks delete.
+    /// ONE POST STILL IN THE AIR. There can be several, and that is the whole reason this type
+    /// exists (owner 2026-08-07: "when I upload multiple images, every time I can see only the last
+    /// one uploading — I need to see all, when I click right or left each one must be uploading").
+    ///
+    /// Posts have ALWAYS queued rather than replaced each other — the task chain below has done that
+    /// since a second post silently destroyed the first — but the state describing them was a single
+    /// image, a single url and a single start time, overwritten by whichever post was newest. So
+    /// three pictures were three real uploads behind ONE placeholder: the two waiting their turn had
+    /// nowhere to be drawn, and the viewer had nothing to page between.
+    struct PendingUpload: Identifiable {
+        let id: String                  // this post's synthetic story id — unique per post
+        let image: UIImage?             // the picture, or a video's poster frame
+        let url: String                 // the synthetic media url its bytes are cached under
+        let startedAt: Date
+        let tag: StoryAudienceTag
+    }
+    /// Oldest first, which is the order stories are read in — so the placeholders sit at the end of
+    /// my bucket in the same order they will land as real stories.
+    private(set) var inFlight: [PendingUpload] = []
+
+    // Synthetic story items shown while an upload runs, so an uploading photo appears INSIDE the
+    // real story viewer (real progress bars, header, swipe to my older posted stories) instead of a
+    // separate placeholder screen. Its image is served from URLCache (pre-stored on upload start);
+    // its id marks it so the viewer shows the "Uploading…" bar and blocks delete.
+    ///
+    /// A PREFIX, not the id itself, since there can be several at once. Everything that used to ask
+    /// `id == uploadingStoryId` asks `isPending(id)` instead.
     static let uploadingStoryId = "story.uploading.placeholder"
-    /// PER-POST, not a constant. It was one fixed URL, and StoryUI's ImageLoader keeps decoded
-    /// images in StoryMemoryCache keyed by absoluteString — so the placeholder for post B could
-    /// serve post A's picture out of that cache (for a video story, A's poster: his "shows a
-    /// different video that was already in my Story" report). URLCache was refreshed each post;
-    /// the memory cache in FRONT of it was not, and could not be from here. A fresh path per post
-    /// misses every cache by construction. The path must vary, not a query — the disk cache's key
-    /// ignores queries.
-    private var uploadingURLString = "https://fariin.local/uploading-placeholder.jpg"
-    /// THE AUDIENCE THE POST IN FLIGHT WAS SENT TO. The placeholder used to be built with the
-    /// struct's defaults, which say "friends" — so a story posted to a custom list wore "My Friends"
-    /// in the header for the whole upload and then changed to "Custom" when the real document
-    /// arrived (his report, 2026-08-07). The header must say the same thing before and after,
-    /// because it is the same story.
-    private var uploadingTag: StoryAudienceTag = .friends
-    /// The custom list's device-local name, for the placeholder alone: the real story's name is
-    /// filed under its document id, which does not exist yet while it is uploading.
-    var uploadingAudienceName: String { uploadingTag.name }
-    var uploadingStory: Story? {
-        guard uploading, uploadingImage != nil else { return nil }
-        return Story(id: Self.uploadingStoryId, authorUid: uid, createdAt: uploadStartedAt,
-                     expiresAt: uploadStartedAt.addingTimeInterval(24 * 3600),
-                     mediaUrl: uploadingURLString, allowsReplies: false,
-                     audienceLabel: uploadingTag.label, oneTime: uploadingTag.oneTime)
+    static func isPending(_ storyId: String) -> Bool { storyId.hasPrefix(uploadingStoryId) }
+
+    /// The newest post's picture — what the story ROW draws on its single "Uploading…" card. The row
+    /// has one slot for my story whatever is happening behind it; the viewer is where they are all
+    /// visible.
+    var uploadingImage: UIImage? { inFlight.last?.image }
+
+    /// The custom list's device-local name for a placeholder: the real story's name is filed under
+    /// its document id, which does not exist yet while it is uploading.
+    func uploadingAudienceName(for storyId: String) -> String {
+        inFlight.first { $0.id == storyId }?.tag.name ?? ""
+    }
+
+    /// Every post in the air, as story items. Each carries ITS OWN audience (a story posted to a
+    /// custom list used to wear "My Friends" until the real document arrived) and its own picture.
+    var uploadingStories: [Story] {
+        inFlight.compactMap { p in
+            guard p.image != nil else { return nil }
+            return Story(id: p.id, authorUid: uid, createdAt: p.startedAt,
+                         expiresAt: p.startedAt.addingTimeInterval(24 * 3600),
+                         mediaUrl: p.url, allowsReplies: false,
+                         audienceLabel: p.tag.label, oneTime: p.tag.oneTime)
+        }
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
@@ -167,16 +188,23 @@ final class StoriesService {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
-        uploadingImage = UIImage(data: image)
-        uploadingTag = tag          // the header must say the chosen audience from the first frame
-        uploadStartedAt = Date()
-        uploadingURLString = "https://fariin.local/uploading-\(UUID().uuidString).jpg"
+        // PER-POST, not a constant, and the url must be fresh per post as well as unique: StoryUI's
+        // ImageLoader keeps decoded images in StoryMemoryCache keyed by absoluteString, so a reused
+        // path could serve post A's picture as post B's placeholder (for a video, A's poster: his
+        // "shows a different video that was already in my Story" report). A fresh path misses every
+        // cache by construction. The PATH must vary, not a query — the disk cache ignores queries.
+        let pending = PendingUpload(id: "\(Self.uploadingStoryId).\(UUID().uuidString)",
+                                    image: UIImage(data: image),
+                                    url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
+                                    startedAt: Date(),
+                                    tag: tag)   // the header says the chosen audience from frame one
         // Pre-store the picked bytes in URLCache under the synthetic URL so the injected uploading item
         // renders instantly in the viewer (StoryUI's ImageLoader reads URLCache first).
-        if let u = URL(string: uploadingURLString) {
+        if let u = URL(string: pending.url) {
             let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: image.count, textEncodingName: nil)
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: image), for: URLRequest(url: u))
         }
+        inFlight.append(pending)
         uploading = true
         uploadPhase = .preparing   // every post starts on the phone's half
         // Each post owns a token; the completion below only touches shared state if it's STILL the
@@ -195,8 +223,14 @@ final class StoriesService {
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
-                guard self.currentUploadToken == token else { return }   // a newer post owns the state now
-                self.uploading = false; self.uploadingImage = nil; self.uploadTask = nil; self.uploadError = failure
+                // ⚠️ OUTSIDE THE TOKEN GUARD, and that is the point of keeping them separate. This
+                // post is finished whoever is newest, so its placeholder must go — under the guard,
+                // an older post completing while a newer one is still uploading would never clear
+                // its own entry and the row would show an upload that had already landed.
+                self.inFlight.removeAll { $0.id == pending.id }
+                self.uploading = !self.inFlight.isEmpty
+                guard self.currentUploadToken == token else { return }   // a newer post owns the rest
+                self.uploadTask = nil; self.uploadError = failure
             }
         }
         if let t = uploadTask { queuedUploads.append(t) }   // cancellable as part of the chain
@@ -212,7 +246,7 @@ final class StoriesService {
         for t in queuedUploads { t.cancel() }
         queuedUploads.removeAll()
         uploadTask?.cancel(); uploadTask = nil
-        uploading = false; uploadingImage = nil
+        uploading = false; inFlight.removeAll()
     }
     /// Every post task still in the queue (including the one currently uploading), so cancel can
     /// reach all of them. Entries are dropped as they finish.
@@ -404,14 +438,17 @@ final class StoriesService {
                                              excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
-        uploadingImage = UIImage(data: thumbnail)
-        uploadingTag = tag          // as above: the same story, the same audience line, throughout
-        uploadStartedAt = Date()
-        uploadingURLString = "https://fariin.local/uploading-\(UUID().uuidString).jpg"
-        if let u = URL(string: uploadingURLString) {
+        // Its own entry in the queue, exactly as a photo post takes one — see `PendingUpload`.
+        let pending = PendingUpload(id: "\(Self.uploadingStoryId).\(UUID().uuidString)",
+                                    image: UIImage(data: thumbnail),
+                                    url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
+                                    startedAt: Date(),
+                                    tag: tag)
+        if let u = URL(string: pending.url) {
             let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: thumbnail.count, textEncodingName: nil)
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: thumbnail), for: URLRequest(url: u))
         }
+        inFlight.append(pending)
         uploading = true
         uploadPhase = .preparing   // video starts on the phone's half too — and it is the long one
         let token = UUID()
@@ -426,8 +463,10 @@ final class StoriesService {
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
+                self.inFlight.removeAll { $0.id == pending.id }   // outside the guard — see the photo path
+                self.uploading = !self.inFlight.isEmpty
                 guard self.currentUploadToken == token else { return }
-                self.uploading = false; self.uploadingImage = nil; self.uploadTask = nil; self.uploadError = failure
+                self.uploadTask = nil; self.uploadError = failure
             }
         }
         // IN THE CANCEL CHAIN, like the photo path always was. This append was missing here, so
