@@ -1232,6 +1232,152 @@ struct ChatsView: View {
                 set: { router.pendingInviteCode = $0?.code })
     }
 
+    /// THE LOADED CHAT LIST: the List, the stories row floating over it, and every modifier
+    /// the two need. Lifted out of `body` because the type-checker gave up on it — "unable to
+    /// type-check this expression in reasonable time". `body` was already close to the budget
+    /// and this is the heaviest part of it by a wide margin; splitting the value out is the
+    /// documented fix and costs nothing at runtime.
+    private var loadedChatList: some View {
+                        ZStack(alignment: .top) {
+                          // Selection is ALWAYS bound (a Set only selects in edit mode, so taps still OPEN
+                          // the row when not editing). Swapping the binding nil<->$selection reconfigured
+                          // the List and made the edit-mode transition POP; a stable binding lets the
+                          // native circles-slide-in + rows-shift-right animate smoothly (withAnimation on
+                          // `selecting` at the tap sites drives it).
+                          List(selection: $selection) {
+                          // Row body extracted (chatListRow): the inline closure blew past the
+                          // type-checker's budget once the peek preview + row background joined it.
+                          ForEach(visible) { conv in chatListRow(conv) }
+                        }
+                        .listStyle(.plain)
+                        // THE STUCK GREY ROW, real cause. This List carries a `selection` binding for
+                        // multi-select, and every row carries a `.tag`. A NavigationLink row does not only
+                        // push - it ALSO sets the List's selection - and SwiftUI does not clear that on the
+                        // way back, so the row stays SELECTED, and selected renders as a permanent grey fill.
+                        // It is not a press highlight at all, which is why removing the custom press style
+                        // did not fix it: the highlight was correct, the selection underneath it was not.
+                        // Outside edit mode there is no such thing as a selected chat, so say so.
+                        .onChange(of: selection) { _, sel in
+                            if !selecting, !sel.isEmpty { selection.removeAll() }
+                        }
+                        .onChange(of: selecting) { _, on in
+                            if !on, !selection.isEmpty { selection.removeAll() }   // leaving edit mode clears it
+                        }
+                        // When a new message bumps a chat to the top, the rows
+                        // slide to their new order instead of popping. Scoped to the order/
+                        // membership only, so it won't animate unrelated content changes.
+                        // Nil until the list has settled, so a cold launch PAINTS its rows instead of
+                        // flying them in from nowhere on top of each other. See `listSettled`.
+                        .animation(listSettled ? .spring(response: 0.38, dampingFraction: 0.86) : nil,
+                                   value: visible.map(\.id))
+                        // A GRACE PERIOD FROM WHEN THE LIST FIRST EXISTS, not from `hasLoaded`.
+                        //
+                        // Keying it to `hasLoaded` looks right and is not: on a cold launch the skeleton
+                        // holds this branch until `hasLoaded` is ALREADY true, so the List first appears
+                        // on the far side of that flip and would unlock animation on its very first
+                        // frame. The official channel then lands from its own store a moment later and
+                        // flies in alone — the exact row he photographed sitting across another one.
+                        //
+                        // Timing from first appearance covers every path: skeleton-then-list,
+                        // cached-chats-render-instantly, and empty-then-populated alike.
+                        .onAppear {
+                            guard !listSettled else { return }   // warm return: already a list, animate now
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { listSettled = true }
+                        }
+                        .environment(\.editMode, .constant(selecting ? .active : .inactive))
+                        // Rows start below the stories row; as the list scrolls, the row above is
+                        // offset by the same amount, so both move as ONE scroll surface.
+                        .contentMargins(.top, storiesOptedOut ? 8 : storiesRowHeight, for: .scrollContent)
+                        // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
+                        // (its transparent margins otherwise show + tap-through to a row behind the pill).
+                        .contentMargins(.bottom, 28, for: .scrollContent)
+                        // Now that the list truly underlaps the nav bar (clip fix), the header draws
+                        // its HARD edge line whenever content is beneath it — in BOTH scroll
+                        // directions. Soft top edge = blur fade, no drawn line (bottom stays default,
+                        // which the user confirmed fixed).
+                        .scrollEdgeEffectStyle(.soft, for: .top)
+                        .onScrollGeometryChange(for: CGFloat.self,
+                                                of: { $0.contentOffset.y + $0.contentInsets.top },
+                                                action: { _, y in chatScrollY = y })
+
+                          // Stories row stays OUTSIDE the List so EACH card long-presses on its
+                          // own. Inside a List, the whole row lifts as one cell (the bug). (Build 147.)
+                          if !storiesOptedOut {
+                          StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
+                                     // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
+                                     // unseen story re-sorts the row live, so their card slid out from
+                                     // under the close before it could land on it — his story leaving
+                                     // sideways towards the screen edge. See `StoriesRow.displayedOthers`.
+                                     freezeOrder: storyDoorState.isOpen,
+                                     onCompose: { showCompose = true },
+                                     // EVERY SURFACE IS ON OUR OWN TRANSITION NOW (migration finished
+                                     // 2026-08-07). The viewer is presented by `StoryZoomPresenter` — a
+                                     // screen we own, added and removed with no system animation — and
+                                     // the card flying out of this row IS the open. The drag-down close
+                                     // is the same flight in reverse, on the same view. `StoryDoor` is
+                                     // the only way in, from here and from the other five doors alike.
+                                     //
+                                     // THE 481 LESSON THIS IS BUILT ON: the previous custom transition
+                                     // flew UIPageViewController's INTERNAL scroll view and UIKit
+                                     // asserted while animating it. The flight now transforms only the
+                                     // presenter's own container (`StoryCardMorph.flightCard`); nothing
+                                     // private is ever touched, so that crash is structurally gone.
+                                     onOpen: { g in openStoryFromRow(g) },
+                                     onMessage: { g in openStoryChat(g) },
+                                     onProfile: { g in profileGroup = g },
+                                     // ⚠️ A METHOD, NOT AN INLINE CLOSURE. Written out here it tipped this
+                                     // body over the type-checker's budget ("unable to type-check this
+                                     // expression in reasonable time") — `body` is already a very large
+                                     // single expression and every optional-chained default inside a new
+                                     // closure is more work for it. Same rule as the other handlers above.
+                                     onOpenUploading: { openUploadingStory() })
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
+                            .offset(y: -chatScrollY)
+                            // NO clip and NO mask on the stories row (user's 3-stage proof, build 225):
+                            // ANY truncation chops the card images in a straight line while they slide
+                            // away — that visible cut WAS the "top border" all along. Unclipped, the
+                            // cards slide up behind the glass header pills exactly like the chat rows
+                            // do once the stories are gone (stage 3, confirmed "looks normal").
+                            // MELT-AWAY (user's 4-stage proof, build 226): the row is a separate layer
+                            // from the List, so its header blur and the List's own edge blur are TWO
+                            // systems — a visible seam where they met ("feels like two pages"). Fade
+                            // the row out over the last stretch of its slide (untouched through the
+                            // approved stage-2 phase), so only ONE blur is ever visible — no seam.
+                            .opacity({
+                                let h = max(1, storiesRowHeight)
+                                let t = (chatScrollY - h * 0.45) / (h * 0.45)
+                                return 1 - min(1, max(0, t))
+                            }())
+                          }   // if !storiesOptedOut
+                        }   // ZStack (stories row scrolling in sync above the list)
+                        // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
+                        // only when truly unfiltered; a filtered empty result says so instead.
+                        .overlay(alignment: .top) {
+                            // `hasLoaded` too, or the quiet window before the skeleton arms would show
+                            // "No chats yet" to someone who has chats. An empty list is only news once
+                            // we have actually heard back.
+                            if visible.isEmpty, repo.hasLoaded {
+                                if chatFilter == 0 {
+                                    // First run: an empty list must TEACH the next step, not dead-end
+                                    // (big-app pattern) — find people, share your QR, invite friends.
+                                    // With stories opted out the row is unmounted but storiesRowHeight
+                                    // keeps its initial value — the empty state floated ~175pt too low
+                                    // (audit). Pad only for a row that actually exists.
+                                    emptyWelcome
+                                        .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
+                                } else {
+                                    // Per-filter copy — the Groups filter was showing the Unread text.
+                                    ContentUnavailableView(
+                                        chatFilter == 2 ? "No groups yet" : "No unread chats",
+                                        systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
+                                        description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
+                                        .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                        }
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             Group {
@@ -1245,144 +1391,7 @@ struct ChatsView: View {
                     // branch — a separate branch replaced the whole view incl. the Stories row, so
                     // filtering to Unread with nothing unread made all stories vanish + showed a
                     // wrong "No chats yet". The row now always stays; only the list area goes empty.
-                    ZStack(alignment: .top) {
-                      // Selection is ALWAYS bound (a Set only selects in edit mode, so taps still OPEN
-                      // the row when not editing). Swapping the binding nil<->$selection reconfigured
-                      // the List and made the edit-mode transition POP; a stable binding lets the
-                      // native circles-slide-in + rows-shift-right animate smoothly (withAnimation on
-                      // `selecting` at the tap sites drives it).
-                      List(selection: $selection) {
-                      // Row body extracted (chatListRow): the inline closure blew past the
-                      // type-checker's budget once the peek preview + row background joined it.
-                      ForEach(visible) { conv in chatListRow(conv) }
-                    }
-                    .listStyle(.plain)
-                    // THE STUCK GREY ROW, real cause. This List carries a `selection` binding for
-                    // multi-select, and every row carries a `.tag`. A NavigationLink row does not only
-                    // push - it ALSO sets the List's selection - and SwiftUI does not clear that on the
-                    // way back, so the row stays SELECTED, and selected renders as a permanent grey fill.
-                    // It is not a press highlight at all, which is why removing the custom press style
-                    // did not fix it: the highlight was correct, the selection underneath it was not.
-                    // Outside edit mode there is no such thing as a selected chat, so say so.
-                    .onChange(of: selection) { _, sel in
-                        if !selecting, !sel.isEmpty { selection.removeAll() }
-                    }
-                    .onChange(of: selecting) { _, on in
-                        if !on, !selection.isEmpty { selection.removeAll() }   // leaving edit mode clears it
-                    }
-                    // When a new message bumps a chat to the top, the rows
-                    // slide to their new order instead of popping. Scoped to the order/
-                    // membership only, so it won't animate unrelated content changes.
-                    // Nil until the list has settled, so a cold launch PAINTS its rows instead of
-                    // flying them in from nowhere on top of each other. See `listSettled`.
-                    .animation(listSettled ? .spring(response: 0.38, dampingFraction: 0.86) : nil,
-                               value: visible.map(\.id))
-                    // A GRACE PERIOD FROM WHEN THE LIST FIRST EXISTS, not from `hasLoaded`.
-                    //
-                    // Keying it to `hasLoaded` looks right and is not: on a cold launch the skeleton
-                    // holds this branch until `hasLoaded` is ALREADY true, so the List first appears
-                    // on the far side of that flip and would unlock animation on its very first
-                    // frame. The official channel then lands from its own store a moment later and
-                    // flies in alone — the exact row he photographed sitting across another one.
-                    //
-                    // Timing from first appearance covers every path: skeleton-then-list,
-                    // cached-chats-render-instantly, and empty-then-populated alike.
-                    .onAppear {
-                        guard !listSettled else { return }   // warm return: already a list, animate now
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { listSettled = true }
-                    }
-                    .environment(\.editMode, .constant(selecting ? .active : .inactive))
-                    // Rows start below the stories row; as the list scrolls, the row above is
-                    // offset by the same amount, so both move as ONE scroll surface.
-                    .contentMargins(.top, storiesOptedOut ? 8 : storiesRowHeight, for: .scrollContent)
-                    // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
-                    // (its transparent margins otherwise show + tap-through to a row behind the pill).
-                    .contentMargins(.bottom, 28, for: .scrollContent)
-                    // Now that the list truly underlaps the nav bar (clip fix), the header draws
-                    // its HARD edge line whenever content is beneath it — in BOTH scroll
-                    // directions. Soft top edge = blur fade, no drawn line (bottom stays default,
-                    // which the user confirmed fixed).
-                    .scrollEdgeEffectStyle(.soft, for: .top)
-                    .onScrollGeometryChange(for: CGFloat.self,
-                                            of: { $0.contentOffset.y + $0.contentInsets.top },
-                                            action: { _, y in chatScrollY = y })
-
-                      // Stories row stays OUTSIDE the List so EACH card long-presses on its
-                      // own. Inside a List, the whole row lifts as one cell (the bug). (Build 147.)
-                      if !storiesOptedOut {
-                      StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
-                                 // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
-                                 // unseen story re-sorts the row live, so their card slid out from
-                                 // under the close before it could land on it — his story leaving
-                                 // sideways towards the screen edge. See `StoriesRow.displayedOthers`.
-                                 freezeOrder: storyDoorState.isOpen,
-                                 onCompose: { showCompose = true },
-                                 // EVERY SURFACE IS ON OUR OWN TRANSITION NOW (migration finished
-                                 // 2026-08-07). The viewer is presented by `StoryZoomPresenter` — a
-                                 // screen we own, added and removed with no system animation — and
-                                 // the card flying out of this row IS the open. The drag-down close
-                                 // is the same flight in reverse, on the same view. `StoryDoor` is
-                                 // the only way in, from here and from the other five doors alike.
-                                 //
-                                 // THE 481 LESSON THIS IS BUILT ON: the previous custom transition
-                                 // flew UIPageViewController's INTERNAL scroll view and UIKit
-                                 // asserted while animating it. The flight now transforms only the
-                                 // presenter's own container (`StoryCardMorph.flightCard`); nothing
-                                 // private is ever touched, so that crash is structurally gone.
-                                 onOpen: { g in openStoryFromRow(g) },
-                                 onMessage: { g in openStoryChat(g) },
-                                 onProfile: { g in profileGroup = g },
-                                 // ⚠️ A METHOD, NOT AN INLINE CLOSURE. Written out here it tipped this
-                                 // body over the type-checker's budget ("unable to type-check this
-                                 // expression in reasonable time") — `body` is already a very large
-                                 // single expression and every optional-chained default inside a new
-                                 // closure is more work for it. Same rule as the other handlers above.
-                                 onOpenUploading: { openUploadingStory() })
-                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
-                        .offset(y: -chatScrollY)
-                        // NO clip and NO mask on the stories row (user's 3-stage proof, build 225):
-                        // ANY truncation chops the card images in a straight line while they slide
-                        // away — that visible cut WAS the "top border" all along. Unclipped, the
-                        // cards slide up behind the glass header pills exactly like the chat rows
-                        // do once the stories are gone (stage 3, confirmed "looks normal").
-                        // MELT-AWAY (user's 4-stage proof, build 226): the row is a separate layer
-                        // from the List, so its header blur and the List's own edge blur are TWO
-                        // systems — a visible seam where they met ("feels like two pages"). Fade
-                        // the row out over the last stretch of its slide (untouched through the
-                        // approved stage-2 phase), so only ONE blur is ever visible — no seam.
-                        .opacity({
-                            let h = max(1, storiesRowHeight)
-                            let t = (chatScrollY - h * 0.45) / (h * 0.45)
-                            return 1 - min(1, max(0, t))
-                        }())
-                      }   // if !storiesOptedOut
-                    }   // ZStack (stories row scrolling in sync above the list)
-                    // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
-                    // only when truly unfiltered; a filtered empty result says so instead.
-                    .overlay(alignment: .top) {
-                        // `hasLoaded` too, or the quiet window before the skeleton arms would show
-                        // "No chats yet" to someone who has chats. An empty list is only news once
-                        // we have actually heard back.
-                        if visible.isEmpty, repo.hasLoaded {
-                            if chatFilter == 0 {
-                                // First run: an empty list must TEACH the next step, not dead-end
-                                // (big-app pattern) — find people, share your QR, invite friends.
-                                // With stories opted out the row is unmounted but storiesRowHeight
-                                // keeps its initial value — the empty state floated ~175pt too low
-                                // (audit). Pad only for a row that actually exists.
-                                emptyWelcome
-                                    .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
-                            } else {
-                                // Per-filter copy — the Groups filter was showing the Unread text.
-                                ContentUnavailableView(
-                                    chatFilter == 2 ? "No groups yet" : "No unread chats",
-                                    systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
-                                    description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
-                                    .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                    }
+                    loadedChatList
                 }
             }
             .navigationTitle("Chats")
