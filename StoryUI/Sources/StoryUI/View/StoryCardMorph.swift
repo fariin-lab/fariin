@@ -232,13 +232,16 @@ public final class StoryCardMorph {
     ///   drawn at this alpha, so the surround fades in with the card's last stretch home and out
     ///   again with the first of a drag — one continuous arrival, driven by the same fraction as
     ///   everything else. 0 is the old hard crop, which is what the viewers sheet still wants.
+    ///   - crop: how much of the story's height is shaved to reach the row slot's shorter shape,
+    ///     0…1. **The drag passes 0 and a flight drives it** — see the note in `applyCore`. Defaulted
+    ///     to 1 so any caller that does not care keeps the original geometry exactly.
     public func applyFlight(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
                             centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil,
-                            chrome: CGFloat = 0) {
+                            chrome: CGFloat = 0, crop: CGFloat = 1) {
         guard let flightCard else { return }
         applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome)
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome, crop: crop)
     }
 
     /// Flight over: container back to identity, unmasked — and the wall behind it opaque again. The
@@ -304,9 +307,12 @@ public final class StoryCardMorph {
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
         guard !StoryPager.dismissActive, let card else { return }
+        // `crop: 1` — the sheet's geometry is unchanged and must stay so. It shrinks the story into
+        // the viewers panel's slot, where the shave IS the effect: it is what hides the black above
+        // and below the card. Only the flight defers it.
         applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0)
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0, crop: 1)
     }
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
@@ -314,7 +320,7 @@ public final class StoryCardMorph {
     private func applyCore(on card: UIView, sheet: Bool,
                            fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
                            cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?,
-                           chrome: CGFloat) {
+                           chrome: CGFloat, crop: CGFloat) {
         guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
@@ -366,8 +372,22 @@ public final class StoryCardMorph {
         // The crop, in the view's own untransformed coordinates: the card's width, and whatever
         // height renders as `visibleH` once the scale is applied, centred on the CARD. This is also
         // what hides the black above and below the card once the sheet is open.
-        let cropH = min(restH, visibleH / scale)
-        let crop = CGRect(x: content.minX, y: content.midY - cropH / 2, width: restW, height: cropH)
+        //
+        // ⚠️ `crop` IS HOW MUCH OF THAT RECONCILIATION IS APPLIED, AND THE DRAG PASSES 0.
+        //
+        // The row slot is deliberately ~12% shorter than the story's own 9:16 (the owner signed that
+        // off twice), so a uniform scale cannot satisfy width AND height and the difference has to
+        // come out of the story's height somewhere. Taking it out on the FRACTION meant the picture
+        // was being shaved from the top and bottom while his finger was still on it, which is his
+        // 2026-08-07 report: "as the view moves downward its content bounds clip and crop… the media
+        // is distorted". So the shave is a value the flight owns, exactly like the cover: the finger
+        // gets `crop: 0`, a pure uniform scale-down of the whole 9:16 picture with nothing removed
+        // (Snapchat's zoom-out), and the snap that follows the release converges it to 1 over the
+        // same window the cover fades in on. At the landing it is 1, so the card is the slot's shape
+        // and the pixel identity the hand-over depends on is untouched.
+        let tightH = min(restH, visibleH / scale)
+        let cropH = restH + (tightH - restH) * max(0, min(1, crop))
+        let cropRect = CGRect(x: content.minX, y: content.midY - cropH / 2, width: restW, height: cropH)
 
         // CATransaction: a CAShapeLayer path change is an implicitly ANIMATED property, so without
         // this the mask chases the transform by a quarter second and the crop visibly lags the card
@@ -385,9 +405,17 @@ public final class StoryCardMorph {
         // the row card's aspect (restW / (targetH/scale) == targetW/targetH), so at fraction 1 the
         // cover IS the row card, pixel for pixel, and the hand-over at either end cannot pop.
         // Alpha is not touched here — the flight's own fraction owns it.
-        if !sheet { flightCover?.frame = crop }
-        applyMask(on: card, sheet: sheet, rect: crop,
-                  cornerRadius: cornerRadius * f / scale,
+        if !sheet { flightCover?.frame = cropRect }
+        // THE RADIUS ARRIVES WITH THE GESTURE, NOT WITH THE JOURNEY. It used to be `cornerRadius * f`,
+        // which on a drag means square corners for the first inch: the thing under the finger read as
+        // a rectangle of screen rather than a card being lifted out. His spec asks for a fixed radius
+        // "as soon as the interactive drag gesture starts". Ramped over the first twelfth rather than
+        // switched on, so it cannot pop, and still resolved to 0 at f = 0 — which is what keeps the
+        // END of an open square-cornered against the phone's own bezel instead of snapping there.
+        // Divided by `scale` because the transform will multiply it back.
+        let radiusRamp = min(1, f / 0.12)
+        applyMask(on: card, sheet: sheet, rect: cropRect,
+                  cornerRadius: cornerRadius * (sheet ? f : radiusRamp) / scale,
                   outside: sheet ? 0 : chrome)
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
         if abs(card.alpha - alpha) > 0.001 { card.alpha = alpha }

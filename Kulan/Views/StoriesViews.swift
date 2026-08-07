@@ -1062,6 +1062,11 @@ struct StoryViewer: View {
         /// show story A and nothing else, and the exchange to belong entirely to the snap that runs
         /// when he lets go. So the drag pins this at 0 and only a flight's own tick moves it.
         var coverAlpha: CGFloat = 0
+        /// How much of the story's height is shaved to reach the row slot's shorter shape, 0…1.
+        ///
+        /// Same rule as `coverAlpha` and for the same reason: the drag pins it at 0 so what is in his
+        /// hand is the whole picture, uniformly scaled and uncropped, and only a flight moves it.
+        var crop: CGFloat = 0
         /// What the world was last told about the chrome outside the card (`storyFlightActive`).
         /// Tracked here rather than read back off `heroFlying` so the notification is posted exactly
         /// once per crossing, from the one place that knows the fraction.
@@ -1109,9 +1114,9 @@ struct StoryViewer: View {
     /// purpose: the shrink has to read as gradual under a slow drag, and the close commits long
     /// before this is reached.
     private static let heroDragSpan: CGFloat = 420
-    /// How much the story itself dims as it is pulled away. Small: it is the background that is
-    /// meant to give way, not the picture.
-    private static let heroFade: CGFloat = 0.22
+    // (`heroFade`, how much the story itself softened as it was pulled away, is GONE — 2026-08-07.
+    // It was 0.22 and it is what he saw as the chat list showing through the story like glass. The
+    // background giving way is `heroDimMax`'s job; the picture stays opaque.)
     /// The darkest the chat list gets under a story in flight. Judged against his Snapchat shots,
     /// where the list behind is dimmed well past half but never to black — you can still read it.
     private static let heroDimMax: CGFloat = 0.45
@@ -1964,7 +1969,8 @@ struct StoryViewer: View {
                                           centerOverride: hero.center,
                                           alpha: hero.alpha,
                                           dim: heroDim(f),
-                                          chrome: heroChrome(f))
+                                          chrome: heroChrome(f),
+                                          crop: hero.crop)
         // THE COVER BELONGS TO THE FLIGHT, NOT TO THE FINGER. Written by whichever run is going
         // (see `HeroBox.coverAlpha`); the drag holds it at 0, so what is under the hand is story A,
         // unaltered, all the way down.
@@ -2104,6 +2110,7 @@ struct StoryViewer: View {
                          velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
                          stiffness: CGFloat? = nil, settle: CGFloat? = nil,
                          cover: ((CGFloat) -> CGFloat)? = nil,
+                         crop: ((CGFloat) -> CGFloat)? = nil,
                          done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
@@ -2114,6 +2121,7 @@ struct StoryViewer: View {
                                   y: hero.fromC.y + (hero.toC.y - hero.fromC.y) * t)
             hero.alpha = hero.fromA + (hero.toA - hero.fromA) * alphaCurve(t)
             if let cover { hero.coverAlpha = cover(t) }
+            if let crop { hero.crop = crop(t) }
             applyHero()
         }, completion: done)
     }
@@ -2180,6 +2188,10 @@ struct StoryViewer: View {
             hero.alpha = 1
             hero.cover = true          // the tapped card is the one on the cover, by definition
             hero.coverAlpha = 1        // the seat is the thumbnail; the flight dissolves it away
+            // Seated IN the slot, so it wears the slot's shape; the open lets it back out to the
+            // whole 9:16 picture on the same curve that dissolves the cover, which is what keeps
+            // the unfolding hidden under the thumbnail while it happens.
+            hero.crop = 1
             // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
@@ -2209,10 +2221,11 @@ struct StoryViewer: View {
             //
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
                     stiffness: 450, settle: 0.0008,
-                    cover: heroCoverOut) {
+                    cover: heroCoverOut, crop: heroCoverOut) {
                 hero.live = false
                 hero.cover = false
                 hero.coverAlpha = 0
+                hero.crop = 0
                 // Belt only: `applyHero` has already crossed both of these on the way in, at 0.18.
                 if heroFlying { heroFlying = false }
                 if hero.chromeHidden {
@@ -2301,6 +2314,7 @@ struct StoryViewer: View {
         hero.center = rest
         hero.alpha = 1
         hero.coverAlpha = 0        // starts on the live story, exactly as a released drag does
+        hero.crop = 0              // and on the whole picture, so a button close is the same flight
         StoryCardMorph.heroDismissActive = true
         StoryCardMorph.shared.prepareForHero?()
         // The surround leaves on the fraction, exactly as it does under a finger — a button close
@@ -2333,6 +2347,12 @@ struct StoryViewer: View {
             // half-dissolved thumbnail. It comes back only if this drag commits.
             hero.cover = heroKeyNow() == heroSourceKey
             hero.coverAlpha = 0
+            // AND NOTHING IS SHAVED OFF IT EITHER (his spec: "uniform scale only… preserving the
+            // full video/image visibility without cropping any edges"). A finger seizing the card
+            // mid-open gets the same deal, which is why this is written here rather than only on
+            // `.began`: whatever the open had reconciled so far is released back to the whole
+            // picture the moment the gesture takes over.
+            hero.crop = 0
             // THE REPLY BAR STEPS ASIDE ON THE FRACTION, THE CARD'S OWN CHROME STAYS ON THE CARD.
             //
             // This used to post `storyChromeHidden`, which took the progress bars and the name with
@@ -2361,7 +2381,13 @@ struct StoryViewer: View {
             // The LANDING still travels sideways, and that is a different thing: the card it flies
             // home to sits wherever it sits in the row. What is locked is the part the finger owns.
             hero.center = CGPoint(x: hero.rest.x, y: hero.rest.y + ty)
-            hero.alpha = 1 - Self.heroFade * hero.f
+            // OPAQUE ALL THE WAY DOWN. This used to be `1 - heroFade * f`, softening the story to
+            // about 94% across a normal pull and 78% at the end of the span, and his report is that
+            // the chat list shows THROUGH the story like glass. It does: there is a dimmed but fully
+            // drawn list right behind it, so even a few percent reads as the card being see-through.
+            // The background giving way is `heroDim`'s job and it already does it. Nothing about the
+            // picture itself should say "leaving" except its size and its position.
+            hero.alpha = 1
             applyHero()
             // NOTHING ELSE IS WRITTEN HERE. `dragDown` used to be set on the first six points so the
             // owner bar could hide itself, which made the same piece of chrome answer to two rules —
@@ -2429,10 +2455,13 @@ struct StoryViewer: View {
             // card cross-fades from the story he was watching into the row card's own picture —
             // avatar ring, border and all — and is finished before it touches down.
             runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining),
-                    cover: heroCoverIn, done: land)
+                    cover: heroCoverIn, crop: heroCoverIn, done: land)
         } else {
+            // No cover on this one, but the SHAPE still has to converge: it is landing on somebody
+            // else's card and a 9:16 rectangle would overhang their slot top and bottom. Same curve,
+            // so it too is the row's shape before it touches down.
             runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
-                    alphaCurve: { $0 * $0 * $0 }, done: land)
+                    alphaCurve: { $0 * $0 * $0 }, crop: heroCoverIn, done: land)
         }
         // A FLIGHT THAT NEVER LANDS MUST NOT TRAP HIM IN THE VIEWER.
         //
@@ -2456,7 +2485,7 @@ struct StoryViewer: View {
         // No cover on a spring-back: there is nothing to exchange, the story is going back to being
         // the whole screen. It was already 0 through the drag and stays there.
         runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining,
-                cover: { _ in 0 }) {
+                cover: { _ in 0 }, crop: { _ in 0 }) {
             hero.live = false
             hero.cover = false
             if heroFlying { heroFlying = false }     // belt: applyHero crossed this at 0.18
