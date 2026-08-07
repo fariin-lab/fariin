@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import QuartzCore   // CACurrentMediaTime, for StoryRowPress's quiet window
 
 //
 // THE STORIES ROW'S LONG PRESS, ON THE APP'S OWN MENU.
@@ -29,6 +30,27 @@ import UIKit
 //
 // See [[kulan-story-row-isolation-rule]]: this area ships alone.
 //
+
+/// THE BELT FOR THE SAME BUG, because the gesture rule above depends on SwiftUI's Button being a
+/// UIGestureRecognizer we can out-rank, and that is an implementation detail of a framework rather
+/// than a promise. If a future SwiftUI drives its taps some other way, refusing simultaneity stops
+/// meaning anything and the story opens on release again.
+///
+/// So the row's own open ALSO declines while a press owns the finger. The window extends past the
+/// lift because a Button's action fires on touch-up, which is the same instant the recogniser ends,
+/// and nothing orders those two.
+enum StoryRowPress {
+    private static var active = false
+    private static var quietUntil: CFTimeInterval = 0
+
+    static var swallowsTap: Bool { active || CACurrentMediaTime() < quietUntil }
+
+    static func began() { active = true }
+    static func ended() {
+        active = false
+        quietUntil = CACurrentMediaTime() + 0.35
+    }
+}
 
 /// What a press on the row found: which card, where it is, and what its menu should say.
 struct StoryMenuTarget {
@@ -135,15 +157,32 @@ struct StoryRowLongPress: UIViewRepresentable {
             overlay?.dismiss(animated: false)
         }
 
-        /// Let the scroll view's pan and the cards' own taps carry on. A horizontal scroll cancels
-        /// the press by itself, which is the behaviour a row of cards should have.
+        /// ⚠️ THE SCROLL, YES. THE CARD'S TAP, NO — and that distinction is the whole of his
+        /// "releasing after a long press opens the story".
+        ///
+        /// This returned `true` for everything, and the note at the top of the file claimed that on
+        /// recognising, "UIKit cancels the touch the Button was tracking". It does not, and cannot,
+        /// while we are saying yes to the Button's own recogniser: granting simultaneity is
+        /// precisely the instruction to let it carry on. So the press raised the menu, the finger
+        /// lifted, the tap that had been tracking the whole time fired, and the story opened behind
+        /// the menu.
+        ///
+        /// Refusing it restores the standard rule: a recogniser that recognises cancels the others
+        /// analysing the same touches unless it has agreed to share them. The pan keeps its yes,
+        /// because a horizontal scroll must still be able to take the press away — that is the
+        /// behaviour a row of cards should have and it is the only reason this method exists.
         func gestureRecognizer(_ g: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            other is UIPanGestureRecognizer
+        }
 
         @objc private func pressed(_ g: UILongPressGestureRecognizer) {
             let p = g.location(in: nil)
             switch g.state {
             case .began:
+                // Raised BEFORE the early-outs below: the finger is already past the threshold, so
+                // the tap must be swallowed even on a press that finds no card to lift.
+                StoryRowPress.began()
                 guard overlay == nil,
                       let window = g.view?.window,
                       let t = target(p),
@@ -183,6 +222,7 @@ struct StoryRowLongPress: UIViewRepresentable {
                 overlay?.fingerMoved(to: p)
 
             case .ended, .cancelled, .failed:
+                StoryRowPress.ended()
                 overlay?.fingerEnded(at: p)
 
             default:

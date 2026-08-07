@@ -501,7 +501,9 @@ struct StoriesRow: View {
                                     avatar: g.photoUrl,
                                     seen: displayedSeen(g),
                                     cardW: cardW,
-                                    onOpen: { onOpen(g) },
+                                    // A press that raised the menu must not also open the story when
+                                    // the finger lifts — see `StoryRowPress`.
+                                    onOpen: { guard !StoryRowPress.swallowsTap else { return }; onOpen(g) },
                                     storyNS: storyNS,
                                     groupID: g.id)
                         .equatable()
@@ -610,6 +612,9 @@ struct StoriesRow: View {
                      name: "My Story", avatarName: meName, avatar: mePhoto,
                      seen: repo.mine.map(displayedSeen) ?? [],
                      heroKey: repo.mine?.id, onBadge: onCompose) {
+                    // Same swallow as the friend cards: My Story is pressed on the same row by the
+                    // same recogniser, and its menu is raised the same way.
+                    guard !StoryRowPress.swallowsTap else { return }
                     if let m = repo.mine { onOpen(m) } else { onCompose() }
                 }
                 // The menu is the ROW's now, in UIKit, lifting this card's own pixels — see
