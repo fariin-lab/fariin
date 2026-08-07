@@ -2103,13 +2103,36 @@ struct StoryViewer: View {
     ///
     /// In the middle: Snapchat's grey, from his screenshots — the list behind is clearly dimmed but
     /// still readable, which is what makes the story read as lifting off it.
+    /// ⚠️ NO PLATEAU. It used to hold a flat `heroDimMax` from f 0.15 all the way to 0.75 and only
+    /// let go over the last quarter, which is 60% of the journey during which the backdrop did not
+    /// move at all. That is his 2026-08-07 report in as many words: "the dimming level does not feel
+    /// fluid or bound to the story frame scale… bind the overlay's opacity directly to the transition
+    /// progress". A drag is exactly where a plateau is most visible, because his finger is setting
+    /// the fraction by hand and the background is answering with a constant.
+    ///
+    /// One continuous, monotonic curve now. It is written every frame already (`applyCore` sets the
+    /// wall's `backgroundColor` inside the same disabled-actions transaction as the transform), so
+    /// binding it to `f` binds it to the finger.
+    ///
+    /// The two ends are still DIFFERENT and that part must not be "simplified":
+    /// * f → 0 (full screen) goes to OPAQUE, not to `heroDimMax`. The wall IS the story screen's
+    ///   black above and below the card, so it has to arrive WITH the card. A symmetric curve here
+    ///   was his build-487 report, with the white strips circled top and bottom.
+    /// * f → 1 (the row) lets go to nothing, so the landing reveals the chat list rather than a grey
+    ///   pane sitting over it at the exact moment the cover is lifted.
     private func heroDim(_ f: CGFloat) -> CGFloat {
         let f = max(0, min(1, f))
-        if f < 0.15 {
-            return 1 - (1 - Self.heroDimMax) * (f / 0.15)
+        // The last stretch into full screen, where the letterbox has to become solid.
+        if f < Self.heroDimSolid {
+            return 1 - (1 - Self.heroDimMax) * (f / Self.heroDimSolid)
         }
-        return Self.heroDimMax * (f > 0.75 ? max(0, (1 - f) / 0.25) : 1)
+        // Everything else: straight down to nothing, proportional to how far the card has travelled.
+        // Linear on purpose — "proportional to the user's drag distance" is what he asked for, and an
+        // eased curve would put the change somewhere other than where his finger is.
+        return Self.heroDimMax * (1 - (f - Self.heroDimSolid) / (1 - Self.heroDimSolid))
     }
+    /// How much of the journey nearest full screen is spent turning the wall solid.
+    private static let heroDimSolid: CGFloat = 0.15
 
     /// THE CARD THIS STORY BELONGS TO RIGHT NOW, which is not always the one it was opened from.
     ///
