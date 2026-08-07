@@ -1357,6 +1357,25 @@ struct ChatsView: View {
             .onChange(of: path.count) {
                 showHeaderIcons = path.isEmpty
             }
+            // THE CHAT LIST DARKENS WHILE A STORY IS OPEN.
+            //
+            // His shot of the drag-down close: white above and below the shrinking story. That white
+            // is this screen, at full size, in light mode — the Edit pill and the toolbar icons are
+            // visible in it. Nothing was drawing white; our app is simply light and Snapchat's is
+            // dark, so their story pulls away from a dark surface and ours pulled away from a white
+            // one.
+            //
+            // It has to live HERE rather than in the cover, and that is the whole point: anything
+            // inside the cover shrinks with the cover, so it can never darken what is behind it.
+            //
+            // Only while a viewer is up, which is the only time this screen is visible behind one.
+            // Not animated on purpose — it appears under a cover that already covers it, so the
+            // first frame anybody sees is during the transition.
+            .overlay {
+                if viewerGroup != nil || showUploadViewer {
+                    Color.black.opacity(0.45).ignoresSafeArea().allowsHitTesting(false)
+                }
+            }
             // Add Story opens the CAMERA, full screen (owner 2026-08-03). It was a bottom sheet
             // holding a picker; a camera in a card with the chat list showing behind it is not a
             // camera, and the sheet's own drag-to-dismiss would fight the preview.
