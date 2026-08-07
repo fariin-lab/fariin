@@ -681,7 +681,11 @@ struct ChatsView: View {
     private func openStoryFromRow(_ g: StoryGroup) {
         guard !StoryZoomPresenter.isActive else { return }   // one viewer at a time
         presenterGroup = g                                    // holds the row order still
-        StoryZoomPresenter.present(rowViewer(for: g))
+        // The tapped card's live view: the presenter photographs it and the flight wears the
+        // snapshot — the shared-element open (thumbnail expands, dissolves to the story), and the
+        // close's pixel-matched landing into the emptied slot.
+        StoryZoomPresenter.present(rowViewer(for: g),
+                                   coverFrom: MediaOpenRects.liveView(MediaOpenRects.key(.storyRow, g.id)))
     }
 
     /// Presenter teardown shared by every exit: reveal the row card, release the row order, and

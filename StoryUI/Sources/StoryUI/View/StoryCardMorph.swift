@@ -76,6 +76,25 @@ public final class StoryCardMorph {
     private weak var flightCard: UIView?
     private var flightMask: CAShapeLayer?
 
+    /// THE COVER THE OPEN WEARS. His frame-grab of the open showed the problem exactly: the flying
+    /// card faded in as a half-transparent ghost of the full-screen layout over a row card that
+    /// never moved — where Snapchat's growing thing is the cover picture itself, opaque from the
+    /// first pixel, dissolving into the live story mid-flight. So the presenter hangs a snapshot of
+    /// the tapped row card here (inside the flight container, above the content), the open seats
+    /// the card OPAQUE wearing it — pixel-matched to the row card it covers, so nothing can pop —
+    /// and dissolves it away while the card grows. Framed to the card strip on every apply, because
+    /// the strip's metrics arrive with layout. Alpha is driven by the OPEN's own tick alone; it
+    /// stays 0 for the close, whose landing crossfade into the real row card is untouched.
+    public weak var flightCover: UIView?
+
+    public func setFlightCoverAlpha(_ a: CGFloat) {
+        guard let flightCover else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        flightCover.alpha = max(0, min(1, a))
+        CATransaction.commit()
+    }
+
     /// Where the STORY CARD sits inside the registered view: how far down it starts, and how tall it
     /// is. The view is a page-wide strip; the card is 9:16 and pinned to the safe-area top inside it
     /// (Telegram's rule, see `StoryDetailView.cardHeight`). Shrinking the whole VIEW would carry the
@@ -224,6 +243,7 @@ public final class StoryCardMorph {
         flightCard.alpha = 1
         flightCard.layer.mask = nil
         flightMask = nil
+        flightCover?.alpha = 0   // the cover belongs to flights; at rest the live story is the screen
         flightCard.superview?.backgroundColor = .black
         CATransaction.commit()
     }
@@ -338,6 +358,9 @@ public final class StoryCardMorph {
         // both live inside the same disabled-actions block.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // The open's cover rides the card strip exactly, framed on every apply because the strip's
+        // metrics arrive with layout. Alpha is not touched here — the flight's own tick owns it.
+        if !sheet { flightCover?.frame = content }
         // The crop, in the view's own untransformed coordinates: the card's width, and whatever
         // height renders as `visibleH` once the scale is applied, centred on the CARD. This is also
         // what hides the black above and below the card once the sheet is open.

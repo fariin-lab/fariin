@@ -41,10 +41,21 @@ enum StoryZoomPresenter {
     /// One viewer at a time; the row's onOpen guards on this too.
     static var isActive: Bool { container != nil }
 
-    static func present<Content: View>(_ content: Content) {
+    /// `coverFrom`: the tapped row card's live view. It is photographed HERE, at tap time while it
+    /// is definitely on screen, and the snapshot rides the flight as the cover the open wears —
+    /// the shared-element look he named from Snapchat: the thumbnail itself expands, opaque from
+    /// the first pixel, and dissolves into the live story mid-flight. Nil (card scrolled away, or
+    /// capture failed) degrades to the open without a cover, which is the pre-cover behaviour.
+    static func present<Content: View>(_ content: Content, coverFrom source: UIView? = nil) {
         guard container == nil else { return }
         guard let top = topController() else { return }
         let vc = StoryZoomContainerVC()
+        if let source, source.bounds.width > 1, source.bounds.height > 1 {
+            let shot = UIGraphicsImageRenderer(bounds: source.bounds).image { _ in
+                source.drawHierarchy(in: source.bounds, afterScreenUpdates: false)
+            }
+            vc.setCoverImage(shot)
+        }
         vc.setContent(AnyView(content))
         container = vc
         // animated:false is the whole design: the card flying out of the row IS the open animation
@@ -99,6 +110,12 @@ final class StoryZoomContainerVC: UIViewController {
     let flightView = UIView()
     private var hosting: UIHostingController<AnyView>?
     private var pendingRoot: AnyView?
+    /// The snapshot of the tapped row card, worn by the open and by the close's landing. Lives
+    /// INSIDE flightView (top-most), so it rides the flight's transform and mask for free; framed
+    /// to the card strip by `StoryCardMorph.applyCore`; alpha driven only by the flight's ticks.
+    /// Born invisible: before the flight has geometry its frame falls back to the whole screen,
+    /// and a full-screen cover flash is exactly the kind of frame this system exists to kill.
+    private var coverView: UIImageView?
 
     init() {
         super.init(nibName: nil, bundle: nil)
@@ -150,6 +167,14 @@ final class StoryZoomContainerVC: UIViewController {
         }
     }
 
+    func setCoverImage(_ image: UIImage) {
+        let iv = UIImageView(image: image)
+        iv.contentMode = .scaleAspectFill   // the strip is taller than the row card; crop, never stretch
+        iv.clipsToBounds = true
+        iv.alpha = 0
+        coverView = iv
+    }
+
     private func mount(_ root: AnyView) {
         let hc = UIHostingController(rootView: root)
         hc.view.backgroundColor = .clear   // the wall behind answers for what shows through
@@ -159,6 +184,12 @@ final class StoryZoomContainerVC: UIViewController {
         flightView.addSubview(hc.view)
         hc.didMove(toParent: self)
         hosting = hc
+        // The cover sits ABOVE the content, inside the transformed container: it rides the flight's
+        // transform and mask untouched, and only its alpha is ever driven.
+        if let coverView {
+            flightView.addSubview(coverView)
+            StoryCardMorph.shared.flightCover = coverView
+        }
     }
 
     func tearDown() {
@@ -166,6 +197,7 @@ final class StoryZoomContainerVC: UIViewController {
         // back to identity — done before the dismissal that would be one frame of full-screen story
         // painted between the landing and the removal. Off-window, the reset touches nobody.
         dismiss(animated: false)
+        if StoryCardMorph.shared.flightCover === coverView { StoryCardMorph.shared.flightCover = nil }
         // Identity-checked detach, same contract as the pagers': a successor presented before this
         // teardown finishes must not lose its registration.
         StoryCardMorph.shared.detachFlight(flightView)

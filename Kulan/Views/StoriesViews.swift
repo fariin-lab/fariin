@@ -2008,14 +2008,16 @@ struct StoryViewer: View {
     /// Run the single scalar from 0 to 1, interpolating every value in `hero` between the two ends
     /// stored on it. `velocity` is the finger's, in progress units per second, so a flick carries
     /// its own speed into the spring instead of restarting from rest.
-    /// `alphaCurve` reshapes TIME for the alpha alone (geometry stays on the spring's own t). Both
-    /// crossfades use it: the landing hands `t³` (tail-heavy — solid while it travels, melting only
-    /// as it arrives) and the open hands its mirror `1-(1-t)³` (head-heavy — in within the first
-    /// third of the lift). A whole-journey linear fade is the one shape neither may use: that was
-    /// the see-through flying card he reported on an earlier build.
+    /// `alphaCurve` reshapes TIME for the whole-card alpha alone (geometry stays on the spring's
+    /// own t). Since the shared-element cover arrived, NEITHER flight fades the card itself — the
+    /// card stays solid end to end and the COVER dissolves instead, driven by `tick`. The curve
+    /// stays for the day a caller needs a whole-card fade again; if one does, never make it
+    /// whole-journey linear — that was the see-through flying card he reported on an earlier build.
+    /// `tick` runs after each `applyHero`, so the cover's frame is already laid when it fires.
     private func runHero(to endF: CGFloat, center endC: CGPoint, alpha endA: CGFloat,
                          velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
                          stiffness: CGFloat? = nil, settle: CGFloat? = nil,
+                         tick: ((CGFloat) -> Void)? = nil,
                          done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
@@ -2026,6 +2028,7 @@ struct StoryViewer: View {
                                   y: hero.fromC.y + (hero.toC.y - hero.fromC.y) * t)
             hero.alpha = hero.fromA + (hero.toA - hero.fromA) * alphaCurve(t)
             applyHero()
+            tick?(t)   // after applyHero: the cover's frame is laid by the apply, its alpha by this
         }, completion: done)
     }
 
@@ -2078,16 +2081,17 @@ struct StoryViewer: View {
             hero.anchor = anchor
             hero.f = 1
             hero.center = CGPoint(x: anchor.midX, y: anchor.midY)
-            // BORN INVISIBLE, EXACTLY OVER THE ROW CARD. The viewer does not necessarily open on
-            // the story the row card is showing: the card previews the NEWEST story, the viewer
-            // opens where the resume rule says (his example: the card shows B, the viewer opens on
-            // unseen A). Seating the card at full alpha swapped B for A in one frame at lift-off —
-            // his report, with the required feel spelled out: "it should look like Story B is
-            // smoothly transitioning into Story A". So the open is a crossfade too, the mirror of
-            // the landing: the flying card fades IN over the still-visible row card during the
-            // first stretch of the growth, and whatever it contains dissolves out of the picture
-            // the row was showing.
-            hero.alpha = 0
+            // BORN SOLID, WEARING THE ROW CARD'S OWN PICTURE. Two failed shapes came before this
+            // one. A hard-alpha seat swapped the card's preview (newest story) for the story the
+            // viewer opens on (first unwatched) in one frame — his B-pops-to-A report. Then an
+            // alpha-0 fade-in fixed the pop but flew as a half-transparent ghost over a row card
+            // that never moved — his frame-grab, against Snapchat where "the thumbnail itself
+            // expands". The shared-element answer keeps both promises: the presenter photographed
+            // the tapped card at tap time, that snapshot (`flightCover`) sits on top of the flying
+            // card, the seat is fully opaque and pixel-identical to the slot it covers, and the
+            // cover dissolves into the live story while the card grows. Nothing can pop, and
+            // nothing is ever transparent.
+            hero.alpha = 1
             // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
@@ -2101,34 +2105,42 @@ struct StoryViewer: View {
             // Same on the way in as on the way out: no reply bar sitting at the bottom of the chat
             // list while the card is still growing out of the row.
             NotificationCenter.default.post(name: .init("storyFlightActive"), object: true)
+            // The cover goes on BEFORE the first painted frame of the seat, in the same transaction
+            // family as the apply below — the seat must never paint the fitted mini-layout bare.
+            StoryCardMorph.shared.setFlightCoverAlpha(1)
             applyHero()
-            // The row card is NOT hidden any more, on either end of the flight. The open needs it
-            // as the crossfade's bottom layer (see `hero.alpha` above), and the close lands on it
-            // the same way. "The same picture twice" cannot happen: at the seat the flying card is
-            // fully transparent, and by the time it is opaque it has left the slot.
+            // THE SLOT EMPTIES, Snapchat's way, on his frame-grabs (2026-08-07): "the card goes
+            // [to] the empty place it comes from... [the] place is empty and waiting to fill it
+            // back". The card that lifted off IS the slot's picture (the cover above), so hiding
+            // the real one costs nothing and the row shows a waiting hole for as long as the story
+            // is open. Revealed by the teardown (`storyPresenterClosed`), not by the open.
+            MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, heroKeyNow()))
             StoryCardMorph.shared.revealAfterHeroOpen?()
-            // Head-heavy alpha: mostly in within the first third of the growth, so the dissolve
-            // reads as part of the lift instead of a slow ghost riding the whole flight.
-            //
             // THE OPEN'S OWN SPRING — softer than the close's, on his Snapchat frame-scrub
             // (2026-08-07): what reads as "smoother" there is not the total time, it is the long
             // gentle glide into full screen, where Signal's 631 arrives and stops. 450 with a finer
             // settle keeps the lift-off just as immediate (80% of the travel still lands inside
-            // ~0.15s) and spends the difference on the landing: ~0.45s of visible motion instead of
-            // ~0.33s with a clipped tail. THE CLOSE IS NOT TOUCHED — its tight settle belongs to a
-            // finger release, and he said so outright ("I don't mean closing").
+            // ~0.15s) and spends the difference on the landing: ~0.45s of visible motion.
+            //
+            // The tick is the cover's dissolve: worn fully for the first fifth of the flight (the
+            // lift reads as the thumbnail itself moving), gone by just past half, so the live story
+            // owns the glide into full screen.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
-                    alphaCurve: { let u = 1 - $0; return 1 - u * u * u },
-                    stiffness: 450, settle: 0.0008) {
+                    stiffness: 450, settle: 0.0008,
+                    tick: { t in
+                        StoryCardMorph.shared.setFlightCoverAlpha(1 - min(1, max(0, (t - 0.2) / 0.35)))
+                    }) {
                 hero.live = false
                 heroFlying = false                          // full screen again: the backing may return
                 NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
                 StoryCardMorph.heroDismissActive = false
-                // `resetFlight`: identity, unmasked, and the presenter's wall opaque again. The
-                // sheet's own `reset` has no business here — the flight never touched its view.
+                // `resetFlight`: identity, unmasked, cover off, and the presenter's wall opaque
+                // again. The sheet's own `reset` has no business here — the flight never touched
+                // its view. NO `MediaSourceVisibility.reveal()` any more: the slot stays EMPTY for
+                // the whole viewing, waiting for the close to fill it back (his Snapchat spec);
+                // the teardown reveals it.
                 StoryCardMorph.shared.resetFlight()
                 StoryCardMorph.shared.restoreAfterHero?()   // the page is opaque black again at rest
-                MediaSourceVisibility.shared.reveal()
             }
         }
         // A fixed ladder of attempts rather than a self-rescheduling retry: the first one that finds
@@ -2222,6 +2234,10 @@ struct StoryViewer: View {
             guard !(showViewers && viewersProgress > 0.02) else { return }
             heroAnimator.cancel()
             guard !hero.committing, let (rest, anchor) = heroEndpoints() else { return }
+            // A finger seizing the card mid-open kills the open's tick above, which was mid-way
+            // through dissolving the cover — take it off outright, or the drag flies a half-ghost
+            // of the row card over the live story.
+            StoryCardMorph.shared.setFlightCoverAlpha(0)
             heroFlying = true      // the black backing steps aside — see `storyLayer`
             hero.live = true
             hero.rest = rest
@@ -2289,15 +2305,17 @@ struct StoryViewer: View {
         // the same.
         NotificationCenter.default.post(name: .init("stopVideo"), object: nil)
         let anchorCentre = CGPoint(x: hero.anchor.midX, y: hero.anchor.midY)
-        // THE ROW CARD STAYS VISIBLE, AND THE FLYING STORY FADES INTO IT. This used to blank the
-        // slot so the two were "never both drawn", and the landing then swapped the live story for
-        // the row's still cover in a single frame. He filmed it and stepped through: a one-frame
-        // flash at the end of every close, "still picture pop", too fast for the eye and exactly
-        // visible in slow motion. Apple's zoom and Telegram's TransitionOut both land by
-        // CROSSFADING the moving picture into the resting one, and that is what the tail-heavy
-        // alpha on the landing spring below does — the card is solid for the flight and melts into
-        // the row card as it arrives. Nothing pops, because at every frame one continuous blend of
-        // the two pictures is on screen.
+        // THE CARD FILLS THE EMPTY SLOT IT LEFT, his Snapchat spec in his own words: "the card
+        // goes [to] the empty place it comes from... waiting to fill it back". The slot has been
+        // hidden since the open. On the way home the flying card puts the COVER back on (the
+        // landing tick below: in from just before half-way, fully worn by four-fifths), so what
+        // touches down is pixel-identical to the row card the teardown then reveals — the swap at
+        // the landing exchanges two identical pictures and cannot pop. This replaces the previous
+        // fade-into-a-visible-card landing: he watched Snapchat frame by frame and asked for the
+        // hole. (The first design here blanked the slot AND landed the live story on it — the
+        // one-frame "still picture pop" he caught in slow motion. The cover is what squares that
+        // circle: the slot can be empty AND the landing seamless, because the flying card itself
+        // becomes the row card before it arrives.)
         // Distance left to travel, so the finger's speed enters the spring in the right units.
         // A hard flick is a strong "close this" and the landing should carry that speed. Capped
         // because the row card can be very close to where the finger let go, and a small `remaining`
@@ -2312,8 +2330,20 @@ struct StoryViewer: View {
             // raised would keep the NEXT story's cube flat for as long as that story was open.
             StoryCardMorph.heroDismissActive = false
         }
-        runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
-                alphaCurve: { $0 * $0 * $0 }, done: land)
+        // The cover-and-hole landing belongs to the TAPPED person's slot alone: only that slot was
+        // emptied, and only its pixels are on the cover. A close after swiping to somebody ELSE
+        // lands on their still-visible card, where a wrong-picture cover would be worse than none —
+        // that case keeps the proven crossfade landing: solid while it travels (t³), melting into
+        // the visible card as it arrives.
+        if heroKeyNow() == heroSourceKey {
+            runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining),
+                    tick: { t in
+                        StoryCardMorph.shared.setFlightCoverAlpha(min(1, max(0, (t - 0.45) / 0.35)))
+                    }, done: land)
+        } else {
+            runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
+                    alphaCurve: { $0 * $0 * $0 }, done: land)
+        }
         // A FLIGHT THAT NEVER LANDS MUST NOT TRAP HIM IN THE VIEWER.
         //
         // `libraryPresented` swallows every close while `committing` is true, which is right — a

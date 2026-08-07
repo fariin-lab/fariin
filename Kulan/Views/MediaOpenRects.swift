@@ -60,6 +60,15 @@ import UIKit
         views[key] = WeakView(view)
     }
 
+    /// The registered view itself, while it is on screen. The story hero snapshots it at tap time:
+    /// the flying card lifts off WEARING the tapped card's own pixels (Snapchat's shared-element
+    /// look — the thumbnail expands, not a screen materialising over it), and the snapshot is what
+    /// it wears. Weak-backed, so a scrolled-away card honestly answers nil.
+    static func liveView(_ key: String) -> UIView? {
+        guard let v = views[key]?.value, v.window != nil else { return nil }
+        return v
+    }
+
     /// Where that card is RIGHT NOW, asked of the view itself. Falls back to the last written
     /// rectangle when there is no live view (a screen that reports rects but has no anchor).
     static func liveRect(_ key: String) -> CGRect? {
