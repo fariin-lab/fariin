@@ -536,7 +536,7 @@ final class StoryViewersSheetView: UIView {
             guard allowed else {
                 if pageDir != 0 { endPagePreview(restore: true) }
                 panel.transform = CGAffineTransform(translationX: tx * 0.25, y: 0)
-                onPageDrag?(tx * 0.25 / max(bounds.width, 1))
+                onPageDrag?(tx * 0.25)   // points too — the rubber-band, at quarter strength
                 return
             }
             if pageDir != dir { beginPagePreview(dir) }
@@ -544,8 +544,20 @@ final class StoryViewersSheetView: UIView {
             // behind. One number, two views, no gap between them at any moment of the drag.
             pageGhost?.transform = CGAffineTransform(translationX: tx, y: 0)
             panel.transform = CGAffineTransform(translationX: tx + CGFloat(dir) * pageTravel, y: 0)
-            // A FRACTION OF THE PANEL'S OWN JOURNEY, not raw points. See the note on `onPageDrag`.
-            onPageDrag?(tx / max(bounds.width, 1))
+            // ⚠️ RAW POINTS, and this line is the one that was lying. It sent `tx / bounds.width`,
+            // a fraction of the screen — while the carousel's own note says it receives POINTS and
+            // divides by `fullDist` to get card units, which is exactly what `CarouselScroller`
+            // does with a finger on the row itself.
+            //
+            // In build 493 I made the carousel do that division and believed the two comments over
+            // this line, so a fraction of about 1 was divided by a distance of about 150 and the row
+            // moved by half a percent of what it should, then jumped when the swipe committed. That
+            // is his "erratic, jumps out of sync", and it was mine.
+            //
+            // Sending points is the fix rather than removing the division, because points are what
+            // makes the two gestures the SAME gesture: a finger on the sheet now moves the row the
+            // same distance per point as a finger on the row, which is what he asked for.
+            onPageDrag?(tx)
         case .ended, .cancelled:
             onDragActive?(false)
             let tx = rawX - pageBaselineX
