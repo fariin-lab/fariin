@@ -419,8 +419,14 @@ struct StoryPager: UIViewControllerRepresentable {
         /// down as a black bar for the whole drag.
         @objc func handleHeroDrag(_ g: UIPanGestureRecognizer) {
             guard let pager else { return }
-            let t = g.translation(in: pager.view)
-            let v = g.velocity(in: pager.view)
+            // WINDOW SPACE, NOT PAGER SPACE, and it is load-bearing now. The flight transforms the
+            // presenter's container ABOVE this view, so pager coordinates shrink with the card as
+            // the drag progresses: a translation measured there is divided by the card's scale,
+            // which inflates every report and compounds frame over frame. The same lesson is
+            // already written on the swipe-up pan. The window is never transformed.
+            let space: UIView = pager.view.window ?? pager.view
+            let t = g.translation(in: space)
+            let v = g.velocity(in: space)
             switch g.state {
             case .began:
                 StoryCardMorph.heroDismissActive = true

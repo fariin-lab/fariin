@@ -56,6 +56,26 @@ public final class StoryCardMorph {
     private weak var card: UIView?
     private var maskLayer: CAShapeLayer?
 
+    /// THE FLIGHT CARD — the second transform target, and the reason there are two.
+    ///
+    /// The hero open/close used to fly the SAME view the sheet shrinks, and for a friend's story
+    /// that view is UIPageViewController's internal scroll view. Build 481's crash is what that
+    /// costs (`queuingScrollView:didEndManualScroll:` asserting while UIKit cleaned up a transition
+    /// we had a transform on): a private view UIKit animates itself is not ours to move, and no
+    /// geometry fix was going to make it safe. The flight therefore moves THIS view instead — the
+    /// full-screen container the app's own presenter (`StoryZoomPresenter`) wraps around the whole
+    /// viewer. Created by us, laid out by nobody, never written to by UIKit: the property the solo
+    /// host's `cardContainer` has always had, now true for BOTH hosts, because the container sits
+    /// above whichever of them is mounted.
+    ///
+    /// The sheet keeps `card` (the inner view): it shrinks the story INSIDE the full-screen viewer
+    /// while the carousel and panel stay put around it. The flight shrinks the WHOLE presented
+    /// screen and crops it to the card strip with its mask — which is also what retires the old
+    /// begging-layers-to-step-aside choreography: anything outside the strip is simply cropped,
+    /// black backings included.
+    private weak var flightCard: UIView?
+    private var flightMask: CAShapeLayer?
+
     /// Where the STORY CARD sits inside the registered view: how far down it starts, and how tall it
     /// is. The view is a page-wide strip; the card is 9:16 and pinned to the safe-area top inside it
     /// (Telegram's rule, see `StoryDetailView.cardHeight`). Shrinking the whole VIEW would carry the
@@ -153,6 +173,61 @@ public final class StoryCardMorph {
         card = view
     }
 
+    // MARK: The flight target
+
+    public var isFlightAvailable: Bool { flightCard != nil }
+
+    public func attachFlight(_ view: UIView?) {
+        flightCard = view
+    }
+
+    /// Identity-checked for the same reason `detach` is: a teardown must never clear a successor's
+    /// registration.
+    public func detachFlight(_ view: UIView?) {
+        guard let view, flightCard === view else { return }
+        resetFlight()
+        flightCard = nil
+    }
+
+    /// The card strip inside the flight container, in WINDOW coordinates, at rest. Resolved from
+    /// the same metrics `cardWindowRect` uses, against a view whose `bounds.origin` is structurally
+    /// zero — the double-counted-offset trap in `applyMask` cannot arise here. Read it before a
+    /// transform is applied, or `convert` folds that transform into the answer.
+    public var flightRestRect: CGRect? {
+        guard let flightCard, flightCard.window != nil, flightCard.bounds.width > 1, cardHeight > 1 else { return nil }
+        let r = contentRect(in: flightCard)
+        guard r.width > 1, r.height > 1 else { return nil }
+        return flightCard.convert(r, to: nil)
+    }
+
+    /// `apply`, on the flight container. Same interpolation, same mask discipline, shared core —
+    /// two copies of geometry that must agree to the pixel is the mistake this file keeps warning
+    /// about, so there is exactly one. No `dismissActive` guard: the library's own dismiss pan is
+    /// never installed on a hero presentation, so the two cannot contest this view.
+    public func applyFlight(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
+                            centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil) {
+        guard let flightCard else { return }
+        applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
+                  targetCenter: targetCenter, cornerRadius: cornerRadius,
+                  centerOverride: centerOverride, alpha: alpha, dim: dim)
+    }
+
+    /// Flight over: container back to identity, unmasked — and the wall behind it opaque again. The
+    /// dim writes onto the container's superview (the presenter's wall), and at rest that wall must
+    /// be solid black, or a friend's full-bleed story would show the chat list through its own
+    /// letterbox.
+    public func resetFlight() {
+        guard let flightCard else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        flightCard.transform = .identity
+        flightCard.alpha = 1
+        flightCard.layer.mask = nil
+        flightMask = nil
+        flightCard.superview?.backgroundColor = .black
+        CATransaction.commit()
+    }
+
     /// ONLY IF IT IS STILL THE CARD THIS CALLER ATTACHED.
     ///
     /// SwiftUI builds a replacement representable BEFORE it dismantles the one it is replacing, so a
@@ -198,14 +273,28 @@ public final class StoryCardMorph {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
-        guard !StoryPager.dismissActive, let card, let superview = card.superview else { return }
+        guard !StoryPager.dismissActive, let card else { return }
+        applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
+                  targetCenter: targetCenter, cornerRadius: cornerRadius,
+                  centerOverride: centerOverride, alpha: alpha, dim: dim)
+    }
+
+    /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
+    /// reset that runs on the early-out, nothing else differs.
+    private func applyCore(on card: UIView, sheet: Bool,
+                           fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
+                           cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?) {
+        guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
         // drag, and the surface behind should already be answering to it.
         if let dim { superview.backgroundColor = UIColor.black.withAlphaComponent(max(0, min(1, dim))) }
         // A hero drag begins at fraction 0 and moves the card by translation alone for the first
         // few points, so "nothing to do" cannot be decided from the fraction on its own any more.
-        guard f > 0.001 || centerOverride != nil else { reset(); return }
+        guard f > 0.001 || centerOverride != nil else {
+            if sheet { reset() } else { resetFlight() }
+            return
+        }
         let content = contentRect(in: card)
         let restW = content.width, restH = content.height
         guard restW > 1, restH > 1, card.bounds.width > 1 else { return }
@@ -252,7 +341,8 @@ public final class StoryCardMorph {
         // The crop, in the view's own untransformed coordinates: the card's width, and whatever
         // height renders as `visibleH` once the scale is applied, centred on the CARD. This is also
         // what hides the black above and below the card once the sheet is open.
-        applyMask(rect: CGRect(x: content.minX,
+        applyMask(on: card, sheet: sheet,
+                  rect: CGRect(x: content.minX,
                                y: content.midY - min(restH, visibleH / scale) / 2,
                                width: restW,
                                height: min(restH, visibleH / scale)),
@@ -364,7 +454,7 @@ public final class StoryCardMorph {
         guard let card else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        applyMask(rect: contentRect(in: card), cornerRadius: cornerRadius / max(scale, 0.05))
+        applyMask(on: card, sheet: true, rect: contentRect(in: card), cornerRadius: cornerRadius / max(scale, 0.05))
         CATransaction.commit()
     }
 
@@ -397,14 +487,14 @@ public final class StoryCardMorph {
     /// `rect` is already centred on the card by the caller: the crop takes equal bites off its top
     /// and bottom, which keeps the subject of the photo where the eye left it. A top-anchored crop is
     /// the same mistake the reverted scaleEffect versions made in a different form.
-    private func applyMask(rect: CGRect, cornerRadius: CGFloat) {
-        guard let card else { return }
+    private func applyMask(on card: UIView, sheet: Bool, rect: CGRect, cornerRadius: CGFloat) {
         let layer: CAShapeLayer
-        if let maskLayer, card.layer.mask === maskLayer {
-            layer = maskLayer
+        let existing = sheet ? maskLayer : flightMask
+        if let existing, card.layer.mask === existing {
+            layer = existing
         } else {
             layer = CAShapeLayer()
-            maskLayer = layer
+            if sheet { maskLayer = layer } else { flightMask = layer }
             card.layer.mask = layer
         }
         // THE MASK'S OWN GEOMETRY, stated rather than left at CoreAnimation's default.

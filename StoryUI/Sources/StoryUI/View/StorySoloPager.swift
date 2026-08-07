@@ -186,8 +186,13 @@ struct StorySoloPager: UIViewControllerRepresentable {
         /// Reports the finger; the host owns every decision. See `StoryPager.handleHeroDrag`.
         @objc func handleHeroDrag(_ g: UIPanGestureRecognizer) {
             guard let host else { return }
-            let t = g.translation(in: host.view)
-            let v = g.velocity(in: host.view)
+            // WINDOW space, for the same reason as the swipe-up pan above and the pager's hero
+            // drag: the flight scales the presenter's container ABOVE this view, so host-space
+            // deltas inflate by 1/scale as the card shrinks — a compounding feedback loop. The
+            // window is never transformed.
+            let space: UIView = host.view.window ?? host.view
+            let t = g.translation(in: space)
+            let v = g.velocity(in: space)
             switch g.state {
             case .began:
                 StoryCardMorph.heroDismissActive = true
