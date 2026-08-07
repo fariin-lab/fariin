@@ -433,7 +433,9 @@ public final class StoryCardMorph {
         let flightRadius = cardCornerRadius + (cornerRadius - cardCornerRadius) * min(1, f / 0.12)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
-                  outside: sheet ? 0 : chrome)
+                  outside: sheet ? 0 : chrome,
+                  // The sheet has no surround to round: its `outside` is 0, a hard crop.
+                  outsideRadius: sheet ? 0 : flightRadius / scale)
         card.transform = CGAffineTransform(translationX: dx, y: dy).scaledBy(x: scale, y: scale)
         if abs(card.alpha - alpha) > 0.001 { card.alpha = alpha }
         CATransaction.commit()
@@ -580,7 +582,7 @@ public final class StoryCardMorph {
     /// surround with no second view, no SwiftUI write and no animation of its own. 0 is the hard crop
     /// this has always done.
     private func applyMask(on card: UIView, sheet: Bool, rect: CGRect, cornerRadius: CGFloat,
-                           outside: CGFloat = 0) {
+                           outside: CGFloat = 0, outsideRadius: CGFloat = 0) {
         // ⚠️ A LAYER WITH A CORNER RADIUS, NOT A BEZIER PATH, AND THE REASON IS HIS WHITE CORNERS.
         //
         // This was a CAShapeLayer whose path came from `UIBezierPath(roundedRect:cornerRadius:)`,
@@ -649,5 +651,15 @@ public final class StoryCardMorph {
         // The surround. Black is arbitrary — only the alpha reaches the mask.
         let o = max(0, min(1, outside))
         layer.backgroundColor = o > 0.001 ? UIColor.black.withAlphaComponent(o).cgColor : nil
+        // AND THE SURROUND IS A CARD TOO, not a square sheet of screen.
+        //
+        // His 2026-08-07 screenshot of a friend's story opening, bottom-left corner circled: the card
+        // had its rounded corner and the black strip under it carrying the reply bar was square, so
+        // the moment the reply bar faded in the page grew square shoulders under a rounded card. This
+        // container IS that strip — it is the whole page, and its alpha is what lets the surround
+        // through — so it needs the same corner the card has. Same continuous curve, same radius,
+        // which means the thing that grows out of the row reads as one card end to end.
+        layer.cornerCurve = .continuous
+        layer.cornerRadius = max(0, min(outsideRadius, min(layer.bounds.width, layer.bounds.height) / 2))
     }
 }
