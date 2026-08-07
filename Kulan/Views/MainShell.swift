@@ -679,13 +679,33 @@ struct ChatsView: View {
     /// door still presents the cover with Apple's zoom, deliberately, until this surface is proven
     /// on a real phone (spec §9).
     private func openStoryFromRow(_ g: StoryGroup) {
+        openStory(g, sourceKey: g.id, pinned: false)
+    }
+
+    /// THE CHAT LIST'S RINGED AVATAR, on the same presentation as the row (migration 2/7).
+    ///
+    /// It used to raise the cover with Apple's zoom (`viewerSourceID` + `viewerHero = false`). It now
+    /// goes through the presenter like everything else, and because the ring reports its radius as
+    /// half its width, the story lands back into a CIRCLE — the owner's Snapchat reference.
+    ///
+    /// `pinned`, unlike the row: the viewer pages person to person, and there is no ring in this list
+    /// for "whoever you paged to" — or if there is, it is somewhere else on a list that has not
+    /// scrolled. The anchor is the one that was tapped, which is exactly what the zoom did with
+    /// `viewerSourceID`.
+    private func openStoryFromRing(_ conv: Conversation, _ g: StoryGroup) {
+        openStory(g, sourceKey: "row-\(conv.id)", pinned: true)
+    }
+
+    /// One door for every story open. `sourceKey` is the `MediaOpenRects` key of the thing that was
+    /// tapped, and it decides both what the flight lands on and what shape it lands in.
+    private func openStory(_ g: StoryGroup, sourceKey: String, pinned: Bool) {
         guard !StoryZoomPresenter.isActive else { return }   // one viewer at a time
         presenterGroup = g                                    // holds the row order still
-        // The tapped card's live view: the presenter photographs it and the flight wears the
-        // snapshot — the shared-element open (thumbnail expands, dissolves to the story), and the
-        // close's pixel-matched landing into the emptied slot.
-        StoryZoomPresenter.present(rowViewer(for: g),
-                                   coverFrom: MediaOpenRects.liveView(MediaOpenRects.key(.storyRow, g.id)))
+        // The tapped view: the presenter photographs it and the flight wears the snapshot — the
+        // shared-element open (thumbnail expands, dissolves to the story), and the close's
+        // pixel-matched landing into the emptied slot.
+        StoryZoomPresenter.present(rowViewer(for: g, sourceKey: sourceKey, pinned: pinned),
+                                   coverFrom: MediaOpenRects.liveView(MediaOpenRects.key(.storyRow, sourceKey)))
     }
 
     /// Presenter teardown shared by every exit: reveal the row card, release the row order, and
@@ -703,7 +723,10 @@ struct ChatsView: View {
     /// `refeed: true` builds the replacement viewer for a delete-with-stories-remaining swap: the
     /// screen is already up, so the new viewer must not replay the open flight (`heroStageOpen`).
     @ViewBuilder
-    private func rowViewer(for g: StoryGroup, refeed: Bool = false) -> some View {
+    private func rowViewer(for g: StoryGroup, refeed: Bool = false,
+                           sourceKey: String? = nil, pinned: Bool = false) -> some View {
+        // The row's own key by default, so the refeed path and every existing caller are unchanged.
+        let key = sourceKey ?? g.id
         // Match the row: don't let swiping land on a HIDDEN person's story — same rule as the cover.
         let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
         // THE HERO CLOSE'S EXIT: the card has already flown home by the time this runs, so the
@@ -739,13 +762,14 @@ struct ChatsView: View {
         }
         if let idx = others.firstIndex(where: { $0.id == g.id }) {
             StoryViewer(groups: others, startIndex: idx,
-                        heroDismiss: true, heroSourceKey: g.id,
+                        heroDismiss: true, heroSourceKey: key, heroSourcePinned: pinned,
                         onHeroClose: heroClose,
                         onClose: close,
                         onProfile: profile)
         } else {
             StoryViewer(group: g,
-                        heroDismiss: true, heroSourceKey: g.id, heroStageOpen: !refeed,
+                        heroDismiss: true, heroSourceKey: key, heroSourcePinned: pinned,
+                        heroStageOpen: !refeed,
                         onHeroClose: heroClose,
                         onClose: close,
                         onProfile: profile,
@@ -963,10 +987,12 @@ struct ChatsView: View {
                 onStoryTap: {   // open this person's story in the same viewer the stories row uses
                     // The ring has its own tap gesture, which would beat the row's selection toggle.
                     if selecting { toggleSelection(conv.id); return }
+                    // MIGRATION 2/7: this ring is on the new presentation now. It used to raise the
+                    // cover with Apple's zoom (`viewerSourceID` + `viewerHero = false` +
+                    // `viewerGroup = g`); it goes through the presenter, and lands back into the
+                    // ring as a CIRCLE.
                     if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
-                        viewerSourceID = "row-\(conv.id)"   // zoom from THIS row's ring
-                        viewerHero = false                  // chat-row rings keep Apple's zoom for now
-                        viewerGroup = g
+                        openStoryFromRing(conv, g)
                     }
                 },
                 storyNS: storyNS,
@@ -2257,6 +2283,16 @@ struct ChatRow: View, Equatable {
                 // Anchored on the PHOTO ONLY — with the ring inside the anchor, the hero
                 // stretched the grey ring segments during the zoom (user glitch screenshot).
                 .modifier(RowStoryAnchor(ns: storyNS, id: "row-\(conv.id)"))
+                // AND THE SAME CIRCLE, REGISTERED FOR THE FLIGHT. `RowStoryAnchor` above is Apple's
+                // zoom anchor; this is ours, and it is what the story card flies home into now.
+                //
+                // The radius is HALF THE SIDE, which is the whole trick: the flight interpolates to
+                // whatever radius its source reports, so a photo reporting half its width lands as a
+                // circle without a single per-site branch. Reported on the PHOTO, not the ring, for
+                // the same reason the zoom anchor is — with the ring inside it the transition
+                // stretched the grey ring segments, which the owner screenshotted.
+                .modifier(MediaRectReporter(id: "row-\(conv.id)", scope: .storyRow,
+                                            cornerRadius: (storySeen.isEmpty ? 56 : 49) / 2))
                 .frame(width: 56, height: 56)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {

@@ -899,6 +899,18 @@ struct StoryViewer: View {
     var heroDismiss: Bool = false
     /// The key of the rectangle this was opened from, in `MediaOpenRects` (`.storyRow` scope).
     var heroSourceKey: String = ""
+    /// ALWAYS LAND ON THE THING THAT WAS TAPPED, even after paging to somebody else.
+    ///
+    /// The stories row wants the opposite: it pages person to person and each person has their own
+    /// card sitting in the same row, so closing on the fourth person should land on the fourth
+    /// person's card. Every OTHER door is a single anchor that has no equivalent — a chat row's ring,
+    /// a profile avatar — and there is no ring in the chat list for "whoever you paged to", or if
+    /// there is, it is somewhere else entirely on a list that has not scrolled.
+    ///
+    /// Pinning is also exactly what Apple's zoom did at these doors: `viewerSourceID` was captured at
+    /// the tap and never moved. So this keeps the behaviour the cover already had, rather than
+    /// inventing a new one while moving the door.
+    var heroSourcePinned: Bool = false
     /// False for a REFEED — the delete-with-stories-remaining swap, where the presenter replaces
     /// the viewer while the screen is already up and at rest. There is nothing to fly and no wall
     /// to paint: `stageHeroOpen` marks the open spent and shows the story where it stands, instead
@@ -1164,19 +1176,22 @@ struct StoryViewer: View {
     private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil }
 
     init(group: StoryGroup, ownSwipeDismiss: Bool = false,
-         heroDismiss: Bool = false, heroSourceKey: String = "", heroStageOpen: Bool = true,
+         heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
+         heroStageOpen: Bool = true,
          onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
         self.init(groups: [group], startIndex: 0, ownSwipeDismiss: ownSwipeDismiss,
-                  heroDismiss: heroDismiss, heroSourceKey: heroSourceKey, heroStageOpen: heroStageOpen,
+                  heroDismiss: heroDismiss, heroSourceKey: heroSourceKey,
+                  heroSourcePinned: heroSourcePinned, heroStageOpen: heroStageOpen,
                   onHeroClose: onHeroClose,
                   onClose: onClose, onProfile: onProfile,
                   onDeletedRemaining: onDeletedRemaining)
     }
     init(groups: [StoryGroup], startIndex: Int = 0, ownSwipeDismiss: Bool = false,
-         heroDismiss: Bool = false, heroSourceKey: String = "", heroStageOpen: Bool = true,
+         heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
+         heroStageOpen: Bool = true,
          onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
@@ -1186,6 +1201,7 @@ struct StoryViewer: View {
         self.ownSwipeDismiss = ownSwipeDismiss
         self.heroDismiss = heroDismiss
         self.heroSourceKey = heroSourceKey
+        self.heroSourcePinned = heroSourcePinned
         self.heroStageOpen = heroStageOpen
         self.onHeroClose = onHeroClose
         self.onClose = onClose
@@ -2099,6 +2115,8 @@ struct StoryViewer: View {
     /// is reported.
     private func heroKeyNow() -> String {
         guard heroDismiss else { return "" }
+        // A pinned door has one anchor and it does not move — see `heroSourcePinned`.
+        guard !heroSourcePinned else { return heroSourceKey }
         if let g = groups.first(where: { $0.authorUid == currentBucketUid }),
            onScreenRect(for: g.id) != nil { return g.id }
         return heroSourceKey
