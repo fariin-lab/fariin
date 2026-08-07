@@ -3317,11 +3317,24 @@ struct MyStoriesCarousel: View {
                         // combinedFraction = (index offset) + scroll fraction. `pageDrag` biases the
                         // whole row while the SHEET is being thrown sideways: finger left → points
                         // negative → effective scroll grows → the NEXT card slides toward the
-                        // centre, in step with the panel under the same finger. `pageDrag` is
-                        // already a fraction of the panel's own journey, so one whole width of
-                        // sheet travel is exactly one card — see the note on `onPageDrag` for why
-                        // it is proportional rather than 1:1 with the finger.
-                        let cf = CGFloat(i) - (scroll - pageDrag)
+                        // centre, in step with the panel under the same finger.
+                        //
+                        // ⚠️ DIVIDED BY `fullDist`, AND THAT DIVISION WAS MISSING. `pageDrag` arrives
+                        // in POINTS (its own doc says so, and says it is "converted to card units
+                        // below with fullDist"), while `scroll` is in CARD UNITS. Subtracting one
+                        // from the other spent every point as a whole card, so a few millimetres of
+                        // sheet travel threw the row tens of cards sideways and the position formula
+                        // — which saturates past one card — piled them on top of each other at
+                        // assorted scales. That is his 2026-08-07 screenshot of the carousel with
+                        // five cards overlapping, and it only happens when the SHEET is the thing
+                        // being swiped, because a finger on the row itself goes through
+                        // `CarouselScroller`, which has always divided by `fullDist` — which is
+                        // exactly why he said the row alone "is working good".
+                        //
+                        // The comment that used to sit here claimed pageDrag was "already a
+                        // fraction". It was not, and the property's own doc four hundred lines up
+                        // said the opposite. Two comments disagreeing is what hid this.
+                        let cf = CGFloat(i) - (scroll - pageDrag / fullDist)
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
