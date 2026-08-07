@@ -5,7 +5,7 @@ import AVFoundation
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
-import StoryUI   // StoryVideoSeed — the uploader warms the viewer's video cache
+import StoryUI   // StoryVideoSeed / StoryImageSeed — the uploader warms the viewer's caches
 
 // One story (photo or video). Rules-protected (v1, not E2EE); media is a plain file in Storage.
 /// WHO A STORY WENT TO, as a label — not as a pointer to the list it came from.
@@ -198,12 +198,10 @@ final class StoriesService {
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
                                     tag: tag)   // the header says the chosen audience from frame one
-        // Pre-store the picked bytes in URLCache under the synthetic URL so the injected uploading item
-        // renders instantly in the viewer (StoryUI's ImageLoader reads URLCache first).
-        if let u = URL(string: pending.url) {
-            let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: image.count, textEncodingName: nil)
-            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: image), for: URLRequest(url: u))
-        }
+        // Pre-store the picked bytes under the synthetic URL so the injected uploading item renders
+        // instantly in the viewer. BOTH CACHES, not URLCache alone: nothing on any server answers a
+        // `fariin.local` url, so an eviction has nowhere to fall back to. See `StoryImageSeed`.
+        if let u = URL(string: pending.url) { StoryImageSeed.seed(image, for: u) }
         inFlight.append(pending)
         uploading = true
         uploadPhase = .preparing   // every post starts on the phone's half
@@ -454,9 +452,9 @@ final class StoriesService {
         // URLCache FIRST, so seeding the raw poster here would win over `pending.image` and put the
         // black-letterboxed frame back on screen.
         if let u = URL(string: pending.url) {
-            let bytes = placeholder?.jpegData(compressionQuality: 0.9) ?? thumbnail
-            let resp = URLResponse(url: u, mimeType: "image/jpeg", expectedContentLength: bytes.count, textEncodingName: nil)
-            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: bytes), for: URLRequest(url: u))
+            // BOTH CACHES — the url is invented, so URLCache evicting it leaves the card with
+            // nothing to draw and no server to ask. See `StoryImageSeed`.
+            StoryImageSeed.seed(placeholder?.jpegData(compressionQuality: 0.9) ?? thumbnail, for: u)
         }
         inFlight.append(pending)
         uploading = true
