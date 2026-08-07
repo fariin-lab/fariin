@@ -410,6 +410,19 @@ public final class StoryCardMorph {
         // That is the picture-in-the-wrong-place-with-black-around-it in his screenshots, and it is
         // also why the same code looked fine on the first person and broke on the next.
         layer.frame = card.bounds
-        layer.path = UIBezierPath(roundedRect: rect, cornerRadius: max(0, cornerRadius)).cgPath
+        // ⚠️ AND THE PATH IS IN THE MASK'S OWN COORDINATES, WHICH IS THE OTHER HALF OF THE SAME BUG.
+        //
+        // Setting `frame` above puts the mask's origin AT `bounds.origin`, and a layer's path is then
+        // drawn relative to that origin. `rect` comes from `contentRect(in:)`, which is built from
+        // `bounds.minX` — so the content offset was counted twice and the reveal hole landed a whole
+        // page to the RIGHT of the story it was meant to cut.
+        //
+        // Measured, not reasoned: his screen recordings show my own story (a plain container, origin
+        // zero, so the two are equal and nothing goes wrong) flying correctly, while a friend's story
+        // — the pager's scroll view, origin one page wide — is invisible for the whole open and leaves
+        // a sliver of itself parked against the right edge on the close. One host works and the other
+        // does not, and this is the only line that can tell them apart.
+        let local = rect.offsetBy(dx: -card.bounds.origin.x, dy: -card.bounds.origin.y)
+        layer.path = UIBezierPath(roundedRect: local, cornerRadius: max(0, cornerRadius)).cgPath
     }
 }
