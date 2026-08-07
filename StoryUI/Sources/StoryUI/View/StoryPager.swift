@@ -69,8 +69,15 @@ struct StoryPager: UIViewControllerRepresentable {
             StoryCardMorph.shared.restoreAfterHero = { [weak pager] in pager?.view.backgroundColor = .black }
             // A story nobody can see is worse than an open with no animation. If the host has not
             // claimed the card by now, something upstream is wrong and the story is shown as it is.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak pager] in
-                if pager?.view.alpha == 0 { pager?.view.alpha = 1 }
+            //
+            // 0.6s, and it MUST stay behind the host's own ceiling (`stageHeroOpen`, ~0.55s) or this
+            // reveals the story at full size while the host is still waiting for the geometry to fly
+            // it — which is the pop the host's patience exists to prevent, arriving from underneath.
+            // Faded, not flipped: this path only runs when something has gone wrong, and a soft
+            // arrival is a better wrong answer than a bang.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak pager] in
+                guard let pager, pager.view.alpha == 0 else { return }
+                UIView.animate(withDuration: 0.18) { pager.view.alpha = 1 }
             }
         }
         DispatchQueue.main.async { context.coordinator.installDismissPan() }

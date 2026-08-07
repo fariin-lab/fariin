@@ -47,8 +47,12 @@ struct StorySoloPager: UIViewControllerRepresentable {
         if heroDismiss {
             vc.view.alpha = 0
             StoryCardMorph.shared.revealAfterHeroOpen = { [weak vc] in vc?.view.alpha = 1 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak vc] in
-                if vc?.view.alpha == 0 { vc?.view.alpha = 1 }
+            // Behind the host's own ceiling (`stageHeroOpen`, ~0.55s) and faded, for the reason
+            // written on the same backstop in StoryPager. This host attaches its card in
+            // `viewDidLoad`, so in practice nothing ever reaches this line.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak vc] in
+                guard let vc, vc.view.alpha == 0 else { return }
+                UIView.animate(withDuration: 0.18) { vc.view.alpha = 1 }
             }
         }
         return vc

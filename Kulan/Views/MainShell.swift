@@ -1258,6 +1258,11 @@ struct ChatsView: View {
                       if !storiesOptedOut {
                       StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                  storyNS: storyNS,
+                                 // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
+                                 // unseen story re-sorts the row live, so their card slid out from
+                                 // under the close before it could land on it — his story leaving
+                                 // sideways towards the screen edge. See `StoriesRow.displayedOthers`.
+                                 freezeOrder: viewerGroup != nil || showUploadViewer,
                                  onCompose: { showCompose = true },
                                  // THE ONE SURFACE ON THE NEW TRANSITION (owner, 2026-08-06: make the
                                  // story list right first, then spread it). The cover is presented

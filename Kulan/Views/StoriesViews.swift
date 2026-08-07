@@ -388,6 +388,10 @@ struct StoriesRow: View {
     var meName: String
     var mePhoto: String?
     var storyNS: Namespace.ID    // zoom transition: card ⇄ full-screen viewer
+    /// A story viewer is open — hold the row's order still until it closes. Declared HERE, with the
+    /// other inputs, because the memberwise initializer takes its arguments in declaration order and
+    /// the call site reads better with the row's inputs together. See `displayedOthers`.
+    var freezeOrder: Bool = false
     var onCompose: () -> Void
     var onOpen: (StoryGroup) -> Void
     var onMessage: (StoryGroup) -> Void = { _ in }
@@ -395,6 +399,9 @@ struct StoriesRow: View {
     var onOpenUploading: () -> Void = {}   // tap the still-uploading card → live upload viewer
     @State private var prefsTick = 0   // re-render after hide/notify toggles
     @State private var hideTarget: StoryGroup?   // "Hide Stories?" confirmation target
+    /// The order the row had when the viewer opened, by group id. Latched on the way in, dropped on
+    /// the way out, so nothing here survives to stale a later row.
+    @State private var frozenOrder: [String] = []
 
     private let storySpacing: CGFloat = 10
     private let storyHPad: CGFloat = 12
@@ -417,6 +424,29 @@ struct StoriesRow: View {
         return unviewed + viewed
     }
 
+    /// THE ROW HOLDS STILL WHILE A STORY IS OPEN, and that is not cosmetic.
+    ///
+    /// The order above re-sorts LIVE: the moment the last unseen story of the person you are
+    /// watching is marked seen, their card leaves the unviewed group and slides right — while you
+    /// are still inside their story. The close then flies home to the card's NEW place, which with
+    /// a few people in the row is somewhere near the edge and can be off the screen entirely. That
+    /// is his screenshot of a story leaving sideways: the animation was correct and the target had
+    /// moved under it.
+    ///
+    /// Frozen by IDENTITY, not by value: the cards themselves stay live, so rings grey out and
+    /// covers update as they always did. Only the ORDER is held, and only while a viewer is up.
+    /// Anyone who posts while you are watching joins the end rather than being dropped. The re-sort
+    /// then plays after the story is gone, which is when the big apps do it anyway.
+    private var displayedOthers: [StoryGroup] {
+        let live = orderedOthers
+        guard freezeOrder, !frozenOrder.isEmpty else { return live }
+        var byId: [String: StoryGroup] = [:]
+        for g in live { byId[g.id] = g }
+        let kept = frozenOrder.compactMap { byId[$0] }
+        let keptIds = Set(kept.map(\.id))
+        return kept + live.filter { !keptIds.contains($0.id) }
+    }
+
     /// The one story each person will actually open on — their first UNSEEN item, which is where the
     /// viewer starts — falling back to their first if everything is watched. Warming the last item
     /// instead (the one the card's cover comes from) would warm the wrong end of the ring.
@@ -435,7 +465,7 @@ struct StoriesRow: View {
                 myCard
                     .id("my-story")   // STABLE identity so its "Add Story/Posted Stories" menu never binds
                                       // to a friend card when the row re-sorts (SwiftUI context-menu bug).
-                ForEach(orderedOthers) { g in
+                ForEach(displayedOthers) { g in
                     // Each friend card is its OWN Equatable view so its long-press survives the row's
                     // re-renders (inline ForEach context menus only fired on the first card).
                     StoryFriendCard(cover: g.stories.last?.previewUrl,
@@ -456,7 +486,14 @@ struct StoriesRow: View {
             .padding(.horizontal, storyHPad)
             .padding(.vertical, 10)
             // Smoothly slide cards to their new spots when a story moves unviewed -> viewed-front (no reload).
-            .animation(.spring(response: 0.42, dampingFraction: 0.82), value: orderedOthers.map(\.id))
+            // Keyed on what is DRAWN, not on the live sort: while a viewer holds the order still there is
+            // nothing to animate, and the re-sort plays once — after the story has gone.
+            .animation(.spring(response: 0.42, dampingFraction: 0.82), value: displayedOthers.map(\.id))
+        }
+        // Latch the order the moment a viewer opens, drop it the moment it closes. Nothing is kept
+        // beyond that, so a later row can never inherit a stale one. See `displayedOthers`.
+        .onChange(of: freezeOrder) { _, frozen in
+            frozenOrder = frozen ? orderedOthers.map(\.id) : []
         }
         // WARM THE FRONT OF EACH RING WHILE THE ROW IS ON SCREEN.
         //
@@ -968,6 +1005,17 @@ struct StoryViewer: View {
         var fromA: CGFloat = 1, toA: CGFloat = 1
     }
     @State private var hero = HeroBox()
+    /// TRUE while a hero open or close owns the card — the one thing about the flight that SwiftUI
+    /// has to know, and therefore the one value that is @State rather than a field on `HeroBox`.
+    ///
+    /// It exists for my own story's black backing (see `storyLayer`). That layer is a SwiftUI view
+    /// BEHIND the pager, not inside it, so the morph's UIKit transform does not move it: the card
+    /// flew home over a full-screen black wall and the chat list only reappeared when the cover was
+    /// finally taken away. His screenshots, twice, with the tab bar still showing underneath.
+    ///
+    /// Written ONCE per flight, at each end — never per frame. Everything that moves stays in
+    /// `HeroBox` for the reason written on it.
+    @State private var heroFlying = false
     /// One scalar, 0 → 1, driving the hero's open, its landing and its spring-back. Reuses the
     /// sheet's display-link spring so both transitions in this viewer settle with the same feel.
     @State private var heroAnimator = SheetProgressAnimator()
@@ -1441,13 +1489,31 @@ struct StoryViewer: View {
                     // background: the cover is see-through (.clear) for the swipe-down, so without this
                     // the light chat list shows through as a WHITE story. A background (unlike a clip)
                     // doesn't pin the card, so the library dismiss stays smooth.
-                    .background(Color.black)
+                    //
+                    // AND IT STEPS ASIDE FOR A HERO FLIGHT. This layer is a SwiftUI view behind the
+                    // pager, so the morph — a UIView transform on the pager's own card — cannot move
+                    // it: it stayed full screen and opaque while the card flew, and what he saw was
+                    // his story shrinking into the row over a black wall, with the chat list only
+                    // arriving once the cover was gone ("it has that black background still, then
+                    // after a bit it will go"). The library's own swipe-down does not need this
+                    // because it slides the WHOLE page, black included, off the screen as one thing.
+                    //
+                    // Only during the flight. At rest the card does not fill the screen — the strip
+                    // above it and the footer's surround are this black, and dropping it there would
+                    // put the chat list back in the very gaps it was added to cover.
+                    .background(Color.black.opacity(heroFlying ? 0 : 1))
                 ownerFooter
                     // Hidden on swipe-down AND while the sheet is REALLY engaged (showViewers
                     // gate: a stray leftover progress value once hid the Views/Delete bar with
                     // no sheet in sight — the tab bar showed through the empty strip).
-                    .opacity((dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
+                    //
+                    // AND FOR THE WHOLE HERO FLIGHT, not just for a drag. It paints its own black
+                    // (`ownerFooter`) and it is outside the card, so on a BUTTON close — where
+                    // `dragDown` never moves — it hung on at the bottom of the screen as a black
+                    // bar while the card flew home over the chat list.
+                    .opacity((heroFlying || dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
                     .animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    .animation(.easeOut(duration: 0.15), value: heroFlying)
                     .animation(.easeOut(duration: 0.15), value: showViewers && viewersProgress > 0.05)
             } else {
                 // Friend's story: full-bleed, NO clip → the library's swipe-down dismiss works.
@@ -1637,10 +1703,12 @@ struct StoryViewer: View {
                     .background(Capsule().stroke(.white.opacity(0.28), lineWidth: 1))
                     .padding(.horizontal, 16)
                     .padding(.bottom, max(10, bottomInset))
-                    // Steps aside for the same two things every other piece of chrome does: the
-                    // close drag, and the viewers sheet coming up over the card.
-                    .opacity((dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
+                    // Steps aside for the same three things every other piece of chrome does: the
+                    // close drag, a hero flight (a button close moves no finger), and the viewers
+                    // sheet coming up over the card.
+                    .opacity((heroFlying || dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
                     .animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    .animation(.easeOut(duration: 0.15), value: heroFlying)
                     .allowsHitTesting(false)   // it is a statement, not a control
             }
         }
@@ -1649,7 +1717,9 @@ struct StoryViewer: View {
         .overlay(alignment: .bottom) {
             if currentIsMine && !mineOnly {
                 ownerBar
-                    .opacity(dragDown > 6 ? 0 : 1).animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    .opacity((heroFlying || dragDown > 6) ? 0 : 1)
+                    .animation(.easeOut(duration: 0.15), value: dragDown > 6)
+                    .animation(.easeOut(duration: 0.15), value: heroFlying)
                     .contentShape(Rectangle())
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 12).onEnded { v in
@@ -1841,9 +1911,16 @@ struct StoryViewer: View {
         // Frames, not a timer: the answer arrives when layout happens, and layout happens on a
         // frame. The page is invisible for however few of them this takes, and the pager's own 0.4s
         // backstop reveals it if this never comes good.
+        // THE BLACK GOES FIRST, BEFORE ANY OF THIS. A @State write lands on the next render pass,
+        // and the reveal below is synchronous — so setting it inside `start` would paint one frame
+        // of full-screen black underneath a card the size of a row card. Set here, at mount, it is
+        // long gone by the time anything is visible; a hero presentation always intends to fly, and
+        // the two paths that turn out not to (no rectangle, or the ladder running out) put it back.
+        heroFlying = true
         let start: () -> Void = {
             guard let (rest, anchor) = heroEndpoints() else {
                 // Nothing to fly from. Show the story rather than hold it hostage to an animation.
+                heroFlying = false
                 StoryCardMorph.shared.revealAfterHeroOpen?()
                 return
             }
@@ -1870,6 +1947,7 @@ struct StoryViewer: View {
             StoryCardMorph.shared.revealAfterHeroOpen?()
             runHero(to: 0, center: rest, alpha: 1, velocity: 0) {
                 hero.live = false
+                heroFlying = false                          // full screen again: the backing may return
                 StoryCardMorph.heroDismissActive = false
                 StoryCardMorph.shared.reset()
                 StoryCardMorph.shared.restoreAfterHero?()   // the page is opaque black again at rest
@@ -1879,12 +1957,27 @@ struct StoryViewer: View {
         // A fixed ladder of attempts rather than a self-rescheduling retry: the first one that finds
         // real geometry wins and the rest see `hero.live` and stand down, and the LAST one runs
         // whatever happens so a story can never be left invisible waiting for a rectangle that is
-        // not coming. 15 frames is ~0.24s, comfortably inside the pager's own 0.4s backstop.
-        let frames = 15
-        for i in 0..<frames {
+        // not coming.
+        //
+        // PATIENCE IS NOT THE SAME AS HOPE, and one flat deadline could not tell them apart. It
+        // waited ~0.25s and then showed the story wherever it was. The SOLO host never reaches
+        // that: `StorySoloHostVC.viewDidLoad` attaches its card synchronously, before the first
+        // paint. The friends' pager structurally cannot — it waits for UIPageViewController to
+        // build its internal scroll view (an async hop, with retries) and then for a hosting
+        // controller built AT TAP TIME to lay out and publish the card's height. Run past 0.25s and
+        // the story was revealed at full size, which is his report to the letter: his own story
+        // grows out of its card and a friend's "pops up and fully becomes the screen".
+        //
+        // So the long ceiling applies only while a host has actually claimed the card and is
+        // therefore still coming good. If nobody has claimed it inside the old window, there is
+        // nothing to wait for and the story is shown rather than held hostage to an animation.
+        let ceiling = 33            // ~0.55s: the outer limit while a host is building
+        let noHostPatience = 15     // ~0.25s with no card attached at all = nothing is coming
+        for i in 0..<ceiling {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) / 60.0) {
                 guard !hero.live else { return }
-                if heroEndpoints() != nil || i == frames - 1 { start() }
+                if heroEndpoints() != nil { start(); return }
+                if i == ceiling - 1 || (i == noHostPatience && !StoryCardMorph.shared.isAvailable) { start() }
             }
         }
     }
@@ -1919,6 +2012,7 @@ struct StoryViewer: View {
     private func beginHeroCloseFromRest() -> Bool {
         guard !hero.live, let (rest, anchor) = heroEndpoints() else { return false }
         heroAnimator.cancel()
+        heroFlying = true          // the black backing steps aside — see `storyLayer`
         hero.live = true
         hero.rest = rest
         hero.anchor = anchor
@@ -1944,6 +2038,7 @@ struct StoryViewer: View {
             guard !(showViewers && viewersProgress > 0.02) else { return }
             heroAnimator.cancel()
             guard !hero.committing, let (rest, anchor) = heroEndpoints() else { return }
+            heroFlying = true      // the black backing steps aside — see `storyLayer`
             hero.live = true
             hero.rest = rest
             hero.anchor = anchor
@@ -2029,6 +2124,7 @@ struct StoryViewer: View {
         let remaining = max(1, hypot(hero.rest.x - hero.center.x, hero.rest.y - hero.center.y))
         runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining) {
             hero.live = false
+            heroFlying = false     // back at full screen: the backing may return
             dragDown = 0
             // Full screen, square, unmasked. `reset` is what puts the card back exactly, rather than
             // an `apply(fraction: 0)` that leaves a mask covering the whole card for every frame the
