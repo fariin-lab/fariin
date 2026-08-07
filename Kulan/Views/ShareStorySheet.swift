@@ -111,10 +111,45 @@ struct ShareStorySheet: View {
         let rowH: CGFloat = 68        // badge 40 + two lines + vertical padding
         let chrome: CGFloat = 56      // the inline navigation bar
             + 44                      // "Who can see your story" + the New button
-            + 44                      // the footer line under the list
             + 76                      // Post Story and its padding
-        let wanted = chrome + rowH * CGFloat(max(2, store.all.count))
+            + Self.bottomSafeInset    // the home indicator, which the button sits above
+        let wanted = chrome + footerHeight + rowH * CGFloat(max(2, store.all.count))
         return min(wanted, UIScreen.main.bounds.height * 0.88)
+    }
+
+    /// ⚠️ MEASURED, NOT BUDGETED. This used to be a flat 44 for "the footer line under the list",
+    /// and the public footer is not a line — it is two sentences that wrap to two lines on a normal
+    /// phone and three on a small one. So the sheet came up too short: the last audience row was cut
+    /// in half and the paragraph was not on screen at all, which is his 2026-08-07 screenshot with
+    /// the gap circled. The bottom safe area was missing from the budget too, so the shortfall was
+    /// the footer's overflow PLUS the home indicator.
+    ///
+    /// Measured off the real string at the real font and the real width, so it cannot drift when the
+    /// wording changes — and the wording here has already changed twice. Erring wide by design: the
+    /// width is taken narrower than the text really gets, so an estimate that is wrong is wrong in
+    /// the direction that leaves room rather than the one that clips.
+    private var footerHeight: CGFloat {
+        let text = oneTimeActive
+            ? "Each person can open this once. As soon as they do it is gone for them, and they cannot open it again."
+            : (store.selected.isPublic
+               ? "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories."
+               : "Only the people in this list can watch it.")
+        // A grouped list footer is footnote, inset from both edges by the list AND the cell.
+        let width = max(120, UIScreen.main.bounds.width - 72)
+        let font = UIFont.preferredFont(forTextStyle: .footnote)
+        let box = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font], context: nil)
+        return ceil(box.height) + 22   // the footer's own top and bottom padding
+    }
+
+    /// The home indicator's strip. `postButton` is a bottom safe-area inset, so it sits ABOVE this
+    /// and the sheet needs the room for both.
+    private static var bottomSafeInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .max() ?? 0
     }
 
     var body: some View {
